@@ -31,7 +31,7 @@ git add .
 git commit -m "T00 + O01: foundation, config, CI, deploy skeleton"
 git branch -M main
 
-git remote add origin https://github.com/<your-user>/PlantLegacy.git
+git remote add origin https://github.com/PlantLegacyGame/PlantLegacy.git
 git push -u origin main
 ```
 
@@ -44,7 +44,7 @@ Use one of:
   access tokens → Fine-grained tokens → repository access = only this repo →
   Contents = Read and write. Paste the token as the password.
 
-Check <https://github.com/<your-user>/PlantLegacy/actions>: the `ci` workflow
+Check <https://github.com/PlantLegacyGame/PlantLegacy/actions>: the `ci` workflow
 should run. Fix any red step before continuing.
 
 ---
@@ -66,7 +66,7 @@ In the GitHub repository:
 Your client URL is:
 
 ```text
-https://<your-user>.github.io/PlantLegacy/
+https://plantlegacygame.github.io/PlantLegacy/
 ```
 
 If `STAGING_SERVER_ORIGIN` is empty, the page will load but report the server as
@@ -155,7 +155,7 @@ Clone the repository:
 
 ```bash
 cd ~
-git clone https://github.com/<your-user>/PlantLegacy.git
+git clone https://github.com/PlantLegacyGame/PlantLegacy.git
 cd PlantLegacy
 ```
 
@@ -234,7 +234,7 @@ cd ~/PlantLegacy
 cat > ops/.env <<'EOF'
 NODE_ENV=staging
 POSTGRES_PASSWORD=replace-with-a-long-hex-password
-CORS_ORIGINS=https://<your-user>.github.io
+CORS_ORIGINS=https://plantlegacygame.github.io
 EOF
 
 chmod 600 ops/.env
@@ -249,7 +249,7 @@ openssl rand -hex 24
 Use **hex**, not base64: `+`, `/` and `=` break the `DATABASE_URL`.
 
 `CORS_ORIGINS` is the **Pages origin**, scheme + host only — for example
-`https://alice.github.io`, not the `/PlantLegacy/` path.
+`https://plantlegacygame.github.io`, not the `/PlantLegacy/` path.
 
 Start:
 
@@ -288,7 +288,7 @@ docker compose --env-file ops/.env -f ops/compose.yml up -d
 ```
 
 3. GitHub → Actions → `deploy-staging` → Re-run all jobs.
-4. Open `https://<your-user>.github.io/PlantLegacy/`.
+4. Open `https://plantlegacygame.github.io/PlantLegacy/`.
 
 You should see “Server ok”, the version, uptime, `database: ok`, and
 `configs: 73 file(s)`.
@@ -299,7 +299,7 @@ You should see “Server ok”, the version, uptime, `database: ok`, and
 
 | Symptom | Cause / fix |
 |---|---|
-| Browser console: CORS policy error | `CORS_ORIGINS` does not include the exact Pages origin. Use `https://<user>.github.io` (no path), restart the server. |
+| Browser console: CORS policy error | `CORS_ORIGINS` does not include the exact Pages origin. Use `https://plantlegacygame.github.io` (no path), restart the server. |
 | Browser console: mixed content | Pages is HTTPS and the API is HTTP. Put HTTPS in front of the server (step 5). |
 | Page says “Server unreachable” | `STAGING_SERVER_ORIGIN` is empty or wrong. Fix the repository variable and re-run the deploy workflow. |
 | Pages 404 | Settings → Pages → Source must be **GitHub Actions**; check the `deploy-staging` run. |

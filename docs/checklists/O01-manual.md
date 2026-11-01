@@ -71,12 +71,15 @@ gaps.
 
 - [x] Push a commit; `.github/workflows/ci.yml` runs and is green.
   - Observed: run `62a8ed2` on `PlantLegacyGame/PlantLegacy` — success.
-- [ ] Repository → Settings → Pages → Source = GitHub Actions.
-  - Current: `deploy-staging` fails at `actions/configure-pages@v5` because no
-    Pages site exists yet; everything before it passes.
+- [x] Repository → Settings → Pages → Source = GitHub Actions.
+  - Observed: Pages site exists; `deploy-staging` on `25f7b05` is green
+    (`configure-pages`, `upload-pages-artifact`, `deploy-pages` all pass).
 - [ ] Add repository variable `STAGING_SERVER_ORIGIN`.
-- [ ] Push to `main`; `deploy-staging` publishes the Pages URL.
+  - Blocked on the VM origin.
+- [x] Push to `main`; `deploy-staging` publishes the Pages URL.
+  - Observed: <https://plantlegacygame.github.io/PlantLegacy/> → 200, shell HTML.
 - [ ] Open the Pages URL; the shell reports the staging server as `ok`.
+  - Page loads; server card still says not configured (variable unset).
 - [ ] Deploy the server on one free VM:
       `git clone … && docker compose -f ops/compose.yml up -d --build`.
 - [ ] `curl <server-origin>/health` → 200 `"status":"ok"`.
