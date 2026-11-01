@@ -55,11 +55,17 @@ gaps.
 
 ## 5. Docker compose (needs Docker)
 
-- [ ] `docker compose -f ops/compose.yml up -d --build`
+- [x] `docker compose -f ops/compose.yml up -d --build`
   - Expected: `postgres` healthy, `server` starts after it, volume `pgdata`.
-- [ ] `curl http://127.0.0.1:8080/ready`
+  - Observed: `postgres:17-alpine` healthy; `server` built from
+    `apps/server/Dockerfile` and healthy; volume created as `ops_pgdata`.
+- [x] `curl http://127.0.0.1:8080/ready`
   - Expected: 200 with `"database":"ok"`.
-- [ ] `docker compose -f ops/compose.yml down` and confirm the volume persists.
+  - Observed: 200 `{"ready":true,…,"database":"ok"}`.
+- [x] `docker compose -f ops/compose.yml down` and confirm the volume persists.
+  - Observed: both containers removed, `ops_pgdata` still listed.
+  - Extra: wrote a probe row, ran `down` then `up -d`, row was still there;
+    probe dropped afterwards.
 
 ## 6. CI and staging (needs a remote)
 
