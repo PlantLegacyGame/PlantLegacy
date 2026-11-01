@@ -1,0 +1,30 @@
+{
+  "name": "plant-legacy",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Plant Legacy — multiplayer plant organism sim. Phase 0 foundation.",
+  "license": "UNLICENSED",
+  "packageManager": "pnpm@10.18.0",
+  "engines": {
+    "node": ">=22.18.0"
+  },
+  "scripts": {
+    "dev": "node tools/dev.mjs",
+    "dev:server": "pnpm --filter @plant-legacy/server dev",
+    "dev:client": "pnpm --filter @plant-legacy/client preview",
+    "build": "pnpm -r --if-present build",
+    "typecheck": "pnpm -r --if-present typecheck",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "format": "biome format --write .",
+    "test": "pnpm -r --if-present test",
+    "config:validate": "node tools/config-validator/src/cli.ts",
+    "verify": "pnpm lint && pnpm typecheck && pnpm config:validate && pnpm test",
+    "start": "pnpm --filter @plant-legacy/server start"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.2.0",
+    "@types/node": "^24.19.2",
+    "typescript": "^5.9.0"
+  }
+}

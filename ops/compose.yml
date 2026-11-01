@@ -1,0 +1,50 @@
+# Local/staging stack: server + Postgres (O01).
+#
+# Local:
+#   docker compose -f ops/compose.yml up --build
+#
+# Staging (export these first, or put them in ops/.env):
+#   NODE_ENV=staging
+#   POSTGRES_PASSWORD=<strong-password>
+#   CORS_ORIGINS=https://<owner>.github.io
+#
+# Free-first and portable (RULE_31): plain Postgres, no Redis, no queue, no
+# microservices. The same image moves to any free VM unchanged.
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-plant}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-plant}
+      POSTGRES_DB: ${POSTGRES_DB:-plant_legacy}
+    # Reachable from the host for psql, but never from the public internet.
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-plant} -d ${POSTGRES_DB:-plant_legacy}"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  server:
+    build:
+      context: ..
+      dockerfile: apps/server/Dockerfile
+    environment:
+      NODE_ENV: ${NODE_ENV:-local}
+      PORT: "8080"
+      CONFIG_DIR: /app/config
+      DATABASE_URL: postgres://${POSTGRES_USER:-plant}:${POSTGRES_PASSWORD:-plant}@postgres:5432/${POSTGRES_DB:-plant_legacy}
+      READINESS_REQUIRES_DB: "true"
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://127.0.0.1:4173}
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  pgdata:

@@ -1,0 +1,18 @@
+# dependencies
+node_modules/
+.pnpm-store/
+
+# build output
+dist/
+*.tsbuildinfo
+
+# environment / secrets — never committed (DESIGN.md Part 9)
+.env
+.env.*
+!.env.example
+secrets.md
+
+# logs and local data
+*.log
+coverage/
+.tmp/

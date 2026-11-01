@@ -1,0 +1,16 @@
+# Keep the server build context small. The Dockerfile copies only what it needs.
+.git
+.github
+node_modules
+**/node_modules
+**/dist
+**/*.log
+.env
+.env.*
+!.env.example
+docs
+DESIGN.md
+README.md
+CONTEXT.md
+ATTRIBUTION.md
+ops

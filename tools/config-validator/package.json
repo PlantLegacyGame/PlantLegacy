@@ -1,0 +1,14 @@
+{
+  "name": "@plant-legacy/config-validator",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "CLI: validate every config/*.json against extended-1 and ban rarity.",
+  "scripts": {
+    "start": "node src/cli.ts",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@plant-legacy/shared": "workspace:*"
+  }
+}

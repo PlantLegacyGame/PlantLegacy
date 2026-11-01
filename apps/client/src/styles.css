@@ -1,0 +1,79 @@
+:root {
+  --loam-900: #14180f;
+  --bark-700: #2a281f;
+  --bone-100: #efe9d8;
+  --bone-300: #cfc8b2;
+  --leaf-500: #7fa648;
+  --sprout-300: #b7d47c;
+  --ember-500: #d4553a;
+  --text-scale: 1;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+  background: radial-gradient(circle at 50% 0%, #232a19 0%, var(--loam-900) 70%);
+  color: var(--bone-100);
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: calc(16px * var(--text-scale));
+  line-height: 1.5;
+}
+
+.shell {
+  max-width: 40rem;
+  margin: 0 auto;
+  padding: 3rem 1.25rem;
+  padding-top: max(3rem, env(safe-area-inset-top));
+}
+
+.title {
+  margin: 0;
+  font-size: 2rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: var(--sprout-300);
+}
+
+.tagline {
+  margin: 0.25rem 0 2rem;
+  color: var(--bone-300);
+}
+
+.panel {
+  border: 1px solid var(--bark-700);
+  border-radius: 12px;
+  padding: 1rem 1.25rem;
+  background: rgb(27 32 20 / 70%);
+}
+
+.status {
+  margin: 0;
+  font-weight: 600;
+}
+
+.status[data-state="ok"] {
+  color: var(--leaf-500);
+}
+
+.status[data-state="down"] {
+  color: var(--ember-500);
+}
+
+.detail {
+  margin: 0.75rem 0 0;
+  font-family: ui-monospace, "JetBrains Mono", monospace;
+  font-size: 0.8rem;
+  color: var(--bone-300);
+  white-space: pre-wrap;
+}
+
+.footnote {
+  margin-top: 2rem;
+  font-size: 0.85rem;
+  color: var(--bone-300);
+}

@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <!-- Point this at the server origin. Empty = same origin (dev / reverse proxy). -->
+    <meta name="server-origin" content="" />
+    <title>Plant Legacy</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <h1 class="title">Plant Legacy</h1>
+      <p class="tagline">Phase 0 foundation. No world yet.</p>
+      <section class="panel" aria-live="polite">
+        <p id="status" class="status">Checking server…</p>
+        <pre id="detail" class="detail"></pre>
+      </section>
+      <p class="footnote">
+        The 3D client arrives in C01. This page exists to prove the static deploy
+        and the server connection end to end.
+      </p>
+    </main>
+    <script type="module" src="./main.js"></script>
+  </body>
+</html>

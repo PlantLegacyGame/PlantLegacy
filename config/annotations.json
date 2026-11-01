@@ -1,0 +1,11 @@
+{
+  "_meta": {
+    "system": "annotations",
+    "version": "0.1.0",
+    "schema": "extended-1",
+    "owner_task": "T19",
+    "status": "stub",
+    "notes": "Declared by T00. Populated by T19 per DESIGN.md Part 5."
+  },
+  "values": {}
+}

@@ -1,0 +1,11 @@
+{
+  "_meta": {
+    "system": "reproduction",
+    "version": "0.1.0",
+    "schema": "extended-1",
+    "owner_task": "T53",
+    "status": "stub",
+    "notes": "Declared by T00. Populated by T53 per DESIGN.md Part 5."
+  },
+  "values": {}
+}

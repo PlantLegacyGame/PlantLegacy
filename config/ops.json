@@ -1,0 +1,105 @@
+{
+  "_meta": {
+    "system": "ops",
+    "version": "0.1.0",
+    "schema": "extended-1",
+    "owner_task": "O01",
+    "status": "active",
+    "notes": "Owned by O01. Environments, ports and health thresholds."
+  },
+  "values": {
+    "environments": {
+      "type": "array",
+      "item_type": "string",
+      "value": [
+        "local",
+        "staging",
+        "production"
+      ],
+      "notes": "Environment separation. Selected by NODE_ENV; never inferred from the hostname."
+    },
+    "port": {
+      "type": "integer",
+      "value": 8080,
+      "range": [
+        1024,
+        65535
+      ],
+      "notes": "Overridden by PORT."
+    },
+    "host": {
+      "type": "string",
+      "value": "0.0.0.0",
+      "max_length": 64,
+      "notes": "Bind address. Overridden by HOST."
+    },
+    "log_level": {
+      "type": "enum",
+      "enum": [
+        "debug",
+        "info",
+        "warn",
+        "error"
+      ],
+      "value": "info",
+      "notes": "Overridden by LOG_LEVEL."
+    },
+    "cors_origins": {
+      "type": "array",
+      "item_type": "string",
+      "value": [
+        "http://127.0.0.1:4173",
+        "http://localhost:4173"
+      ],
+      "notes": "Browser origins allowed to call the API. Overridden by CORS_ORIGINS (comma-separated)."
+    },
+    "health_path": {
+      "type": "string",
+      "value": "/health",
+      "max_length": 64
+    },
+    "readiness_path": {
+      "type": "string",
+      "value": "/ready",
+      "max_length": 64
+    },
+    "readiness_requires_db": {
+      "type": "boolean",
+      "value": true,
+      "notes": "When true, /ready returns 503 unless Postgres answers."
+    },
+    "db_pool_max": {
+      "type": "integer",
+      "value": 10,
+      "range": [
+        1,
+        100
+      ]
+    },
+    "db_connect_timeout_ms": {
+      "type": "integer",
+      "value": 3000,
+      "range": [
+        500,
+        30000
+      ]
+    },
+    "db_idle_timeout_ms": {
+      "type": "integer",
+      "value": 10000,
+      "range": [
+        1000,
+        600000
+      ],
+      "notes": "How long an idle Postgres client stays in the pool before closing."
+    },
+    "shutdown_grace_ms": {
+      "type": "integer",
+      "value": 10000,
+      "range": [
+        0,
+        60000
+      ]
+    }
+  }
+}

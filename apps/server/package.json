@@ -1,0 +1,20 @@
+{
+  "name": "@plant-legacy/server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Plant Legacy world server. One process, one World, one Postgres.",
+  "scripts": {
+    "start": "node src/main.ts",
+    "dev": "node --watch src/main.ts",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "node --test \"src/**/*.test.ts\""
+  },
+  "dependencies": {
+    "@plant-legacy/shared": "workspace:*",
+    "pg": "^8.13.0"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.11.0"
+  }
+}

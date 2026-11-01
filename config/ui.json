@@ -1,0 +1,11 @@
+{
+  "_meta": {
+    "system": "ui",
+    "version": "0.1.0",
+    "schema": "extended-1",
+    "owner_task": "C04",
+    "status": "stub",
+    "notes": "Declared by T00. Populated by C04 per DESIGN.md Part 5."
+  },
+  "values": {}
+}

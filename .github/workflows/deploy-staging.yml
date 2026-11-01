@@ -1,0 +1,59 @@
+name: deploy-staging
+
+# Static client only. The game server + Postgres run on one free VM
+# (DESIGN.md Part 15) and are deployed by hand until O02 adds automation.
+#
+# Required repo setting: Settings > Pages > Source = GitHub Actions.
+# Required repo variable: STAGING_SERVER_ORIGIN (e.g. https://api.example.dev)
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Build client
+        run: pnpm --filter @plant-legacy/client build
+
+      - name: Point the client at the staging server
+        if: ${{ vars.STAGING_SERVER_ORIGIN != '' }}
+        run: |
+          sed -i "s|content=\"\"|content=\"${{ vars.STAGING_SERVER_ORIGIN }}\"|" \
+            apps/client/dist/index.html
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: apps/client/dist
+
+      - id: deployment
+        uses: actions/deploy-pages@v4

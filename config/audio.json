@@ -1,0 +1,11 @@
+{
+  "_meta": {
+    "system": "audio",
+    "version": "0.1.0",
+    "schema": "extended-1",
+    "owner_task": "C06",
+    "status": "stub",
+    "notes": "Declared by T00. Populated by C06 per DESIGN.md Part 5."
+  },
+  "values": {}
+}

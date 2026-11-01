@@ -1,0 +1,11 @@
+{
+  "_meta": {
+    "system": "account_progress",
+    "version": "0.1.0",
+    "schema": "extended-1",
+    "owner_task": "T08B",
+    "status": "stub",
+    "notes": "Declared by T00. Populated by T08B per DESIGN.md Part 5."
+  },
+  "values": {}
+}
