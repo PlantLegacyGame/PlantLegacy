@@ -63,8 +63,11 @@ gaps.
 
 ## 6. CI and staging (needs a remote)
 
-- [ ] Push a commit; `.github/workflows/ci.yml` runs and is green.
+- [x] Push a commit; `.github/workflows/ci.yml` runs and is green.
+  - Observed: run `62a8ed2` on `PlantLegacyGame/PlantLegacy` — success.
 - [ ] Repository → Settings → Pages → Source = GitHub Actions.
+  - Current: `deploy-staging` fails at `actions/configure-pages@v5` because no
+    Pages site exists yet; everything before it passes.
 - [ ] Add repository variable `STAGING_SERVER_ORIGIN`.
 - [ ] Push to `main`; `deploy-staging` publishes the Pages URL.
 - [ ] Open the Pages URL; the shell reports the staging server as `ok`.
