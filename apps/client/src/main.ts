@@ -565,7 +565,7 @@ function connect(): void {
             flower: 3,
             spore_sac: 3,
           };
-          const radius = 0.05 + node.biomass * 0.02;
+          const radius = 0.05 + node.biomass * 0.005;
           const health = Math.min(1, node.biomass / 10);
           plantNodes.set(node.id, {
             id: node.id,
