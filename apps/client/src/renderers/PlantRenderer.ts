@@ -412,8 +412,8 @@ export class PlantRenderer {
   private addTubeSegment(parent: PlantNodeData, child: PlantNodeData): void {
     const startPos = parent.position;
     const endPos = child.position;
-    const startRadius = parent.radius;
-    const endRadius = parent.radius;
+    const startRadius = 0.1;
+    const endRadius = 0.1;
 
     const direction = new THREE.Vector3().subVectors(endPos, startPos);
     const length = direction.length();
