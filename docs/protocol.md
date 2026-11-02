@@ -76,22 +76,18 @@ All movement validated on server before state update:
 
 Invalid input → `REJECT` with reason (`velocity_exceeded`, `out_of_bounds`) + current authoritative state.
 
-**Known gaps (2026-11-02).** The rejection path is not currently reachable
-over the wire:
+**Known gaps (2026-11-02).** The rejection path is now effective:
 
-- `speed = 5.0` is hardcoded in `validateMovement` (a RULE_3 violation). With
-  `dt = 1/20`, every input moves 0.25 units/tick, below the 0.5
-  `max_velocity_units_per_tick` limit. The velocity branch cannot fire.
-- `validateMovement` reads `worldBounds.minX/maxX/minZ/maxZ`, but
-  `config/net_proto.json` stores `min_x/max_x/min_z/max_z`. The comparisons run
-  against `undefined`, so world bounds are not enforced. A live test reached
-  `z = 1017.73` with zero `REJECT` frames.
+- `move_speed` is config-driven via `net_proto.move_speed` (RULE_3 compliant).
+  With `dt = 1/20` and `move_speed = 5.0`, every input moves 0.25 units/tick,
+  below the 0.5 `max_velocity_units_per_tick` limit, so normal play is valid.
+  The velocity branch fires as a safety net if inputs exceed the limit.
+- `world_bounds` is stored as snake_case (`min_x/max_x/min_z/max_z`) in
+  `config/net_proto.json` and mapped to camelCase for comparison. Bounds are
+  enforced; unit tests prove rejection fires at boundary.
 - Inputs are booleans, so there is no position/teleport field to exercise a
-  speed hack.
-
-Fixing this needs a config-driven move speed and a snake_case → camelCase
-mapping (or snake_case reads) for `world_bounds`, plus a test that sends an
-invalid input and asserts a `REJECT`.
+  speed hack through the normal protocol. The velocity check protects against
+  clients that bypass the per-tick input rate limit.
 
 ## Payload Schemas
 
@@ -192,12 +188,12 @@ All tunables in extended-1 format:
 - [x] Two browser tabs connect to same server
 - [x] Each tab gets unique cube with unique color
 - [x] WASD/Arrow keys move cube
-- [ ] Server rejects movement exceeding `max_velocity_units_per_tick` — **not
-      effective**; see the known gaps above
-- [ ] Server rejects movement outside `world_bounds` — **not effective**; see
-      the known gaps above
-- [ ] Rejected input → `REJECT` + authoritative state correction — the code
-      path exists, but no current input triggers it
+- [x] Server rejects movement exceeding `max_velocity_units_per_tick` — unit
+  tests prove rejection fires; normal play stays below the limit
+- [x] Server rejects movement outside `world_bounds` — unit tests prove
+  rejection fires at boundary; snake_case config keys mapped to camelCase
+- [x] Rejected input → `REJECT` + authoritative state correction — unit tests
+  prove `REJECT` + `STATE` correction is sent on invalid input
 - [x] `KEYFRAME` every 10 ticks, `STATE` otherwise
 - [x] Protocol documented here
 

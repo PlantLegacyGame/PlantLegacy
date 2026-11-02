@@ -14,7 +14,7 @@
 |------|--------|-------------|
 | T00 | ✅ Complete | Foundation: monorepo, 75 config files, config validator, rarity ban (RULE_20), account-bound invariant (RULE_23) |
 | O01 | ✅ Complete | Repo + deploy pipeline: pnpm, Biome, CI, Docker, GitHub Pages, `/health` + `/ready` |
-| T03P | ⚠️ Partial | WebSocket + JSON protocol, 20 Hz authoritative cubes; velocity/bounds rejection is ineffective |
+| T03P | ✅ Complete | WebSocket + JSON protocol, 20 Hz authoritative cubes; velocity/bounds rejection effective and tested |
 | C01 | ⚠️ Partial | Vite + Three.js client, OrbitControls, WebSocket; no input abstraction, UI shell or debug overlay |
 | C02 | ✅ Complete | Procedural plant renderer v1: tapered tubes, instanced leaves, shared material, triplanar noise, wind, health tint, 3 mutation signatures, L0/L1 |
 | T00A | ⚠️ Partial | 3-line hint card and resource tooltips; tile grid and resource simulation not built |
@@ -300,8 +300,8 @@ Per `DESIGN.md` Part 4, the ordered tasks to reach **Gate 1 (Week 24)**:
 
 | Order | Task | Description | Depends On | Status |
 |-------|------|-------------|------------|--------|
-| 0 | **T03P fix** | Config-driven move speed + snake_case `world_bounds`; assert `REJECT` | T03P | **next** |
-| 1 | **T01** | Growth: typed nodes, biomass cost, root competition, canopy shading, root attack | T00A | not started |
+| 0 | **T03P** | Networking gate: config-driven move speed, snake_case `world_bounds`, rejection tested | T03P | ✅ complete |
+| 1 | **T01** | Growth: typed nodes, biomass cost, root competition, canopy shading, root attack | T00A | **next** |
 | 2 | **C02** | Procedural plant renderer v1 (tapered tubes, instanced leaves, shared material, L0/L1) | C01 | ✅ complete |
 | 3 | **T03** | Multiplayer world: persistence, offline tiers, binary framing + delta | T03P, T01 | not started |
 | 4 | **T07** | Weather + day/night | T00A, T03 | not started |
