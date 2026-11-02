@@ -503,23 +503,23 @@ function connect(): void {
           plantNodes.clear();
           // Initialize with root node from server
           if (welcome.rootNode) {
-          plantNodes.set(welcome.rootNode.id, {
-            id: welcome.rootNode.id,
-            position: new THREE.Vector3(
-              welcome.rootNode.x,
-              welcome.rootNode.y,
-              welcome.rootNode.z,
-            ),
-            type: 0, // root
-            radius: 0.05 + welcome.rootNode.biomass * 0.15,
-            parentId: null,
-            age: 10,
-            health: 0.9,
-            mutationFlags: 0,
-            biomass: welcome.rootNode.biomass,
-          });
-          plantBiomass = welcome.totalBiomass;
-          updateResourceReadout();
+            plantNodes.set(welcome.rootNode.id, {
+              id: welcome.rootNode.id,
+              position: new THREE.Vector3(
+                welcome.rootNode.x,
+                welcome.rootNode.y,
+                welcome.rootNode.z,
+              ),
+              type: 0, // root
+              radius: 0.05 + welcome.rootNode.biomass * 0.15,
+              parentId: null,
+              age: 10,
+              health: 0.9,
+              mutationFlags: 0,
+              biomass: welcome.rootNode.biomass,
+            });
+            plantBiomass = welcome.totalBiomass;
+            updateResourceReadout();
           }
           // PlantRenderer handles its own objects
           setDetail(
@@ -541,7 +541,15 @@ function connect(): void {
 
         case MESSAGE_TYPE.GROWTH_EVENT: {
           const growth = payload as GrowthEventPayload;
-          console.log('GROWTH_EVENT:', { plantId: growth.plantId, myPlantId: plantId, nodeId: growth.newNode.id, nodeType: growth.newNode.type, pos: [growth.newNode.x, growth.newNode.y, growth.newNode.z], biomass: growth.newNode.biomass, totalBiomass: growth.totalBiomass });
+          console.log('GROWTH_EVENT:', {
+            plantId: growth.plantId,
+            myPlantId: plantId,
+            nodeId: growth.newNode.id,
+            nodeType: growth.newNode.type,
+            pos: [growth.newNode.x, growth.newNode.y, growth.newNode.z],
+            biomass: growth.newNode.biomass,
+            totalBiomass: growth.totalBiomass,
+          });
           if (growth.plantId !== plantId) break;
           const node = growth.newNode;
           const typeMap: Record<string, number> = {

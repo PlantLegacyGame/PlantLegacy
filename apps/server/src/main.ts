@@ -555,11 +555,7 @@ async function main(): Promise<void> {
           }
           case MESSAGE_TYPE.GROWTH_INTENT: {
             const growthIntent = payload as { intent: GrowthIntent };
-            if (
-              growthIntent &&
-              growthIntent.intent &&
-              typeof growthIntent.intent.tick === 'number'
-            ) {
+            if (growthIntent?.intent && typeof growthIntent.intent.tick === 'number') {
               world.handleGrowthIntent(playerId, growthIntent.intent);
             }
             break;

@@ -560,53 +560,30 @@ export class PlantRenderer {
       const c1 = capEndBase + sNext;
 
       this.tubeIndices[
-        baseIndex +
-        (ringCount - 1) * segmentsAround * 6 +
-        segmentsAround * 6 +
-        s * 6
+        baseIndex + (ringCount - 1) * segmentsAround * 6 + segmentsAround * 6 + s * 6
       ] = b0;
       this.tubeIndices[
-        baseIndex +
-        (ringCount - 1) * segmentsAround * 6 +
-        segmentsAround * 6 +
-        s * 6 +
-        1
+        baseIndex + (ringCount - 1) * segmentsAround * 6 + segmentsAround * 6 + s * 6 + 1
       ] = b1;
       this.tubeIndices[
-        baseIndex +
-        (ringCount - 1) * segmentsAround * 6 +
-        segmentsAround * 6 +
-        s * 6 +
-        2
+        baseIndex + (ringCount - 1) * segmentsAround * 6 + segmentsAround * 6 + s * 6 + 2
       ] = c1;
       this.tubeIndices[
-        baseIndex +
-        (ringCount - 1) * segmentsAround * 6 +
-        segmentsAround * 6 +
-        s * 6 +
-        3
+        baseIndex + (ringCount - 1) * segmentsAround * 6 + segmentsAround * 6 + s * 6 + 3
       ] = b0;
       this.tubeIndices[
-        baseIndex +
-        (ringCount - 1) * segmentsAround * 6 +
-        segmentsAround * 6 +
-        s * 6 +
-        4
+        baseIndex + (ringCount - 1) * segmentsAround * 6 + segmentsAround * 6 + s * 6 + 4
       ] = c1;
       this.tubeIndices[
-        baseIndex +
-        (ringCount - 1) * segmentsAround * 6 +
-        segmentsAround * 6 +
-        s * 6 +
-        5
+        baseIndex + (ringCount - 1) * segmentsAround * 6 + segmentsAround * 6 + s * 6 + 5
       ] = c0;
     }
 
     this.tubeVertexCount += ringCount * segmentsAround + capVertexCount;
     this.tubeIndexCount +=
       (ringCount - 1) * segmentsAround * 6 + // body
-        segmentsAround * 6 + // start cap
-        segmentsAround * 6; // end cap
+      segmentsAround * 6 + // start cap
+      segmentsAround * 6; // end cap
 
     this.nodeVertexOffset.set(child.id, baseVertex);
   }
@@ -667,13 +644,24 @@ export class PlantRenderer {
   updatePlantData(nodes: PlantNodeData[]): void {
     for (const node of nodes) {
       if (this.knownNodes.has(node.id)) continue;
-      console.log('updatePlantData adding node:', { id: node.id, type: node.type, pos: [node.position.x, node.position.y, node.position.z], parentId: node.parentId, biomass: node.biomass });
+      console.log('updatePlantData adding node:', {
+        id: node.id,
+        type: node.type,
+        pos: [node.position.x, node.position.y, node.position.z],
+        parentId: node.parentId,
+        biomass: node.biomass,
+      });
       this.knownNodes.set(node.id, node);
 
       if (node.parentId && this.knownNodes.has(node.parentId)) {
         const parent = this.knownNodes.get(node.parentId);
         if (parent) {
-          console.log('updatePlantData adding tube:', { from: parent.id, to: node.id, fromPos: [parent.position.x, parent.position.y, parent.position.z], toPos: [node.position.x, node.position.y, node.position.z] });
+          console.log('updatePlantData adding tube:', {
+            from: parent.id,
+            to: node.id,
+            fromPos: [parent.position.x, parent.position.y, parent.position.z],
+            toPos: [node.position.x, node.position.y, node.position.z],
+          });
           this.addTubeSegment(parent, node);
         }
       }
@@ -696,7 +684,11 @@ export class PlantRenderer {
       (this.tubeGeometry.getIndex() as THREE.BufferAttribute).needsUpdate = true;
       this.tubeGeometry.setDrawRange(0, this.tubeIndexCount);
       this.tubeGeometry.computeBoundingSphere();
-      console.log('updatePlantData complete:', { tubeVertexCount: this.tubeVertexCount, tubeIndexCount: this.tubeIndexCount, leafInstanceCount: this.leafInstanceCount });
+      console.log('updatePlantData complete:', {
+        tubeVertexCount: this.tubeVertexCount,
+        tubeIndexCount: this.tubeIndexCount,
+        leafInstanceCount: this.leafInstanceCount,
+      });
     }
 
     if (this.leafInstanceCount > 0) {
