@@ -108,7 +108,7 @@ float fbm(vec3 p, int octaves) {
     return value;
 }
 
-vec3 triplanarNoise(vec3 worldPos, vec3 normal) {
+float triplanarNoise(vec3 worldPos, vec3 normal) {
     vec3 n = abs(normal);
     float sum = n.x + n.y + n.z + 0.0001;
     vec3 blend = n / sum;
