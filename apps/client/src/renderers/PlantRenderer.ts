@@ -667,12 +667,13 @@ export class PlantRenderer {
   updatePlantData(nodes: PlantNodeData[]): void {
     for (const node of nodes) {
       if (this.knownNodes.has(node.id)) continue;
-
+      console.log('updatePlantData adding node:', { id: node.id, type: node.type, pos: [node.position.x, node.position.y, node.position.z], parentId: node.parentId, biomass: node.biomass });
       this.knownNodes.set(node.id, node);
 
       if (node.parentId && this.knownNodes.has(node.parentId)) {
         const parent = this.knownNodes.get(node.parentId);
         if (parent) {
+          console.log('updatePlantData adding tube:', { from: parent.id, to: node.id, fromPos: [parent.position.x, parent.position.y, parent.position.z], toPos: [node.position.x, node.position.y, node.position.z] });
           this.addTubeSegment(parent, node);
         }
       }
@@ -695,6 +696,7 @@ export class PlantRenderer {
       (this.tubeGeometry.getIndex() as THREE.BufferAttribute).needsUpdate = true;
       this.tubeGeometry.setDrawRange(0, this.tubeIndexCount);
       this.tubeGeometry.computeBoundingSphere();
+      console.log('updatePlantData complete:', { tubeVertexCount: this.tubeVertexCount, tubeIndexCount: this.tubeIndexCount, leafInstanceCount: this.leafInstanceCount });
     }
 
     if (this.leafInstanceCount > 0) {

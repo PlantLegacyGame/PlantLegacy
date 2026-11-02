@@ -10,7 +10,7 @@
   "values": {
     "root_growth_speed": {
       "type": "number",
-      "value": 0.5,
+      "value": 3.0,
       "range": [0.1, 10.0],
       "notes": "Root layer growth speed in units per second"
     },

@@ -243,7 +243,7 @@ function updateResourceReadout(): void {
       <div>LIGHT: <span id="res-light">0.00</span> <span class="tooltip" data-tip="light">ⓘ</span></div>
       <div>WATER: <span id="res-water">0.00</span> <span class="tooltip" data-tip="water">ⓘ</span></div>
       <div>MINERALS: <span id="res-minerals">0.00</span> <span class="tooltip" data-tip="minerals">ⓘ</span></div>
-      <div>BIOMASS: <span id="res-biomass">0</span> <span class="tooltip" data-tip="biomass">ⓘ</span></div>
+      <div>BIOMASS: <span id="res-biomass">${plantBiomass.toFixed(1)}</span> <span class="tooltip" data-tip="biomass">ⓘ</span></div>
     `;
 
   // Add tooltip listeners
@@ -433,6 +433,7 @@ function sendInput(): void {
 }
 
 function sendGrowthIntent(): void {
+  console.log('GROWTH_INTENT sending:', { plantId, plantNodesSize: plantNodes.size });
   if (!ws || ws.readyState !== WebSocket.OPEN || !plantId) return;
 
   growthIntentTick++;
@@ -540,6 +541,7 @@ function connect(): void {
 
         case MESSAGE_TYPE.GROWTH_EVENT: {
           const growth = payload as GrowthEventPayload;
+          console.log('GROWTH_EVENT:', { plantId: growth.plantId, myPlantId: plantId, nodeId: growth.newNode.id, nodeType: growth.newNode.type, pos: [growth.newNode.x, growth.newNode.y, growth.newNode.z], biomass: growth.newNode.biomass, totalBiomass: growth.totalBiomass });
           if (growth.plantId !== plantId) break;
           const node = growth.newNode;
           const typeMap: Record<string, number> = {
