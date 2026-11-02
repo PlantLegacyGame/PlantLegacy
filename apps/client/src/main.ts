@@ -21,7 +21,7 @@ const isLocalDev =
   (location.hostname === '127.0.0.1' || location.hostname === 'localhost') &&
   location.port === '4173';
 const httpOrigin = serverOrigin || (isLocalDev ? 'http://127.0.0.1:8080' : location.origin);
-const wsOrigin = httpOrigin.replace(/^http/, 'ws');
+const wsOrigin = isLocalDev ? 'ws://127.0.0.1:8080' : httpOrigin.replace(/^http/, 'ws');
 
 // T00A: Onboarding config types
 interface OnboardingConfig {
