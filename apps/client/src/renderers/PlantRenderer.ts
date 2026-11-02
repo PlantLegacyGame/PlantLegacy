@@ -413,7 +413,7 @@ export class PlantRenderer {
     const startPos = parent.position;
     const endPos = child.position;
     const startRadius = parent.radius;
-    const endRadius = child.radius;
+    const endRadius = parent.radius;
 
     const direction = new THREE.Vector3().subVectors(endPos, startPos);
     const length = direction.length();
