@@ -1,13 +1,13 @@
 import * as THREE from 'three';
 
-const plantVert = `attribute vec3 aPosition;
-attribute vec3 aNormal;
-attribute float aBiomass;
-attribute float aNodeType;
-attribute float aHealth;
-attribute float aMutationFlags;
-attribute float aTubeU;
-attribute float aTubeV;
+const plantVert = `in vec3 aPosition;
+in vec3 aNormal;
+in float aBiomass;
+in float aNodeType;
+in float aHealth;
+in float aMutationFlags;
+in float aTubeU;
+in float aTubeV;
 
 uniform float uTime;
 uniform float uWindStrength;
@@ -23,15 +23,15 @@ uniform vec3 uRootColor;
 uniform vec3 uCanopyColor;
 uniform vec3 uLeafColor;
 
-varying vec3 vNormal;
-varying vec3 vWorldPos;
-varying float vBiomass;
-varying float vNodeType;
-varying float vHealth;
-varying float vMutationFlags;
-varying float vTubeU;
-varying float vTubeV;
-varying float vIsLeaf;
+out vec3 vNormal;
+out vec3 vWorldPos;
+out float vBiomass;
+out float vNodeType;
+out float vHealth;
+out float vMutationFlags;
+out float vTubeU;
+out float vTubeV;
+out float vIsLeaf;
 
 void main() {
     vWorldPos = (modelMatrix * vec4(aPosition, 1.0)).xyz;
@@ -68,15 +68,17 @@ void main() {
 }
 `;
 
-const plantFrag = `varying vec3 vNormal;
-varying vec3 vWorldPos;
-varying float vBiomass;
-varying float vNodeType;
-varying float vHealth;
-varying float vMutationFlags;
-varying float vTubeU;
-varying float vTubeV;
-varying float vIsLeaf;
+const plantFrag = `in vec3 vNormal;
+in vec3 vWorldPos;
+in float vBiomass;
+in float vNodeType;
+in float vHealth;
+in float vMutationFlags;
+in float vTubeU;
+in float vTubeV;
+in float vIsLeaf;
+
+out vec4 fragColor;
 
 uniform float uTime;
 uniform float uHealthTintStrength;
@@ -152,7 +154,7 @@ void main() {
 
     lit *= 0.6 + vBiomass * 0.4;
 
-    gl_FragColor = vec4(lit, 1.0);
+    fragColor = vec4(lit, 1.0);
 }
 `;
 
