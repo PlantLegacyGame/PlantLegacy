@@ -324,6 +324,7 @@ export class PlantRenderer {
       transparent: false,
       depthTest: true,
       depthWrite: true,
+      side: THREE.DoubleSide,
       uniforms: {
         uTime: { value: 0 },
         uWindStrength: { value: this.config.windStrength },
@@ -447,9 +448,13 @@ export class PlantRenderer {
         this.tubePositions[vi * 3 + 1] = vertex.y;
         this.tubePositions[vi * 3 + 2] = vertex.z;
 
-        this.tubeNormals[vi * 3] = Math.cos(angle);
-        this.tubeNormals[vi * 3 + 1] = 0;
-        this.tubeNormals[vi * 3 + 2] = Math.sin(angle);
+        const n = normal
+          .clone()
+          .multiplyScalar(Math.cos(angle))
+          .add(binormal.clone().multiplyScalar(Math.sin(angle)));
+        this.tubeNormals[vi * 3] = n.x;
+        this.tubeNormals[vi * 3 + 1] = n.y;
+        this.tubeNormals[vi * 3 + 2] = n.z;
 
         this.tubeBiomass[vi] = child.biomass;
         this.tubeNodeType[vi] = child.type;
