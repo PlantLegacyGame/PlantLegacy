@@ -1,0 +1,37 @@
+{
+  "_meta": {
+    "system": "onboarding",
+    "version": "0.1.0",
+    "schema": "extended-1",
+    "owner_task": "T00A",
+    "status": "draft",
+    "notes": "Minimal onboarding per RULE_13: 3-line hint card + contextual tooltips"
+  },
+  "values": {
+    "hint_card_lines": {
+      "type": "array",
+      "item_type": "string",
+      "value": [
+        "WASD / Arrows: Move  |  Mouse: Orbit camera  |  Scroll: Zoom",
+        "You are a plant. Grow roots down, canopy up. Read light, water, minerals.",
+        "Other players are other plants. Compete, ally, or parasitize. The world simulates offline."
+      ],
+      "notes": "Exactly 3 lines per RULE_13. No editorial text, no strategy hints."
+    },
+    "show_hint_card_duration_ms": {
+      "type": "integer",
+      "value": 10000,
+      "range": [3000, 60000],
+      "notes": "How long hint card stays visible on first spawn"
+    },
+    "resource_tooltips": {
+      "type": "object",
+      "value": {
+        "light": "Light: canopy exposure. Higher = faster photosynthesis.",
+        "water": "Water: root access to moisture. Depletes near other roots.",
+        "minerals": "Minerals: root access to nutrients. Concentrated in soil layers."
+      },
+      "notes": "Contextual tooltips for resource readout. No strategy, just what the numbers mean."
+    }
+  }
+}

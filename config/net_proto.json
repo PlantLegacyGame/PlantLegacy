@@ -4,8 +4,67 @@
     "version": "0.1.0",
     "schema": "extended-1",
     "owner_task": "T03P",
-    "status": "stub",
-    "notes": "Declared by T00. Populated by T03P per DESIGN.md Part 5."
+    "status": "draft",
+    "notes": "Wire protocol configuration for T03P networking gate"
   },
-  "values": {}
+  "values": {
+    "protocol_version": {
+      "type": "integer",
+      "value": 1,
+      "range": [1, 255],
+      "notes": "Bumped on any breaking wire change"
+    },
+    "max_message_size_bytes": {
+      "type": "integer",
+      "value": 16384,
+      "range": [1024, 1048576],
+      "notes": "Maximum WebSocket message size"
+    },
+    "tick_rate_hz": {
+      "type": "integer",
+      "value": 20,
+      "range": [10, 60],
+      "notes": "Server simulation tick rate"
+    },
+    "position_quantization": {
+      "type": "integer",
+      "value": 64,
+      "range": [16, 256],
+      "notes": "Position quantization denominator (1/64 unit precision)"
+    },
+    "angle_quantization_bits": {
+      "type": "integer",
+      "value": 16,
+      "range": [8, 32],
+      "notes": "Angle quantization in bits"
+    },
+    "keyframe_interval_ticks": {
+      "type": "integer",
+      "value": 10,
+      "range": [1, 60],
+      "notes": "Full state snapshot interval in ticks"
+    },
+    "max_velocity_units_per_tick": {
+      "type": "number",
+      "value": 0.5,
+      "range": [0.1, 10.0],
+      "notes": "Maximum allowed velocity for movement validation"
+    },
+    "world_bounds": {
+      "type": "object",
+      "value": {
+        "min_x": -1000,
+        "max_x": 1000,
+        "min_z": -1000,
+        "max_z": 1000
+      },
+      "notes": "World boundaries for out-of-bounds validation"
+    },
+    "client_send_rate_hz": {
+      "type": "integer",
+      "value": 20,
+      "range": [5, 60],
+      "notes": "Maximum client input send rate"
+    }
+  }
 }

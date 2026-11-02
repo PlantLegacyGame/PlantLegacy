@@ -1,14 +1,12 @@
 /**
- * One-command local stack (O01).
+ * One-command local stack (O01 + C01).
  *
  * `pnpm dev` from a fresh clone:
  *   1. installs workspace dependencies if `node_modules` is missing;
- *   2. builds the static client shell;
- *   3. starts the server (watch mode) and the client preview together.
+ *   2. starts the server (watch mode) and the Vite dev server together.
  *
  * No extra dependency and no orchestration framework: two child processes and
- * Ctrl+C. The client preview proxies `/health` to the server, so the shell works
- * without configuring an origin.
+ * Ctrl+C. Vite dev server proxies `/health`, `/ready`, and `/ws` to the server.
  */
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
@@ -30,15 +28,13 @@ if (!existsSync(join(root, 'node_modules'))) {
   run('pnpm install', 'install');
 }
 
-run('pnpm --filter @plant-legacy/client build', 'client build');
-
 const children = [
   spawn('pnpm --filter @plant-legacy/server dev', {
     cwd: root,
     stdio: 'inherit',
     shell: true,
   }),
-  spawn('pnpm --filter @plant-legacy/client preview', {
+  spawn('pnpm --filter @plant-legacy/client dev', {
     cwd: root,
     stdio: 'inherit',
     shell: true,

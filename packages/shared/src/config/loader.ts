@@ -113,3 +113,19 @@ export function readStringArray(
   }
   return [...entry.value];
 }
+
+export function readInteger(configs: Map<string, ConfigFile>, system: string, key: string): number {
+  const entry = requireEntry(configs, system, key);
+  if (entry.type !== 'integer') throw new Error(`Config "${system}.${key}" is not an integer.`);
+  return entry.value;
+}
+
+export function readObject<T = Record<string, unknown>>(
+  configs: Map<string, ConfigFile>,
+  system: string,
+  key: string,
+): T {
+  const entry = requireEntry(configs, system, key);
+  if (entry.type !== 'object') throw new Error(`Config "${system}.${key}" is not an object.`);
+  return entry.value as T;
+}

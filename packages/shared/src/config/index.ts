@@ -2,7 +2,9 @@ export type { ConfigLoadResult } from './loader.ts';
 export {
   loadConfigDir,
   readBoolean,
+  readInteger,
   readNumber,
+  readObject,
   readString,
   readStringArray,
 } from './loader.ts';
