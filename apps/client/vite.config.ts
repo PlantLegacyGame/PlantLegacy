@@ -3,6 +3,7 @@ import { defineConfig } from 'vite';
 
 export default defineConfig({
   root: '.',
+  base: '/PlantLegacy/',
   publicDir: 'public',
   build: {
     outDir: 'dist',
