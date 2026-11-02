@@ -18,7 +18,7 @@
 | C01 | ⚠️ Partial | Vite + Three.js client, OrbitControls, WebSocket; no input abstraction, UI shell or debug overlay |
 | C02 | ✅ Complete | Procedural plant renderer v1: tapered tubes, instanced leaves, shared material, triplanar noise, wind, health tint, 3 mutation signatures, L0/L1 |
 | T00A | ⚠️ Partial | 3-line hint card and resource tooltips; tile grid and resource simulation not built |
-| T01 | ✅ Complete | Server-authoritative typed-node growth: biomass cost, root competition, canopy shading, root attack; client renders growing plant via C02 |
+| T01 | ✅ Complete | Server-authoritative typed-node growth: biomass cost, root competition, canopy shading, root attack; client renders growing plant via C02; biomass UI readout; 'G' key to grow |
 
 ### What Works Now (Live)
 - **Local dev:** `pnpm dev` → server (8080) + Vite client (4173) with hot reload
