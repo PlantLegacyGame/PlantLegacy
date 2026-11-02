@@ -13,11 +13,15 @@ jobs:
 
       - uses: pnpm/action-setup@v6
 
-      - name: Debug pnpm and npmrc
+      - name: Debug environment
         run: |
-          pnpm --version
+          echo "Node version: $(node --version)"
+          echo "npm version: $(npm --version)"
+          echo "pnpm version: $(pnpm --version)"
+          echo "PNPM_HOME: $PNPM_HOME"
           cat .npmrc
           pnpm config get allow-all-build-scripts
+          ls -la
 
       - uses: actions/setup-node@v7
         with:
