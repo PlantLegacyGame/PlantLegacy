@@ -1,5 +1,11 @@
 import type { ConfigFile } from '@plant-legacy/shared/config';
-import { readBoolean, readInteger, readNumber, readObject, readStringArray } from '@plant-legacy/shared/config';
+import {
+  readBoolean,
+  readInteger,
+  readNumber,
+  readObject,
+  readStringArray,
+} from '@plant-legacy/shared/config';
 // import { clamp } from '@plant-legacy/shared/math';
 
 export interface ResourceConfig {
@@ -61,9 +67,17 @@ export function loadResourceConfig(configs: Map<string, ConfigFile>): ResourceCo
     lightFactorCurve: readObject(configs, 'resources', 'light_factor_curve') as number[][],
     moistureFactorCurve: readObject(configs, 'resources', 'moisture_factor_curve') as number[][],
     mineralFactorCurve: readObject(configs, 'resources', 'mineral_factor_curve') as number[][],
-    consumptionTriggerTileMineralThreshold: readInteger(configs, 'resources', 'consumption_trigger_tile_mineral_threshold'),
+    consumptionTriggerTileMineralThreshold: readInteger(
+      configs,
+      'resources',
+      'consumption_trigger_tile_mineral_threshold',
+    ),
     consumptionTriggerDungItem: readBoolean(configs, 'resources', 'consumption_trigger_dung_item'),
-    consumptionTriggerFertilizerItem: readBoolean(configs, 'resources', 'consumption_trigger_fertilizer_item'),
+    consumptionTriggerFertilizerItem: readBoolean(
+      configs,
+      'resources',
+      'consumption_trigger_fertilizer_item',
+    ),
     diffusionRate: readNumber(configs, 'resources', 'diffusion_rate'),
     maxAbsorptionPerTick: readNumber(configs, 'resources', 'max_absorption_per_tick'),
     canopyShadeReduction: readNumber(configs, 'resources', 'canopy_shade_reduction'),
