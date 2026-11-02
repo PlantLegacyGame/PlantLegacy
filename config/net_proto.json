@@ -65,6 +65,12 @@
       "value": 20,
       "range": [5, 60],
       "notes": "Maximum client input send rate"
+    },
+    "move_speed": {
+      "type": "number",
+      "value": 5.0,
+      "range": [0.1, 20.0],
+      "notes": "Movement speed in units per second"
     }
   }
 }

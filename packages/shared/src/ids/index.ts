@@ -14,6 +14,7 @@ const PREFIXES = {
   account: 'acct',
   world: 'world',
   plant: 'p',
+  node: 'node',
   item: 'item',
   gene: 'gene',
   seed: 'seed',

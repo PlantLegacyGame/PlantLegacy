@@ -4,6 +4,7 @@
  */
 export * from './config/index.ts';
 export * from './events/index.ts';
+export * from './growth/index.ts';
 export * from './ids/index.ts';
 export * from './math/index.ts';
 export * from './protocol/index.ts';
