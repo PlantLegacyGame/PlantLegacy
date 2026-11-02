@@ -73,8 +73,10 @@ interface CubeState {
 interface WelcomePayload {
   playerId: string;
   cubeId: string;
+  plantId: string;
   tick: number;
   cubes: CubeState[];
+  rootNode: { id: string; x: number; y: number; z: number; type: string; biomass: number };
 }
 
 interface StatePayload {
@@ -97,16 +99,44 @@ interface ErrorPayload {
   message: string;
 }
 
+interface GrowthIntent {
+  plantId: string;
+  nodeId: string;
+  direction: { x: number; y: number; z: number };
+  nodeType: string;
+  isAttack: boolean;
+  tick: number;
+}
+
+interface GrowthEventPayload {
+  plantId: string;
+  newNode: {
+    id: string;
+    plantId: string;
+    type: string;
+    layer: string;
+    x: number;
+    y: number;
+    z: number;
+    biomass: number;
+    age: number;
+    parentId: string | null;
+  };
+  damageDealt?: number;
+}
+
 const MESSAGE_TYPE = {
   HELLO: 1,
   INPUT: 2,
   PING: 3,
+  GROWTH_INTENT: 4,
   WELCOME: 10,
   STATE: 11,
   KEYFRAME: 12,
   REJECT: 13,
   PONG: 14,
   ERROR: 15,
+  GROWTH_EVENT: 16,
 } as const;
 
 interface PlayerInput {
@@ -124,6 +154,22 @@ let serverTick = 0;
 const cubes = new Map<string, CubeState>();
 let inputTick = 0;
 let connecting = false;
+let plantId: string | null = null;
+let growthIntentTick = 0;
+const plantNodes = new Map<
+  string,
+  {
+    id: string;
+    position: THREE.Vector3;
+    type: number;
+    radius: number;
+    parentId: string | null;
+    age: number;
+    health: number;
+    mutationFlags: number;
+    biomass: number;
+  }
+>();
 
 const keys = {
   forward: false,
@@ -308,9 +354,10 @@ async function initPlantRenderer(): Promise<void> {
     nodeSize: 1.0,
   });
 
-  // Generate test plant for now (until server sends plant data)
-  const testNodes = plantRenderer.generateTestPlant(Date.now());
-  plantRenderer.updatePlantData(testNodes);
+  // Initialize with existing plant nodes (root node from WELCOME, or empty)
+  if (plantRenderer) {
+    plantRenderer.updatePlantData(Array.from(plantNodes.values()));
+  }
 }
 
 const scene = new THREE.Scene();
@@ -381,6 +428,38 @@ function sendInput(): void {
   ws.send(message);
 }
 
+function sendGrowthIntent(): void {
+  if (!ws || ws.readyState !== WebSocket.OPEN || !plantId) return;
+
+  growthIntentTick++;
+  // Grow from root node in camera forward direction
+  const rootNode = plantNodes.size > 0 ? Array.from(plantNodes.values())[0] : null;
+  if (!rootNode) return;
+
+  const dir = new THREE.Vector3(0, 0, -1);
+  dir.applyQuaternion(camera.quaternion);
+  dir.normalize();
+
+  // Bias toward growing down for roots, up for stems
+  const nodeType = 'stem';
+  const isAttack = false;
+
+  const intent: GrowthIntent = {
+    plantId,
+    nodeId: rootNode.id,
+    direction: { x: dir.x, y: dir.y, z: dir.z },
+    nodeType,
+    isAttack,
+    tick: growthIntentTick,
+  };
+
+  const message = JSON.stringify({
+    type: MESSAGE_TYPE.GROWTH_INTENT,
+    payload: { intent },
+  });
+  ws.send(message);
+}
+
 function connect(): void {
   if (connecting || (ws && ws.readyState === WebSocket.OPEN)) return;
 
@@ -412,11 +491,31 @@ function connect(): void {
           const welcome = payload as WelcomePayload;
           playerId = welcome.playerId;
           myCubeId = welcome.cubeId;
+          plantId = welcome.plantId;
           serverTick = welcome.tick;
           cubes.clear();
+          plantNodes.clear();
+          // Initialize with root node from server
+          if (welcome.rootNode) {
+            plantNodes.set(welcome.rootNode.id, {
+              id: welcome.rootNode.id,
+              position: new THREE.Vector3(
+                welcome.rootNode.x,
+                welcome.rootNode.y,
+                welcome.rootNode.z,
+              ),
+              type: 0, // root
+              radius: 0.4,
+              parentId: null,
+              age: 10,
+              health: 0.9,
+              mutationFlags: 0,
+              biomass: welcome.rootNode.biomass,
+            });
+          }
           // PlantRenderer handles its own objects
           setDetail(
-            `Welcome! You are ${myCubeId}\nPlayer ID: ${playerId}\nServer tick: ${serverTick}\nT01: Root Sight Shader Active`,
+            `Welcome! You are ${myCubeId}\nPlayer ID: ${playerId}\nServer tick: ${serverTick}\nT01: Growth Active`,
           );
           // T00A: Load onboarding config and show hint card on first spawn
           await loadOnboardingConfig();
@@ -449,6 +548,40 @@ function connect(): void {
             }
             plantRenderer.updatePlantData(nodes);
           }
+          break;
+        }
+
+        case MESSAGE_TYPE.GROWTH_EVENT: {
+          const growth = payload as GrowthEventPayload;
+          if (growth.plantId !== plantId) break;
+          const node = growth.newNode;
+          const typeMap: Record<string, number> = {
+            root: 0,
+            stem: 1,
+            vine: 2,
+            leaf: 3,
+            flower: 3,
+            spore_sac: 3,
+          };
+          const radius = 0.05 + node.biomass * 0.15;
+          const health = Math.min(1, node.biomass / 10);
+          plantNodes.set(node.id, {
+            id: node.id,
+            position: new THREE.Vector3(node.x, node.y, node.z),
+            type: typeMap[node.type] ?? 0,
+            radius,
+            parentId: node.parentId,
+            age: node.age,
+            health,
+            mutationFlags: 0,
+            biomass: node.biomass,
+          });
+          if (plantRenderer) {
+            plantRenderer.updatePlantData(Array.from(plantNodes.values()));
+          }
+          setDetail(
+            `Grew ${node.type} at (${node.x.toFixed(1)}, ${node.y.toFixed(1)}, ${node.z.toFixed(1)})`,
+          );
           break;
         }
 
@@ -510,6 +643,9 @@ window.addEventListener('keydown', (e) => {
     case 'ArrowRight':
       keys.right = true;
       e.preventDefault();
+      break;
+    case 'KeyG':
+      sendGrowthIntent();
       break;
   }
 });

@@ -13,12 +13,20 @@ export interface NetProtoConfig {
     maxZ: number;
   };
   clientSendRateHz: number;
+  moveSpeed: number;
 }
 
 import type { ConfigFile } from '@plant-legacy/shared/config';
 import { readInteger, readNumber, readObject } from '@plant-legacy/shared/config';
 
 export function loadNetProtoConfig(configs: Map<string, ConfigFile>): NetProtoConfig {
+  const rawWorldBounds = readObject<{
+    min_x: number;
+    max_x: number;
+    min_z: number;
+    max_z: number;
+  }>(configs, 'net_proto', 'world_bounds');
+
   return {
     protocolVersion: readInteger(configs, 'net_proto', 'protocol_version'),
     maxMessageSizeBytes: readInteger(configs, 'net_proto', 'max_message_size_bytes'),
@@ -27,13 +35,14 @@ export function loadNetProtoConfig(configs: Map<string, ConfigFile>): NetProtoCo
     angleQuantizationBits: readInteger(configs, 'net_proto', 'angle_quantization_bits'),
     keyframeIntervalTicks: readInteger(configs, 'net_proto', 'keyframe_interval_ticks'),
     maxVelocityUnitsPerTick: readNumber(configs, 'net_proto', 'max_velocity_units_per_tick'),
-    worldBounds: readObject<{
-      minX: number;
-      maxX: number;
-      minZ: number;
-      maxZ: number;
-    }>(configs, 'net_proto', 'world_bounds'),
+    worldBounds: {
+      minX: rawWorldBounds.min_x,
+      maxX: rawWorldBounds.max_x,
+      minZ: rawWorldBounds.min_z,
+      maxZ: rawWorldBounds.max_z,
+    },
     clientSendRateHz: readInteger(configs, 'net_proto', 'client_send_rate_hz'),
+    moveSpeed: readNumber(configs, 'net_proto', 'move_speed'),
   };
 }
 
@@ -42,6 +51,7 @@ export const MESSAGE_TYPE = {
   HELLO: 1,
   INPUT: 2,
   PING: 3,
+  GROWTH_INTENT: 4,
 
   // Server -> Client
   WELCOME: 10,
@@ -50,6 +60,7 @@ export const MESSAGE_TYPE = {
   REJECT: 13,
   PONG: 14,
   ERROR: 15,
+  GROWTH_EVENT: 16,
 } as const;
 
 export type MessageType = (typeof MESSAGE_TYPE)[keyof typeof MESSAGE_TYPE];
@@ -78,8 +89,10 @@ export interface HelloPayload {
 export interface WelcomePayload {
   playerId: string;
   cubeId: string;
+  plantId: string;
   tick: number;
   cubes: CubeState[];
+  rootNode: { id: string; x: number; y: number; z: number; type: string; biomass: number };
 }
 
 export interface InputPayload {
@@ -126,7 +139,7 @@ export function validateMovement(
   _tick: number,
 ): { valid: boolean; newX: number; newZ: number; newRotation: number; reason?: string } {
   const dt = 1 / config.tickRateHz;
-  const speed = 5.0; // units per second
+  const speed = config.moveSpeed;
   const maxVelocity = config.maxVelocityUnitsPerTick;
   const rotationSpeed = Math.PI; // radians per second
 
@@ -134,7 +147,7 @@ export function validateMovement(
   let newZ = cube.z;
   let newRotation = cube.rotation;
 
-  // Calculate movement vector
+  // Calculate movement vector in local space
   let dx = 0;
   let dz = 0;
 
@@ -160,12 +173,17 @@ export function validateMovement(
     newRotation += clamp(normalizedDiff, -maxRotationChange, maxRotationChange);
   }
 
-  // Move in facing direction
-  const moveX = Math.sin(newRotation) * speed * dt;
-  const moveZ = Math.cos(newRotation) * speed * dt;
+  // Move: forward/backward along facing, left/right strafe perpendicular
+  const facingX = Math.sin(newRotation);
+  const facingZ = Math.cos(newRotation);
+  const strafeX = facingZ; // 90 deg right: (cos, -sin)
+  const strafeZ = -facingX;
 
-  newX += dx * moveX + dz * moveX;
-  newZ += dx * moveZ + dz * moveZ;
+  const forwardDist = -dz * speed * dt; // dz = -1 for forward
+  const strafeDist = dx * speed * dt; // dx = 1 for right
+
+  newX += facingX * forwardDist + strafeX * strafeDist;
+  newZ += facingZ * forwardDist + strafeZ * strafeDist;
 
   // Check velocity limit
   const actualDx = newX - cube.x;

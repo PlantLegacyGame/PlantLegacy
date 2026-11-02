@@ -1,10 +1,12 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { createServer } from 'node:http';
 import process from 'node:process';
+import type { GrowthIntent } from '@plant-legacy/shared/growth';
 import { WebSocket, WebSocketServer } from 'ws';
 import { loadRuntimeConfig } from './core/config.ts';
 import { SERVICE_VERSION } from './core/version.ts';
 import { DatabaseProbe } from './ops/db.ts';
+import { loadGrowthConfig } from './ops/growth.ts';
 import { buildHealthReport, isReady } from './ops/health.ts';
 import { createLogger } from './ops/log.ts';
 import {
@@ -22,6 +24,7 @@ import {
   validateMovement,
   type WelcomePayload,
 } from './ops/net.ts';
+import { PlantWorld } from './ops/plantWorld.ts';
 
 const STARTED_AT = Date.now();
 const CUBE_COLORS = [
@@ -54,8 +57,10 @@ interface ConnectedPlayer {
   ws: WebSocket;
   playerId: string;
   cubeId: string;
+  plantId: string | null;
   lastInputTick: number;
   pendingInputs: Map<number, PlayerInput>;
+  pendingGrowthIntents: Map<number, import('@plant-legacy/shared/growth').GrowthIntent>;
 }
 
 class CubeWorld {
@@ -65,13 +70,22 @@ class CubeWorld {
   private config: ReturnType<typeof loadNetProtoConfig>;
   private log: ReturnType<typeof createLogger>;
   private tickInterval: NodeJS.Timeout | null = null;
+  private plantWorld: PlantWorld;
 
-  constructor(config: ReturnType<typeof loadNetProtoConfig>, log: ReturnType<typeof createLogger>) {
+  constructor(
+    config: ReturnType<typeof loadNetProtoConfig>,
+    log: ReturnType<typeof createLogger>,
+    plantWorld: PlantWorld,
+  ) {
     this.config = config;
     this.log = log;
+    this.plantWorld = plantWorld;
   }
 
-  addPlayer(ws: WebSocket, playerId: string): { cubeId: string; welcome: WelcomePayload } {
+  addPlayer(
+    ws: WebSocket,
+    playerId: string,
+  ): { cubeId: string; plantId: string; welcome: WelcomePayload } {
     const cubeId = `cube_${playerId}`;
     const colorIndex = this.cubes.size % CUBE_COLORS.length;
     const cube = createCube(cubeId, CUBE_COLORS[colorIndex]);
@@ -83,34 +97,58 @@ class CubeWorld {
 
     this.cubes.set(cubeId, cube);
 
+    // Create a plant for this player
+    const plant = this.plantWorld.createPlant(playerId, 'world_0', cube.x, cube.z);
+    const plantId = plant.id;
+
     const player: ConnectedPlayer = {
       ws,
       playerId,
       cubeId,
+      plantId,
       lastInputTick: 0,
       pendingInputs: new Map(),
+      pendingGrowthIntents: new Map(),
     };
     this.players.set(playerId, player);
+
+    const rootNodeId = plant.rootNodeId;
+    const rootNode = rootNodeId != null ? plant.nodes.get(rootNodeId) : undefined;
 
     const welcome: WelcomePayload = {
       playerId,
       cubeId,
+      plantId,
       tick: this.tick,
       cubes: Array.from(this.cubes.values()),
+      rootNode: rootNode
+        ? {
+            id: rootNode.id,
+            x: rootNode.x,
+            y: rootNode.y,
+            z: rootNode.z,
+            type: 'root',
+            biomass: rootNode.biomass,
+          }
+        : { id: rootNodeId ?? '', x: 0, y: 0, z: 0, type: 'root', biomass: 0 },
     };
 
-    this.log.info('player joined', { playerId, cubeId, totalPlayers: this.players.size });
-    return { cubeId, welcome };
+    this.log.info('player joined', { playerId, cubeId, plantId, totalPlayers: this.players.size });
+    return { cubeId, plantId, welcome };
   }
 
   removePlayer(playerId: string): void {
     const player = this.players.get(playerId);
     if (player) {
       this.cubes.delete(player.cubeId);
+      if (player.plantId) {
+        this.plantWorld.removePlant(player.plantId);
+      }
       this.players.delete(playerId);
       this.log.info('player left', {
         playerId,
         cubeId: player.cubeId,
+        plantId: player.plantId,
         totalPlayers: this.players.size,
       });
     }
@@ -122,6 +160,15 @@ class CubeWorld {
 
     // Store input for processing on next tick
     player.pendingInputs.set(input.tick, input);
+  }
+
+  handleGrowthIntent(
+    playerId: string,
+    intent: import('@plant-legacy/shared/growth').GrowthIntent,
+  ): void {
+    const player = this.players.get(playerId);
+    if (!player) return;
+    player.pendingGrowthIntents.set(intent.tick, intent);
   }
 
   handlePing(ws: WebSocket): void {
@@ -195,6 +242,11 @@ class CubeWorld {
   step(): void {
     this.tick++;
     this.processInputs();
+    this.processGrowthIntents();
+
+    // Step plant world
+    const dt = 1 / this.config.tickRateHz;
+    this.plantWorld.step(dt);
 
     // Send state updates
     const isKeyframe = this.tick % this.config.keyframeIntervalTicks === 0;
@@ -211,6 +263,37 @@ class CubeWorld {
         cubes: Array.from(this.cubes.values()),
       };
       this.broadcast(MESSAGE_TYPE.STATE, state);
+    }
+  }
+
+  private processGrowthIntents(): void {
+    for (const [_playerId, player] of this.players.entries()) {
+      if (!player.plantId) continue;
+      const sortedTicks = Array.from(player.pendingGrowthIntents.keys()).sort((a, b) => a - b);
+
+      for (const intentTick of sortedTicks) {
+        const intent = player.pendingGrowthIntents.get(intentTick);
+        if (!intent) {
+          player.pendingGrowthIntents.delete(intentTick);
+          continue;
+        }
+        player.pendingGrowthIntents.delete(intentTick);
+
+        // Verify this is the player's plant
+        if (intent.plantId !== player.plantId) continue;
+
+        const result = this.plantWorld.tryGrow(intent);
+
+        if (result.success && result.newNode) {
+          // Broadcast growth event to all players
+          const growthPayload = {
+            plantId: intent.plantId,
+            newNode: result.newNode,
+            damageDealt: result.damageDealt,
+          };
+          this.broadcast(MESSAGE_TYPE.GROWTH_EVENT, growthPayload);
+        }
+      }
     }
   }
 
@@ -250,8 +333,19 @@ async function main(): Promise<void> {
   });
 
   const netProtoConfig = loadNetProtoConfig(configs);
+  const growthConfig = loadGrowthConfig(configs);
 
-  const world = new CubeWorld(netProtoConfig, log);
+  // Plant growth world (T01)
+  const plantWorld = new PlantWorld(growthConfig, {
+    minX: netProtoConfig.worldBounds.minX,
+    maxX: netProtoConfig.worldBounds.maxX,
+    minZ: netProtoConfig.worldBounds.minZ,
+    maxZ: netProtoConfig.worldBounds.maxZ,
+    minY: -100,
+    maxY: 100,
+  });
+
+  const world = new CubeWorld(netProtoConfig, log, plantWorld);
 
   const handle = async (request: IncomingMessage, response: ServerResponse): Promise<void> => {
     applyCors(request, response, runtime.corsOrigins);
@@ -436,8 +530,11 @@ async function main(): Promise<void> {
 
     const { welcome } = world.addPlayer(ws, playerId);
 
-    // Send welcome message
-    const welcomeMsg = JSON.stringify({ type: MESSAGE_TYPE.WELCOME, payload: welcome });
+    // Send welcome message with plant info
+    const welcomeMsg = JSON.stringify({
+      type: MESSAGE_TYPE.WELCOME,
+      payload: { ...welcome, plantId: welcome.plantId },
+    });
     ws.send(welcomeMsg);
 
     ws.on('message', (data: Buffer) => {
@@ -450,6 +547,13 @@ async function main(): Promise<void> {
             const inputPayload = payload as InputPayload;
             if (inputPayload.input && typeof inputPayload.input.tick === 'number') {
               world.handleInput(playerId, inputPayload.input);
+            }
+            break;
+          }
+          case MESSAGE_TYPE.GROWTH_INTENT: {
+            const growthIntent = payload as GrowthIntent;
+            if (growthIntent && typeof growthIntent.tick === 'number') {
+              world.handleGrowthIntent(playerId, growthIntent);
             }
             break;
           }
