@@ -528,26 +528,6 @@ function connect(): void {
         case MESSAGE_TYPE.KEYFRAME: {
           const state = payload as StatePayload | KeyframePayload;
           serverTick = state.tick;
-
-          // Convert cube data to plant nodes for PlantRenderer
-          if (plantRenderer) {
-            const nodes = [];
-            let i = 0;
-            for (const cube of state.cubes) {
-              nodes.push({
-                id: `cube_${cube.id}_${i++}`,
-                position: new THREE.Vector3(cube.x, cube.nodeType === 0 ? -5 : 5, cube.z),
-                type: cube.nodeType ?? 0,
-                radius: 0.2,
-                parentId: i > 0 ? `cube_${state.cubes[0].id}_0` : null,
-                age: 5,
-                health: 0.8,
-                mutationFlags: 0,
-                biomass: 0.5,
-              });
-            }
-            plantRenderer.updatePlantData(nodes);
-          }
           break;
         }
 
