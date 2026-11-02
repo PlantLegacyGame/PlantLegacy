@@ -283,6 +283,22 @@ async function initPlantRenderer(): Promise<void> {
 
   plantRenderer = new PlantRenderer(renderer, scene, camera, {
     maxNodesPerPlant: config.maxNodesPerPlant,
+    tubeRingCount: config.tubeRingCount,
+    tubeLengthSegments: config.tubeLengthSegments,
+    leafCountPerNode: config.leafCountPerNode,
+    leafSize: config.leafSize,
+    leafLengthWidthRatio: config.leafLengthWidthRatio,
+    l0Distance: config.l0Distance,
+    l1Distance: config.l1Distance,
+    l2Distance: config.l2Distance,
+    triangleBudgetL0: config.triangleBudgetL0,
+    triangleBudgetL1: config.triangleBudgetL1,
+    windStrength: config.windStrength,
+    windSpeed: config.windSpeed,
+    healthTintStrength: config.healthTintStrength,
+    mutation0Param: config.mutation0Param,
+    mutation1Param: config.mutation1Param,
+    mutation2Param: config.mutation2Param,
     rootSightEnabled: config.rootSightEnabled,
     rootSightOpacity: config.rootSightOpacity,
     canopySightEnabled: config.canopySightEnabled,
@@ -417,15 +433,18 @@ function connect(): void {
           // Convert cube data to plant nodes for PlantRenderer
           if (plantRenderer) {
             const nodes = [];
+            let i = 0;
             for (const cube of state.cubes) {
               nodes.push({
+                id: `cube_${cube.id}_${i++}`,
                 position: new THREE.Vector3(cube.x, cube.nodeType === 0 ? -5 : 5, cube.z),
-                normal: new THREE.Vector3(0, 1, 0),
+                type: cube.nodeType ?? 0,
+                radius: 0.2,
+                parentId: i > 0 ? `cube_${state.cubes[0].id}_0` : null,
+                age: 5,
+                health: 0.8,
+                mutationFlags: 0,
                 biomass: 0.5,
-                nodeType: cube.nodeType ?? 0,
-                waterLevel: 0.7,
-                nutrientLevel: 0.6,
-                photosynthesisRate: 0.5,
               });
             }
             plantRenderer.updatePlantData(nodes);

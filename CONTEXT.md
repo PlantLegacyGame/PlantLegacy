@@ -4,8 +4,8 @@ Current context for any human or AI session working in this repository. Keep it
 current at the end of every task (DESIGN.md, Session Protocol). `DESIGN.md` wins
 over this file whenever they disagree.
 
-**Phase:** 0 — Foundation + Gate 0. **Implemented:** T00, O01, T03P, C01, T00A
-and the procedural plant renderer / Root Sight prototype committed as T01.
+**Phase:** 0 — Foundation + Gate 0. **Implemented:** T00, O01, T03P, C01, T00A, C02
+and the procedural plant renderer v1 (replaces the T01-labelled Root Sight prototype).
 **Last updated:** 2026-11-02.
 
 ## 1. Stack
@@ -333,11 +333,11 @@ The full rationale log is in [`docs/decisions.md`](./docs/decisions.md).
 Growth simulation, persistence, accounts, chat, economy, database
 schema/migrations, admin/compliance tooling.
 
-The renderer is a **prototype**, not simulated plant state: it draws server cube
-positions plus a client-generated test plant. DESIGN.md assigns **T01** to
-growth and **C02** to the procedural renderer; this repository committed the
-renderer foundation under the T01 label, so do not read the record as proof that
-growth exists. The next task in DESIGN.md order is **T01 Growth**.
+The C02 procedural plant renderer v1 is complete: tapered tubes for
+roots/stems/vines, instanced leaves with L0/L1, shared plant material with
+triplanar noise + wind + health tint, deterministic generation from node data,
+and 3 mutation visual signatures. T01 growth simulation is still not built;
+the next task in DESIGN.md order is **T01 Growth**.
 
 ## 9. Keeping this file current
 

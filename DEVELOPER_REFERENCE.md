@@ -2,7 +2,7 @@
 
 **Last Updated:** 2026-11-02  
 **Current Phase:** Gate 0 complete; Gate 1 run-up (Week 3-24)  
-**Completed Tasks:** T00, O01  
+**Completed Tasks:** T00, O01, **C02**  
 **Partial Tasks:** T03P (transport works, rejection ineffective), C01 (foundation slice), T00A (onboarding slice), T01 (renderer prototype; growth not built)  
 **Next Task:** fix T03P rejection, then **T01 Growth** (DESIGN.md Part 4)
 
@@ -16,14 +16,15 @@
 | O01 | ✅ Complete | Repo + deploy pipeline: pnpm, Biome, CI, Docker, GitHub Pages, `/health` + `/ready` |
 | T03P | ⚠️ Partial | WebSocket + JSON protocol, 20 Hz authoritative cubes; velocity/bounds rejection is ineffective |
 | C01 | ⚠️ Partial | Vite + Three.js client, OrbitControls, WebSocket; no input abstraction, UI shell or debug overlay |
+| C02 | ✅ Complete | Procedural plant renderer v1: tapered tubes, instanced leaves, shared material, triplanar noise, wind, health tint, 3 mutation signatures, L0/L1 |
 | T00A | ⚠️ Partial | 3-line hint card and resource tooltips; tile grid and resource simulation not built |
-| T01 | ⚠️ Partial | Root Sight renderer prototype; DESIGN.md T01 growth simulation not built |
+| T01 | ⚠️ Partial | Root Sight renderer prototype (superseded by C02 for mesh generation); DESIGN.md T01 growth simulation not built |
 
 ### What Works Now (Live)
 - **Local dev:** `pnpm dev` → server (8080) + Vite client (4173) with hot reload
 - **Staging:** GitHub Pages at `https://plantlegacygame.github.io/PlantLegacy/`, API via Cloudflare quick tunnel
 - **Protocol:** WebSocket v1 documented in `docs/protocol.md`; two tabs, server-authoritative cubes
-- **Client:** Three.js scene, OrbitControls, Root Sight renderer prototype, onboarding overlays
+- **Client:** Three.js scene, OrbitControls, C02 procedural plant renderer (tapered tubes + instanced leaves, shared material, triplanar noise, wind, health tint, mutation signatures, L0/L1), onboarding overlays
 - **Config:** 75 files in `config/` (extended-1 format), validated at startup + CI
 
 ---
@@ -206,13 +207,13 @@ PlantLegacy/
 │   ├── ci.yml              # Lint, typecheck, config:validate, test, build
 │   └── deploy-staging.yml  # Build client → GitHub Pages on main push
 ├── apps/
-│   ├── client/             # Vite + Three.js client (C01, T00A, T01)
+│   ├── client/             # Vite + Three.js client (C01, T00A, C02)
 │   │   ├── index.html      # Vite entry + meta[name=server-origin]
 │   │   ├── src/
 │   │   │   ├── main.ts     # Game client entry (WebSocket, Three.js, input, overlays)
 │   │   │   ├── styles.css  # Page + overlay styles
 │   │   │   ├── config/plantRendererConfig.ts  # fetch + fallback for /config/plant_renderer
-│   │   │   └── renderers/PlantRenderer.ts     # Root Sight shaders, ground, points
+│   │   │   └── renderers/PlantRenderer.ts     # C02: tapered tubes, instanced leaves, shared plant material, triplanar noise, wind, health tint, mutation signatures, L0/L1 LOD
 │   │   ├── scripts/        # Legacy preview helpers (unused by `pnpm dev`)
 │   │   ├── vite.config.ts  # Vite config with dev proxy + Pages base path
 │   │   └── package.json    # deps: three, vite, @vitejs/plugin-legacy
@@ -269,7 +270,7 @@ PlantLegacy/
 | `compliance.json` | T00 | draft | 3 | 5-line illegal-content-only policy (RULE_6) |
 | `net_proto.json` | T03P | draft | 9 | Protocol: tick rate, quantization, velocity limit, world bounds |
 | `onboarding.json` | T00A | draft | 3 | Hint card (3 lines), resource tooltips, duration |
-| `plant_renderer.json` | T01 | draft | 15 | Root Sight shaders, node budget, visualization flags, quality |
+| `plant_renderer.json` | C02 | draft | 30 | Tapered tube, instanced leaf, LOD, wind, health tint, mutation tunables |
 | `*.json` (70 files) | various | stub | 0 | Empty `values: {}` — filled by owning task |
 
 `pnpm config:validate` checks every row above. `docs/tunables.md` lists each key,
@@ -301,7 +302,7 @@ Per `DESIGN.md` Part 4, the ordered tasks to reach **Gate 1 (Week 24)**:
 |-------|------|-------------|------------|--------|
 | 0 | **T03P fix** | Config-driven move speed + snake_case `world_bounds`; assert `REJECT` | T03P | **next** |
 | 1 | **T01** | Growth: typed nodes, biomass cost, root competition, canopy shading, root attack | T00A | not started |
-| 2 | **C02** | Procedural plant renderer v1 (the T01-labelled prototype is the starting point) | C01, T01 | prototype only |
+| 2 | **C02** | Procedural plant renderer v1 (tapered tubes, instanced leaves, shared material, L0/L1) | C01 | ✅ complete |
 | 3 | **T03** | Multiplayer world: persistence, offline tiers, binary framing + delta | T03P, T01 | not started |
 | 4 | **T07** | Weather + day/night | T00A, T03 | not started |
 | 5 | **C03** | Environment and weather visuals | T07, C01 | not started |
@@ -362,7 +363,7 @@ ordering follows Gate 0. The full ordered list is DESIGN.md Part 4.
 - **75 config files** — 73 DESIGN.md systems plus `onboarding.json` and `plant_renderer.json`
 - **Rarity ban is absolute** — any `rarity` key or enum member fails validation
 - **`account_bound: true` forces** `tradeable`, `mailable`, `listable` to `false` (RULE_23)
-- **Known RULE_3 gaps to close:** `speed = 5.0` in `apps/server/src/ops/net.ts`, hardcoded WASD bindings and camera limits in `apps/client/src/main.ts`, shader colors and `nodeSize` in `PlantRenderer.ts`
+- **Known RULE_3 gaps to close:** `speed = 5.0` in `apps/server/src/ops/net.ts`, hardcoded WASD bindings and camera limits in `apps/client/src/main.ts`
 
 ### Client-Server Boundary
 - **Client is NEVER authoritative** — it renders received state and sends input intents
@@ -379,7 +380,6 @@ ordering follows Gate 0. The full ordered list is DESIGN.md Part 4.
 ### Upcoming Technical Decisions
 - **T03P fix:** config-driven move speed, snake_case `world_bounds` reads, a `REJECT` test
 - **T01 Growth:** node graph, biomass economy, root competition, canopy shading (DESIGN.md Part 4)
-- **C02:** finish the procedural renderer — real Root Sight camera/cutaway, GPU buffer budget
 - **T03:** binary protocol — frame header `[version:u8][type:u8][payload]`, quantization, delta encoding
 
 ---
