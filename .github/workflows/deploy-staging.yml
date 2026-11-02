@@ -31,16 +31,6 @@ jobs:
 
       - uses: pnpm/action-setup@v6
 
-      - name: Debug environment
-        run: |
-          echo "Node version: $(node --version)"
-          echo "npm version: $(npm --version)"
-          echo "pnpm version: $(pnpm --version)"
-          echo "PNPM_HOME: $PNPM_HOME"
-          cat .npmrc
-          pnpm config get allow-all-build-scripts
-          ls -la
-
       - uses: actions/setup-node@v7
         with:
           node-version: 24

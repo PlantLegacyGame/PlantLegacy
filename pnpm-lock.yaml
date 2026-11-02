@@ -7,34 +7,15 @@ settings:
 importers:
 
   .:
-    dependencies:
-      '@types/three':
-        specifier: ^0.187.0
-        version: 0.187.0
-      '@types/ws':
-        specifier: ^8.18.2
-        version: 8.18.2
-      '@vitejs/plugin-legacy':
-        specifier: ^8.2.3
-        version: 8.2.3(terser@5.51.2)(vite@8.3.5(@types/node@24.19.2)(terser@5.51.2))
-      three:
-        specifier: ^0.187.0
-        version: 0.187.0
-      vite:
-        specifier: ^8.3.5
-        version: 8.3.5(@types/node@24.19.2)(terser@5.51.2)
-      ws:
-        specifier: ^8.22.1
-        version: 8.22.1
     devDependencies:
       '@biomejs/biome':
-        specifier: ^2.2.0
+        specifier: ^2.6.4
         version: 2.6.4
       '@types/node':
         specifier: ^24.19.2
         version: 24.19.2
       typescript:
-        specifier: ^5.9.0
+        specifier: ^5.9.3
         version: 5.9.3
 
   apps/client:
@@ -46,12 +27,18 @@ importers:
       '@types/three':
         specifier: ^0.187.0
         version: 0.187.0
+      '@types/ws':
+        specifier: ^8.18.2
+        version: 8.18.2
       '@vitejs/plugin-legacy':
         specifier: ^8.2.3
         version: 8.2.3(terser@5.51.2)(vite@8.3.5(@types/node@26.6.6)(terser@5.51.2))
       vite:
         specifier: ^8.3.5
         version: 8.3.5(@types/node@26.6.6)(terser@5.51.2)
+      ws:
+        specifier: ^8.22.1
+        version: 8.22.1
 
   apps/server:
     dependencies:
@@ -61,10 +48,16 @@ importers:
       pg:
         specifier: ^8.13.0
         version: 8.23.1
+      ws:
+        specifier: ^8.22.1
+        version: 8.22.1
     devDependencies:
       '@types/pg':
         specifier: ^8.11.0
         version: 8.23.1
+      '@types/ws':
+        specifier: ^8.18.2
+        version: 8.18.2
 
   packages/shared: {}
 
@@ -2056,25 +2049,6 @@ snapshots:
     dependencies:
       '@types/node': 24.19.2
 
-  '@vitejs/plugin-legacy@8.2.3(terser@5.51.2)(vite@8.3.5(@types/node@24.19.2)(terser@5.51.2))':
-    dependencies:
-      '@babel/core': 7.29.7
-      '@babel/plugin-transform-dynamic-import': 7.29.7(@babel/core@7.29.7)
-      '@babel/plugin-transform-modules-systemjs': 7.29.8(@babel/core@7.29.7)
-      '@babel/preset-env': 7.29.7(@babel/core@7.29.7)
-      babel-plugin-polyfill-corejs3: 0.14.2(@babel/core@7.29.7)
-      babel-plugin-polyfill-regenerator: 0.6.8(@babel/core@7.29.7)
-      browserslist: 4.29.5
-      browserslist-to-esbuild: 2.1.1(browserslist@4.29.5)
-      core-js: 3.51.0
-      magic-string: 1.4.5
-      regenerator-runtime: 0.14.1
-      systemjs: 6.15.1
-      terser: 5.51.2
-      vite: 8.3.5(@types/node@24.19.2)(terser@5.51.2)
-    transitivePeerDependencies:
-      - supports-color
-
   '@vitejs/plugin-legacy@8.2.3(terser@5.51.2)(vite@8.3.5(@types/node@26.6.6)(terser@5.51.2))':
     dependencies:
       '@babel/core': 7.29.7
@@ -2420,18 +2394,6 @@ snapshots:
       browserslist: 4.29.5
       escalade: 3.2.0
       picocolors: 1.1.1
-
-  vite@8.3.5(@types/node@24.19.2)(terser@5.51.2):
-    dependencies:
-      lightningcss: 1.33.0
-      picomatch: 4.0.7
-      postcss: 8.5.32
-      rolldown: 1.2.16
-      tinyglobby: 0.2.17
-    optionalDependencies:
-      '@types/node': 24.19.2
-      fsevents: 2.3.3
-      terser: 5.51.2
 
   vite@8.3.5(@types/node@26.6.6)(terser@5.51.2):
     dependencies:

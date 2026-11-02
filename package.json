@@ -11,7 +11,7 @@
   "scripts": {
     "dev": "node tools/dev.mjs",
     "dev:server": "pnpm --filter @plant-legacy/server dev",
-    "dev:client": "pnpm --filter @plant-legacy/client preview",
+    "dev:client": "pnpm --filter @plant-legacy/client dev",
     "build": "pnpm -r --if-present build",
     "typecheck": "pnpm -r --if-present typecheck",
     "lint": "biome check .",
@@ -23,8 +23,8 @@
     "start": "pnpm --filter @plant-legacy/server start"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.2.0",
+    "@biomejs/biome": "^2.6.4",
     "@types/node": "^24.19.2",
-    "typescript": "^5.9.0"
+    "typescript": "^5.9.3"
   }
 }

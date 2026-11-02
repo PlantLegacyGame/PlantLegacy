@@ -12,9 +12,11 @@
   },
   "dependencies": {
     "@plant-legacy/shared": "workspace:*",
-    "pg": "^8.13.0"
+    "pg": "^8.13.0",
+    "ws": "^8.22.1"
   },
   "devDependencies": {
-    "@types/pg": "^8.11.0"
+    "@types/pg": "^8.11.0",
+    "@types/ws": "^8.18.2"
   }
 }
