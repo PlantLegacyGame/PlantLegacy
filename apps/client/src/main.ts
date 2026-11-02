@@ -522,7 +522,7 @@ function connect(): void {
           }
           // PlantRenderer handles its own objects
           setDetail(
-            `Welcome! You are ${myCubeId}\nPlayer ID: ${playerId}\nServer tick: ${serverTick}\nT01: Growth Active`,
+            `Welcome! You are ${myCubeId}\nPlayer ID: ${playerId}\nServer tick: ${serverTick}\nT01: Growth Active — Press 'G' to grow stem from root`,
           );
           // T00A: Load onboarding config and show hint card on first spawn
           await loadOnboardingConfig();
