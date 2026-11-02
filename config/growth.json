@@ -4,8 +4,135 @@
     "version": "0.1.0",
     "schema": "extended-1",
     "owner_task": "T01",
-    "status": "stub",
-    "notes": "Declared by T00. Populated by T01 per DESIGN.md Part 5."
+    "status": "draft",
+    "notes": "Growth simulation configuration. All values from DESIGN.md Part 4 T01."
   },
-  "values": {}
+  "values": {
+    "root_growth_speed": {
+      "type": "number",
+      "value": 0.5,
+      "range": [0.1, 10.0],
+      "notes": "Root layer growth speed in units per second"
+    },
+    "canopy_growth_speed": {
+      "type": "number",
+      "value": 0.5,
+      "range": [0.1, 10.0],
+      "notes": "Canopy layer growth speed in units per second"
+    },
+    "node_cost_base": {
+      "type": "integer",
+      "value": 20,
+      "range": [1, 100],
+      "notes": "Base biomass cost per node"
+    },
+    "max_nodes_per_plant": {
+      "type": "integer",
+      "value": 2000,
+      "range": [200, 200000],
+      "notes": "Server-safety ceiling for max nodes per plant"
+    },
+    "growth_cooldown": {
+      "type": "number",
+      "value": 0.5,
+      "range": [0.0, 1.0],
+      "notes": "Cooldown between growth attempts in seconds"
+    },
+    "root_overlap_pressure_damage": {
+      "type": "number",
+      "value": 5.0,
+      "range": [0.0, 20.0],
+      "notes": "Damage per second applied by overlapping rival roots (HP/s)"
+    },
+    "light_blocking_per_node": {
+      "type": "integer",
+      "value": 5,
+      "range": [1, 25],
+      "notes": "Light reduction per canopy node on tiles below"
+    },
+    "root_node": {
+      "type": "object",
+      "value": {
+        "biomass_cost": 30,
+        "resource_draw_water": 0.5,
+        "resource_draw_nutrients": 0.3,
+        "upkeep_biomass_per_second": 0.01,
+        "stat_modifiers": {},
+        "growth_direction_bias": "upward"
+      },
+      "notes": "Root node type definition"
+    },
+    "stem_node": {
+      "type": "object",
+      "value": {
+        "biomass_cost": 12,
+        "resource_draw_water": 0.2,
+        "resource_draw_nutrients": 0.2,
+        "upkeep_biomass_per_second": 0.02,
+        "stat_modifiers": { "structural_integrity": 1.0 },
+        "growth_direction_bias": "upward"
+      },
+      "notes": "Stem node type definition"
+    },
+    "leaf_node": {
+      "type": "object",
+      "value": {
+        "biomass_cost": 15,
+        "resource_draw_water": 0.1,
+        "resource_draw_nutrients": 0.1,
+        "upkeep_biomass_per_second": 0.03,
+        "stat_modifiers": { "photosynthesis": 1.5, "light_blocking": 1.0 },
+        "growth_direction_bias": "outward"
+      },
+      "notes": "Leaf node type definition"
+    },
+    "flower_node": {
+      "type": "object",
+      "value": {
+        "biomass_cost": 25,
+        "resource_draw_water": 0.3,
+        "resource_draw_nutrients": 0.4,
+        "upkeep_biomass_per_second": 0.05,
+        "stat_modifiers": { "reproduction": 1.0, "pollinator_attraction": 1.0 },
+        "growth_direction_bias": "upward"
+      },
+      "notes": "Flower node type definition"
+    },
+    "spore_sac_node": {
+      "type": "object",
+      "value": {
+        "biomass_cost": 30,
+        "resource_draw_water": 0.2,
+        "resource_draw_nutrients": 0.3,
+        "upkeep_biomass_per_second": 0.04,
+        "stat_modifiers": { "spore_production": 1.0 },
+        "growth_direction_bias": "outward"
+      },
+      "notes": "Spore sac node type definition"
+    },
+    "vine_node": {
+      "type": "object",
+      "value": {
+        "biomass_cost": 10,
+        "resource_draw_water": 0.2,
+        "resource_draw_nutrients": 0.1,
+        "upkeep_biomass_per_second": 0.02,
+        "stat_modifiers": { "climbing": 1.0, "horizontal_spread": 1.5 },
+        "growth_direction_bias": "horizontal"
+      },
+      "notes": "Vine node type definition"
+    },
+    "growth_intent_cooldown": {
+      "type": "number",
+      "value": 0.2,
+      "range": [0.05, 1.0],
+      "notes": "Client growth intent rate limit in seconds"
+    },
+    "root_attack_damage_multiplier": {
+      "type": "number",
+      "value": 2.0,
+      "range": [0.5, 10.0],
+      "notes": "Multiplier for root attack damage vs passive overlap pressure"
+    }
+  }
 }

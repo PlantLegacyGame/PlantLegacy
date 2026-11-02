@@ -435,9 +435,11 @@ function sendGrowthIntent(): void {
   const rootNode = plantNodes.size > 0 ? Array.from(plantNodes.values())[0] : null;
   if (!rootNode) return;
 
-  const dir = new THREE.Vector3(0, 0, -1);
-  dir.applyQuaternion(camera.quaternion);
-  dir.normalize();
+  // Grow stems upward (canopy) with camera direction mixed in
+  const camDir = new THREE.Vector3(0, 0, -1);
+  camDir.applyQuaternion(camera.quaternion);
+  camDir.normalize();
+  const dir = new THREE.Vector3(camDir.x * 0.7, 0.7, camDir.z * 0.7).normalize();
 
   // Bias toward growing down for roots, up for stems
   const nodeType = 'stem';
@@ -504,7 +506,7 @@ function connect(): void {
                 welcome.rootNode.z,
               ),
               type: 0, // root
-              radius: 0.4,
+              radius: 0.05 + welcome.rootNode.biomass * 0.15,
               parentId: null,
               age: 10,
               health: 0.9,

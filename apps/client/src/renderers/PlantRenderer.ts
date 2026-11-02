@@ -200,7 +200,7 @@ interface PlantRendererConfig {
 
 const DEFAULT_CONFIG: PlantRendererConfig = {
   maxNodesPerPlant: 1000,
-  tubeRingCount: 8,
+  tubeRingCount: 12,
   tubeLengthSegments: 4,
   leafCountPerNode: 3,
   leafSize: 1.5,
@@ -286,8 +286,12 @@ export class PlantRenderer {
     this.config = { ...DEFAULT_CONFIG, ...config };
 
     const maxNodes = this.config.maxNodesPerPlant;
-    const maxRingsPerSegment = (this.config.tubeLengthSegments + 1) * this.config.tubeRingCount;
-    const maxIndicesPerSegment = this.config.tubeLengthSegments * this.config.tubeRingCount * 6;
+    const ringsPerSegment = this.config.tubeLengthSegments + 1;
+    const capRingsPerSegment = 2;
+    const maxRingsPerSegment = (ringsPerSegment + capRingsPerSegment) * this.config.tubeRingCount;
+    const maxIndicesPerSegment =
+      this.config.tubeLengthSegments * this.config.tubeRingCount * 6 +
+      this.config.tubeRingCount * 6 * 2;
 
     this.maxTubes = maxNodes;
     this.maxLeaves = maxNodes * this.config.leafCountPerNode;
@@ -419,9 +423,11 @@ export class PlantRenderer {
 
     const ringCount = this.config.tubeLengthSegments + 1;
     const segmentsAround = this.config.tubeRingCount;
+    const capVertexCount = segmentsAround * 2;
     const baseVertex = this.tubeVertexCount;
     const baseIndex = this.tubeIndexCount;
 
+    // Body rings between startPos and endPos
     for (let r = 0; r < ringCount; r++) {
       const t = r / (ringCount - 1);
       const pos = new THREE.Vector3().lerpVectors(startPos, endPos, t);
@@ -454,6 +460,63 @@ export class PlantRenderer {
       }
     }
 
+    // Start cap ring (at startPos, normals pointing along -tangent)
+    const capStartBase = baseVertex + ringCount * segmentsAround;
+    for (let s = 0; s < segmentsAround; s++) {
+      const angle = (s / segmentsAround) * Math.PI * 2;
+      const offset = normal
+        .clone()
+        .multiplyScalar(Math.cos(angle))
+        .add(binormal.clone().multiplyScalar(Math.sin(angle)))
+        .multiplyScalar(startRadius);
+      const vertex = startPos.clone().add(offset);
+      const vi = capStartBase + s;
+
+      this.tubePositions[vi * 3] = vertex.x;
+      this.tubePositions[vi * 3 + 1] = vertex.y;
+      this.tubePositions[vi * 3 + 2] = vertex.z;
+
+      this.tubeNormals[vi * 3] = -tangent.x;
+      this.tubeNormals[vi * 3 + 1] = -tangent.y;
+      this.tubeNormals[vi * 3 + 2] = -tangent.z;
+
+      this.tubeBiomass[vi] = child.biomass;
+      this.tubeNodeType[vi] = child.type;
+      this.tubeHealth[vi] = child.health;
+      this.tubeMutationFlags[vi] = child.mutationFlags;
+      this.tubeTubeU[vi] = 0;
+      this.tubeTubeV[vi] = s / segmentsAround;
+    }
+
+    // End cap ring (at endPos, normals pointing along +tangent)
+    const capEndBase = capStartBase + segmentsAround;
+    for (let s = 0; s < segmentsAround; s++) {
+      const angle = (s / segmentsAround) * Math.PI * 2;
+      const offset = normal
+        .clone()
+        .multiplyScalar(Math.cos(angle))
+        .add(binormal.clone().multiplyScalar(Math.sin(angle)))
+        .multiplyScalar(endRadius);
+      const vertex = endPos.clone().add(offset);
+      const vi = capEndBase + s;
+
+      this.tubePositions[vi * 3] = vertex.x;
+      this.tubePositions[vi * 3 + 1] = vertex.y;
+      this.tubePositions[vi * 3 + 2] = vertex.z;
+
+      this.tubeNormals[vi * 3] = tangent.x;
+      this.tubeNormals[vi * 3 + 1] = tangent.y;
+      this.tubeNormals[vi * 3 + 2] = tangent.z;
+
+      this.tubeBiomass[vi] = child.biomass;
+      this.tubeNodeType[vi] = child.type;
+      this.tubeHealth[vi] = child.health;
+      this.tubeMutationFlags[vi] = child.mutationFlags;
+      this.tubeTubeU[vi] = 1;
+      this.tubeTubeV[vi] = s / segmentsAround;
+    }
+
+    // Body ring indices
     for (let r = 0; r < ringCount - 1; r++) {
       for (let s = 0; s < segmentsAround; s++) {
         const sNext = (s + 1) % segmentsAround;
@@ -471,8 +534,79 @@ export class PlantRenderer {
       }
     }
 
-    this.tubeVertexCount += ringCount * segmentsAround;
-    this.tubeIndexCount += (ringCount - 1) * segmentsAround * 6;
+    // Start cap: connect capStartBase ring to body ring 0
+    for (let s = 0; s < segmentsAround; s++) {
+      const sNext = (s + 1) % segmentsAround;
+      const c0 = capStartBase + s;
+      const c1 = capStartBase + sNext;
+      const b0 = baseVertex + s;
+      const b1 = baseVertex + sNext;
+
+      this.tubeIndices[baseIndex + (ringCount - 1) * segmentsAround * 6 + s * 6] = c0;
+      this.tubeIndices[baseIndex + (ringCount - 1) * segmentsAround * 6 + s * 6 + 1] = c1;
+      this.tubeIndices[baseIndex + (ringCount - 1) * segmentsAround * 6 + s * 6 + 2] = b1;
+      this.tubeIndices[baseIndex + (ringCount - 1) * segmentsAround * 6 + s * 6 + 3] = c0;
+      this.tubeIndices[baseIndex + (ringCount - 1) * segmentsAround * 6 + s * 6 + 4] = b1;
+      this.tubeIndices[baseIndex + (ringCount - 1) * segmentsAround * 6 + s * 6 + 5] = b0;
+    }
+
+    // End cap: connect body last ring to capEndBase ring
+    const lastBodyBase = baseVertex + (ringCount - 1) * segmentsAround;
+    for (let s = 0; s < segmentsAround; s++) {
+      const sNext = (s + 1) % segmentsAround;
+      const b0 = lastBodyBase + s;
+      const b1 = lastBodyBase + sNext;
+      const c0 = capEndBase + s;
+      const c1 = capEndBase + sNext;
+
+      this.tubeIndices[
+        baseIndex +
+        (ringCount - 1) * segmentsAround * 6 +
+        segmentsAround * 6 +
+        s * 6
+      ] = b0;
+      this.tubeIndices[
+        baseIndex +
+        (ringCount - 1) * segmentsAround * 6 +
+        segmentsAround * 6 +
+        s * 6 +
+        1
+      ] = b1;
+      this.tubeIndices[
+        baseIndex +
+        (ringCount - 1) * segmentsAround * 6 +
+        segmentsAround * 6 +
+        s * 6 +
+        2
+      ] = c1;
+      this.tubeIndices[
+        baseIndex +
+        (ringCount - 1) * segmentsAround * 6 +
+        segmentsAround * 6 +
+        s * 6 +
+        3
+      ] = b0;
+      this.tubeIndices[
+        baseIndex +
+        (ringCount - 1) * segmentsAround * 6 +
+        segmentsAround * 6 +
+        s * 6 +
+        4
+      ] = c1;
+      this.tubeIndices[
+        baseIndex +
+        (ringCount - 1) * segmentsAround * 6 +
+        segmentsAround * 6 +
+        s * 6 +
+        5
+      ] = c0;
+    }
+
+    this.tubeVertexCount += ringCount * segmentsAround + capVertexCount;
+    this.tubeIndexCount +=
+      (ringCount - 1) * segmentsAround * 6 + // body
+        segmentsAround * 6 + // start cap
+        segmentsAround * 6; // end cap
 
     this.nodeVertexOffset.set(child.id, baseVertex);
   }
