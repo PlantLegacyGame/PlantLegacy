@@ -158,6 +158,7 @@ let inputTick = 0;
 let connecting = false;
 let plantId: string | null = null;
 let growthIntentTick = 0;
+let lastGrownNodeId: string | null = null;
 let plantBiomass = 0;
 const plantNodes = new Map<
   string,
@@ -437,8 +438,11 @@ function sendGrowthIntent(): void {
   if (!ws || ws.readyState !== WebSocket.OPEN || !plantId) return;
 
   growthIntentTick++;
+  // Grow from the most recently added node so stems chain, not all from root
+  const growFrom = lastGrownNodeId ? plantNodes.get(lastGrownNodeId) : null;
   const rootNode = plantNodes.size > 0 ? Array.from(plantNodes.values())[0] : null;
-  if (!rootNode) return;
+  const parentNode = growFrom ?? rootNode;
+  if (!parentNode) return;
 
   // Grow stems upward (canopy) with camera direction mixed in
   const camDir = new THREE.Vector3(0, 0, -1);
@@ -452,7 +456,7 @@ function sendGrowthIntent(): void {
 
   const intent: GrowthIntent = {
     plantId,
-    nodeId: rootNode.id,
+    nodeId: parentNode.id,
     direction: { x: dir.x, y: dir.y, z: dir.z },
     nodeType,
     isAttack,
@@ -519,6 +523,7 @@ function connect(): void {
               biomass: welcome.rootNode.biomass,
             });
             plantBiomass = welcome.totalBiomass;
+            lastGrownNodeId = welcome.rootNode.id;
             updateResourceReadout();
           }
           // PlantRenderer handles its own objects
@@ -574,6 +579,7 @@ function connect(): void {
             biomass: node.biomass,
           });
           plantBiomass = growth.totalBiomass ?? plantBiomass;
+          lastGrownNodeId = node.id;
           updateResourceReadout();
           if (plantRenderer) {
             plantRenderer.updatePlantData(Array.from(plantNodes.values()));
