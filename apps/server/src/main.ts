@@ -279,10 +279,14 @@ class CubeWorld {
         }
         player.pendingGrowthIntents.delete(intentTick);
 
+        console.log('GROWTH_INTENT processing:', { playerId: _playerId, plantId: intent.plantId, intentPlantId: intent.plantId, playerPlantId: player.plantId, match: intent.plantId === player.plantId });
+
         // Verify this is the player's plant
         if (intent.plantId !== player.plantId) continue;
 
         const result = this.plantWorld.tryGrow(intent);
+
+        console.log('GROWTH_INTENT result:', { success: result.success, reason: result.reason, newNode: result.newNode ? result.newNode.id : null });
 
         if (result.success && result.newNode) {
           // Broadcast growth event to all players
@@ -551,6 +555,7 @@ async function main(): Promise<void> {
             break;
           }
           case MESSAGE_TYPE.GROWTH_INTENT: {
+            console.log('GROWTH_INTENT message received:', { playerId, intentTick: (payload as GrowthIntent)?.tick });
             const growthIntent = payload as GrowthIntent;
             if (growthIntent && typeof growthIntent.tick === 'number') {
               world.handleGrowthIntent(playerId, growthIntent);

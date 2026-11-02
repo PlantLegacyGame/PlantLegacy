@@ -429,12 +429,21 @@ function sendInput(): void {
 }
 
 function sendGrowthIntent(): void {
-  if (!ws || ws.readyState !== WebSocket.OPEN || !plantId) return;
+  console.log('GROWTH_INTENT called:', { wsOpen: !!ws, plantId, plantNodesSize: plantNodes.size });
+
+  if (!ws || ws.readyState !== WebSocket.OPEN || !plantId) {
+    console.log('GROWTH_INTENT blocked: not ready');
+    return;
+  }
 
   growthIntentTick++;
-  // Grow from root node in camera forward direction
   const rootNode = plantNodes.size > 0 ? Array.from(plantNodes.values())[0] : null;
-  if (!rootNode) return;
+  if (!rootNode) {
+    console.log('GROWTH_INTENT blocked: no root node');
+    return;
+  }
+
+  console.log('GROWTH_INTENT sending:', { rootNodeId: rootNode.id, plantId });
 
   const dir = new THREE.Vector3(0, 0, -1);
   dir.applyQuaternion(camera.quaternion);
@@ -458,6 +467,7 @@ function sendGrowthIntent(): void {
     payload: { intent },
   });
   ws.send(message);
+  console.log('GROWTH_INTENT sent to server');
 }
 
 function connect(): void {
@@ -532,6 +542,7 @@ function connect(): void {
         }
 
         case MESSAGE_TYPE.GROWTH_EVENT: {
+          console.log('GROWTH_EVENT received:', JSON.stringify(payload));
           const growth = payload as GrowthEventPayload;
           if (growth.plantId !== plantId) break;
           const node = growth.newNode;
