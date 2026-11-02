@@ -131,6 +131,7 @@ class CubeWorld {
             biomass: rootNode.biomass,
           }
         : { id: rootNodeId ?? '', x: 0, y: 0, z: 0, type: 'root', biomass: 0 },
+      totalBiomass: plant.totalBiomass,
     };
 
     this.log.info('player joined', { playerId, cubeId, plantId, totalPlayers: this.players.size });
@@ -286,10 +287,12 @@ class CubeWorld {
 
         if (result.success && result.newNode) {
           // Broadcast growth event to all players
+          const plant = this.plantWorld.getPlant(intent.plantId);
           const growthPayload = {
             plantId: intent.plantId,
             newNode: result.newNode,
             damageDealt: result.damageDealt,
+            totalBiomass: plant?.totalBiomass ?? 0,
           };
           this.broadcast(MESSAGE_TYPE.GROWTH_EVENT, growthPayload);
         }

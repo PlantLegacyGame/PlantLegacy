@@ -77,6 +77,7 @@ interface WelcomePayload {
   tick: number;
   cubes: CubeState[];
   rootNode: { id: string; x: number; y: number; z: number; type: string; biomass: number };
+  totalBiomass: number;
 }
 
 interface StatePayload {
@@ -123,6 +124,7 @@ interface GrowthEventPayload {
     parentId: string | null;
   };
   damageDealt?: number;
+  totalBiomass?: number;
 }
 
 const MESSAGE_TYPE = {
@@ -156,6 +158,7 @@ let inputTick = 0;
 let connecting = false;
 let plantId: string | null = null;
 let growthIntentTick = 0;
+let plantBiomass = 0;
 const plantNodes = new Map<
   string,
   {
@@ -240,6 +243,7 @@ function updateResourceReadout(): void {
       <div>LIGHT: <span id="res-light">0.00</span> <span class="tooltip" data-tip="light">ⓘ</span></div>
       <div>WATER: <span id="res-water">0.00</span> <span class="tooltip" data-tip="water">ⓘ</span></div>
       <div>MINERALS: <span id="res-minerals">0.00</span> <span class="tooltip" data-tip="minerals">ⓘ</span></div>
+      <div>BIOMASS: <span id="res-biomass">0</span> <span class="tooltip" data-tip="biomass">ⓘ</span></div>
     `;
 
   // Add tooltip listeners
@@ -498,21 +502,23 @@ function connect(): void {
           plantNodes.clear();
           // Initialize with root node from server
           if (welcome.rootNode) {
-            plantNodes.set(welcome.rootNode.id, {
-              id: welcome.rootNode.id,
-              position: new THREE.Vector3(
-                welcome.rootNode.x,
-                welcome.rootNode.y,
-                welcome.rootNode.z,
-              ),
-              type: 0, // root
-              radius: 0.05 + welcome.rootNode.biomass * 0.15,
-              parentId: null,
-              age: 10,
-              health: 0.9,
-              mutationFlags: 0,
-              biomass: welcome.rootNode.biomass,
-            });
+          plantNodes.set(welcome.rootNode.id, {
+            id: welcome.rootNode.id,
+            position: new THREE.Vector3(
+              welcome.rootNode.x,
+              welcome.rootNode.y,
+              welcome.rootNode.z,
+            ),
+            type: 0, // root
+            radius: 0.05 + welcome.rootNode.biomass * 0.15,
+            parentId: null,
+            age: 10,
+            health: 0.9,
+            mutationFlags: 0,
+            biomass: welcome.rootNode.biomass,
+          });
+          plantBiomass = welcome.totalBiomass;
+          updateResourceReadout();
           }
           // PlantRenderer handles its own objects
           setDetail(
@@ -557,6 +563,8 @@ function connect(): void {
             mutationFlags: 0,
             biomass: node.biomass,
           });
+          plantBiomass = growth.totalBiomass ?? plantBiomass;
+          updateResourceReadout();
           if (plantRenderer) {
             plantRenderer.updatePlantData(Array.from(plantNodes.values()));
           }

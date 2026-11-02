@@ -93,6 +93,7 @@ export interface WelcomePayload {
   tick: number;
   cubes: CubeState[];
   rootNode: { id: string; x: number; y: number; z: number; type: string; biomass: number };
+  totalBiomass: number;
 }
 
 export interface InputPayload {
