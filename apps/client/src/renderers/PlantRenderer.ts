@@ -5,32 +5,10 @@
 
 import * as THREE from 'three';
 
-interface PlantNodeData {
-  position: THREE.Vector3;
-  normal: THREE.Vector3;
-  biomass: number;
-  nodeType: number; // 0 = root, 1 = canopy
-  waterLevel: number;
-  nutrientLevel: number;
-  photosynthesisRate: number;
-}
-
-interface PlantRendererConfig {
-  maxNodesPerPlant: number;
-  rootSightEnabled: boolean;
-  rootSightOpacity: number;
-  canopySightEnabled: boolean;
-  photosynthesisViz: boolean;
-  waterFlowViz: boolean;
-  nutrientFlowViz: boolean;
-  nodeSize: number;
-}
-
-// Shader sources inlined for Vite compatibility
-const plantNodeVert = `#version 300 es
-precision highp float;
-
-layout(location = 0) in vec3 aPosition;
+// Shader sources inlined for Vite compatibility.
+// Three.js prepends `#version 300 es`, the precision block and the built-in
+// matrices/attributes, so none of those may be declared here.
+const plantNodeVert = `layout(location = 0) in vec3 aPosition;
 layout(location = 1) in vec3 aNormal;
 layout(location = 2) in float aBiomass;
 layout(location = 3) in float aNodeType;
@@ -38,9 +16,6 @@ layout(location = 4) in float aWaterLevel;
 layout(location = 5) in float aNutrientLevel;
 layout(location = 6) in float aPhotosynthesisRate;
 
-uniform mat4 modelViewMatrix;
-uniform mat4 projectionMatrix;
-uniform mat4 modelMatrix;
 uniform float uTime;
 uniform float uNodeSize;
 uniform float uRootSightOpacity;
@@ -63,7 +38,7 @@ out vec3 vWorldPos;
 void main() {
     vWorldPos = (modelMatrix * vec4(aPosition, 1.0)).xyz;
     vPosition = aPosition;
-    vNormal = normalize((modelViewMatrix * vec4(aNormal, 0.0)).xyz);
+    vNormal = normalize(mat3(modelMatrix) * aNormal);
     vBiomass = aBiomass;
     vNodeType = aNodeType;
     vWaterLevel = aWaterLevel;
@@ -79,10 +54,7 @@ void main() {
 }
 `;
 
-const plantNodeFrag = `#version 300 es
-precision highp float;
-
-in vec3 vPosition;
+const plantNodeFrag = `in vec3 vPosition;
 in vec3 vNormal;
 in float vBiomass;
 in float vNodeType;
@@ -180,15 +152,7 @@ void main() {
 }
 `;
 
-const groundVert = `#version 300 es
-precision highp float;
-
-layout(location = 0) in vec3 aPosition;
-layout(location = 1) in vec2 aUv;
-
-uniform mat4 modelViewMatrix;
-uniform mat4 projectionMatrix;
-uniform mat4 modelMatrix;
+const groundVert = `// position and uv come from PlaneGeometry via Three's preamble.
 uniform float uTime;
 
 out vec2 vUv;
@@ -196,20 +160,16 @@ out vec3 vWorldPos;
 out float vDepth;
 
 void main() {
-    vec4 worldPos = modelMatrix * vec4(aPosition, 1.0);
+    vec4 worldPos = modelMatrix * vec4(position, 1.0);
     vWorldPos = worldPos.xyz;
     vDepth = worldPos.y;
-    vUv = aUv;
-    
-    vec4 mvPosition = modelViewMatrix * worldPos;
-    gl_Position = projectionMatrix * mvPosition;
+    vUv = uv;
+
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
 }
 `;
 
-const groundFrag = `#version 300 es
-precision highp float;
-
-in vec2 vUv;
+const groundFrag = `in vec2 vUv;
 in vec3 vWorldPos;
 in float vDepth;
 
@@ -370,6 +330,7 @@ export class PlantRenderer {
     this.plantMaterial = new THREE.ShaderMaterial({
       vertexShader: plantNodeVert,
       fragmentShader: plantNodeFrag,
+      glslVersion: THREE.GLSL3,
       transparent: true,
       depthTest: true,
       depthWrite: false,
@@ -394,6 +355,7 @@ export class PlantRenderer {
     this.groundMaterial = new THREE.ShaderMaterial({
       vertexShader: groundVert,
       fragmentShader: groundFrag,
+      glslVersion: THREE.GLSL3,
       transparent: false,
       depthTest: true,
       depthWrite: true,

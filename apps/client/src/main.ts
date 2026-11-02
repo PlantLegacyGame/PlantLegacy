@@ -17,8 +17,11 @@ import { PlantRenderer } from './renderers/PlantRenderer.js';
 const serverOrigin =
   document.querySelector('meta[name="server-origin"]')?.getAttribute('content') ?? '';
 
-const isLocalDev = location.hostname === '127.0.0.1' && location.port === '4173';
-const wsOrigin = isLocalDev ? 'ws://127.0.0.1:8080' : serverOrigin.replace(/^http/, 'ws');
+const isLocalDev =
+  (location.hostname === '127.0.0.1' || location.hostname === 'localhost') &&
+  location.port === '4173';
+const httpOrigin = serverOrigin || (isLocalDev ? 'http://127.0.0.1:8080' : location.origin);
+const wsOrigin = httpOrigin.replace(/^http/, 'ws');
 
 // T00A: Onboarding config types
 interface OnboardingConfig {
@@ -136,7 +139,7 @@ const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.shadowMap.type = THREE.PCFShadowMap;
 app.appendChild(renderer.domElement);
 
 // T00A: Hint card overlay (3 lines per RULE_13)
@@ -369,7 +372,7 @@ function connect(): void {
   setStatus('Connecting…', 'pending');
   setDetail(`Connecting to ${wsOrigin}...`);
 
-  ws = new WebSocket(wsOrigin);
+  ws = new WebSocket(`${wsOrigin}/ws`);
 
   ws.onopen = () => {
     connecting = false;

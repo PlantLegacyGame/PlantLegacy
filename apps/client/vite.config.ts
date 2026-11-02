@@ -22,6 +22,7 @@ export default defineConfig({
     proxy: {
       '/health': 'http://127.0.0.1:8080',
       '/ready': 'http://127.0.0.1:8080',
+      '/config': 'http://127.0.0.1:8080',
       '/ws': {
         target: 'ws://127.0.0.1:8080',
         ws: true,

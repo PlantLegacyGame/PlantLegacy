@@ -39,38 +39,63 @@ let plantRendererConfig: PlantRendererConfig = {
   computeShaderWorkgroupSize: 64,
 };
 
+type ConfigPayload = Record<string, unknown> & {
+  values?: Record<string, { value?: unknown }>;
+};
+
+/**
+ * The server flattens `config/plant_renderer.json` to `{ key: value }`; raw
+ * config files use `{ values: { key: { value } } }`. Accept both.
+ */
+function readValue<T>(payload: ConfigPayload, key: string, fallback: T): T {
+  const flat = payload[key];
+  if (flat !== undefined) return flat as T;
+
+  const nested = payload.values?.[key]?.value;
+  if (nested !== undefined) return nested as T;
+
+  return fallback;
+}
+
 export async function loadPlantRendererConfig(serverOrigin: string): Promise<PlantRendererConfig> {
   try {
     const response = await fetch(`${serverOrigin}/config/plant_renderer`, { cache: 'no-store' });
     if (response.ok) {
-      const config = await response.json();
-      // Extract values from extended-1 format
-      const values = config.values || {};
+      const payload = (await response.json()) as ConfigPayload;
+      const current = plantRendererConfig;
+
       plantRendererConfig = {
-        maxNodesPerPlant: values.max_nodes_per_plant?.value ?? plantRendererConfig.maxNodesPerPlant,
-        rootMaxDepth: values.root_max_depth?.value ?? plantRendererConfig.rootMaxDepth,
-        canopyMaxHeight: values.canopy_max_height?.value ?? plantRendererConfig.canopyMaxHeight,
-        nodeSpacingMin: values.node_spacing_min?.value ?? plantRendererConfig.nodeSpacingMin,
-        nodeSpacingMax: values.node_spacing_max?.value ?? plantRendererConfig.nodeSpacingMax,
-        branchProbability:
-          values.branch_probability?.value ?? plantRendererConfig.branchProbability,
-        rootSightEnabled: values.root_sight_enabled?.value ?? plantRendererConfig.rootSightEnabled,
-        rootSightOpacity: values.root_sight_opacity?.value ?? plantRendererConfig.rootSightOpacity,
-        canopySightEnabled:
-          values.canopy_sight_enabled?.value ?? plantRendererConfig.canopySightEnabled,
-        photosynthesisVisualization:
-          values.photosynthesis_visualization?.value ??
-          plantRendererConfig.photosynthesisVisualization,
-        waterFlowVisualization:
-          values.water_flow_visualization?.value ?? plantRendererConfig.waterFlowVisualization,
-        nutrientFlowVisualization:
-          values.nutrient_flow_visualization?.value ??
-          plantRendererConfig.nutrientFlowVisualization,
-        shaderQuality: values.shader_quality?.value ?? plantRendererConfig.shaderQuality,
-        maxGpuBuffers: values.max_gpu_buffers?.value ?? plantRendererConfig.maxGpuBuffers,
-        computeShaderWorkgroupSize:
-          values.compute_shader_workgroup_size?.value ??
-          plantRendererConfig.computeShaderWorkgroupSize,
+        maxNodesPerPlant: readValue(payload, 'max_nodes_per_plant', current.maxNodesPerPlant),
+        rootMaxDepth: readValue(payload, 'root_max_depth', current.rootMaxDepth),
+        canopyMaxHeight: readValue(payload, 'canopy_max_height', current.canopyMaxHeight),
+        nodeSpacingMin: readValue(payload, 'node_spacing_min', current.nodeSpacingMin),
+        nodeSpacingMax: readValue(payload, 'node_spacing_max', current.nodeSpacingMax),
+        branchProbability: readValue(payload, 'branch_probability', current.branchProbability),
+        rootSightEnabled: readValue(payload, 'root_sight_enabled', current.rootSightEnabled),
+        rootSightOpacity: readValue(payload, 'root_sight_opacity', current.rootSightOpacity),
+        canopySightEnabled: readValue(payload, 'canopy_sight_enabled', current.canopySightEnabled),
+        photosynthesisVisualization: readValue(
+          payload,
+          'photosynthesis_visualization',
+          current.photosynthesisVisualization,
+        ),
+        waterFlowVisualization: readValue(
+          payload,
+          'water_flow_visualization',
+          current.waterFlowVisualization,
+        ),
+        nutrientFlowVisualization: readValue(
+          payload,
+          'nutrient_flow_visualization',
+          current.nutrientFlowVisualization,
+        ),
+        shaderQuality: readValue(payload, 'shader_quality', current.shaderQuality),
+        maxGpuBuffers: readValue(payload, 'max_gpu_buffers', current.maxGpuBuffers),
+        computeShaderWorkgroupSize: readValue(
+          payload,
+          'compute_shader_workgroup_size',
+          current.computeShaderWorkgroupSize,
+        ),
       };
     }
   } catch {
