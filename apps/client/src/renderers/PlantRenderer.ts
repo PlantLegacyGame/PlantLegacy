@@ -562,14 +562,15 @@ export class PlantRenderer {
 
     if (this.leafInstanceCount > 0) {
       this.leafMesh.count = this.leafInstanceCount;
-      this.leafMesh.instanceMatrix.needsUpdate = true;
+      const instanceMatrix = this.leafMesh.instanceMatrix;
+      if (instanceMatrix) {
+        instanceMatrix.set(this.leafInstanceMatrix);
+        instanceMatrix.needsUpdate = true;
+      }
       const instanceColor = this.leafMesh.instanceColor;
       if (instanceColor) {
+        instanceColor.set(this.leafInstanceColor);
         instanceColor.needsUpdate = true;
-      }
-      if (this.leafGeometry.getAttribute('aPhase')) {
-        (this.leafGeometry.getAttribute('aPhase') as THREE.InstancedBufferAttribute).needsUpdate =
-          true;
       }
     }
   }
