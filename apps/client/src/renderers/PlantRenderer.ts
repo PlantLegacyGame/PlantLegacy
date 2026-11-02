@@ -86,6 +86,7 @@ uniform float uMutation0Param;
 uniform float uMutation1Param;
 uniform float uMutation2Param;
 uniform vec3 uSunDirection;
+uniform vec3 uCameraPosition;
 uniform vec3 uRootColor;
 uniform vec3 uCanopyColor;
 uniform vec3 uLeafColor;
@@ -111,9 +112,9 @@ vec3 triplanarNoise(vec3 worldPos, vec3 normal) {
     vec3 n = abs(normal);
     float sum = n.x + n.y + n.z + 0.0001;
     vec3 blend = n / sum;
-    float nx = fbm(worldPos.yz * 4.0, 4);
-    float ny = fbm(worldPos.xz * 4.0, 4);
-    float nz = fbm(worldPos.xy * 4.0, 4);
+    float nx = fbm(vec3(worldPos.yz * 4.0, uTime), 4);
+    float ny = fbm(vec3(worldPos.xz * 4.0, uTime), 4);
+    float nz = fbm(vec3(worldPos.xy * 4.0, uTime), 4);
     return nx * blend.x + ny * blend.y + nz * blend.z;
 }
 
