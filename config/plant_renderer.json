@@ -1,0 +1,97 @@
+{
+  "_meta": {
+    "system": "plant_renderer",
+    "version": "0.1.0",
+    "schema": "extended-1",
+    "owner_task": "T01",
+    "status": "draft",
+    "notes": "Root Sight shader and procedural plant rendering tunables"
+  },
+  "values": {
+    "max_nodes_per_plant": {
+      "type": "integer",
+      "value": 1000,
+      "range": [100, 10000],
+      "notes": "Maximum nodes (roots + canopy) per plant"
+    },
+    "root_max_depth": {
+      "type": "number",
+      "value": 50.0,
+      "range": [10.0, 200.0],
+      "notes": "Maximum root depth below ground"
+    },
+    "canopy_max_height": {
+      "type": "number",
+      "value": 50.0,
+      "range": [10.0, 200.0],
+      "notes": "Maximum canopy height above ground"
+    },
+    "node_spacing_min": {
+      "type": "number",
+      "value": 0.5,
+      "range": [0.1, 5.0],
+      "notes": "Minimum distance between nodes"
+    },
+    "node_spacing_max": {
+      "type": "number",
+      "value": 2.0,
+      "range": [0.5, 10.0],
+      "notes": "Maximum distance between nodes"
+    },
+    "branch_probability": {
+      "type": "number",
+      "value": 0.15,
+      "range": [0.0, 1.0],
+      "notes": "Probability of branching per node"
+    },
+    "root_sight_enabled": {
+      "type": "boolean",
+      "value": true,
+      "notes": "Enable Root Sight shader (roots visible underground)"
+    },
+    "root_sight_opacity": {
+      "type": "number",
+      "value": 0.6,
+      "range": [0.1, 1.0],
+      "notes": "Opacity of underground root visualization"
+    },
+    "canopy_sight_enabled": {
+      "type": "boolean",
+      "value": true,
+      "notes": "Enable canopy visualization above ground"
+    },
+    "photosynthesis_visualization": {
+      "type": "boolean",
+      "value": true,
+      "notes": "Show photosynthesis activity on canopy"
+    },
+    "water_flow_visualization": {
+      "type": "boolean",
+      "value": true,
+      "notes": "Show water flow in roots"
+    },
+    "nutrient_flow_visualization": {
+      "type": "boolean",
+      "value": true,
+      "notes": "Show nutrient flow in roots"
+    },
+    "shader_quality": {
+      "type": "enum",
+      "enum": ["low", "medium", "high", "ultra"],
+      "value": "high",
+      "notes": "Shader quality preset"
+    },
+    "max_gpu_buffers": {
+      "type": "integer",
+      "value": 8,
+      "range": [2, 16],
+      "notes": "Maximum GPU storage buffers for plant data"
+    },
+    "compute_shader_workgroup_size": {
+      "type": "integer",
+      "value": 64,
+      "range": [16, 256],
+      "notes": "Workgroup size for compute shaders"
+    }
+  }
+}

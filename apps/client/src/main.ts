@@ -2,14 +2,17 @@
  * C01 Client - Vite + Three.js foundation.
  *
  * Replaces the Phase 0 canvas client with a proper Three.js scene.
- * Connects via WebSocket, renders cubes in 3D, sends input.
+ * Connects via WebSocket, renders procedural plants with Root Sight shader.
  * No client-side authority - server validates all movement.
  *
  * T00A: First-spawn hint card (3 lines) + resource readout tooltips (RULE_13).
+ * T01: Procedural Plant Renderer (Root Sight Shader).
  */
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { loadPlantRendererConfig } from './config/plantRendererConfig.js';
+import { PlantRenderer } from './renderers/PlantRenderer.js';
 
 const serverOrigin =
   document.querySelector('meta[name="server-origin"]')?.getAttribute('content') ?? '';
@@ -61,6 +64,7 @@ interface CubeState {
   rotation: number;
   color: number;
   lastInputTick: number;
+  nodeType?: number;
 }
 
 interface WelcomePayload {
@@ -213,20 +217,20 @@ let tooltipEl: HTMLDivElement | null = null;
 function showTooltip(target: HTMLElement, text: string): void {
   tooltipEl = document.createElement('div');
   tooltipEl.style.cssText = `
-      position: fixed;
-      background: rgba(20, 24, 15, 0.98);
-      border: 1px solid #2a281f;
-      border-radius: 4px;
-      padding: 8px 12px;
-      color: #efe9d8;
-      font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
-      font-size: 12px;
-      line-height: 1.4;
-      max-width: 280px;
-      z-index: 200;
-      pointer-events: none;
-      box-shadow: 0 2px 10px rgba(0,0,0,0.4);
-    `;
+    position: fixed;
+    background: rgba(20, 24, 15, 0.98);
+    border: 1px solid #2a281f;
+    border-radius: 4px;
+    padding: 8px 12px;
+    color: #efe9d8;
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    font-size: 12px;
+    line-height: 1.4;
+    max-width: 280px;
+    z-index: 200;
+    pointer-events: none;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.4);
+  `;
   tooltipEl.textContent = text;
   document.body.appendChild(tooltipEl);
 
@@ -253,8 +257,42 @@ function showHintCard(): void {
   }, onboardingConfig.show_hint_card_duration_ms);
 }
 
-// Initial resource readout
-updateResourceReadout();
+const statusElement = document.getElementById('status');
+const detailElement = document.getElementById('detail');
+
+function setStatus(text: string, state: 'pending' | 'ok' | 'down'): void {
+  if (!statusElement) return;
+  statusElement.textContent = text;
+  statusElement.dataset.state = state;
+}
+
+function setDetail(text: string): void {
+  if (!detailElement) return;
+  detailElement.textContent = text;
+}
+
+// T01: Plant Renderer
+let plantRenderer: PlantRenderer | null = null;
+let lastUpdateTime = 0;
+
+async function initPlantRenderer(): Promise<void> {
+  const config = await loadPlantRendererConfig(serverOrigin);
+
+  plantRenderer = new PlantRenderer(renderer, scene, camera, {
+    maxNodesPerPlant: config.maxNodesPerPlant,
+    rootSightEnabled: config.rootSightEnabled,
+    rootSightOpacity: config.rootSightOpacity,
+    canopySightEnabled: config.canopySightEnabled,
+    photosynthesisViz: config.photosynthesisVisualization,
+    waterFlowViz: config.waterFlowVisualization,
+    nutrientFlowViz: config.nutrientFlowVisualization,
+    nodeSize: 1.0,
+  });
+
+  // Generate test plant for now (until server sends plant data)
+  const testNodes = plantRenderer.generateTestPlant(Date.now());
+  plantRenderer.updatePlantData(testNodes);
+}
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x14180f);
@@ -269,10 +307,8 @@ controls.enableDamping = true;
 controls.dampingFactor = 0.05;
 controls.enablePan = true;
 controls.minDistance = 10;
-controls.maxDistance = 100;
+controls.maxDistance = 200;
 controls.maxPolarAngle = Math.PI / 2 - 0.05;
-
-const cubeMeshes = new Map<string, THREE.Mesh>();
 
 // Lighting
 const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
@@ -294,17 +330,7 @@ scene.add(sunLight);
 const hemisphereLight = new THREE.HemisphereLight(0x87ceeb, 0x8b4513, 0.3);
 scene.add(hemisphereLight);
 
-// Ground plane
-const groundGeometry = new THREE.PlaneGeometry(400, 400);
-const groundMaterial = new THREE.MeshStandardMaterial({
-  color: 0x2a281f,
-  roughness: 0.9,
-  metalness: 0.1,
-});
-const ground = new THREE.Mesh(groundGeometry, groundMaterial);
-ground.rotation.x = -Math.PI / 2;
-ground.receiveShadow = true;
-scene.add(ground);
+// Remove old ground plane - PlantRenderer handles ground now
 
 // Grid helper
 const gridHelper = new THREE.GridHelper(400, 80, 0x3a382f, 0x2a281f);
@@ -314,194 +340,8 @@ scene.add(gridHelper);
 const axesHelper = new THREE.AxesHelper(20);
 scene.add(axesHelper);
 
-const statusElement = document.getElementById('status');
-const detailElement = document.getElementById('detail');
-
-function setStatus(text: string, state: 'pending' | 'ok' | 'down'): void {
-  if (!statusElement) return;
-  statusElement.textContent = text;
-  statusElement.dataset.state = state;
-}
-
-function setDetail(text: string): void {
-  if (!detailElement) return;
-  detailElement.textContent = text;
-}
-
-function createCubeMesh(cube: CubeState): THREE.Mesh {
-  const geometry = new THREE.BoxGeometry(2, 2, 2);
-  const material = new THREE.MeshStandardMaterial({
-    color: cube.color,
-    roughness: 0.7,
-    metalness: 0.2,
-  });
-  const mesh = new THREE.Mesh(geometry, material);
-  mesh.castShadow = true;
-  mesh.receiveShadow = true;
-  mesh.position.set(cube.x, 1, cube.z);
-  mesh.rotation.y = -cube.rotation;
-
-  // Direction indicator (small cone on top)
-  const coneGeometry = new THREE.ConeGeometry(0.3, 0.8, 4);
-  const coneMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0x333333 });
-  const cone = new THREE.Mesh(coneGeometry, coneMaterial);
-  cone.position.y = 1.5;
-  mesh.add(cone);
-
-  // Label
-  const sprite = makeTextSprite(cube.id === myCubeId ? 'YOU' : cube.id.slice(0, 8), {
-    fontsize: 24,
-    backgroundColor: { r: 0, g: 0, b: 0, a: 0.7 },
-    textColor: { r: 255, g: 255, b: 255, a: 1 },
-  });
-  sprite.position.y = 3;
-  mesh.add(sprite);
-
-  return mesh;
-}
-
-interface TextSpriteParams {
-  fontface?: string;
-  fontsize?: number;
-  borderThickness?: number;
-  borderColor?: { r: number; g: number; b: number; a: number };
-  backgroundColor?: { r: number; g: number; b: number; a: number };
-  textColor?: { r: number; g: number; b: number; a: number };
-}
-
-function makeTextSprite(text: string, params: TextSpriteParams = {}): THREE.Sprite {
-  const fontface = params.fontface || 'monospace';
-  const fontsize = params.fontsize || 24;
-  const borderThickness = params.borderThickness || 4;
-  const borderColor = params.borderColor || { r: 0, g: 0, b: 0, a: 1 };
-  const backgroundColor = params.backgroundColor || { r: 255, g: 255, b: 255, a: 1 };
-  const textColor = params.textColor || { r: 0, g: 0, b: 0, a: 1 };
-
-  const canvas = document.createElement('canvas');
-  const rawContext = canvas.getContext('2d');
-  if (!rawContext) throw new Error('Failed to get 2d context');
-  const context = rawContext;
-  context.font = `${fontsize}px ${fontface}`;
-  const metrics = context.measureText(text);
-  const textWidth = metrics.width;
-
-  canvas.width = textWidth + borderThickness * 2;
-  canvas.height = fontsize * 1.4 + borderThickness * 2;
-
-  context.fillStyle = `rgba(${backgroundColor.r}, ${backgroundColor.g}, ${backgroundColor.b}, ${backgroundColor.a})`;
-  context.strokeStyle = `rgba(${borderColor.r}, ${borderColor.g}, ${borderColor.b}, ${borderColor.a})`;
-  context.lineWidth = borderThickness;
-  roundRect(
-    context,
-    borderThickness / 2,
-    borderThickness / 2,
-    textWidth + borderThickness,
-    fontsize * 1.4 + borderThickness,
-    8,
-  );
-  context.fill();
-  context.stroke();
-
-  context.fillStyle = `rgba(${textColor.r}, ${textColor.g}, ${textColor.b}, ${textColor.a})`;
-  context.font = `${fontsize}px ${fontface}`;
-  context.textBaseline = 'middle';
-  context.fillText(text, borderThickness, canvas.height / 2);
-
-  const texture = new THREE.CanvasTexture(canvas);
-  texture.needsUpdate = true;
-  const spriteMaterial = new THREE.SpriteMaterial({ map: texture, transparent: true });
-  const sprite = new THREE.Sprite(spriteMaterial);
-  sprite.scale.set(canvas.width / 10, canvas.height / 10, 1);
-  return sprite;
-}
-
-function roundRect(
-  ctx: CanvasRenderingContext2D,
-  x: number,
-  y: number,
-  w: number,
-  h: number,
-  r: number,
-): void {
-  ctx.beginPath();
-  ctx.moveTo(x + r, y);
-  ctx.lineTo(x + w - r, y);
-  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
-  ctx.lineTo(x + w, y + h - r);
-  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
-  ctx.lineTo(x + r, y + h);
-  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
-  ctx.lineTo(x, y + r);
-  ctx.quadraticCurveTo(x, y, x + r, y);
-  ctx.closePath();
-}
-
-function updateCubeMesh(cube: CubeState): void {
-  let mesh = cubeMeshes.get(cube.id);
-  if (!mesh) {
-    mesh = createCubeMesh(cube);
-    cubeMeshes.set(cube.id, mesh);
-    scene.add(mesh);
-  }
-
-  // Smooth interpolation to authoritative position
-  mesh.position.x += (cube.x - mesh.position.x) * 0.3;
-  mesh.position.z += (cube.z - mesh.position.z) * 0.3;
-  mesh.position.y = 1;
-
-  const targetRotation = -cube.rotation;
-  let rotationDiff = targetRotation - mesh.rotation.y;
-  rotationDiff = ((rotationDiff + Math.PI) % (2 * Math.PI)) - Math.PI;
-  mesh.rotation.y += rotationDiff * 0.3;
-
-  // Update label
-  const sprite = mesh.children.find((c) => c instanceof THREE.Sprite) as THREE.Sprite | undefined;
-  if (sprite && sprite.material instanceof THREE.SpriteMaterial && sprite.material.map) {
-    const canvas = (sprite.material.map as THREE.CanvasTexture).image as HTMLCanvasElement;
-    const rawContext = canvas.getContext('2d');
-    if (!rawContext) return;
-    const context = rawContext;
-    context.clearRect(0, 0, canvas.width, canvas.height);
-    const newText = cube.id === myCubeId ? 'YOU' : cube.id.slice(0, 8);
-    context.font = '24px monospace';
-    context.fillStyle = 'rgba(0, 0, 0, 0.7)';
-    roundRect(context, 2, 2, canvas.width - 4, canvas.height - 4, 8);
-    context.fill();
-    context.fillStyle = 'white';
-    context.textBaseline = 'middle';
-    context.fillText(newText, 2, canvas.height / 2);
-    (sprite.material.map as THREE.CanvasTexture).needsUpdate = true;
-  }
-}
-
-function removeCubeMesh(cubeId: string): void {
-  const mesh = cubeMeshes.get(cubeId);
-  if (mesh) {
-    scene.remove(mesh);
-    mesh.geometry.dispose();
-    if (Array.isArray(mesh.material)) {
-      for (const m of mesh.material) m.dispose();
-    } else {
-      mesh.material.dispose();
-    }
-    for (const child of mesh.children) {
-      if (child instanceof THREE.Mesh) {
-        child.geometry.dispose();
-        if (Array.isArray(child.material)) {
-          for (const m of child.material) m.dispose();
-        } else {
-          child.material.dispose();
-        }
-      } else if (child instanceof THREE.Sprite) {
-        if (child.material instanceof THREE.SpriteMaterial && child.material.map) {
-          (child.material.map as THREE.Texture).dispose();
-        }
-        child.material.dispose();
-      }
-    }
-    cubeMeshes.delete(cubeId);
-  }
-}
+// Initial resource readout
+updateResourceReadout();
 
 function sendInput(): void {
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
@@ -555,16 +395,13 @@ function connect(): void {
           myCubeId = welcome.cubeId;
           serverTick = welcome.tick;
           cubes.clear();
-          for (const id of cubeMeshes.keys()) removeCubeMesh(id);
-          for (const cube of welcome.cubes) {
-            cubes.set(cube.id, cube);
-            updateCubeMesh(cube);
-          }
+          // PlantRenderer handles its own objects
           setDetail(
-            `Welcome! You are ${myCubeId}\nPlayer ID: ${playerId}\nCubes: ${cubes.size}\nServer tick: ${serverTick}`,
+            `Welcome! You are ${myCubeId}\nPlayer ID: ${playerId}\nServer tick: ${serverTick}\nT01: Root Sight Shader Active`,
           );
           // T00A: Load onboarding config and show hint card on first spawn
           await loadOnboardingConfig();
+          await initPlantRenderer();
           showHintCard();
           break;
         }
@@ -574,21 +411,21 @@ function connect(): void {
           const state = payload as StatePayload | KeyframePayload;
           serverTick = state.tick;
 
-          const receivedIds = new Set<string>();
-          for (const cube of state.cubes) {
-            cubes.set(cube.id, cube);
-            updateCubeMesh(cube);
-            receivedIds.add(cube.id);
-          }
-
-          // Remove cubes not in state (for STATE deltas, but KEYFRAME has all)
-          if (type === MESSAGE_TYPE.KEYFRAME) {
-            for (const id of cubes.keys()) {
-              if (!receivedIds.has(id)) {
-                cubes.delete(id);
-                removeCubeMesh(id);
-              }
+          // Convert cube data to plant nodes for PlantRenderer
+          if (plantRenderer) {
+            const nodes = [];
+            for (const cube of state.cubes) {
+              nodes.push({
+                position: new THREE.Vector3(cube.x, cube.nodeType === 0 ? -5 : 5, cube.z),
+                normal: new THREE.Vector3(0, 1, 0),
+                biomass: 0.5,
+                nodeType: cube.nodeType ?? 0,
+                waterLevel: 0.7,
+                nutrientLevel: 0.6,
+                photosynthesisRate: 0.5,
+              });
             }
+            plantRenderer.updatePlantData(nodes);
           }
           break;
         }
@@ -701,6 +538,15 @@ window.addEventListener('resize', () => {
 function animate(): void {
   requestAnimationFrame(animate);
   controls.update();
+
+  // Update plant renderer
+  if (plantRenderer) {
+    const now = Date.now();
+    const deltaTime = (now - lastUpdateTime) / 1000;
+    lastUpdateTime = now;
+    plantRenderer.update(deltaTime);
+  }
+
   renderer.render(scene, camera);
 }
 

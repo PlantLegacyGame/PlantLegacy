@@ -352,6 +352,62 @@ async function main(): Promise<void> {
       }
     }
 
+    if (url.pathname === '/config/plant_renderer') {
+      // T01: Serve plant renderer config
+      const fs = await import('node:fs/promises');
+      const path = await import('node:path');
+
+      try {
+        const configDir = runtime.configDir;
+        const plantRendererPath = path.resolve(configDir, 'plant_renderer.json');
+        const raw = await fs.readFile(plantRendererPath, 'utf8');
+        const config = JSON.parse(raw);
+
+        // Extract values from extended-1 format
+        const values = config.values || {};
+        const plantRendererConfig = {
+          max_nodes_per_plant: values.max_nodes_per_plant?.value ?? 1000,
+          root_max_depth: values.root_max_depth?.value ?? 50.0,
+          canopy_max_height: values.canopy_max_height?.value ?? 50.0,
+          node_spacing_min: values.node_spacing_min?.value ?? 0.5,
+          node_spacing_max: values.node_spacing_max?.value ?? 2.0,
+          branch_probability: values.branch_probability?.value ?? 0.15,
+          root_sight_enabled: values.root_sight_enabled?.value ?? true,
+          root_sight_opacity: values.root_sight_opacity?.value ?? 0.6,
+          canopy_sight_enabled: values.canopy_sight_enabled?.value ?? true,
+          photosynthesis_visualization: values.photosynthesis_visualization?.value ?? true,
+          water_flow_visualization: values.water_flow_visualization?.value ?? true,
+          nutrient_flow_visualization: values.nutrient_flow_visualization?.value ?? true,
+          shader_quality: values.shader_quality?.value ?? 'high',
+          max_gpu_buffers: values.max_gpu_buffers?.value ?? 8,
+          compute_shader_workgroup_size: values.compute_shader_workgroup_size?.value ?? 64,
+        };
+
+        sendJson(response, 200, plantRendererConfig);
+        return;
+      } catch {
+        // Fallback to defaults
+        sendJson(response, 200, {
+          max_nodes_per_plant: 1000,
+          root_max_depth: 50.0,
+          canopy_max_height: 50.0,
+          node_spacing_min: 0.5,
+          node_spacing_max: 2.0,
+          branch_probability: 0.15,
+          root_sight_enabled: true,
+          root_sight_opacity: 0.6,
+          canopy_sight_enabled: true,
+          photosynthesis_visualization: true,
+          water_flow_visualization: true,
+          nutrient_flow_visualization: true,
+          shader_quality: 'high',
+          max_gpu_buffers: 8,
+          compute_shader_workgroup_size: 64,
+        });
+        return;
+      }
+    }
+
     sendJson(response, 404, { error: 'not_found' });
   };
 
