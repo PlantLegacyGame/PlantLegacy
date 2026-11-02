@@ -6,7 +6,8 @@
  *   2. starts the server (watch mode) and the Vite dev server together.
  *
  * No extra dependency and no orchestration framework: two child processes and
- * Ctrl+C. Vite dev server proxies `/health`, `/ready`, and `/ws` to the server.
+ * Ctrl+C. Vite dev server proxies `/health`, `/ready`, `/config` and `/ws` to
+ * the server.
  */
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
@@ -71,5 +72,5 @@ for (const child of children) {
 }
 
 console.log(
-  `dev: server on http://127.0.0.1:${process.env.PORT ?? '8080'}, client on http://127.0.0.1:${process.env.CLIENT_PORT ?? '4173'}`,
+  `dev: server on http://127.0.0.1:${process.env.PORT ?? '8080'}, client on http://localhost:4173`,
 );

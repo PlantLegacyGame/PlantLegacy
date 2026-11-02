@@ -14,11 +14,12 @@ gaps.
 - [x] `pnpm typecheck`
   - Expected: all 4 projects `Done`.
 - [x] `pnpm config:validate`
-  - Expected: 73 files, OK.
+  - Expected: 75 files, OK.
 - [x] `pnpm test`
   - Expected: 12 shared tests + 8 server tests pass, 0 fail.
 - [x] `pnpm build`
-  - Expected: `apps/client/dist/{index.html,main.js,styles.css}`.
+  - Expected: `apps/client/dist/index.html` plus hashed `assets/*.js` and
+    `assets/*.css` from Vite.
 - [x] `pnpm verify`
   - Expected: the whole chain exits 0.
 
@@ -27,7 +28,7 @@ gaps.
 - [x] `node apps/server/src/main.ts` (no `DATABASE_URL`)
   - Expected log: `listening`, `database: skipped`.
 - [x] `curl http://127.0.0.1:8080/health`
-  - Expected: 200, `"status":"ok"`, `"config_files":73`,
+  - Expected: 200, `"status":"ok"`, `"config_files":75`,
     `"database":"skipped"`.
   - Observed: exact.
 - [x] `curl http://127.0.0.1:8080/ready`
@@ -46,11 +47,14 @@ gaps.
 ## 4. One-command local stack
 
 - [x] Delete `node_modules` (or use a fresh clone) and run `pnpm dev`.
-  - Expected: installs, builds the client, starts server `:8080` and preview
-    `:4173`.
-  - Observed: both processes start; preview proxies `/health`.
-- [x] Open `http://127.0.0.1:4173`.
-  - Expected: “Server ok” and version/uptime/database/config lines.
+  - Expected: installs if needed, starts server `:8080` and the Vite dev server
+    on `localhost:4173`.
+  - Observed: both processes start; Vite proxies `/health`, `/ready`, `/config`
+    and `/ws`.
+- [x] Open `http://localhost:4173` (not `127.0.0.1`; Vite binds the IPv6
+      loopback on Windows).
+  - Expected: Three.js canvas, hint card after `WELCOME`, and a WebSocket
+    connection to `/ws`.
 - [x] `Ctrl+C` stops both processes.
 
 ## 5. Docker compose (needs Docker)
@@ -67,22 +71,27 @@ gaps.
   - Extra: wrote a probe row, ran `down` then `up -d`, row was still there;
     probe dropped afterwards.
 
-## 6. CI and staging (needs a remote)
+## 6. CI and staging (remote + tunnel)
 
 - [x] Push a commit; `.github/workflows/ci.yml` runs and is green.
-  - Observed: run `62a8ed2` on `PlantLegacyGame/PlantLegacy` — success.
+  - Observed: `ci` and `deploy-staging` both success on `7d22644`.
 - [x] Repository → Settings → Pages → Source = GitHub Actions.
-  - Observed: Pages site exists; `deploy-staging` on `25f7b05` is green
+  - Observed: Pages site exists; `deploy-staging` is green
     (`configure-pages`, `upload-pages-artifact`, `deploy-pages` all pass).
-- [ ] Add repository variable `STAGING_SERVER_ORIGIN`.
-  - Blocked on the VM origin.
+- [x] Add repository variable `STAGING_SERVER_ORIGIN`.
+  - Observed: set to the current Cloudflare quick-tunnel origin.
 - [x] Push to `main`; `deploy-staging` publishes the Pages URL.
-  - Observed: <https://plantlegacygame.github.io/PlantLegacy/> → 200, shell HTML.
-- [ ] Open the Pages URL; the shell reports the staging server as `ok`.
-  - Page loads; server card still says not configured (variable unset).
-- [ ] Deploy the server on one free VM:
-      `git clone … && docker compose -f ops/compose.yml up -d --build`.
-- [ ] `curl <server-origin>/health` → 200 `"status":"ok"`.
+  - Observed: <https://plantlegacygame.github.io/PlantLegacy/> → 200.
+- [x] Open the Pages URL; the client connects to the staging API.
+  - Observed: `wss://…/ws` → 101, `/config/onboarding` and
+    `/config/plant_renderer` → 200, canvas renders, no console errors.
+- [x] Run the server + Postgres from compose:
+      `docker compose -f ops/compose.yml up -d --build`.
+  - Observed: `postgres` and `server` both healthy.
+- [x] Expose `:8080` with `cloudflared tunnel --url http://localhost:8080`.
+  - Observed: HTTPS tunnel origin; `/health` and `/ready` return 200.
+- [x] `curl <server-origin>/health` → 200 `"status":"ok"`.
+- [ ] Persistent VM: deferred until a no-card host is chosen; not an O01 gap.
 
 ## 7. Secrets
 

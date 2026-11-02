@@ -1,6 +1,9 @@
 # Protocol
 
-**Status:** decided by T03P (Gate 0, week 2). Implemented by T03.
+**Status:** decided and partially implemented by T03P (Gate 0, week 2). The
+transport, messages and 20 Hz loop work; server-side rejection is incomplete
+(see the known gaps below). T03 adds binary framing, persistence and delta
+compression.
 **Source of truth:** DESIGN.md Part 13.8.
 
 ---
@@ -72,6 +75,23 @@ All movement validated on server before state update:
 4. **Rotation smoothing:** Max π rad/s turn rate
 
 Invalid input → `REJECT` with reason (`velocity_exceeded`, `out_of_bounds`) + current authoritative state.
+
+**Known gaps (2026-11-02).** The rejection path is not currently reachable
+over the wire:
+
+- `speed = 5.0` is hardcoded in `validateMovement` (a RULE_3 violation). With
+  `dt = 1/20`, every input moves 0.25 units/tick, below the 0.5
+  `max_velocity_units_per_tick` limit. The velocity branch cannot fire.
+- `validateMovement` reads `worldBounds.minX/maxX/minZ/maxZ`, but
+  `config/net_proto.json` stores `min_x/max_x/min_z/max_z`. The comparisons run
+  against `undefined`, so world bounds are not enforced. A live test reached
+  `z = 1017.73` with zero `REJECT` frames.
+- Inputs are booleans, so there is no position/teleport field to exercise a
+  speed hack.
+
+Fixing this needs a config-driven move speed and a snake_case → camelCase
+mapping (or snake_case reads) for `world_bounds`, plus a test that sends an
+invalid input and asserts a `REJECT`.
 
 ## Payload Schemas
 
@@ -172,9 +192,12 @@ All tunables in extended-1 format:
 - [x] Two browser tabs connect to same server
 - [x] Each tab gets unique cube with unique color
 - [x] WASD/Arrow keys move cube
-- [x] Server rejects movement exceeding `max_velocity_units_per_tick`
-- [x] Server rejects movement outside `world_bounds`
-- [x] Rejected input → `REJECT` + authoritative state correction visible in both tabs
+- [ ] Server rejects movement exceeding `max_velocity_units_per_tick` — **not
+      effective**; see the known gaps above
+- [ ] Server rejects movement outside `world_bounds` — **not effective**; see
+      the known gaps above
+- [ ] Rejected input → `REJECT` + authoritative state correction — the code
+      path exists, but no current input triggers it
 - [x] `KEYFRAME` every 10 ticks, `STATE` otherwise
 - [x] Protocol documented here
 

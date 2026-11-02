@@ -4,8 +4,9 @@ Current context for any human or AI session working in this repository. Keep it
 current at the end of every task (DESIGN.md, Session Protocol). `DESIGN.md` wins
 over this file whenever they disagree.
 
-**Phase:** 0 — Foundation. **Implemented:** T00 + O01 only.
-**Last updated:** 2026-11-01.
+**Phase:** 0 — Foundation + Gate 0. **Implemented:** T00, O01, T03P, C01, T00A
+and the procedural plant renderer / Root Sight prototype committed as T01.
+**Last updated:** 2026-11-02.
 
 ## 1. Stack
 
@@ -18,23 +19,29 @@ over this file whenever they disagree.
 | Tests | `node --test` (built in) | No test framework dependency |
 | Server HTTP | `node:http` (built in) | No framework until a task needs one |
 | Database | PostgreSQL 17 (`postgres:17-alpine`), `pg` 8 | Single Postgres, no Redis/queue (RULE_31) |
-| Client | Static HTML/CSS/TS shell | C01 replaces it with Vite + Three.js |
+| Client | Vite 8 + Three.js r187 + `@vitejs/plugin-legacy` | C01 foundation; one dev server and one production build |
+| Realtime | `ws` (WebSocket) + JSON | T03P protocol; browser-compatible, works through the tunnel |
 | CI | GitHub Actions | Verify on push/PR; Pages deploy on `main` |
 | Container | `node:24-alpine` | Runs TS directly |
 
-There is **no bundler, no ORM, no game engine and no game loop** yet. Do not add
-one without a task that requires it.
+The **client** is bundled by Vite. The **server, shared package and tools** run
+TypeScript directly on Node with no bundler. There is still **no ORM, no game
+engine and no growth simulation**; the renderer draws a client-side test plant
+and server cube positions. Do not add a new framework without a task that
+requires it.
 
 ## 2. Commands
 
 ```sh
-pnpm dev              # one command: install if needed, build client, run both
+pnpm dev              # one command: install if needed, server + Vite dev server
+pnpm dev:server       # server only, watch mode
+pnpm dev:client       # Vite dev server only
 pnpm verify           # lint + typecheck + config:validate + test
 pnpm lint             # biome check .
 pnpm typecheck        # tsc -p in every package
 pnpm config:validate  # schema + rarity ban over config/*.json
 pnpm test             # node --test in packages/shared and apps/server
-pnpm build            # static client -> apps/client/dist
+pnpm build            # Vite production build -> apps/client/dist
 pnpm start            # server only
 ```
 
@@ -50,20 +57,22 @@ committed; CI installs with `--frozen-lockfile`.
 │   └── deploy-staging.yml     # static client -> GitHub Pages on main
 ├── apps/
 │   ├── client/
-│   │   ├── index.html         # shell; meta[name=server-origin]
-│   │   ├── scripts/copy-static.mjs
-│   │   ├── scripts/serve.mjs  # preview server; proxies /health and /ready
-│   │   ├── src/main.ts        # fetch /health, render status
+│   │   ├── index.html         # Vite entry; meta[name=server-origin]
+│   │   ├── vite.config.ts     # dev proxy + GitHub Pages base path
+│   │   ├── scripts/           # legacy preview helpers (unused by `pnpm dev`)
+│   │   ├── src/main.ts        # Three.js scene, WebSocket client, input, hint card
+│   │   ├── src/config/plantRendererConfig.ts
+│   │   ├── src/renderers/PlantRenderer.ts  # Root Sight shaders, ground, points
 │   │   ├── src/styles.css
 │   │   └── tsconfig.json
 │   └── server/
 │       ├── Dockerfile
 │       ├── src/core/config.ts # config load + env merge
 │       ├── src/core/version.ts
-│       ├── src/main.ts        # HTTP server, /health, /ready, shutdown
+│       ├── src/main.ts        # HTTP + WebSocket server, CubeWorld, /config routes
 │       ├── src/ops/db.ts      # Postgres reachability probe
 │       ├── src/ops/health.ts  # pure report + readiness
-│       ├── src/ops/health.test.ts
+│       ├── src/ops/net.ts     # protocol types, net_proto config, movement validation
 │       ├── src/ops/log.ts     # JSON logger
 │       └── tsconfig.json
 ├── packages/shared/
@@ -83,7 +92,7 @@ committed; CI installs with `--frozen-lockfile`.
 │   ├── load-test/             # placeholder (O03)
 │   ├── seed-data/             # placeholder (T03)
 │   └── backup/                # placeholder (O02)
-├── config/                    # 73 tunable files + _meta
+├── config/                    # 75 tunable files + _meta
 ├── docs/                      # tunables, tasks, checklists, design notes
 ├── ops/
 │   ├── compose.yml            # server + postgres:17-alpine
@@ -109,19 +118,24 @@ committed; CI installs with `--frozen-lockfile`.
 ## 4. Runtime architecture
 
 ```
-Browser (static shell) ──GET /health──▶ Server (node:http) ──select 1──▶ Postgres
-        ▲                                   │
-        └──────── static files ─────────────┘ (separate origin/host)
+Browser (Vite + Three.js) ──HTTP /health,/ready,/config/*──▶ Server (node:http + ws) ──select 1──▶ Postgres
+        ▲                                                          │
+        └──────────── WebSocket /ws (JSON, 20 Hz) ─────────────────┘
 ```
 
-- **Client:** static files only. It holds no game state and no authority
-  (RULE_4, RULE_27). `src/main.ts` probes `/health` and prints the result.
-- **Server:** one process, one world, one Postgres (RULE_31). It loads and
-  validates all config before listening; invalid config is a startup failure.
+- **Client:** renders only. It sends input intents and draws server cube state;
+  it holds no authority (RULE_4, RULE_27). Three.js scene, OrbitControls,
+  `PlantRenderer` (Root Sight shaders) and the T00A onboarding overlay.
+- **Server:** one process, one world, one Postgres (RULE_31). `CubeWorld` runs a
+  20 Hz tick, quantizes movement and broadcasts `STATE` / `KEYFRAME`. Velocity
+  and world-bounds rejection code exists but is currently ineffective; see the
+  known gaps in [`docs/protocol.md`](./protocol.md). Config is loaded and
+  validated before listening.
 - **Database:** optional locally (`DATABASE_URL` unset → `skipped`), required in
   compose/staging (`READINESS_REQUIRES_DB=true`).
-- **Deploy split:** client on GitHub Pages; server + Postgres on one free VM.
-  They are deployed separately on purpose.
+- **Deploy split:** client on GitHub Pages; server + Postgres in Docker compose,
+  currently exposed through a Cloudflare quick tunnel rather than a VM. They are
+  deployed separately on purpose.
 
 ## 5. Interfaces
 
@@ -137,7 +151,13 @@ preflight. Other methods are `405`. Responses carry
 | GET | `/health` | 200 always while alive | `HealthReport` |
 | GET | `/ready` | 200 ready, 503 not ready | `{ ready, ...HealthReport }` |
 | GET | `/` | 200 | `{ name, version, world, note }` |
+| GET | `/config/onboarding` | 200 | `{ hint_card_lines, show_hint_card_duration_ms, resource_tooltips }` |
+| GET | `/config/plant_renderer` | 200 | flat `plant_renderer` values (`max_nodes_per_plant`, …) |
 | * | anything else | 404 | `{ error: "not_found" }` |
+
+The `/config/*` routes read the file from `CONFIG_DIR` on each request and fall
+back to built-in defaults if the file cannot be read. They exist so the static
+client can load T00A/T01 tunables without a bundler rebuild.
 
 ```ts
 interface HealthReport {
@@ -146,7 +166,7 @@ interface HealthReport {
   uptime_s: number;           // floor(seconds since start)
   checks: {
     config: 'ok';
-    config_files: number;     // 73
+    config_files: number;     // 75
     database: 'ok' | 'down' | 'skipped';
   };
 }
@@ -236,11 +256,12 @@ Validator rules (authoritative code: `src/config/validate.ts`):
 | `DATABASE_URL` | unset | Unset → DB `skipped` |
 | `READINESS_REQUIRES_DB` | `ops.readiness_requires_db` (true) | |
 | `STAGING_SERVER_ORIGIN` | unset | GitHub repository variable, deploy only |
-| `CLIENT_PORT` / `PROXY_ORIGIN` | `4173` / `http://127.0.0.1:8080` | Local client preview only |
 
 `NODE_ENV` is validated against `ops.environments` at startup. Secrets are never
 committed. `.env.example` contains placeholders only, and the server does not
-load a `.env` file (ADR-011).
+load a `.env` file (ADR-011). Docker Compose does auto-load `ops/.env` for the
+staging stack (ADR-015); that file is gitignored and is not read by the server
+process itself.
 
 ### 5.5 Database probe
 
@@ -248,11 +269,17 @@ load a `.env` file (ADR-011).
 `select 1` and returns `ok` / `down`; no URL returns `skipped`. There are **no
 tables or migrations yet** — T03/T08A/O02 add them.
 
-### 5.6 Wire protocol (placeholder)
+### 5.6 Wire protocol (T03P)
 
-`PROTOCOL_VERSION = 1`; frame header is `[version:u8][type:u8]`. Payload
-encoding is decided by **T03P** (Gate 0) and documented in
-`docs/protocol.md`. Do not invent a second framing.
+WebSocket at `/ws`, JSON messages `{ type: number, payload: object }`.
+`PROTOCOL_VERSION = 1`; the client sends `HELLO { clientVersion: 1 }` and the
+server answers with `WELCOME`. Client → server: `HELLO`, `INPUT`, `PING`.
+Server → client: `WELCOME`, `STATE`, `KEYFRAME`, `REJECT`, `PONG`, `ERROR`.
+The server is **intended** to validate movement (velocity, world bounds,
+quantization) and send `REJECT` plus authoritative state, but the velocity and
+bounds checks are currently ineffective (hardcoded speed, camelCase/snake_case
+mismatch). Full table, payload schemas and known gaps:
+[`docs/protocol.md`](./protocol.md).
 
 ### 5.7 Events and ids
 
@@ -278,11 +305,12 @@ These are not open for reinterpretation without a new decision record.
    `mailable`, `listable` all false (RULE_23).
 6. **Config is the only source of tunables.** No gameplay number in code
    (RULE_3). Config is validated at startup and in CI.
-7. **TypeScript runs directly.** Server, shared and tools use Node's type
-   stripping; imports carry `.ts` extensions. The client compiles with `tsc`
-   until C01 moves it to Vite.
+7. **TypeScript runs directly on the server side.** Server, shared and tools use
+   Node's type stripping; imports carry `.ts` extensions. The client is bundled
+   by Vite and typechecked with `tsc --noEmit`.
 8. **Static client, authoritative server.** Separate deploy targets; the client
-   never holds state (RULE_4, RULE_27).
+   never holds state (RULE_4, RULE_27). The Vite build is uploaded as static
+   files; the server never serves the game client in production.
 9. **Secrets only via environment.** No secrets file, no committed `.env`.
 10. **`/health` is liveness, `/ready` is readiness.** A degraded database does
     not kill the process.
@@ -293,18 +321,23 @@ The full rationale log is in [`docs/decisions.md`](./docs/decisions.md).
 
 | Rule | Where |
 |---|---|
-| RULE_3 (no hardcoded tunables) | config validator + code review; ops/compliance values live in config |
+| RULE_3 (no hardcoded tunables) | config validator + code review; ops/compliance/net_proto/onboarding/plant_renderer values live in config. Known gaps: `speed = 5.0` in `ops/net.ts`, WASD bindings and camera limits in `main.ts`, shader constants in `PlantRenderer.ts` |
 | RULE_20 (no rarity) | `auditTree` + validator tests + CI |
 | RULE_23 (account-bound flags) | `auditTree` + `violatesAccountBoundInvariant` + tests |
 | Startup fails on invalid config | `loadRuntimeConfig` throws before `listen` |
-| Server owns state | no client state exists yet; server is the only writer |
+| Server owns state | `CubeWorld` is the only writer; the client renders received cube state and sends intents |
 | Secrets not committed | `.gitignore` ignores `.env`; `.env.example` has placeholders |
 
 ## 8. Not built yet
 
-World simulation, plants, growth, rendering, accounts, chat, economy, protocol
-transport, database schema/migrations, admin/compliance tooling. The next task
-is **T03P** (Gate 0), per DESIGN.md Part 4.
+Growth simulation, persistence, accounts, chat, economy, database
+schema/migrations, admin/compliance tooling.
+
+The renderer is a **prototype**, not simulated plant state: it draws server cube
+positions plus a client-generated test plant. DESIGN.md assigns **T01** to
+growth and **C02** to the procedural renderer; this repository committed the
+renderer foundation under the T01 label, so do not read the record as proof that
+growth exists. The next task in DESIGN.md order is **T01 Growth**.
 
 ## 9. Keeping this file current
 

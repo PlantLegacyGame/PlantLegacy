@@ -1,9 +1,10 @@
 # Plant Legacy — Complete Developer Reference
 
-**Last Updated:** 2026-11-01  
-**Current Phase:** Gate 1 Run-up (Week 2-24)  
-**Completed Tasks:** T00, O01, T03P, C01, T00A  
-**Next Task:** T01 — Procedural Plant Renderer (Root Sight Shader)
+**Last Updated:** 2026-11-02  
+**Current Phase:** Gate 0 complete; Gate 1 run-up (Week 3-24)  
+**Completed Tasks:** T00, O01  
+**Partial Tasks:** T03P (transport works, rejection ineffective), C01 (foundation slice), T00A (onboarding slice), T01 (renderer prototype; growth not built)  
+**Next Task:** fix T03P rejection, then **T01 Growth** (DESIGN.md Part 4)
 
 ---
 
@@ -11,17 +12,19 @@
 
 | Task | Status | Description |
 |------|--------|-------------|
-| T00 | ✅ Complete | Foundation: monorepo, 74 config files, config validator, rarity ban (RULE_20), account-bound invariant (RULE_23) |
+| T00 | ✅ Complete | Foundation: monorepo, 75 config files, config validator, rarity ban (RULE_20), account-bound invariant (RULE_23) |
 | O01 | ✅ Complete | Repo + deploy pipeline: pnpm, Biome, CI, Docker, GitHub Pages, `/health` + `/ready` |
-| T03P | ✅ Complete | Networking Gate 0: WebSocket + JSON protocol, server-authoritative cubes, 20Hz tick |
-| C01 | ✅ Complete | Vite + Three.js client: OrbitControls, 3D cubes, smooth interpolation, dev proxy |
-| T00A | ✅ Complete | Onboarding: 3-line hint card (RULE_13), resource readout with tooltips |
+| T03P | ⚠️ Partial | WebSocket + JSON protocol, 20 Hz authoritative cubes; velocity/bounds rejection is ineffective |
+| C01 | ⚠️ Partial | Vite + Three.js client, OrbitControls, WebSocket; no input abstraction, UI shell or debug overlay |
+| T00A | ⚠️ Partial | 3-line hint card and resource tooltips; tile grid and resource simulation not built |
+| T01 | ⚠️ Partial | Root Sight renderer prototype; DESIGN.md T01 growth simulation not built |
 
 ### What Works Now (Live)
 - **Local dev:** `pnpm dev` → server (8080) + Vite client (4173) with hot reload
-- **Staging:** GitHub Pages at `https://plantlegacygame.github.io/PlantLegacy/` (shows "Server ok" when tunnel active)
-- **Protocol:** WebSocket v1 documented in `docs/protocol.md`
-- **Config:** 74 files in `config/` (extended-1 format), validated at startup + CI
+- **Staging:** GitHub Pages at `https://plantlegacygame.github.io/PlantLegacy/`, API via Cloudflare quick tunnel
+- **Protocol:** WebSocket v1 documented in `docs/protocol.md`; two tabs, server-authoritative cubes
+- **Client:** Three.js scene, OrbitControls, Root Sight renderer prototype, onboarding overlays
+- **Config:** 75 files in `config/` (extended-1 format), validated at startup + CI
 
 ---
 
@@ -34,12 +37,13 @@ pnpm dev
 **What it does:**
 1. Checks for `node_modules` → runs `pnpm install` if missing
 2. Starts **server** in watch mode (`node --watch src/main.ts`) on `http://127.0.0.1:8080`
-3. Starts **Vite dev server** on `http://127.0.0.1:4173` with:
+3. Starts **Vite dev server** on `http://localhost:4173` with:
    - Hot module replacement (HMR)
-   - Proxy for `/health`, `/ready`, `/ws` → server
-   - Serves `apps/client/src/index.html` as entry
+   - Proxy for `/health`, `/ready`, `/config`, `/ws` → server
+   - Serves `apps/client/index.html` as entry
 
-**Open:** `http://127.0.0.1:4173` in **two tabs** to test multiplayer sync  
+**Open:** `http://localhost:4173` in **two tabs** to test multiplayer sync  
+(Use `localhost`, not `127.0.0.1`; Vite binds the IPv6 loopback on Windows.)  
 **Stop:** `Ctrl+C` in the terminal running `pnpm dev`
 
 ### Verification Commands
@@ -48,7 +52,7 @@ pnpm verify        # Full CI chain: lint + typecheck + config:validate + test
 pnpm lint          # Biome check (formatter + linter)
 pnpm lint:fix      # Auto-fix lint issues (safe fixes only)
 pnpm typecheck     # TypeScript strict check across all packages
-pnpm config:validate  # Validates all 74 config files (schema + rarity ban + account-bound)
+pnpm config:validate  # Validates all 75 config files (schema + rarity ban + account-bound)
 pnpm test          # node --test in packages/shared + apps/server
 pnpm build         # Production build: Vite → apps/client/dist
 pnpm start         # Server only (no watch), for production
@@ -57,9 +61,9 @@ pnpm start         # Server only (no watch), for production
 ### Key URLs (Local)
 | Service | URL | Purpose |
 |---------|-----|---------|
-| Client | `http://127.0.0.1:4173` | Three.js game client |
-| Server HTTP | `http://127.0.0.1:8080` | `/health`, `/ready`, `/config/onboarding` |
-| Server WS | `ws://127.0.0.1:8080` | WebSocket for game protocol |
+| Client | `http://localhost:4173` | Three.js game client |
+| Server HTTP | `http://127.0.0.1:8080` | `/health`, `/ready`, `/config/onboarding`, `/config/plant_renderer` |
+| Server WS | `ws://127.0.0.1:8080/ws` | WebSocket for game protocol |
 
 ---
 
@@ -69,6 +73,7 @@ pnpm start         # Server only (no watch), for production
 - [x] GitHub repo: `PlantLegacyGame/PlantLegacy`
 - [x] Pages enabled: Settings → Pages → **Build and deployment** → Source = **GitHub Actions**
 - [x] Docker Desktop installed and running
+- [x] `cloudflared` installed
 
 ### Required GitHub Repository Variable
 | Name | Value | Where |
@@ -77,26 +82,28 @@ pnpm start         # Server only (no watch), for production
 
 > **Important:** This MUST be the **server's public URL** (Cloudflare tunnel), NOT the GitHub Pages URL. The deploy workflow injects this into the client's `<meta name="server-origin">` so the browser knows where to connect.
 
+### `ops/.env` (gitignored, never commit)
+```dotenv
+NODE_ENV=staging
+CORS_ORIGINS=https://plantlegacygame.github.io,https://<current-tunnel>.trycloudflare.com,http://localhost:4173,http://127.0.0.1:4173,http://localhost:4174
+```
+`POSTGRES_PASSWORD` is intentionally unset: the existing `ops_pgdata` volume was
+initialised with the compose default. Changing it breaks auth. Do **not** run
+`down -v` unless you accept losing the volume.
+
 ### Step-by-Step Deploy Process
 
 #### Window 1 — Start Staging Stack (Server + Postgres)
 ```powershell
 cd C:\Users\khmer\PlantLegacy
 
-# Set environment variables (run in THIS window only)
-$env:NODE_ENV = "staging"
-$env:POSTGRES_PASSWORD = -join ((48..57) + (65..90) + (97..122) | Get-Random -Count 32 | ForEach-Object { [char]$_ })
-$env:CORS_ORIGINS = "https://plantlegacygame.github.io"
-
-# Clean start (removes old Postgres volume)
-docker compose -f ops/compose.yml down -v
 docker compose -f ops/compose.yml up -d --build
 
-# Wait 15-20 seconds for Postgres healthcheck, then verify:
-curl http://localhost:8080/health
-curl http://localhost:8080/ready
+# Wait for the Postgres healthcheck, then verify:
+curl.exe http://localhost:8080/health
+curl.exe http://localhost:8080/ready
 ```
-**Expected:** Both return 200. `/ready` must show `"ready":true` and `"database":"ok"`
+**Expected:** Both return 200. `/ready` must show `"ready":true` and `"database":"ok"`.
 
 #### Window 2 — Start Cloudflare Tunnel
 ```powershell
@@ -104,10 +111,12 @@ cloudflared tunnel --url http://localhost:8080
 ```
 **Copy the HTTPS URL** (e.g., `https://abc123.trycloudflare.com`) — **this changes every restart**
 
-#### GitHub — Update Variable
-1. Go to: `https://github.com/PlantLegacyGame/PlantLegacy/settings/variables/actions`
-2. Edit `STAGING_SERVER_ORIGIN` → paste the **new** tunnel URL
-3. Save
+#### Wire the tunnel origin
+1. Put the tunnel origin in `ops/.env` → `CORS_ORIGINS`.
+2. Restart the server so it picks up the value:
+   `docker compose -f ops/compose.yml up -d server`
+3. GitHub → `https://github.com/PlantLegacyGame/PlantLegacy/settings/variables/actions`
+   → edit `STAGING_SERVER_ORIGIN` → paste the **new** tunnel URL.
 
 #### Trigger Deploy
 ```powershell
@@ -117,13 +126,15 @@ git push origin main
 ```
 
 #### Verify
-1. **GitHub Actions** → `deploy-staging` workflow → wait for **green**
-2. **Pages URL:** `https://plantlegacygame.github.io/PlantLegacy/` → should show **"Server ok"** with version, uptime, database status
+1. **GitHub Actions** → `deploy-staging` → wait for **green**.
+2. **Pages URL:** `https://plantlegacygame.github.io/PlantLegacy/` → canvas renders,
+   hint card appears, and DevTools shows `wss://<tunnel>/ws` **101** plus
+   `/config/onboarding` and `/config/plant_renderer` **200**.
 
 ### Keep Running for Demo
 - **Window 1** (docker compose) — must stay open
 - **Window 2** (cloudflared) — must stay open
-- **On restart:** Repeat ALL steps (tunnel URL changes every time)
+- **On restart:** update `ops/.env` and `STAGING_SERVER_ORIGIN`, then re-run the deploy (the tunnel URL changes every time)
 
 ---
 
@@ -131,7 +142,8 @@ git push origin main
 
 ```powershell
 # Stop staging stack (frees ports 8080, 5432)
-docker compose -f ops/compose.yml down -v
+docker compose -f ops/compose.yml down
+# Add -v ONLY if you accept losing the ops_pgdata volume (its password is baked in).
 
 # Stop local dev (Ctrl+C in pnpm dev terminal)
 # Stop tunnel (Ctrl+C in cloudflared terminal)
@@ -179,7 +191,9 @@ curl http://localhost:8080/health
 curl http://localhost:8080/ready
 ```
 
-Then set `STAGING_SERVER_ORIGIN` = `http://<vps-ip>:8080` (or domain with Caddy/Cloudflare for HTTPS)
+Then set `STAGING_SERVER_ORIGIN` to an **HTTPS** origin (a domain behind Caddy,
+nginx or a named Cloudflare tunnel). GitHub Pages is HTTPS, so a plain
+`http://<vps-ip>:8080` API is blocked by the browser as mixed content.
 
 ---
 
@@ -192,16 +206,19 @@ PlantLegacy/
 │   ├── ci.yml              # Lint, typecheck, config:validate, test, build
 │   └── deploy-staging.yml  # Build client → GitHub Pages on main push
 ├── apps/
-│   ├── client/             # Vite + Three.js client (C01)
+│   ├── client/             # Vite + Three.js client (C01, T00A, T01)
+│   │   ├── index.html      # Vite entry + meta[name=server-origin]
 │   │   ├── src/
-│   │   │   ├── main.ts     # Game client entry (WebSocket, Three.js, input)
-│   │   │   └── index.html  # Vite entry (in src/ for Vite)
-│   │   ├── vite.config.ts  # Vite config with dev proxy
-│   │   ├── package.json    # deps: three, vite, @vitejs/plugin-legacy
-│   │   └── public/         # Static assets (empty for now)
+│   │   │   ├── main.ts     # Game client entry (WebSocket, Three.js, input, overlays)
+│   │   │   ├── styles.css  # Page + overlay styles
+│   │   │   ├── config/plantRendererConfig.ts  # fetch + fallback for /config/plant_renderer
+│   │   │   └── renderers/PlantRenderer.ts     # Root Sight shaders, ground, points
+│   │   ├── scripts/        # Legacy preview helpers (unused by `pnpm dev`)
+│   │   ├── vite.config.ts  # Vite config with dev proxy + Pages base path
+│   │   └── package.json    # deps: three, vite, @vitejs/plugin-legacy
 │   └── server/             # Node HTTP + WebSocket server
 │       ├── src/
-│       │   ├── main.ts     # HTTP + WebSocket server, CubeWorld
+│       │   ├── main.ts     # HTTP + WebSocket server, CubeWorld, /config routes
 │       │   ├── core/       # config.ts, version.ts
 │       │   └── ops/        # net.ts (protocol), health.ts, db.ts, log.ts
 │       ├── Dockerfile      # Node 24 alpine, runs TS directly
@@ -214,12 +231,14 @@ PlantLegacy/
 │       ├── ids/            # Prefixed opaque IDs
 │       ├── math/           # clamp, lerp
 │       └── schemas/        # Item, death-record schemas
-├── config/                 # 74 tunable files (extended-1 format)
+├── config/                 # 75 tunable files (extended-1 format)
 │   ├── _meta/schema.json   # JSON Schema for editors
 │   ├── _meta/validator-rules.md  # Authoritative validator rules
-│   ├── ops.json            # Server config (ports, CORS, DB, etc.)
-│   ├── onboarding.json     # T00A: hint card + resource tooltips
-│   ├── net_proto.json      # T03P: protocol tunables
+│   ├── ops.json            # O01, active: ports, CORS, DB, health, log
+│   ├── compliance.json     # T00, draft: 5-line illegal-content policy
+│   ├── net_proto.json      # T03P, draft: protocol tunables
+│   ├── onboarding.json     # T00A, draft: hint card + resource tooltips
+│   ├── plant_renderer.json # T01, draft: Root Sight renderer tunables
 │   └── *.json              # 70 stub configs for future tasks
 ├── tools/
 │   ├── dev.mjs             # pnpm dev orchestrator
@@ -244,13 +263,17 @@ PlantLegacy/
 ```
 
 ### Key Config Files
-| File | Owner | Status | Purpose |
-|------|-------|--------|---------|
-| `ops.json` | O01 | active | Server: port, CORS, DB pool, health paths, log level |
-| `onboarding.json` | T00A | draft | Hint card (3 lines), resource tooltips, duration |
-| `net_proto.json` | T03P | draft | Protocol: tick rate, quantization, velocity limits, world bounds |
-| `compliance.json` | T00 | draft | 5-line illegal-content-only policy (RULE_6) |
-| `*.json` (70 files) | various | stub | Empty `values: {}` — filled by owning task |
+| File | Owner | Status | Values | Purpose |
+|------|-------|--------|--------|---------|
+| `ops.json` | O01 | active | 12 | Server: port, CORS, DB pool, health paths, log level |
+| `compliance.json` | T00 | draft | 3 | 5-line illegal-content-only policy (RULE_6) |
+| `net_proto.json` | T03P | draft | 9 | Protocol: tick rate, quantization, velocity limit, world bounds |
+| `onboarding.json` | T00A | draft | 3 | Hint card (3 lines), resource tooltips, duration |
+| `plant_renderer.json` | T01 | draft | 15 | Root Sight shaders, node budget, visualization flags, quality |
+| `*.json` (70 files) | various | stub | 0 | Empty `values: {}` — filled by owning task |
+
+`pnpm config:validate` checks every row above. `docs/tunables.md` lists each key,
+its type, range and default.
 
 ---
 
@@ -274,20 +297,17 @@ These are **non-negotiable** — violating them breaks the architecture:
 
 Per `DESIGN.md` Part 4, the ordered tasks to reach **Gate 1 (Week 24)**:
 
-| Order | Task | Description | Depends On |
-|-------|------|-------------|------------|
-| 1 | **T01** | Procedural plant renderer (Root Sight shader) | C01 |
-| 2 | **C02** | HUD/menus/input rebinding + text scale 80-150% | C01 |
-| 3 | **T03** | Full binary protocol (delta compression, client prediction) | T03P |
-| 4 | **T08C** | Accounts: username/password + session (email recovery later) | T00, O01 |
-| 5 | **T02** | Growth simulation: nodes, biomass, pruning, resources | T01 |
-| 6 | **T07** | Day/night cycle + weather system | C01 |
-| 7 | **C03** | Weather visuals (particles, sky, lighting) | T07, C01 |
-| 8 | **T05** | Chat (proximity + world) + report/block UI | C02, T08C |
-| 9 | **T04** | Mutations: schema + 3 implemented | T01, T02 |
-| 10 | **T06** | Damage pipeline (weather, roots, herbivores) | T02, T07 |
-| 11 | **T08A** | Inventory + Spore stipend (session end) | T08C |
-| 12 | **C04** | Mail UI + guild roster | T08A, T05 |
+| Order | Task | Description | Depends On | Status |
+|-------|------|-------------|------------|--------|
+| 0 | **T03P fix** | Config-driven move speed + snake_case `world_bounds`; assert `REJECT` | T03P | **next** |
+| 1 | **T01** | Growth: typed nodes, biomass cost, root competition, canopy shading, root attack | T00A | not started |
+| 2 | **C02** | Procedural plant renderer v1 (the T01-labelled prototype is the starting point) | C01, T01 | prototype only |
+| 3 | **T03** | Multiplayer world: persistence, offline tiers, binary framing + delta | T03P, T01 | not started |
+| 4 | **T07** | Weather + day/night | T00A, T03 | not started |
+| 5 | **C03** | Environment and weather visuals | T07, C01 | not started |
+
+This table is deliberately short: it lists only the tasks whose DESIGN.md
+ordering follows Gate 0. The full ordered list is DESIGN.md Part 4.
 
 **Gate 1 Acceptance:** 50-player core-loop playtest (read resources → grow → compete → be damaged → chat)
 
@@ -310,7 +330,7 @@ Per `DESIGN.md` Part 4, the ordered tasks to reach **Gate 1 (Week 24)**:
 | Goal | Command |
 |------|---------|
 | Start staging stack | `docker compose -f ops/compose.yml up -d --build` |
-| Stop staging stack | `docker compose -f ops/compose.yml down -v` |
+| Stop staging stack | `docker compose -f ops/compose.yml down` (add `-v` only if you accept losing `ops_pgdata`) |
 | Start tunnel | `cloudflared tunnel --url http://localhost:8080` |
 | Trigger deploy | `git commit --allow-empty -m "deploy" && git push origin main` |
 | Check Pages | `https://plantlegacygame.github.io/PlantLegacy/` |
@@ -339,12 +359,15 @@ Per `DESIGN.md` Part 4, the ordered tasks to reach **Gate 1 (Week 24)**:
 ### Config System
 - **Never hardcode values** — always use `readNumber/readInteger/readString/readBoolean/readStringArray/readObject` from `@plant-legacy/shared/config`
 - **Config validator runs at server startup** — invalid config = process exits before listening
-- **74 config files** — count increases as tasks add their configs
+- **75 config files** — 73 DESIGN.md systems plus `onboarding.json` and `plant_renderer.json`
 - **Rarity ban is absolute** — any `rarity` key or enum member fails validation
+- **`account_bound: true` forces** `tradeable`, `mailable`, `listable` to `false` (RULE_23)
+- **Known RULE_3 gaps to close:** `speed = 5.0` in `apps/server/src/ops/net.ts`, hardcoded WASD bindings and camera limits in `apps/client/src/main.ts`, shader colors and `nodeSize` in `PlantRenderer.ts`
 
 ### Client-Server Boundary
-- **Client is NEVER authoritative** — it renders interpolated state, sends inputs
-- **Server validates every input** — velocity limits, world bounds, quantization
+- **Client is NEVER authoritative** — it renders received state and sends input intents
+- **Server owns the tick** — `CubeWorld` steps at `net_proto.tick_rate_hz` and broadcasts `STATE` / `KEYFRAME`
+- **Rejection is currently broken** — `validateMovement` compares camelCase `worldBounds` keys against the snake_case config and moves at a hardcoded speed below the velocity limit, so no input produces `REJECT`. See `docs/protocol.md` known gaps.
 - **Protocol v1** — WebSocket + JSON; T03 will replace with binary framing + delta compression
 
 ### Development Workflow
@@ -354,10 +377,10 @@ Per `DESIGN.md` Part 4, the ordered tasks to reach **Gate 1 (Week 24)**:
 4. **Staging deploy** only when you need to show someone externally
 
 ### Upcoming Technical Decisions
-- **T01:** Root Sight shader — will need GPU buffer management, compute shaders
-- **T03:** Binary protocol — frame header `[version:u8][type:u8][payload]`, quantization, delta encoding
-- **T08C:** Accounts — bcrypt password hashing, JWT sessions, `accounts` config
-- **T02:** Growth — node-based procedural generation, biomass economy, pruning mechanics
+- **T03P fix:** config-driven move speed, snake_case `world_bounds` reads, a `REJECT` test
+- **T01 Growth:** node graph, biomass economy, root competition, canopy shading (DESIGN.md Part 4)
+- **C02:** finish the procedural renderer — real Root Sight camera/cutaway, GPU buffer budget
+- **T03:** binary protocol — frame header `[version:u8][type:u8][payload]`, quantization, delta encoding
 
 ---
 
@@ -377,4 +400,4 @@ Per `DESIGN.md` Part 4, the ordered tasks to reach **Gate 1 (Week 24)**:
 ---
 
 **Keep this file updated** as tasks complete and new workflows emerge.  
-Next update after **T01** (Procedural Plant Renderer) is complete.
+Next update after the **T03P rejection fix** and then **T01 Growth**.

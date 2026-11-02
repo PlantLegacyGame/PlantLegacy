@@ -1,6 +1,7 @@
 # Attribution
 
-**Status:** stub created by T00. No third-party assets are in the repository yet.
+**Status:** stub created by T00. No third-party **asset files** are in the
+repository; bundled npm dependencies are listed in the notes below.
 
 Every asset added to the project must be recorded here **before** it is used.
 C01's asset loader will fail the build when a file has no entry in this manifest
@@ -35,5 +36,8 @@ C01's asset loader will fail the build when a file has no entry in this manifest
 
 ## Notes
 
-The Phase 0 client uses only system fonts and hand-written CSS. No image, model,
-texture, sound or font file is committed.
+The client bundles third-party **code** dependencies through pnpm (Three.js,
+Vite, `@vitejs/plugin-legacy`, `ws`, `pg`); their licenses travel with the
+packages in `node_modules`, and none are committed as asset files. The UI still
+uses system fonts and hand-written CSS. No image, model, texture, sound or font
+file is committed, so the asset manifest stays empty.

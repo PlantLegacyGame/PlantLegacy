@@ -1,7 +1,9 @@
 # Hosting and environments
 
-**Status:** skeleton shipped by O01. Deploy automation for the server arrives
-with O02. This file records the intended shape so nothing is improvised later.
+**Status:** O01 shipped the pipeline; the staging API currently runs from the
+local Docker compose stack through a Cloudflare quick tunnel. A persistent VM is
+deferred until a no-card host is chosen. This file records the intended shape so
+nothing is improvised later.
 
 **First time?** Follow [`docs/deploy-walkthrough.md`](./deploy-walkthrough.md)
 for copy-paste commands from commit to live staging URL.
@@ -10,72 +12,107 @@ for copy-paste commands from commit to live staging URL.
 
 | Environment | Client | Server | Postgres | `NODE_ENV` |
 |---|---|---|---|---|
-| Local | `http://127.0.0.1:4173` (preview) | `http://127.0.0.1:8080` | optional, compose on `:5432` | `local` |
-| Staging | GitHub Pages URL | one free VM, Docker | same VM, Docker volume | `staging` |
-| Production | same static build, separate origin | same VM or a larger one | managed or same VM | `production` |
+| Local | Vite dev server `http://localhost:4173` | `http://127.0.0.1:8080` | optional, compose on `127.0.0.1:5432` | `local` |
+| Staging | GitHub Pages URL | Docker compose on a Docker host, exposed by a Cloudflare quick tunnel | same compose stack, named volume | `staging` |
+| Production | same static build, separate origin | VM or larger host | managed or same host | `production` |
 
 Environment is selected **only** by `NODE_ENV`; it is never inferred from a
 hostname. The same image and the same static build move between environments.
 
+The staging server is **not independent** right now: it needs the Docker host,
+the compose stack and the `cloudflared` process to stay running. If the PC
+sleeps or the tunnel restarts, staging goes down or the URL changes.
+
 ## Staging URLs
 
-- Client: `https://<owner>.github.io/<repo>/` — shown in the repository's
-  `github-pages` environment after the first deploy.
-- Server: set the repository variable `STAGING_SERVER_ORIGIN` to the VM origin
-  (for example `https://api-staging.example.dev`). The deploy workflow injects
-  it into `apps/client/dist/index.html` as `meta[name=server-origin]`.
-- Health: `$STAGING_SERVER_ORIGIN/health` must return 200 with
-  `"status":"ok"` (or `"degraded"` only while the DB is intentionally down).
-- Readiness: `$STAGING_SERVER_ORIGIN/ready` must return 200 before the deploy is
-  considered good.
-- CORS: set the server's `CORS_ORIGINS` to the exact Pages origin (for example
-  `https://owner.github.io`). The client and API are different origins; without
-  this the browser blocks `/health`.
+- Client: <https://plantlegacygame.github.io/PlantLegacy/> — published by the
+  `deploy-staging` workflow to the `github-pages` environment.
+- Server: the HTTPS origin printed by `cloudflared tunnel --url
+  http://localhost:8080`. It looks like
+  `https://<random-words>.trycloudflare.com` and **changes on every restart**.
+  The current value lives in two places that must agree:
+  - `ops/.env` → `CORS_ORIGINS`
+  - GitHub → Settings → Secrets and variables → Actions → Variables →
+    `STAGING_SERVER_ORIGIN`
+- Health: `$STAGING_SERVER_ORIGIN/health` returns 200 with `"status":"ok"` (or
+  `"degraded"` only while the DB is intentionally down).
+- Readiness: `$STAGING_SERVER_ORIGIN/ready` returns 200 with `"database":"ok"`.
+- Game API: `$STAGING_SERVER_ORIGIN/config/onboarding`,
+  `$STAGING_SERVER_ORIGIN/config/plant_renderer`, and the WebSocket at
+  `wss://<tunnel>/ws`.
+- CORS: `CORS_ORIGINS` must contain the **exact** Pages origin
+  (`https://plantlegacygame.github.io`) and the current tunnel origin. The
+  client and API are different origins; without this the browser blocks
+  `/config/*` and the WebSocket handshake.
 
 ## Client (free static host)
 
-`.github/workflows/deploy-staging.yml` builds `apps/client/dist` and publishes it
-to GitHub Pages on every push to `main`.
+`.github/workflows/deploy-staging.yml` builds `apps/client/dist` and publishes
+it to GitHub Pages on every push to `main`.
 
 1. Repository → Settings → Pages → Source = **GitHub Actions**.
-2. Add repository variable `STAGING_SERVER_ORIGIN`.
+2. Add repository variable `STAGING_SERVER_ORIGIN` (the tunnel or VM origin).
 3. Push to `main`; the workflow prints the Pages URL in the `github-pages`
    environment.
 
 The client is static. It never talks to Postgres and never holds state.
 
-## Server + Postgres (one free VM)
+## Server + Postgres (Docker host + quick tunnel)
+
+On any machine with Docker:
 
 ```sh
-git clone <repo> && cd PlantLegacy
 docker compose -f ops/compose.yml up -d --build
 docker compose -f ops/compose.yml ps
 curl -fsS http://127.0.0.1:8080/health
+curl -fsS http://127.0.0.1:8080/ready
 ```
 
-Compose sets the server's environment directly (including `DATABASE_URL`); no
-`.env` file is read. For non-Compose runs, export variables in the shell — the
-server deliberately has no dotenv loader (ADR-011).
+Compose auto-loads `ops/.env` (gitignored) from the project directory. The
+server itself still reads `process.env` directly and has no dotenv loader
+(ADR-011); Compose is what turns the file into container environment variables.
 
-Compose starts `postgres:17-alpine` with a named volume and the server image
-built from `apps/server/Dockerfile`. The server waits for the Postgres health
-check, then listens on `:8080`.
+A minimal `ops/.env` for staging:
 
-Put a TLS reverse proxy (Caddy or nginx) in front of `:8080` for a public
-origin. The proxy terminates TLS; the container stays plain HTTP on a private
-network.
+```dotenv
+NODE_ENV=staging
+CORS_ORIGINS=https://plantlegacygame.github.io,https://<current-tunnel>.trycloudflare.com,http://localhost:4173,http://127.0.0.1:4173
+```
 
-### Free VM options
+`POSTGRES_PASSWORD` is intentionally unset on the current machine: the existing
+`ops_pgdata` volume was initialised with the compose default. Changing the
+password now breaks authentication; reset the volume with `down -v` (data loss)
+if you need a new password.
 
-Any provider that offers a persistent VM with Docker and a small disk works.
-The plan only requires "one free VM". Prefer a provider whose free tier does not
-sleep, because a sleeping world server misses ticks. Record the chosen provider
-and region here when the first staging VM exists.
+Start the tunnel in a second terminal:
+
+```sh
+cloudflared tunnel --url http://localhost:8080
+```
+
+It prints the public HTTPS URL. Copy that URL into `ops/.env`
+(`CORS_ORIGINS`), restart the server, then update the `STAGING_SERVER_ORIGIN`
+repository variable and re-run `deploy-staging`.
+
+The Postgres port is bound to `127.0.0.1` only; it is never exposed through the
+tunnel. The tunnel forwards only the server's `:8080`.
+
+## Persistent VM (deferred)
+
+A free VM with Docker and a small disk is the intended stable target. Prefer a
+provider whose free tier does **not** require a credit card and does not sleep,
+because a sleeping world server misses ticks. The repository owner has ruled out
+card-verified hosts for now, so this remains deferred.
+
+On a VM, use the same compose file and put a TLS reverse proxy (Caddy or nginx)
+in front of `:8080`, or run a named Cloudflare tunnel for a fixed hostname. Do
+not expose `:8080` or `:5432` directly.
 
 ## Secrets
 
 - Secrets are **only** environment variables. There is no secrets file in the
   repository, and `.env` is git-ignored.
+- `ops/.env` is local-only and must never be committed.
 - GitHub Actions secrets hold deploy credentials; repository **variables** hold
   non-secret values such as `STAGING_SERVER_ORIGIN`.
 - Never paste a secret into a task record, a config file, a log line or an AI
@@ -95,5 +132,5 @@ until O02 adds a supervisor and backup/restore drill.
 ## What O02 adds
 
 Migrations on deploy, automated backups, a restore drill, and server deploy
-automation. Until then, server deploys are a deliberate manual `git pull` +
-`docker compose up -d --build` on the VM.
+automation. Until then, server deploys are a deliberate `docker compose up -d
+--build` on the Docker host.
