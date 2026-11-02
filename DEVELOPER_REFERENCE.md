@@ -2,9 +2,9 @@
 
 **Last Updated:** 2026-11-02  
 **Current Phase:** Gate 0 complete; Gate 1 run-up (Week 3-24)  
-**Completed Tasks:** T00, O01, **C02**  
-**Partial Tasks:** T03P (transport works, rejection ineffective), C01 (foundation slice), T00A (onboarding slice), T01 (renderer prototype; growth not built)  
-**Next Task:** fix T03P rejection, then **T01 Growth** (DESIGN.md Part 4)
+**Completed Tasks:** T00, O01, **T03P**, **C02**, **T01**  
+**Partial Tasks:** C01 (foundation slice), T00A (onboarding slice)  
+**Next Task:** **C03 Environment Rendering** (DESIGN.md Part 6.1)
 
 ---
 
@@ -18,7 +18,7 @@
 | C01 | ⚠️ Partial | Vite + Three.js client, OrbitControls, WebSocket; no input abstraction, UI shell or debug overlay |
 | C02 | ✅ Complete | Procedural plant renderer v1: tapered tubes, instanced leaves, shared material, triplanar noise, wind, health tint, 3 mutation signatures, L0/L1 |
 | T00A | ⚠️ Partial | 3-line hint card and resource tooltips; tile grid and resource simulation not built |
-| T01 | ⚠️ Partial | Root Sight renderer prototype (superseded by C02 for mesh generation); DESIGN.md T01 growth simulation not built |
+| T01 | ✅ Complete | Server-authoritative typed-node growth: biomass cost, root competition, canopy shading, root attack; client renders growing plant via C02 |
 
 ### What Works Now (Live)
 - **Local dev:** `pnpm dev` → server (8080) + Vite client (4173) with hot reload
@@ -301,7 +301,8 @@ Per `DESIGN.md` Part 4, the ordered tasks to reach **Gate 1 (Week 24)**:
 | Order | Task | Description | Depends On | Status |
 |-------|------|-------------|------------|--------|
 | 0 | **T03P** | Networking gate: config-driven move speed, snake_case `world_bounds`, rejection tested | T03P | ✅ complete |
-| 1 | **T01** | Growth: typed nodes, biomass cost, root competition, canopy shading, root attack | T00A | **next** |
+| 1 | **T01** | Growth: typed nodes, biomass cost, root competition, canopy shading, root attack | T00A | ✅ complete |
+| 2 | **C03** | Environment rendering: terrain, sky, weather visuals | C01, T01 | next |
 | 2 | **C02** | Procedural plant renderer v1 (tapered tubes, instanced leaves, shared material, L0/L1) | C01 | ✅ complete |
 | 3 | **T03** | Multiplayer world: persistence, offline tiers, binary framing + delta | T03P, T01 | not started |
 | 4 | **T07** | Weather + day/night | T00A, T03 | not started |
@@ -378,9 +379,9 @@ ordering follows Gate 0. The full ordered list is DESIGN.md Part 4.
 4. **Staging deploy** only when you need to show someone externally
 
 ### Upcoming Technical Decisions
-- **T03P fix:** config-driven move speed, snake_case `world_bounds` reads, a `REJECT` test
-- **T01 Growth:** node graph, biomass economy, root competition, canopy shading (DESIGN.md Part 4)
-- **T03:** binary protocol — frame header `[version:u8][type:u8][payload]`, quantization, delta encoding
+- **C03 Environment Rendering:** terrain mesh, sky/day-night, rain, storm visuals (DESIGN.md Part 6.1)
+- **T03 Multiplayer world:** persistence, offline tiers, binary protocol, delta encoding
+- **T02 Root Sight:** underground cutaway shader, soil transparency, camera mode
 
 ---
 
@@ -400,4 +401,4 @@ ordering follows Gate 0. The full ordered list is DESIGN.md Part 4.
 ---
 
 **Keep this file updated** as tasks complete and new workflows emerge.  
-Next update after the **T03P rejection fix** and then **T01 Growth**.
+Next update after **C03 Environment Rendering**.

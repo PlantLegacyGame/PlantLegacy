@@ -4,7 +4,7 @@ Current context for any human or AI session working in this repository. Keep it
 current at the end of every task (DESIGN.md, Session Protocol). `DESIGN.md` wins
 over this file whenever they disagree.
 
-**Phase:** 0 — Foundation + Gate 0. **Implemented:** T00, O01, **T03P**, C01, T00A, C02
+**Phase:** 0 — Foundation + Gate 0. **Implemented:** T00, O01, T03P, C01, T00A, C02, **T01**
 and the procedural plant renderer v1 (replaces the T01-labelled Root Sight prototype).
 **Last updated:** 2026-11-02.
 
