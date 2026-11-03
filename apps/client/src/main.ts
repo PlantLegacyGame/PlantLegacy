@@ -173,6 +173,8 @@ const cubes = new Map<string, CubeState>();
 let inputTick = 0;
 let connecting = false;
 let plantId: string | null = null;
+let cameraFramed = false;
+let welcome: WelcomePayload | null = null;
 
 // Persistent plant ID for reconnect/reclaim
 const STORAGE_KEY = 'plant-legacy-plant-id';
@@ -703,7 +705,9 @@ function connect(): void {
 
       switch (type) {
         case MESSAGE_TYPE.WELCOME: {
-          const welcome = payload as WelcomePayload;
+          welcome = payload as WelcomePayload;
+          const isReconnect = getStoredPlantId() !== null && getStoredPlantId() !== welcome.plantId;
+
           playerId = welcome.playerId;
           myCubeId = welcome.cubeId;
           plantId = welcome.plantId;
@@ -734,35 +738,15 @@ function connect(): void {
             });
             plantBiomass = welcome.totalBiomass;
             lastGrownNodeId = welcome.rootNode.id;
+          }
 
-            // Frame the player's plant on spawn so the root is not a speck in
-            // the distance.
-            const target = new THREE.Vector3(
-              welcome.rootNode.x,
-              welcome.rootNode.y,
-              welcome.rootNode.z,
-            );
-            controls.target.copy(target);
-            camera.position.set(target.x + 12, target.y + 14, target.z + 20);
-            controls.update();
+          // Request full plant sync on reconnect to get all nodes
+          if (isReconnect && ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: MESSAGE_TYPE.PLANT_SYNC_REQUEST, payload: {} }));
+            setDetail('Reconnected — syncing plant state...');
           }
-          setDetail(
-            `Welcome! You are ${myCubeId}\nPlayer ID: ${playerId}\nServer tick: ${serverTick}\nT01: Growth Active — Press 'G' to grow stem from root`,
-          );
-          // T00A: Load onboarding config and show hint card on first spawn
-          await loadOnboardingConfig();
-          await initPlantRenderer();
-          createResourceReadout();
-          // T00A: Show hint card (3 lines per RULE_13)
-          if (hintCardElement) {
-            hintCardElement.innerHTML = onboardingConfig.hint_card_lines
-              .map((line) => `<div>${line}</div>`)
-              .join('');
-            hintCardElement.style.opacity = '1';
-            setTimeout(() => {
-              hintCardElement.style.opacity = '0';
-            }, onboardingConfig.show_hint_card_duration_ms);
-          }
+          // Clear other players' plants to avoid stale data on reconnect
+          otherPlayerPlants.clear();
           break;
         }
 
@@ -1094,6 +1078,36 @@ function connect(): void {
 
         default:
           console.warn('Unknown message type:', type);
+      }
+
+      // Frame camera on first spawn (after WELCOME)
+      if (welcome?.rootNode && !cameraFramed) {
+        cameraFramed = true;
+        const target = new THREE.Vector3(
+          welcome.rootNode.x,
+          welcome.rootNode.y,
+          welcome.rootNode.z,
+        );
+        controls.target.copy(target);
+        camera.position.set(target.x + 12, target.y + 14, target.z + 20);
+        controls.update();
+        setDetail(
+          `Welcome! You are ${myCubeId}\nPlayer ID: ${playerId}\nServer tick: ${serverTick}\nT01: Growth Active — Press 'G' to grow stem from root`,
+        );
+        // T00A: Load onboarding config and show hint card on first spawn
+        await loadOnboardingConfig();
+        await initPlantRenderer();
+        createResourceReadout();
+        // T00A: Show hint card (3 lines per RULE_13)
+        if (hintCardElement) {
+          hintCardElement.innerHTML = onboardingConfig.hint_card_lines
+            .map((line) => `<div>${line}</div>`)
+            .join('');
+          hintCardElement.style.opacity = '1';
+          setTimeout(() => {
+            hintCardElement.style.opacity = '0';
+          }, onboardingConfig.show_hint_card_duration_ms);
+        }
       }
     } catch (error) {
       console.error('Failed to parse message:', error);
