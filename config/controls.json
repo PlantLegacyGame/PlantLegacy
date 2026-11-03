@@ -4,8 +4,88 @@
     "version": "0.1.0",
     "schema": "extended-1",
     "owner_task": "C01",
-    "status": "stub",
-    "notes": "Declared by T00. Populated by C01 per DESIGN.md Part 5."
+    "status": "active",
+    "notes": "C01 input abstraction: named actions, producers for keyboard/mouse/touch, bindings loaded at runtime. Gameplay code never reads raw keys."
   },
-  "values": {}
+  "values": {
+    "bindings_desktop": {
+      "type": "schema_array",
+      "schema": {
+        "action": "string",
+        "keys": "array",
+        "mouse": "string",
+        "mode": "string",
+        "context": "string"
+      },
+      "value": [
+        { "action": "camera_orbit", "keys": [], "mouse": "right_drag", "mode": "hold", "context": "" },
+        { "action": "camera_pan", "keys": ["KeyW", "KeyA", "KeyS", "KeyD"], "mouse": "middle_drag", "mode": "hold", "context": "" },
+        { "action": "camera_zoom", "keys": [], "mouse": "wheel", "mode": "hold", "context": "" },
+        { "action": "camera_recenter", "keys": ["Space"], "mouse": "double_click_ground", "mode": "press", "context": "" },
+        { "action": "camera_rotate_left", "keys": ["KeyQ"], "mouse": "", "mode": "press", "context": "" },
+        { "action": "camera_rotate_right", "keys": ["KeyE"], "mouse": "", "mode": "press", "context": "" },
+        { "action": "select_part", "keys": [], "mouse": "left_click", "mode": "press", "context": "" },
+        { "action": "grow_cancel", "keys": ["Escape"], "mouse": "right_click", "mode": "press", "context": "" },
+        { "action": "root_sight_toggle", "keys": ["Tab"], "mouse": "", "mode": "toggle", "context": "" },
+        { "action": "reroot_steer", "keys": ["KeyW", "KeyA", "KeyS", "KeyD"], "mouse": "", "mode": "hold", "context": "uprooted" },
+        { "action": "emote_wheel", "keys": ["KeyG"], "mouse": "", "mode": "hold", "context": "" },
+        { "action": "growth_intent", "keys": ["KeyG"], "mouse": "", "mode": "press", "context": "" },
+        { "action": "inventory_open", "keys": ["KeyI"], "mouse": "", "mode": "toggle", "context": "" },
+        { "action": "mutations_panel", "keys": ["KeyV"], "mouse": "", "mode": "toggle", "context": "" },
+        { "action": "chat_open", "keys": ["Enter"], "mouse": "", "mode": "press", "context": "" },
+        { "action": "menu_open", "keys": ["Escape"], "mouse": "", "mode": "toggle", "context": "" },
+        { "action": "debug_toggle", "keys": ["Backquote"], "mouse": "", "mode": "toggle", "context": "" },
+        { "action": "move_forward", "keys": ["ArrowUp", "KeyW"], "mouse": "", "mode": "hold", "context": "" },
+        { "action": "move_backward", "keys": ["ArrowDown", "KeyS"], "mouse": "", "mode": "hold", "context": "" },
+        { "action": "move_left", "keys": ["ArrowLeft", "KeyA"], "mouse": "", "mode": "hold", "context": "" },
+        { "action": "move_right", "keys": ["ArrowRight", "KeyD"], "mouse": "", "mode": "hold", "context": "" }
+      ]
+    },
+    "bindings_touch": {
+      "type": "schema_array",
+      "schema": {
+        "action": "string",
+        "gesture": "string",
+        "context": "string"
+      },
+      "value": [
+        { "action": "camera_orbit", "gesture": "one_finger_drag", "context": "" },
+        { "action": "camera_zoom", "gesture": "pinch", "context": "" },
+        { "action": "camera_pan", "gesture": "two_finger_drag", "context": "" },
+        { "action": "camera_recenter", "gesture": "double_tap", "context": "" },
+        { "action": "select_part", "gesture": "tap", "context": "" },
+        { "action": "root_sight_toggle", "gesture": "edge_button", "context": "" }
+      ]
+    },
+    "touch_min_target_px": {
+      "type": "number",
+      "value": 44,
+      "range": [40, 64],
+      "notes": "Minimum touch target size in CSS pixels."
+    },
+    "hud_max_screen_fraction": {
+      "type": "number",
+      "value": 0.2,
+      "range": [0.1, 0.4],
+      "notes": "Maximum fraction of screen the HUD may cover."
+    },
+    "root_sight_mode": {
+      "type": "enum",
+      "enum": ["toggle", "hold"],
+      "value": "toggle",
+      "notes": "Root Sight interaction mode."
+    },
+    "text_scale": {
+      "type": "number",
+      "value": 1.0,
+      "range": [0.8, 1.5],
+      "notes": "Global UI text scale (80-150%)."
+    },
+    "context_dock_fade_ms": {
+      "type": "integer",
+      "value": 150,
+      "range": [0, 500],
+      "notes": "Fade duration for context-dock actions appearing/disappearing."
+    }
+  }
 }

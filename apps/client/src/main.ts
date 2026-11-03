@@ -25,9 +25,13 @@ const serverOrigin =
 
 const isLocalDev =
   (location.hostname === '127.0.0.1' || location.hostname === 'localhost') &&
-  location.port === '4173';
+  (location.port === '4173' || location.port === '4174');
 const httpOrigin = serverOrigin || (isLocalDev ? 'http://127.0.0.1:8080' : location.origin);
-const wsOrigin = isLocalDev ? 'ws://127.0.0.1:8080' : httpOrigin.replace(/^http/, 'ws');
+// Use proxy path for WebSocket in dev (goes through Vite proxy to server)
+// The proxy is at root level, so connect to /ws from the root
+const wsOrigin = isLocalDev
+  ? `${location.protocol}//${location.host}`
+  : httpOrigin.replace(/^http/, 'ws');
 
 // T00A: Onboarding config types
 interface OnboardingConfig {
@@ -139,6 +143,7 @@ const MESSAGE_TYPE = {
   PING: 3,
   GROWTH_INTENT: 4,
   RESOURCE_QUERY: 5,
+  PLANT_SYNC_REQUEST: 6,
   WELCOME: 10,
   STATE: 11,
   KEYFRAME: 12,
@@ -147,6 +152,8 @@ const MESSAGE_TYPE = {
   ERROR: 15,
   GROWTH_EVENT: 16,
   RESOURCE_UPDATE: 17,
+  PLANT_SYNC: 18,
+  PLANT_CREATED: 19,
 } as const;
 
 interface PlayerInput {
@@ -181,6 +188,25 @@ const plantNodes = new Map<
     mutationFlags: number;
     biomass: number;
   }
+>();
+
+// Other players' plants (plantId -> nodes)
+const otherPlayerPlants = new Map<
+  string,
+  Map<
+    string,
+    {
+      id: string;
+      position: THREE.Vector3;
+      type: number;
+      radius: number;
+      parentId: string | null;
+      age: number;
+      health: number;
+      mutationFlags: number;
+      biomass: number;
+    }
+  >
 >();
 
 // C01: Input abstraction - replaces hardcoded keydown/keyup
@@ -320,6 +346,10 @@ async function initC01(): Promise<void> {
         setDetail('Tab hidden — pausing');
       } else {
         setDetail('Tab visible — resuming');
+        // Request full plant sync when tab becomes visible again
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: MESSAGE_TYPE.PLANT_SYNC_REQUEST, payload: {} }));
+        }
       }
     });
   }
@@ -364,7 +394,22 @@ async function initPlantRenderer(): Promise<void> {
 
   // Initialize with existing plant nodes (root node from WELCOME, or empty)
   if (plantRenderer) {
-    plantRenderer.updatePlantData(Array.from(plantNodes.values()));
+    const otherNodes: Array<{
+      id: string;
+      position: THREE.Vector3;
+      type: number;
+      radius: number;
+      parentId: string | null;
+      age: number;
+      health: number;
+      mutationFlags: number;
+      biomass: number;
+    }> = [];
+    for (const nodes of otherPlayerPlants.values()) {
+      otherNodes.push(...nodes.values());
+    }
+    const allNodes = [...plantNodes.values(), ...otherNodes];
+    plantRenderer.updatePlantData(allNodes);
   }
 }
 
@@ -557,10 +602,10 @@ function sendInput(): void {
 
   inputTick++;
   const input: PlayerInput = {
-    moveForward: inputBus?.isActive('camera_pan') ?? false,
-    moveBackward: inputBus?.isActive('camera_pan') ?? false,
-    moveLeft: inputBus?.isActive('camera_pan') ?? false,
-    moveRight: inputBus?.isActive('camera_pan') ?? false,
+    moveForward: inputBus?.isActive('move_forward') ?? false,
+    moveBackward: inputBus?.isActive('move_backward') ?? false,
+    moveLeft: inputBus?.isActive('move_left') ?? false,
+    moveRight: inputBus?.isActive('move_right') ?? false,
     tick: inputTick,
   };
 
@@ -644,6 +689,10 @@ function connect(): void {
           plantId = welcome.plantId;
           serverTick = welcome.tick;
           cubes.clear();
+          // Populate initial cubes from welcome
+          for (const cube of welcome.cubes) {
+            cubes.set(cube.id, cube);
+          }
           plantNodes.clear();
           // Initialize with root node from server
           if (welcome.rootNode) {
@@ -703,6 +752,10 @@ function connect(): void {
           if (debugOverlay) {
             debugOverlay.recordBytes(0, event.data.length);
           }
+          // Update cubes from server state
+          for (const cube of state.cubes) {
+            cubes.set(cube.id, cube);
+          }
           break;
         }
 
@@ -731,7 +784,6 @@ function connect(): void {
 
         case MESSAGE_TYPE.GROWTH_EVENT: {
           const growth = payload as GrowthEventPayload;
-          if (growth.plantId !== plantId) break;
           const node = growth.newNode;
           const typeMap: Record<string, number> = {
             root: 0,
@@ -743,7 +795,7 @@ function connect(): void {
           };
           const radius = nodeRadius(node.biomass);
           const health = Math.min(1, node.biomass / 10);
-          plantNodes.set(node.id, {
+          const nodeData = {
             id: node.id,
             position: new THREE.Vector3(node.x, node.y, node.z),
             type: typeMap[node.type] ?? 0,
@@ -753,15 +805,43 @@ function connect(): void {
             health,
             mutationFlags: 0,
             biomass: node.biomass,
-          });
-          plantBiomass = growth.totalBiomass ?? plantBiomass;
-          lastGrownNodeId = node.id;
-          if (plantRenderer) {
-            plantRenderer.updatePlantData(Array.from(plantNodes.values()));
+          };
+
+          if (growth.plantId === plantId) {
+            // Local player's plant
+            plantNodes.set(node.id, nodeData);
+            plantBiomass = growth.totalBiomass ?? plantBiomass;
+            lastGrownNodeId = node.id;
+            if (plantRenderer) {
+              const otherNodes: Array<{
+                id: string;
+                position: THREE.Vector3;
+                type: number;
+                radius: number;
+                parentId: string | null;
+                age: number;
+                health: number;
+                mutationFlags: number;
+                biomass: number;
+              }> = [];
+              for (const nodes of otherPlayerPlants.values()) {
+                otherNodes.push(...nodes.values());
+              }
+              const allNodes = [...plantNodes.values(), ...otherNodes];
+              plantRenderer.updatePlantData(allNodes);
+            }
+            setDetail(
+              `Grew ${node.type} at (${node.x.toFixed(1)}, ${node.y.toFixed(1)}, ${node.z.toFixed(1)})`,
+            );
+          } else {
+            // Other player's plant
+            let otherPlant = otherPlayerPlants.get(growth.plantId);
+            if (!otherPlant) {
+              otherPlant = new Map();
+              otherPlayerPlants.set(growth.plantId, otherPlant);
+            }
+            otherPlant.set(node.id, nodeData);
           }
-          setDetail(
-            `Grew ${node.type} at (${node.x.toFixed(1)}, ${node.y.toFixed(1)}, ${node.z.toFixed(1)})`,
-          );
           break;
         }
 
@@ -774,6 +854,190 @@ function connect(): void {
         case MESSAGE_TYPE.ERROR: {
           const error = payload as ErrorPayload;
           setDetail(`ERROR: ${error.code} - ${error.message}`);
+          break;
+        }
+
+        case MESSAGE_TYPE.PLANT_SYNC: {
+          const sync = payload as {
+            plants: Array<{
+              id: string;
+              ownerId: string;
+              rootNodeId: string | null;
+              totalBiomass: number;
+              totalUpkeep: number;
+              nodes: Array<{
+                id: string;
+                plantId: string;
+                type: string;
+                layer: string;
+                x: number;
+                y: number;
+                z: number;
+                biomass: number;
+                age: number;
+                parentId: string | null;
+                children: string[];
+                statModifiers: Record<string, number>;
+                resourceDrawWater: number;
+                resourceDrawNutrients: number;
+                upkeepBiomassPerSecond: number;
+                growthDirectionBias: string;
+                lastGrowthTick: number;
+              }>;
+            }>;
+          };
+          const typeMap: Record<string, number> = {
+            root: 0,
+            stem: 1,
+            vine: 2,
+            leaf: 3,
+            flower: 3,
+            spore_sac: 3,
+          };
+          for (const plant of sync.plants) {
+            if (plant.id === plantId) continue; // Skip own plant (already loaded from WELCOME)
+            const otherPlant = new Map<
+              string,
+              {
+                id: string;
+                position: THREE.Vector3;
+                type: number;
+                radius: number;
+                parentId: string | null;
+                age: number;
+                health: number;
+                mutationFlags: number;
+                biomass: number;
+              }
+            >();
+            for (const node of plant.nodes) {
+              const radius = nodeRadius(node.biomass);
+              const health = Math.min(1, node.biomass / 10);
+              otherPlant.set(node.id, {
+                id: node.id,
+                position: new THREE.Vector3(node.x, node.y, node.z),
+                type: typeMap[node.type] ?? 0,
+                radius,
+                parentId: node.parentId,
+                age: node.age,
+                health,
+                mutationFlags: 0,
+                biomass: node.biomass,
+              });
+            }
+            otherPlayerPlants.set(plant.id, otherPlant);
+          }
+          // Update renderer with all plants
+          if (plantRenderer) {
+            const otherNodes: Array<{
+              id: string;
+              position: THREE.Vector3;
+              type: number;
+              radius: number;
+              parentId: string | null;
+              age: number;
+              health: number;
+              mutationFlags: number;
+              biomass: number;
+            }> = [];
+            for (const nodes of otherPlayerPlants.values()) {
+              otherNodes.push(...nodes.values());
+            }
+            const allNodes = [...plantNodes.values(), ...otherNodes];
+            plantRenderer.updatePlantData(allNodes);
+          }
+          setDetail(`Synced ${sync.plants.length} plants from server`);
+          break;
+        }
+
+        case MESSAGE_TYPE.PLANT_CREATED: {
+          const created = payload as {
+            plant: {
+              id: string;
+              ownerId: string;
+              rootNodeId: string | null;
+              totalBiomass: number;
+              totalUpkeep: number;
+              nodes: Array<{
+                id: string;
+                plantId: string;
+                type: string;
+                layer: string;
+                x: number;
+                y: number;
+                z: number;
+                biomass: number;
+                age: number;
+                parentId: string | null;
+                children: string[];
+                statModifiers: Record<string, number>;
+                resourceDrawWater: number;
+                resourceDrawNutrients: number;
+                upkeepBiomassPerSecond: number;
+                growthDirectionBias: string;
+                lastGrowthTick: number;
+              }>;
+            };
+          };
+          const typeMap: Record<string, number> = {
+            root: 0,
+            stem: 1,
+            vine: 2,
+            leaf: 3,
+            flower: 3,
+            spore_sac: 3,
+          };
+          if (created.plant.id === plantId) break; // Skip own plant
+          const otherPlant = new Map<
+            string,
+            {
+              id: string;
+              position: THREE.Vector3;
+              type: number;
+              radius: number;
+              parentId: string | null;
+              age: number;
+              health: number;
+              mutationFlags: number;
+              biomass: number;
+            }
+          >();
+          for (const node of created.plant.nodes) {
+            const radius = nodeRadius(node.biomass);
+            const health = Math.min(1, node.biomass / 10);
+            otherPlant.set(node.id, {
+              id: node.id,
+              position: new THREE.Vector3(node.x, node.y, node.z),
+              type: typeMap[node.type] ?? 0,
+              radius,
+              parentId: node.parentId,
+              age: node.age,
+              health,
+              mutationFlags: 0,
+              biomass: node.biomass,
+            });
+          }
+          otherPlayerPlants.set(created.plant.id, otherPlant);
+          // Update renderer with all plants
+          if (plantRenderer) {
+            const otherNodes: Array<{
+              id: string;
+              position: THREE.Vector3;
+              type: number;
+              radius: number;
+              parentId: string | null;
+              age: number;
+              health: number;
+              mutationFlags: number;
+              biomass: number;
+            }> = [];
+            for (const nodes of otherPlayerPlants.values()) {
+              otherNodes.push(...nodes.values());
+            }
+            const allNodes = [...plantNodes.values(), ...otherNodes];
+            plantRenderer.updatePlantData(allNodes);
+          }
+          setDetail(`New player joined: ${created.plant.id}`);
           break;
         }
 
@@ -800,16 +1064,6 @@ function connect(): void {
     setDetail('WebSocket error');
   };
 }
-
-// Send input at 20Hz
-setInterval(sendInput, 50);
-
-// Ping every 5 seconds
-setInterval(() => {
-  if (ws && ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({ type: MESSAGE_TYPE.PING, payload: {} }));
-  }
-}, 5000);
 
 // Resize handler
 window.addEventListener('resize', () => {
@@ -854,6 +1108,17 @@ function animate(): void {
 // Start
 await initC01();
 connect();
+
+// Send input at 20Hz (after input bus is initialized)
+setInterval(sendInput, 50);
+
+// Ping every 5 seconds
+setInterval(() => {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: MESSAGE_TYPE.PING, payload: {} }));
+  }
+}, 5000);
+
 animate();
 
 declare global {

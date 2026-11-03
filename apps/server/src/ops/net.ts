@@ -53,6 +53,7 @@ export const MESSAGE_TYPE = {
   PING: 3,
   GROWTH_INTENT: 4,
   RESOURCE_QUERY: 5,
+  PLANT_SYNC_REQUEST: 6,
 
   // Server -> Client
   WELCOME: 10,
@@ -63,6 +64,8 @@ export const MESSAGE_TYPE = {
   ERROR: 15,
   GROWTH_EVENT: 16,
   RESOURCE_UPDATE: 17,
+  PLANT_SYNC: 18,
+  PLANT_CREATED: 19,
 } as const;
 
 export type MessageType = (typeof MESSAGE_TYPE)[keyof typeof MESSAGE_TYPE];
@@ -133,6 +136,89 @@ export interface ResourceUpdatePayload {
 export interface ResourceQueryPayload {
   tileX: number;
   tileZ: number;
+}
+
+export interface GrowthEventPayload {
+  plantId: string;
+  newNode: {
+    id: string;
+    plantId: string;
+    type: string;
+    layer: string;
+    x: number;
+    y: number;
+    z: number;
+    biomass: number;
+    age: number;
+    parentId: string | null;
+    children: string[];
+    statModifiers: Record<string, number>;
+    resourceDrawWater: number;
+    resourceDrawNutrients: number;
+    upkeepBiomassPerSecond: number;
+    growthDirectionBias: string;
+    lastGrowthTick: number;
+  };
+  damageDealt?: number;
+  totalBiomass?: number;
+}
+
+export interface PlantSyncPayload {
+  plants: Array<{
+    id: string;
+    ownerId: string;
+    rootNodeId: string | null;
+    totalBiomass: number;
+    totalUpkeep: number;
+    nodes: Array<{
+      id: string;
+      plantId: string;
+      type: string;
+      layer: string;
+      x: number;
+      y: number;
+      z: number;
+      biomass: number;
+      age: number;
+      parentId: string | null;
+      children: string[];
+      statModifiers: Record<string, number | undefined>;
+      resourceDrawWater: number;
+      resourceDrawNutrients: number;
+      upkeepBiomassPerSecond: number;
+      growthDirectionBias: string;
+      lastGrowthTick: number;
+    }>;
+  }>;
+}
+
+export interface PlantCreatedPayload {
+  plant: {
+    id: string;
+    ownerId: string;
+    rootNodeId: string | null;
+    totalBiomass: number;
+    totalUpkeep: number;
+    nodes: Array<{
+      id: string;
+      plantId: string;
+      type: string;
+      layer: string;
+      x: number;
+      y: number;
+      z: number;
+      biomass: number;
+      age: number;
+      parentId: string | null;
+      children: string[];
+      statModifiers: Record<string, number | undefined>;
+      resourceDrawWater: number;
+      resourceDrawNutrients: number;
+      upkeepBiomassPerSecond: number;
+      growthDirectionBias: string;
+      lastGrowthTick: number;
+    }>;
+  };
 }
 
 export function quantizePosition(value: number, quantization: number): number {

@@ -8,6 +8,7 @@ import { SERVICE_VERSION } from './core/version.ts';
 import { DatabaseProbe } from './ops/db.ts';
 import { loadGrowthConfig } from './ops/growth.ts';
 import { buildHealthReport, isReady } from './ops/health.ts';
+import { InterestManager } from './ops/interestManager.ts';
 import { createLogger } from './ops/log.ts';
 import {
   type CubeState,
@@ -18,6 +19,8 @@ import {
   type KeyframePayload,
   loadNetProtoConfig,
   MESSAGE_TYPE,
+  type PlantCreatedPayload,
+  type PlantSyncPayload,
   type PlayerInput,
   type RejectPayload,
   type ResourceQueryPayload,
@@ -25,8 +28,10 @@ import {
   validateMovement,
   type WelcomePayload,
 } from './ops/net.ts';
+import { PlantPersistence } from './ops/persistence/plantPersistence.ts';
 import { PlantWorld } from './ops/plantWorld.ts';
 import { loadResourcesConfig, type PlantForResource, ResourceWorld } from './ops/resourceWorld.ts';
+import { loadWorldConfig } from './ops/world.ts';
 
 const STARTED_AT = Date.now();
 const CUBE_COLORS = [
@@ -74,17 +79,32 @@ class CubeWorld {
   private tickInterval: NodeJS.Timeout | null = null;
   private plantWorld: PlantWorld;
   private resourceWorld: ResourceWorld;
+  private interestManager: InterestManager;
+
+  getPlayers(): Map<string, ConnectedPlayer> {
+    return this.players;
+  }
+
+  getPlantWorld(): PlantWorld {
+    return this.plantWorld;
+  }
+
+  sendTo(ws: WebSocket, type: number, payload: unknown): void {
+    this.send(ws, type, payload);
+  }
 
   constructor(
     config: ReturnType<typeof loadNetProtoConfig>,
     log: ReturnType<typeof createLogger>,
     plantWorld: PlantWorld,
     resourceWorld: ResourceWorld,
+    interestManager: InterestManager,
   ) {
     this.config = config;
     this.log = log;
     this.plantWorld = plantWorld;
     this.resourceWorld = resourceWorld;
+    this.interestManager = interestManager;
   }
 
   addPlayer(
@@ -105,6 +125,9 @@ class CubeWorld {
     // Create a plant for this player
     const plant = this.plantWorld.createPlant(playerId, 'world_0', cube.x, cube.z);
     const plantId = plant.id;
+
+    // Register with interest manager
+    this.interestManager.registerClient(playerId, cube.x, cube.z);
 
     const player: ConnectedPlayer = {
       ws,
@@ -140,6 +163,78 @@ class CubeWorld {
     };
 
     this.log.info('player joined', { playerId, cubeId, plantId, totalPlayers: this.players.size });
+
+    // Send PLANT_SYNC with only active players' plants to the new player
+    const activePlantIds = new Set<string>();
+    for (const player of this.players.values()) {
+      if (player.plantId) activePlantIds.add(player.plantId);
+    }
+    // Also include the new player's plant
+    activePlantIds.add(plantId);
+
+    const allPlants = this.plantWorld.getAllPlants();
+    const activePlants = allPlants.filter((p) => activePlantIds.has(p.id));
+    const syncPayload: PlantSyncPayload = {
+      plants: activePlants.map((p) => ({
+        id: p.id,
+        ownerId: p.ownerId,
+        rootNodeId: p.rootNodeId,
+        totalBiomass: p.totalBiomass,
+        totalUpkeep: p.totalUpkeep,
+        nodes: Array.from(p.nodes.values()).map((n) => ({
+          id: n.id,
+          plantId: n.plantId,
+          type: n.type,
+          layer: n.layer,
+          x: n.x,
+          y: n.y,
+          z: n.z,
+          biomass: n.biomass,
+          age: n.age,
+          parentId: n.parentId,
+          children: n.children,
+          statModifiers: n.statModifiers,
+          resourceDrawWater: n.resourceDrawWater,
+          resourceDrawNutrients: n.resourceDrawNutrients,
+          upkeepBiomassPerSecond: n.upkeepBiomassPerSecond,
+          growthDirectionBias: n.growthDirectionBias,
+          lastGrowthTick: n.lastGrowthTick,
+        })),
+      })),
+    };
+    this.send(ws, MESSAGE_TYPE.PLANT_SYNC, syncPayload);
+
+    // Broadcast PLANT_CREATED to all other players
+    const createdPayload: PlantCreatedPayload = {
+      plant: {
+        id: plant.id,
+        ownerId: plant.ownerId,
+        rootNodeId: plant.rootNodeId,
+        totalBiomass: plant.totalBiomass,
+        totalUpkeep: plant.totalUpkeep,
+        nodes: Array.from(plant.nodes.values()).map((n) => ({
+          id: n.id,
+          plantId: n.plantId,
+          type: n.type,
+          layer: n.layer,
+          x: n.x,
+          y: n.y,
+          z: n.z,
+          biomass: n.biomass,
+          age: n.age,
+          parentId: n.parentId,
+          children: n.children,
+          statModifiers: n.statModifiers,
+          resourceDrawWater: n.resourceDrawWater,
+          resourceDrawNutrients: n.resourceDrawNutrients,
+          upkeepBiomassPerSecond: n.upkeepBiomassPerSecond,
+          growthDirectionBias: n.growthDirectionBias,
+          lastGrowthTick: n.lastGrowthTick,
+        })),
+      },
+    };
+    this.broadcast(MESSAGE_TYPE.PLANT_CREATED, createdPayload);
+
     return { cubeId, plantId, welcome };
   }
 
@@ -147,6 +242,7 @@ class CubeWorld {
     const player = this.players.get(playerId);
     if (player) {
       this.cubes.delete(player.cubeId);
+      this.interestManager.unregisterClient(playerId);
       if (player.plantId) {
         const plant = this.plantWorld.getPlant(player.plantId);
         if (plant?.rootNodeId) {
@@ -262,9 +358,25 @@ class CubeWorld {
     this.processInputs();
     this.processGrowthIntents();
 
-    // Step plant world
+    // Update interest manager with player positions
+    for (const player of this.players.values()) {
+      const cube = this.cubes.get(player.cubeId);
+      if (cube) {
+        this.interestManager.updateClientPosition(player.playerId, cube.x, cube.z);
+      }
+    }
+
+    // Collect online plant IDs for tier management
+    const onlinePlantIds = new Set<string>();
+    for (const player of this.players.values()) {
+      if (player.plantId) {
+        onlinePlantIds.add(player.plantId);
+      }
+    }
+
+    // Step plant world with tier support (T03)
     const dt = 1 / this.config.tickRateHz;
-    this.plantWorld.step(dt);
+    const tierTiming = this.plantWorld.step(dt, onlinePlantIds);
 
     // Step resource world (T00A)
     const plantsForResource = new Map<string, PlantForResource>();
@@ -323,6 +435,19 @@ class CubeWorld {
       height: resourceState.height,
       tileSize: resourceState.tileSize,
     });
+
+    // Log tick budget periodically
+    if (this.tick % 100 === 0) {
+      const total = tierTiming.activeMs + tierTiming.nearMs + tierTiming.dormantMs;
+      this.log.debug('tick budget', {
+        tick: this.tick,
+        activeMs: tierTiming.activeMs.toFixed(2),
+        nearMs: tierTiming.nearMs.toFixed(2),
+        dormantMs: tierTiming.dormantMs.toFixed(2),
+        totalMs: total.toFixed(2),
+        tierStats: this.plantWorld.getTierStats(),
+      });
+    }
   }
 
   private processGrowthIntents(): void {
@@ -400,18 +525,33 @@ async function main(): Promise<void> {
     idleTimeoutMs: runtime.dbIdleTimeoutMs,
   });
 
+  // Initialize database and run migrations (T03)
+  await database.initialize();
+
   const netProtoConfig = loadNetProtoConfig(configs);
   const growthConfig = loadGrowthConfig(configs);
+  const worldConfig = loadWorldConfig(configs);
 
-  // Plant growth world (T01)
-  const plantWorld = new PlantWorld(growthConfig, {
-    minX: netProtoConfig.worldBounds.minX,
-    maxX: netProtoConfig.worldBounds.maxX,
-    minZ: netProtoConfig.worldBounds.minZ,
-    maxZ: netProtoConfig.worldBounds.maxZ,
-    minY: -100,
-    maxY: 100,
-  });
+  // Plant growth world (T01) with T03 tier support
+  const plantWorld = new PlantWorld(
+    growthConfig,
+    {
+      minX: netProtoConfig.worldBounds.minX,
+      maxX: netProtoConfig.worldBounds.maxX,
+      minZ: netProtoConfig.worldBounds.minZ,
+      maxZ: netProtoConfig.worldBounds.maxZ,
+      minY: -100,
+      maxY: 100,
+    },
+    {
+      activeTickRateHz: worldConfig.activeTickRateHz,
+      nearTickRateHz: worldConfig.nearTickRateHz,
+      dormantStepIntervalSec: worldConfig.dormantStepIntervalSec,
+      offlineDamageMultiplier: worldConfig.offlineDamageMultiplier,
+      tickBudgetActiveShare: worldConfig.tickBudgetActiveShare,
+      tickBudgetWarnThresholdMs: worldConfig.tickBudgetWarnThresholdMs,
+    },
+  );
 
   // Resource world (T00A)
   const resourcesConfig = loadResourcesConfig(configs);
@@ -422,7 +562,57 @@ async function main(): Promise<void> {
     maxZ: netProtoConfig.worldBounds.maxZ,
   });
 
-  const world = new CubeWorld(netProtoConfig, log, plantWorld, resourceWorld);
+  // Persistence layer (T03)
+  const worldId = 'world_0';
+  let plantPersistence: PlantPersistence | null = null;
+  if (database.pool) {
+    plantPersistence = new PlantPersistence(database.pool, worldId);
+    // Load existing plants
+    const loadedPlants = await plantPersistence.loadAllPlants();
+    for (const loaded of loadedPlants) {
+      // Reconstruct Plant from snapshot
+      const plant = {
+        id: loaded.id,
+        ownerId: loaded.ownerId,
+        worldId: loaded.worldId,
+        nodes: loaded.nodes,
+        rootNodeId: loaded.rootNodeId,
+        totalBiomass: loaded.totalBiomass,
+        totalUpkeep: loaded.totalUpkeep,
+        lastGrowthTick: loaded.lastGrowthTick,
+        growthCooldownUntil: loaded.growthCooldownUntil,
+        tier: loaded.tier,
+        lastTick: loaded.lastTick,
+      };
+      plantWorld.loadPlant(plant);
+    }
+    log.info('loaded plants from database', { count: loadedPlants.length });
+  }
+
+  // Interest management (T03)
+  const interestManager = new InterestManager(worldConfig);
+
+  const world = new CubeWorld(netProtoConfig, log, plantWorld, resourceWorld, interestManager);
+
+  // Periodic plant persistence (T03)
+  let saveInterval: NodeJS.Timeout | null = null;
+  if (plantPersistence) {
+    const saveIntervalMs = 30000; // 30 seconds
+    saveInterval = setInterval(async () => {
+      try {
+        const plants = plantWorld.getAllPlants();
+        for (const plant of plants) {
+          await plantPersistence.savePlant(plant);
+        }
+        log.debug('periodic plant save', { count: plants.length });
+      } catch (error) {
+        log.error('periodic plant save failed', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }, saveIntervalMs);
+    saveInterval.unref();
+  }
 
   const handle = async (request: IncomingMessage, response: ServerResponse): Promise<void> => {
     applyCors(request, response, runtime.corsOrigins);
@@ -905,6 +1095,45 @@ async function main(): Promise<void> {
             }
             break;
           }
+          case MESSAGE_TYPE.PLANT_SYNC_REQUEST: {
+            // Send PLANT_SYNC with only active players' plants
+            const activePlantIds = new Set<string>();
+            for (const p of world.getPlayers().values()) {
+              if (p.plantId) activePlantIds.add(p.plantId);
+            }
+            const allPlants = world.getPlantWorld().getAllPlants();
+            const activePlants = allPlants.filter((p) => activePlantIds.has(p.id));
+            const syncPayload: PlantSyncPayload = {
+              plants: activePlants.map((p) => ({
+                id: p.id,
+                ownerId: p.ownerId,
+                rootNodeId: p.rootNodeId,
+                totalBiomass: p.totalBiomass,
+                totalUpkeep: p.totalUpkeep,
+                nodes: Array.from(p.nodes.values()).map((n) => ({
+                  id: n.id,
+                  plantId: n.plantId,
+                  type: n.type,
+                  layer: n.layer,
+                  x: n.x,
+                  y: n.y,
+                  z: n.z,
+                  biomass: n.biomass,
+                  age: n.age,
+                  parentId: n.parentId,
+                  children: n.children,
+                  statModifiers: n.statModifiers,
+                  resourceDrawWater: n.resourceDrawWater,
+                  resourceDrawNutrients: n.resourceDrawNutrients,
+                  upkeepBiomassPerSecond: n.upkeepBiomassPerSecond,
+                  growthDirectionBias: n.growthDirectionBias,
+                  lastGrowthTick: n.lastGrowthTick,
+                })),
+              })),
+            };
+            world.sendTo(ws, MESSAGE_TYPE.PLANT_SYNC, syncPayload);
+            break;
+          }
           default:
             log.warn('unknown message type', { type, playerId });
         }
@@ -926,12 +1155,32 @@ async function main(): Promise<void> {
   });
 
   let shuttingDown = false;
-  const shutdown = (signal: string): void => {
+  const shutdown = async (signal: string): Promise<void> => {
     if (shuttingDown) return;
     shuttingDown = true;
     log.info('shutting down', { signal });
 
     world.stop();
+
+    if (saveInterval) {
+      clearInterval(saveInterval);
+    }
+
+    // Save all plants on shutdown
+    if (plantPersistence) {
+      const plants = plantWorld.getAllPlants();
+      for (const plant of plants) {
+        try {
+          await plantPersistence.savePlant(plant);
+        } catch (error) {
+          log.error('shutdown plant save failed', {
+            plantId: plant.id,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+      log.info('saved plants on shutdown', { count: plants.length });
+    }
 
     const forceExit = setTimeout(() => {
       log.error('shutdown timed out', { graceMs: runtime.shutdownGraceMs });

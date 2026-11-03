@@ -1,5 +1,8 @@
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { Pool } from 'pg';
 import type { DatabaseState } from './health.ts';
+import { runMigrations } from './persistence/migrate.ts';
 
 export interface DatabaseProbeOptions {
   max: number;
@@ -7,12 +10,9 @@ export interface DatabaseProbeOptions {
   idleTimeoutMs: number;
 }
 
-/**
- * Thin reachability probe. T00/O01 only prove the server can reach Postgres;
- * real tables and row-locked transactions arrive with T03 and T08A.
- */
 export class DatabaseProbe {
   readonly #pool: Pool | null;
+  readonly #migrationsDir: string;
 
   constructor(url: string | null, options: DatabaseProbeOptions) {
     this.#pool = url
@@ -24,12 +24,24 @@ export class DatabaseProbe {
         })
       : null;
 
+    this.#migrationsDir = join(dirname(fileURLToPath(import.meta.url)), 'persistence');
+
     // An idle client error must never take the process down.
     this.#pool?.on('error', () => undefined);
   }
 
   get configured(): boolean {
     return this.#pool !== null;
+  }
+
+  get pool(): Pool | null {
+    return this.#pool;
+  }
+
+  async initialize(): Promise<void> {
+    if (this.#pool) {
+      await runMigrations(this.#pool, this.#migrationsDir);
+    }
   }
 
   async ping(): Promise<DatabaseState> {

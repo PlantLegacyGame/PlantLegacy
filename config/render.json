@@ -4,8 +4,100 @@
     "version": "0.1.0",
     "schema": "extended-1",
     "owner_task": "C01",
-    "status": "stub",
-    "notes": "Declared by T00. Populated by C01 per DESIGN.md Part 5."
+    "status": "active",
+    "notes": "C01 client foundation: quality tiers, resolution floor, camera smoothing, idle-drop timeout. C02/C03 own the plant and environment shader values."
   },
-  "values": {}
+  "values": {
+    "target_fps": {
+      "type": "integer",
+      "value": 60,
+      "range": [30, 120],
+      "notes": "Render-loop target frames per second on the current tier."
+    },
+    "fps_warning_threshold": {
+      "type": "number",
+      "value": 0.85,
+      "range": [0.5, 0.95],
+      "notes": "Fraction of target_fps at which the client downgrades resolution."
+    },
+    "resolution_floor": {
+      "type": "number",
+      "value": 0.25,
+      "range": [0.1, 1.0],
+      "notes": "Minimum renderer pixel ratio relative to devicePixelRatio."
+    },
+    "max_pixel_ratio": {
+      "type": "number",
+      "value": 2.0,
+      "range": [1.0, 4.0],
+      "notes": "Maximum renderer pixel ratio."
+    },
+    "camera_smoothing": {
+      "type": "number",
+      "value": 0.05,
+      "range": [0.0, 0.5],
+      "notes": "OrbitControls dampingFactor."
+    },
+    "camera_min_distance": {
+      "type": "number",
+      "value": 10.0,
+      "range": [1.0, 100.0],
+      "notes": "Minimum orbit distance."
+    },
+    "camera_max_distance": {
+      "type": "number",
+      "value": 200.0,
+      "range": [50.0, 1000.0],
+      "notes": "Maximum orbit distance."
+    },
+    "camera_max_polar_angle": {
+      "type": "number",
+      "value": 1.52,
+      "range": [0.0, 3.14],
+      "notes": "Max polar angle in radians (keeps camera above ground)."
+    },
+    "idle_drop_timeout_ms": {
+      "type": "integer",
+      "value": 30000,
+      "range": [0, 120000],
+      "notes": "Ms of no input before the render loop throttles to 10 fps."
+    },
+    "shadow_map_size": {
+      "type": "integer",
+      "value": 2048,
+      "range": [512, 4096],
+      "notes": "Directional light shadow map dimension."
+    },
+    "quality_tiers": {
+      "type": "schema_array",
+      "schema": {
+        "name": "string",
+        "pixel_ratio": "number",
+        "shadow_map_size": "integer",
+        "max_triangles": "integer",
+        "antialiasing": "boolean"
+      },
+      "value": [
+        { "name": "low", "pixel_ratio": 1.0, "shadow_map_size": 1024, "max_triangles": 50000, "antialiasing": false },
+        { "name": "medium", "pixel_ratio": 1.5, "shadow_map_size": 2048, "max_triangles": 200000, "antialiasing": true },
+        { "name": "high", "pixel_ratio": 2.0, "shadow_map_size": 2048, "max_triangles": 500000, "antialiasing": true }
+      ]
+    },
+    "debug_overlay_enabled": {
+      "type": "boolean",
+      "value": true,
+      "notes": "Toggle the C01 debug overlay (fps, triangles, draw calls, memory, network)."
+    },
+    "debug_overlay_key": {
+      "type": "string",
+      "value": "`",
+      "max_length": 8,
+      "notes": "Keyboard code that toggles the debug overlay."
+    },
+    "pause_on_hidden": {
+      "type": "boolean",
+      "value": true,
+      "notes": "Pause the render loop and stop sending INPUT when the tab is hidden."
+    }
+  }
 }

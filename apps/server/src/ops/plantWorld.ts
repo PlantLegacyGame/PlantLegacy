@@ -10,6 +10,7 @@ import type {
 import { getLayerForNodeType, getNodeTypeDefinition } from '@plant-legacy/shared/growth';
 import { newId } from '@plant-legacy/shared/ids';
 import { clamp } from '@plant-legacy/shared/math';
+import { eventBus, GAME_EVENTS } from './eventBus.ts';
 
 function getGrowthSpeed(config: GrowthConfig, layer: Layer): number {
   return layer === 'root' ? config.rootGrowthSpeed : config.canopyGrowthSpeed;
@@ -51,6 +52,21 @@ export class PlantWorld {
     maxY: number;
   };
 
+  // T03: Offline tier configuration (Part 13.6)
+  private readonly activeTickRateHz: number;
+  private readonly nearTickRateHz: number;
+  private readonly dormantStepIntervalSec: number;
+  private readonly offlineDamageMultiplier: number;
+
+  // Tier tracking
+  private activePlants = new Set<string>();
+  private nearPlants = new Set<string>();
+  private dormantPlants = new Set<string>();
+
+  // Tick budget tracking
+  private readonly tickBudgetActiveShare: number;
+  private readonly tickBudgetWarnThresholdMs: number;
+
   constructor(
     config: GrowthConfig,
     worldBounds: {
@@ -61,9 +77,23 @@ export class PlantWorld {
       minY: number;
       maxY: number;
     },
+    tierConfig?: {
+      activeTickRateHz?: number;
+      nearTickRateHz?: number;
+      dormantStepIntervalSec?: number;
+      offlineDamageMultiplier?: number;
+      tickBudgetActiveShare?: number;
+      tickBudgetWarnThresholdMs?: number;
+    },
   ) {
     this.config = config;
     this.worldBounds = worldBounds;
+    this.activeTickRateHz = tierConfig?.activeTickRateHz ?? 20;
+    this.nearTickRateHz = tierConfig?.nearTickRateHz ?? 5;
+    this.dormantStepIntervalSec = tierConfig?.dormantStepIntervalSec ?? 30;
+    this.offlineDamageMultiplier = tierConfig?.offlineDamageMultiplier ?? 1.0;
+    this.tickBudgetActiveShare = tierConfig?.tickBudgetActiveShare ?? 0.7;
+    this.tickBudgetWarnThresholdMs = tierConfig?.tickBudgetWarnThresholdMs ?? 40;
   }
 
   private getCellKey(x: number, y: number, z: number): string {
@@ -190,11 +220,184 @@ export class PlantWorld {
     return Array.from(this.plants.values());
   }
 
-  step(dt: number): void {
+  getPlantsByTier(tier: 'active' | 'near' | 'dormant'): Plant[] {
+    const set =
+      tier === 'active'
+        ? this.activePlants
+        : tier === 'near'
+          ? this.nearPlants
+          : this.dormantPlants;
+    return Array.from(set)
+      .map((id) => this.plants.get(id))
+      .filter((p): p is Plant => p !== undefined);
+  }
+
+  getTierStats(): { active: number; near: number; dormant: number } {
+    return {
+      active: this.activePlants.size,
+      near: this.nearPlants.size,
+      dormant: this.dormantPlants.size,
+    };
+  }
+
+  step(
+    dt: number,
+    onlinePlantIds: Set<string>,
+  ): { activeMs: number; nearMs: number; dormantMs: number; totalMs: number } {
+    const startTime = performance.now();
     this.tick++;
+
+    // Update tiers based on online status
+    this.updateTiers(onlinePlantIds);
+
+    // Process each tier with appropriate timing
+    const activeStart = performance.now();
+    this.processTier('active', dt);
+    const activeMs = performance.now() - activeStart;
+
+    const nearStart = performance.now();
+    this.processTier('near', dt * (this.activeTickRateHz / this.nearTickRateHz));
+    const nearMs = performance.now() - nearStart;
+
+    const dormantStart = performance.now();
+    this.processTier('dormant', dt * (this.activeTickRateHz / (1 / this.dormantStepIntervalSec)));
+    const dormantMs = performance.now() - dormantStart;
+
+    const totalMs = performance.now() - startTime;
+
+    // Check tick budget
+    this.checkTickBudget(activeMs, totalMs);
+
+    return { activeMs, nearMs, dormantMs, totalMs };
+  }
+
+  private updateTiers(onlinePlantIds: Set<string>): void {
     for (const plant of this.plants.values()) {
-      this.processPlantUpkeep(plant, dt);
-      this.processRootOverlapDamage(plant);
+      const isOnline = onlinePlantIds.has(plant.id);
+      const isNear = this.isNearActivePlant(plant, onlinePlantIds);
+
+      let newTier: 'active' | 'near' | 'dormant';
+      if (isOnline) {
+        newTier = 'active';
+      } else if (isNear) {
+        newTier = 'near';
+      } else {
+        newTier = 'dormant';
+      }
+
+      if (plant.tier !== newTier) {
+        const oldTier = plant.tier ?? 'dormant';
+        plant.tier = newTier;
+        plant.lastTick = this.tick;
+
+        // Move between tier sets
+        this.activePlants.delete(plant.id);
+        this.nearPlants.delete(plant.id);
+        this.dormantPlants.delete(plant.id);
+        if (newTier === 'active') this.activePlants.add(plant.id);
+        else if (newTier === 'near') this.nearPlants.add(plant.id);
+        else this.dormantPlants.add(plant.id);
+
+        eventBus.publishSync(GAME_EVENTS.PLANT_TIER_CHANGE, {
+          plantId: plant.id,
+          oldTier,
+          newTier,
+          tick: this.tick,
+        });
+      }
+    }
+  }
+
+  private isNearActivePlant(plant: Plant, onlinePlantIds: Set<string>): boolean {
+    // Check if this plant is within interaction range of any active plant
+    const interactionRange = 50; // Configurable later
+    for (const onlineId of onlinePlantIds) {
+      const onlinePlant = this.plants.get(onlineId);
+      if (!onlinePlant) continue;
+      const rootNodeId = onlinePlant.rootNodeId;
+      if (!rootNodeId) continue;
+      const rootNode = onlinePlant.nodes.get(rootNodeId);
+      if (!rootNode) continue;
+
+      const thisRootId = plant.rootNodeId;
+      if (!thisRootId) continue;
+      const thisRoot = plant.nodes.get(thisRootId);
+      if (!thisRoot) continue;
+
+      const dx = rootNode.x - thisRoot.x;
+      const dz = rootNode.z - thisRoot.z;
+      const distSq = dx * dx + dz * dz;
+      if (distSq < interactionRange * interactionRange) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private processTier(tier: 'active' | 'near' | 'dormant', dt: number): void {
+    const plantIds =
+      tier === 'active'
+        ? this.activePlants
+        : tier === 'near'
+          ? this.nearPlants
+          : this.dormantPlants;
+
+    for (const plantId of plantIds) {
+      const plant = this.plants.get(plantId);
+      if (!plant) continue;
+
+      if (tier === 'dormant') {
+        this.processDormantPlant(plant, dt);
+      } else {
+        this.processPlantUpkeep(plant, dt);
+        this.processRootOverlapDamage(plant, tier);
+      }
+    }
+  }
+
+  private processDormantPlant(plant: Plant, _dt: number): void {
+    // Catch-up integration for dormant plants (Part 13.6 rule 2)
+    // Compute elapsed resource gain/upkeep analytically instead of replaying ticks
+    const ticksSinceLastUpdate = this.tick - (plant.lastTick ?? this.tick);
+    if (ticksSinceLastUpdate <= 0) return;
+
+    const elapsedSeconds = ticksSinceLastUpdate / this.activeTickRateHz;
+
+    // Apply upkeep
+    let biomassChange = -plant.totalUpkeep * elapsedSeconds;
+    for (const node of plant.nodes.values()) {
+      biomassChange -= node.upkeepBiomassPerSecond * elapsedSeconds;
+    }
+
+    // Apply offline damage multiplier for root overlap
+    // (simplified - real implementation would track overlapping roots)
+    plant.totalBiomass = Math.max(0, plant.totalBiomass + biomassChange);
+
+    if (plant.totalBiomass <= 0) {
+      this.removePlant(plant.id);
+    }
+
+    plant.lastTick = this.tick;
+  }
+
+  private checkTickBudget(activeMs: number, totalMs: number): void {
+    const activeShare = totalMs > 0 ? activeMs / totalMs : 0;
+    if (activeShare > this.tickBudgetActiveShare) {
+      eventBus.publishSync(GAME_EVENTS.TICK_BUDGET_WARNING, {
+        activeShare,
+        threshold: this.tickBudgetActiveShare,
+        activeMs,
+        totalMs,
+        tick: this.tick,
+      });
+    }
+    if (activeMs > this.tickBudgetWarnThresholdMs) {
+      eventBus.publishSync(GAME_EVENTS.TICK_BUDGET_WARNING, {
+        activeMs,
+        threshold: this.tickBudgetWarnThresholdMs,
+        totalMs,
+        tick: this.tick,
+      });
     }
   }
 
@@ -209,7 +412,9 @@ export class PlantWorld {
     }
   }
 
-  private processRootOverlapDamage(plant: Plant): void {
+  private processRootOverlapDamage(plant: Plant, tier: 'active' | 'near'): void {
+    const damageMultiplier = tier === 'near' ? this.offlineDamageMultiplier : 1.0;
+
     for (const node of plant.nodes.values()) {
       if (node.layer !== 'root') continue;
       const nearbyIds = this.getNearbyNodeIds(node.x, node.y, node.z, 2.0);
@@ -221,7 +426,7 @@ export class PlantWorld {
         if (nearbyNode?.layer !== 'root') continue;
         const dist = distance3d(node, nearbyNode);
         if (dist < 1.5) {
-          const damage = this.config.rootOverlapPressureDamage;
+          const damage = this.config.rootOverlapPressureDamage * damageMultiplier;
           this.applyDamageToPlant(nearbyPlant, damage);
         }
       }
@@ -386,6 +591,17 @@ export class PlantWorld {
       if (ownerPlants.size === 0) {
         this.plantByOwner.delete(plant.ownerId);
       }
+    }
+  }
+
+  loadPlant(plant: Plant): void {
+    this.plants.set(plant.id, plant);
+    if (!this.plantByOwner.has(plant.ownerId)) {
+      this.plantByOwner.set(plant.ownerId, new Set());
+    }
+    this.plantByOwner.get(plant.ownerId)?.add(plant.id);
+    for (const node of plant.nodes.values()) {
+      this.addNodeToSpatialIndex(node);
     }
   }
 

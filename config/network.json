@@ -1,11 +1,88 @@
 {
   "_meta": {
     "system": "network",
-    "version": "0.1.0",
+    "version": "1.0.0",
     "schema": "extended-1",
     "owner_task": "T03",
-    "status": "stub",
-    "notes": "Declared by T00. Populated by T03 per DESIGN.md Part 5."
+    "status": "active",
+    "notes": "Network protocol config per DESIGN.md Part 13.8"
   },
-  "values": {}
+  "values": {
+    "protocol_version": {
+      "type": "integer",
+      "value": 1,
+      "range": [1, 255],
+      "description": "Wire protocol version"
+    },
+    "max_message_size_bytes": {
+      "type": "integer",
+      "value": 65536,
+      "range": [1024, 1048576],
+      "description": "Max WebSocket message size"
+    },
+    "tick_rate_hz": {
+      "type": "integer",
+      "value": 20,
+      "range": [10, 60],
+      "description": "Server tick rate (network update rate)"
+    },
+    "keyframe_interval_ticks": {
+      "type": "integer",
+      "value": 100,
+      "range": [10, 1000],
+      "description": "Keyframe broadcast interval in ticks"
+    },
+    "world_bounds": {
+      "type": "object",
+      "value": {
+        "min_x": -1000,
+        "max_x": 1000,
+        "min_z": -1000,
+        "max_z": 1000
+      },
+      "description": "World bounds for movement validation"
+    },
+    "max_velocity_units_per_tick": {
+      "type": "number",
+      "value": 2.0,
+      "range": [0.1, 10.0],
+      "description": "Max velocity per tick for movement validation"
+    },
+    "move_speed": {
+      "type": "number",
+      "value": 5.0,
+      "range": [0.1, 50.0],
+      "description": "Base move speed for cubes"
+    },
+    "binary_protocol_enabled": {
+      "type": "boolean",
+      "value": false,
+      "description": "Enable binary protocol (Part 13.8)"
+    },
+    "position_quantization": {
+      "type": "integer",
+      "value": 64,
+      "range": [16, 256],
+      "description": "Position quantization divisor (1/64 unit precision)"
+    },
+    "angle_quantization_bits": {
+      "type": "integer",
+      "value": 16,
+      "range": [8, 16],
+      "description": "Angle quantization bits"
+    },
+    "rate_limit_per_type": {
+      "type": "schema_array",
+      "value": [
+        { "type": 1, "limit": 60 },
+        { "type": 2, "limit": 100 },
+        { "type": 3, "limit": 20 }
+      ],
+      "schema": {
+        "type": "integer",
+        "limit": "integer"
+      },
+      "description": "Rate limits per message type (type, max_per_second)"
+    }
+  }
 }

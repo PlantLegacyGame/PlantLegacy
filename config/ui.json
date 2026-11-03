@@ -3,9 +3,92 @@
     "system": "ui",
     "version": "0.1.0",
     "schema": "extended-1",
-    "owner_task": "C04",
-    "status": "stub",
-    "notes": "Declared by T00. Populated by C04 per DESIGN.md Part 5."
+    "owner_task": "C01",
+    "status": "active",
+    "notes": "C01 UI shell: layer stack, theme tokens, toast/panel defaults. C04 owns HUD element contents; C05 owns screens."
   },
-  "values": {}
+  "values": {
+    "text_scale": {
+      "type": "number",
+      "value": 1.0,
+      "range": [0.8, 1.5],
+      "notes": "Global UI text scale applied as a CSS variable."
+    },
+    "layers": {
+      "type": "object",
+      "value": {
+        "world": 0,
+        "hud": 100,
+        "panel": 200,
+        "menu": 300,
+        "modal": 400,
+        "toast": 500,
+        "tooltip": 600,
+        "debug": 700
+      },
+      "notes": "Z-index stack for DOM overlay layers. Higher layers always win."
+    },
+    "theme": {
+      "type": "object",
+      "value": {
+        "loam_900": "#14180f",
+        "bark_700": "#2a281f",
+        "bone_100": "#efe9d8",
+        "bone_300": "#cfc8b2",
+        "leaf_500": "#7fa648",
+        "sprout_300": "#b7d47c",
+        "ember_500": "#d4553a",
+        "sky_400": "#87ceeb",
+        "soil_600": "#8b4513"
+      },
+      "notes": "Design tokens. Plain colors only - no rarity tiers (RULE_20)."
+    },
+    "toast_duration_ms": {
+      "type": "integer",
+      "value": 4000,
+      "range": [1000, 15000],
+      "notes": "Default time a toast notification stays visible."
+    },
+    "toast_max_stack": {
+      "type": "integer",
+      "value": 5,
+      "range": [1, 20],
+      "notes": "Maximum toasts stacked before older ones are dropped."
+    },
+    "hint_card_duration_ms": {
+      "type": "integer",
+      "value": 10000,
+      "range": [2000, 60000],
+      "notes": "First-spawn hint card display time."
+    },
+    "hint_card_max_lines": {
+      "type": "integer",
+      "value": 3,
+      "range": [1, 6],
+      "notes": "Maximum hint card lines (RULE_13)."
+    },
+    "panel_default_width_px": {
+      "type": "integer",
+      "value": 320,
+      "range": [200, 640],
+      "notes": "Default width for collapsible side panels."
+    },
+    "panel_animation_ms": {
+      "type": "integer",
+      "value": 200,
+      "range": [0, 600],
+      "notes": "Panel open/close animation duration."
+    },
+    "reduced_motion": {
+      "type": "boolean",
+      "value": false,
+      "notes": "Respect OS reduced-motion: kills camera shake, particles and sway."
+    },
+    "safe_area_padding_px": {
+      "type": "integer",
+      "value": 8,
+      "range": [0, 32],
+      "notes": "HUD padding from the device safe-area edge."
+    }
+  }
 }

@@ -288,13 +288,13 @@ describe('PlantWorld', () => {
 
   it('applies root overlap pressure damage', () => {
     const world = makeTestPlantWorld();
-    world.createPlant('player_1', 'world_0', 0, 0);
+    const plant1 = world.createPlant('player_1', 'world_0', 0, 0);
     const plant2 = world.createPlant('player_2', 'world_0', 0.5, 0); // very close
 
     const initialBiomass2 = plant2.totalBiomass;
 
-    // Step the world to trigger overlap damage
-    world.step(1.0);
+    // Step the world to trigger overlap damage - both plants online
+    world.step(1.0, new Set([plant1.id, plant2.id]));
 
     const updatedPlant2 = world.getPlant(plant2.id);
     assert(updatedPlant2);
@@ -397,7 +397,7 @@ describe('PlantWorld', () => {
     world.createPlant('player_2', 'world_0', 0, 0); // same position
 
     // Step to apply massive overlap damage
-    world.step(1.0);
+    world.step(1.0, new Set([plant1.id]));
 
     const deadPlant = world.getPlant(plant1.id);
     // Plant might not die in one step if damage isn't applied correctly

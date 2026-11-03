@@ -71,6 +71,10 @@ export interface Plant {
   totalUpkeep: number;
   lastGrowthTick: number;
   growthCooldownUntil: number;
+  // T03: Offline simulation tiers (Part 13.6)
+  tier?: 'active' | 'near' | 'dormant';
+  lastTick?: number;
+  maxNodesPerPlant?: number;
 }
 
 export interface GrowthIntent {

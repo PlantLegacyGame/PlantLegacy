@@ -9,6 +9,10 @@ in float aMutationFlags;
 in float aTubeU;
 in float aTubeV;
 
+#ifdef USE_INSTANCING
+in vec4 aLeafColor;
+#endif
+
 uniform float uTime;
 uniform float uWindStrength;
 uniform float uWindSpeed;
@@ -32,18 +36,33 @@ out float vMutationFlags;
 out float vTubeU;
 out float vTubeV;
 out float vIsLeaf;
+out vec3 vLeafColor;
 
 void main() {
-    vWorldPos = (modelMatrix * vec4(aPosition, 1.0)).xyz;
-    vNormal = normalize(mat3(modelMatrix) * aNormal);
+    vec4 localPosition = vec4(aPosition, 1.0);
+    vec3 localNormal = aNormal;
+    vec3 leafColor = uLeafColor;
+
+#ifdef USE_INSTANCING
+    // Leaf cards are drawn through an InstancedMesh. Apply the per-instance
+    // transform here; without it every leaf collapses onto the origin.
+    localPosition = instanceMatrix * localPosition;
+    localNormal = mat3(instanceMatrix) * localNormal;
+    leafColor = aLeafColor.rgb;
+#endif
+
+    vec4 worldPosition = modelMatrix * localPosition;
+    vWorldPos = worldPosition.xyz;
+    vNormal = normalize(mat3(modelMatrix) * localNormal);
     vBiomass = aBiomass;
     vNodeType = aNodeType;
     vHealth = aHealth;
     vMutationFlags = aMutationFlags;
     vTubeU = aTubeU;
     vTubeV = aTubeV;
+    vLeafColor = leafColor;
 
-    float isLeaf = step(1.5, aNodeType);
+    float isLeaf = step(2.5, aNodeType);
     vIsLeaf = isLeaf;
 
     float heightFactor = clamp(vWorldPos.y / 60.0, 0.0, 1.0);
@@ -63,7 +82,7 @@ void main() {
         vWorldPos.z += curl * sin(vTubeV * 6.28);
     }
 
-    vec4 mvPosition = modelViewMatrix * vec4(vWorldPos, 1.0);
+    vec4 mvPosition = viewMatrix * vec4(vWorldPos, 1.0);
     gl_Position = projectionMatrix * mvPosition;
 }
 `;
@@ -77,6 +96,7 @@ in float vMutationFlags;
 in float vTubeU;
 in float vTubeV;
 in float vIsLeaf;
+in vec3 vLeafColor;
 
 out vec4 fragColor;
 
@@ -119,11 +139,11 @@ float triplanarNoise(vec3 worldPos, vec3 normal) {
 }
 
 void main() {
-    float isRoot = step(0.5, vNodeType);
+    float isRoot = 1.0 - step(0.5, vNodeType);
     float isLeaf = vIsLeaf;
 
     vec3 baseColor = mix(uCanopyColor, uRootColor, isRoot);
-    baseColor = mix(baseColor, uLeafColor, isLeaf);
+    baseColor = mix(baseColor, vLeafColor, isLeaf);
 
     if (isLeaf < 0.5) {
         float texture = triplanarNoise(vWorldPos, vNormal);
@@ -132,7 +152,7 @@ void main() {
 
     float healthFactor = clamp(vHealth, 0.0, 1.0);
     vec3 unhealthyColor = vec3(0.55, 0.5, 0.45);
-    float tintMix = 1.0 - healthFactor * uHealthTintStrength;
+    float tintMix = mix(1.0 - uHealthTintStrength, 1.0, healthFactor);
     baseColor = mix(unhealthyColor, baseColor, tintMix);
 
     float mutation0 = mod(vMutationFlags, 2.0);
@@ -148,14 +168,14 @@ void main() {
 
     vec3 viewDir = normalize(uCameraPosition - vWorldPos);
     float rim = pow(1.0 - max(dot(vNormal, viewDir), 0.0), 3.0);
-    lit += vec3(0.25, 0.3, 0.35) * rim * 0.6;
+    lit += vec3(0.18, 0.26, 0.20) * rim * 0.35;
 
     float emissive = mutation0 * uMutation0Param * 0.5;
     lit += vec3(0.3, 0.5, 0.8) * emissive;
 
-    lit *= 0.6 + vBiomass * 0.4;
+    lit *= 0.6 + clamp(vBiomass / 30.0, 0.0, 1.0) * 0.4;
 
-    fragColor = vec4(lit, 1.0);
+    fragColor = linearToOutputTexel(vec4(lit, 1.0));
 }
 `;
 
@@ -247,6 +267,11 @@ export class PlantRenderer {
 
   private leafMesh!: THREE.InstancedMesh;
   private leafGeometry!: THREE.BufferGeometry;
+  private leafColorAttribute!: THREE.InstancedBufferAttribute;
+
+  private rootGeometry!: THREE.SphereGeometry;
+  private rootMaterial!: THREE.MeshStandardMaterial;
+  private readonly rootMeshes = new Map<string, THREE.Mesh>();
 
   private maxTubes: number;
   private maxLeaves: number;
@@ -388,12 +413,66 @@ export class PlantRenderer {
     this.leafGeometry.setAttribute('aPosition', new THREE.BufferAttribute(leafVertices, 3));
     this.leafGeometry.setAttribute('aNormal', new THREE.BufferAttribute(leafNormals, 3));
     this.leafGeometry.setAttribute('aUV', new THREE.BufferAttribute(leafUvs, 2));
+    // The plant shader expects the same attributes as tube geometry. Leaf
+    // cards are always type 3 (leaf) and share these per-vertex defaults.
+    this.leafGeometry.setAttribute(
+      'aNodeType',
+      new THREE.BufferAttribute(new Float32Array([3, 3, 3, 3]), 1),
+    );
+    this.leafGeometry.setAttribute(
+      'aBiomass',
+      new THREE.BufferAttribute(new Float32Array([15, 15, 15, 15]), 1),
+    );
+    this.leafGeometry.setAttribute(
+      'aHealth',
+      new THREE.BufferAttribute(new Float32Array([1, 1, 1, 1]), 1),
+    );
+    this.leafGeometry.setAttribute(
+      'aMutationFlags',
+      new THREE.BufferAttribute(new Float32Array([0, 0, 0, 0]), 1),
+    );
+    this.leafGeometry.setAttribute(
+      'aTubeU',
+      new THREE.BufferAttribute(new Float32Array([0, 0, 0, 0]), 1),
+    );
+    this.leafGeometry.setAttribute(
+      'aTubeV',
+      new THREE.BufferAttribute(new Float32Array([0, 0, 0, 0]), 1),
+    );
+    this.leafColorAttribute = new THREE.InstancedBufferAttribute(this.leafInstanceColor, 4);
+    this.leafColorAttribute.setUsage(THREE.DynamicDrawUsage);
+    this.leafGeometry.setAttribute('aLeafColor', this.leafColorAttribute);
     this.leafGeometry.setIndex(new THREE.BufferAttribute(leafIndices, 1));
 
     this.leafMesh = new THREE.InstancedMesh(this.leafGeometry, this.plantMaterial, this.maxLeaves);
+    this.leafMesh.count = 0;
     this.leafMesh.frustumCulled = false;
     this.leafMesh.instanceMatrix.usage = THREE.DynamicDrawUsage;
     this.scene.add(this.leafMesh);
+
+    // The root node has no parent, so it never gets a tube segment. Give each
+    // root a small visible crown at ground level instead.
+    this.rootGeometry = new THREE.SphereGeometry(1, 16, 12);
+    this.rootMaterial = new THREE.MeshStandardMaterial({
+      color: 0x6f8a3c,
+      roughness: 0.85,
+      metalness: 0,
+    });
+  }
+
+  private updateRootVisual(node: PlantNodeData): void {
+    let mesh = this.rootMeshes.get(node.id);
+    if (!mesh) {
+      mesh = new THREE.Mesh(this.rootGeometry, this.rootMaterial);
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      this.scene.add(mesh);
+      this.rootMeshes.set(node.id, mesh);
+    }
+
+    const radius = Math.max(0.2, node.radius);
+    mesh.position.set(node.position.x, node.position.y + radius * 0.55, node.position.z);
+    mesh.scale.setScalar(radius * 1.6);
   }
 
   private createFrame(tangent: THREE.Vector3): { normal: THREE.Vector3; binormal: THREE.Vector3 } {
@@ -412,8 +491,8 @@ export class PlantRenderer {
   private addTubeSegment(parent: PlantNodeData, child: PlantNodeData): void {
     const startPos = parent.position;
     const endPos = child.position;
-    const startRadius = 0.1;
-    const endRadius = 0.1;
+    const startRadius = parent.radius ?? 0.1;
+    const endRadius = child.radius ?? 0.1;
 
     const direction = new THREE.Vector3().subVectors(endPos, startPos);
     const length = direction.length();
@@ -634,9 +713,10 @@ export class PlantRenderer {
       const r = 0.55 + healthFactor * 0.25 + mutation2 * this.config.mutation2Param * 0.2;
       const g = 0.7 + healthFactor * 0.2;
       const b = 0.2 + healthFactor * 0.1;
-      this.leafInstanceColor[ii * 4] = r;
-      this.leafInstanceColor[ii * 4 + 1] = g;
-      this.leafInstanceColor[ii * 4 + 2] = b;
+      const leafColor = new THREE.Color().setRGB(r, g, b, THREE.SRGBColorSpace);
+      this.leafInstanceColor[ii * 4] = leafColor.r;
+      this.leafInstanceColor[ii * 4 + 1] = leafColor.g;
+      this.leafInstanceColor[ii * 4 + 2] = leafColor.b;
       this.leafInstanceColor[ii * 4 + 3] = 1.0;
 
       this.leafInstancePhase[ii] = rng();
@@ -649,24 +729,16 @@ export class PlantRenderer {
   updatePlantData(nodes: PlantNodeData[]): void {
     for (const node of nodes) {
       if (this.knownNodes.has(node.id)) continue;
-      console.log('updatePlantData adding node:', {
-        id: node.id,
-        type: node.type,
-        pos: [node.position.x, node.position.y, node.position.z],
-        parentId: node.parentId,
-        biomass: node.biomass,
-      });
       this.knownNodes.set(node.id, node);
 
-      if (node.parentId && this.knownNodes.has(node.parentId)) {
+      if (!node.parentId) {
+        this.updateRootVisual(node);
+        continue;
+      }
+
+      if (this.knownNodes.has(node.parentId)) {
         const parent = this.knownNodes.get(node.parentId);
         if (parent) {
-          console.log('updatePlantData adding tube:', {
-            from: parent.id,
-            to: node.id,
-            fromPos: [parent.position.x, parent.position.y, parent.position.z],
-            toPos: [node.position.x, node.position.y, node.position.z],
-          });
           this.addTubeSegment(parent, node);
         }
       }
@@ -689,11 +761,6 @@ export class PlantRenderer {
       (this.tubeGeometry.getIndex() as THREE.BufferAttribute).needsUpdate = true;
       this.tubeGeometry.setDrawRange(0, this.tubeIndexCount);
       this.tubeGeometry.computeBoundingSphere();
-      console.log('updatePlantData complete:', {
-        tubeVertexCount: this.tubeVertexCount,
-        tubeIndexCount: this.tubeIndexCount,
-        leafInstanceCount: this.leafInstanceCount,
-      });
     }
 
     if (this.leafInstanceCount > 0) {
@@ -703,11 +770,7 @@ export class PlantRenderer {
         instanceMatrix.set(this.leafInstanceMatrix);
         instanceMatrix.needsUpdate = true;
       }
-      const instanceColor = this.leafMesh.instanceColor;
-      if (instanceColor) {
-        instanceColor.set(this.leafInstanceColor);
-        instanceColor.needsUpdate = true;
-      }
+      this.leafColorAttribute.needsUpdate = true;
     }
   }
 
@@ -894,6 +957,10 @@ export class PlantRenderer {
     this.knownNodes.clear();
     this.tubeGeometry.setDrawRange(0, 0);
     this.leafMesh.count = 0;
+    for (const mesh of this.rootMeshes.values()) {
+      this.scene.remove(mesh);
+    }
+    this.rootMeshes.clear();
   }
 
   dispose(): void {
@@ -902,6 +969,12 @@ export class PlantRenderer {
     this.plantMaterial.dispose();
     this.scene.remove(this.tubeMesh);
     this.scene.remove(this.leafMesh);
+    for (const mesh of this.rootMeshes.values()) {
+      this.scene.remove(mesh);
+    }
+    this.rootMeshes.clear();
+    this.rootGeometry.dispose();
+    this.rootMaterial.dispose();
   }
 }
 
