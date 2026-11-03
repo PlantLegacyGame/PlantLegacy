@@ -180,7 +180,7 @@ export class PlantWorld {
     };
 
     // Start with enough biomass for the root plus some extra for initial growth
-    const initialBiomass = rootDef.biomass_cost + this.config.nodeCostBase * 2;
+    const initialBiomass = rootDef.biomass_cost + this.config.nodeCostBase * 8;
 
     const plant: Plant = {
       id: plantId,

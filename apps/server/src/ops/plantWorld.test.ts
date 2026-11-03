@@ -170,9 +170,9 @@ describe('PlantWorld', () => {
     const updatedPlant = world.getPlant(plant.id);
     assert(updatedPlant);
     assert.equal(updatedPlant.nodes.size, 2);
-    // Plant starts with root cost (8) + 2 * nodeCostBase (20) = 28
-    // Stem costs 12, so remaining = 16
-    assert(updatedPlant.totalBiomass === 16);
+    // Test config: root cost (8) + 8 * nodeCostBase (80) = 88
+    // Stem costs 12, so remaining = 76
+    assert(updatedPlant.totalBiomass === 76);
   });
 
   it('rejects growth when on cooldown', () => {
@@ -202,11 +202,11 @@ describe('PlantWorld', () => {
   it('rejects growth when insufficient biomass', () => {
     const world = makeTestPlantWorld({
       node_cost_base: { type: 'integer', value: 1000, range: [1, 100] },
-      // Also set stem cost high so initial biomass isn't enough
+      // Stem cost exceeds available biomass (node_cost_base * 8 = 8000)
       stem_node: {
         type: 'object',
         value: {
-          biomass_cost: 5000,
+          biomass_cost: 20000,
           resource_draw_water: 0.2,
           resource_draw_nutrients: 0.2,
           upkeep_biomass_per_second: 0.02,
@@ -214,11 +214,11 @@ describe('PlantWorld', () => {
           growth_direction_bias: 'upward',
         },
       },
-      // Root cost also high
+      // Normal root cost
       root_node: {
         type: 'object',
         value: {
-          biomass_cost: 1000,
+          biomass_cost: 8,
           resource_draw_water: 0.5,
           resource_draw_nutrients: 0.3,
           upkeep_biomass_per_second: 0.01,
