@@ -4,7 +4,7 @@ Current context for any human or AI session working in this repository. Keep it
 current at the end of every task (DESIGN.md, Session Protocol). `DESIGN.md` wins
 over this file whenever they disagree.
 
-**Phase:** 1 — The Living Sprout (in progress). **Implemented:** T00, O01, T03P, C01, **T00A** (resource model + onboarding), C02, T01 (growth + procedural renderer), **T03** (persistence, offline tiers, interest management, event bus). **Added:** config/resources.json, config/world.json, config/network.json, server resource model, PlantPersistence, PlantWorld tiers, InterestManager, EventBus. **Last updated:** 2026-11-03.
+**Phase:** 1 — The Living Sprout (in progress). **Implemented:** T00, O01, T03P, C01, **T00A** (resource model + onboarding), C02, T01 (growth + procedural renderer), **T03** (persistence, offline tiers, interest management, event bus), **T08C** (accounts + sessions). **Added:** config/resources.json, config/world.json, config/network.json, config/accounts.json, server resource model, PlantPersistence, PlantWorld tiers, InterestManager, EventBus, AccountsService. **Last updated:** 2026-11-03.
 
 ## 1. Stack
 
@@ -82,6 +82,10 @@ committed; CI installs with `--frozen-lockfile`.
 │       ├── src/ops/world.ts         # T03 world config loader
 │       ├── src/ops/persistence/     # T03 binary snapshot + event log
 │       ├── src/ops/plantWorld.ts    # T01 growth + T03 offline tiers
+│       ├── src/ops/accounts/        # T08C accounts + sessions
+│       │   ├── config.ts            # config loader
+│       │   ├── service.ts           # argon2id, JWT, rate limits, lockout
+│       │   └── http.ts              # /auth/* endpoints
 │       └── tsconfig.json
 ├── packages/shared/
 │   └── src/

@@ -1,11 +1,155 @@
 {
   "_meta": {
     "system": "accounts",
-    "version": "0.1.0",
+    "version": "1.0.0",
     "schema": "extended-1",
     "owner_task": "T08C",
-    "status": "stub",
-    "notes": "Declared by T00. Populated by T08C per DESIGN.md Part 5."
+    "status": "active",
+    "notes": "Accounts and sessions config per DESIGN.md Part 4, T08C"
   },
-  "values": {}
+  "values": {
+    "access_token_lifetime_min": {
+      "type": "integer",
+      "value": 15,
+      "range": [5, 120],
+      "description": "Access token lifetime in minutes"
+    },
+    "refresh_token_lifetime_days": {
+      "type": "integer",
+      "value": 30,
+      "range": [1, 365],
+      "description": "Refresh token lifetime in days"
+    },
+    "password_min_length": {
+      "type": "integer",
+      "value": 8,
+      "range": [6, 64],
+      "description": "Minimum password length"
+    },
+    "password_max_length": {
+      "type": "integer",
+      "value": 128,
+      "range": [8, 256],
+      "description": "Maximum password length"
+    },
+    "password_require_uppercase": {
+      "type": "boolean",
+      "value": true,
+      "description": "Require uppercase letter in password"
+    },
+    "password_require_lowercase": {
+      "type": "boolean",
+      "value": true,
+      "description": "Require lowercase letter in password"
+    },
+    "password_require_digit": {
+      "type": "boolean",
+      "value": true,
+      "description": "Require digit in password"
+    },
+    "password_require_special": {
+      "type": "boolean",
+      "value": false,
+      "description": "Require special character in password"
+    },
+    "username_min_length": {
+      "type": "integer",
+      "value": 3,
+      "range": [2, 32],
+      "description": "Minimum username length"
+    },
+    "username_max_length": {
+      "type": "integer",
+      "value": 24,
+      "range": [3, 64],
+      "description": "Maximum username length"
+    },
+    "username_allowed_chars": {
+      "type": "string",
+      "value": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-",
+      "description": "Allowed characters in username"
+    },
+    "rate_limit_signup_per_hour": {
+      "type": "integer",
+      "value": 5,
+      "range": [1, 100],
+      "description": "Max sign-up attempts per IP per hour"
+    },
+    "rate_limit_login_per_minute": {
+      "type": "integer",
+      "value": 10,
+      "range": [1, 60],
+      "description": "Max login attempts per IP per minute"
+    },
+    "rate_limit_refresh_per_minute": {
+      "type": "integer",
+      "value": 20,
+      "range": [5, 100],
+      "description": "Max token refresh attempts per IP per minute"
+    },
+    "lockout_max_failed_attempts": {
+      "type": "integer",
+      "value": 5,
+      "range": [3, 20],
+      "description": "Max failed login attempts before lockout"
+    },
+    "lockout_duration_min": {
+      "type": "integer",
+      "value": 15,
+      "range": [5, 1440],
+      "description": "Lockout duration in minutes"
+    },
+    "argon2_time_cost": {
+      "type": "integer",
+      "value": 3,
+      "range": [1, 10],
+      "description": "Argon2id time cost (iterations)"
+    },
+    "argon2_memory_cost_kib": {
+      "type": "integer",
+      "value": 65536,
+      "range": [8192, 1048576],
+      "description": "Argon2id memory cost in KiB"
+    },
+    "argon2_parallelism": {
+      "type": "integer",
+      "value": 4,
+      "range": [1, 8],
+      "description": "Argon2id parallelism factor"
+    },
+    "jwt_algorithm": {
+      "type": "enum",
+      "value": "HS256",
+      "enum": ["HS256", "RS256"],
+      "description": "JWT signing algorithm"
+    },
+    "jwt_issuer": {
+      "type": "string",
+      "value": "plant-legacy",
+      "description": "JWT issuer claim"
+    },
+    "jwt_audience": {
+      "type": "string",
+      "value": "plant-legacy-client",
+      "description": "JWT audience claim"
+    },
+    "display_name_min_length": {
+      "type": "integer",
+      "value": 1,
+      "range": [1, 32],
+      "description": "Minimum display name length"
+    },
+    "display_name_max_length": {
+      "type": "integer",
+      "value": 32,
+      "range": [1, 64],
+      "description": "Maximum display name length"
+    },
+    "session_max_per_account": {
+      "type": "integer",
+      "value": 10,
+      "range": [1, 50],
+      "description": "Max concurrent sessions per account"
+    }
+  }
 }

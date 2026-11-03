@@ -33,12 +33,16 @@ Honest list. No feature promises (T42, RULE_13). Updated at every gate.
   catch-up integration. Interest management with spatial cells and entity caps.
   Event bus for decoupled game events. Tick-budget metrics logged per tick.
   Reconnect window implemented.
+- **T08C accounts and sessions:** sign-up, login, logout, token refresh;
+  argon2id password hashing; JWT access (15 min) + refresh (30 days) tokens with
+  rotation; IP rate limits and account lockout after failed attempts; WebSocket
+  auth via HELLO accessToken; plant ownerId = accountId for persistence.
 - Staging client on GitHub Pages, with the API served from the local compose
   stack through a tunnel.
 
 ## Not built yet
 
-Growth simulation (two-step pointing), accounts, chat, economy, damage,
+Growth simulation (two-step pointing), chat, economy, damage,
 weather, mutation, inventory, and a real Root Sight toggle (the shader exists;
 the camera/soil cutaway does not). Touch input not implemented (desktop only).
 The renderer has no interpolation between server ticks. Interest management
@@ -46,9 +50,7 @@ not yet filtering STATE/KEYFRAME broadcasts. Binary protocol not on wire.
 
 ## Next
 
-Per DESIGN.md Part 4, the next tasks are **T08C** (Accounts and Sessions),
-**T02** (Root Sight), **T07** (Weather and Day/Night), **C03** (Environment
-Rendering). **T02** depends on T01 + C01.
+Per DESIGN.md Part 4, the next tasks are **T02** (Root Sight), **T07** (Weather and Day/Night), **C03** (Environment Rendering). **T02** depends on T01 + C01.
 
 ## Explicitly not promised
 

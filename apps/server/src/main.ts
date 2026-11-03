@@ -5,6 +5,9 @@ import type { GrowthIntent } from '@plant-legacy/shared/growth';
 import { WebSocket, WebSocketServer } from 'ws';
 import { loadRuntimeConfig } from './core/config.ts';
 import { SERVICE_VERSION } from './core/version.ts';
+import { loadAccountsConfig } from './ops/accounts/config.ts';
+import { createAccountsHandlers, createAuthMiddleware } from './ops/accounts/http.ts';
+import { AccountsService } from './ops/accounts/service.ts';
 import { DatabaseProbe } from './ops/db.ts';
 import { loadGrowthConfig } from './ops/growth.ts';
 import { buildHealthReport, isReady } from './ops/health.ts';
@@ -65,6 +68,7 @@ interface ConnectedPlayer {
   playerId: string;
   cubeId: string;
   plantId: string | null;
+  accountId: string;
   lastInputTick: number;
   pendingInputs: Map<number, PlayerInput>;
   pendingGrowthIntents: Map<number, import('@plant-legacy/shared/growth').GrowthIntent>;
@@ -110,6 +114,7 @@ class CubeWorld {
   addPlayer(
     ws: WebSocket,
     playerId: string,
+    accountId?: string,
   ): { cubeId: string; plantId: string; welcome: WelcomePayload } {
     const cubeId = `cube_${playerId}`;
     const colorIndex = this.cubes.size % CUBE_COLORS.length;
@@ -122,8 +127,11 @@ class CubeWorld {
 
     this.cubes.set(cubeId, cube);
 
+    // Use accountId as ownerId if available, otherwise fall back to playerId
+    const ownerId = accountId ?? playerId;
+
     // Create a plant for this player
-    const plant = this.plantWorld.createPlant(playerId, 'world_0', cube.x, cube.z);
+    const plant = this.plantWorld.createPlant(ownerId, 'world_0', cube.x, cube.z);
     const plantId = plant.id;
 
     // Register with interest manager
@@ -134,6 +142,7 @@ class CubeWorld {
       playerId,
       cubeId,
       plantId,
+      accountId: ownerId,
       lastInputTick: 0,
       pendingInputs: new Map(),
       pendingGrowthIntents: new Map(),
@@ -162,7 +171,13 @@ class CubeWorld {
       totalBiomass: plant.totalBiomass,
     };
 
-    this.log.info('player joined', { playerId, cubeId, plantId, totalPlayers: this.players.size });
+    this.log.info('player joined', {
+      playerId,
+      cubeId,
+      plantId,
+      accountId: ownerId,
+      totalPlayers: this.players.size,
+    });
 
     // Send PLANT_SYNC with only active players' plants to the new player
     const activePlantIds = new Set<string>();
@@ -592,6 +607,41 @@ async function main(): Promise<void> {
   // Interest management (T03)
   const interestManager = new InterestManager(worldConfig);
 
+  // Accounts service (T08C)
+  const accountsConfig = loadAccountsConfig(configs);
+  let accountsService: AccountsService | null = null;
+  let handleSignup: ReturnType<typeof createAccountsHandlers>['handleSignup'];
+  let handleLogin: ReturnType<typeof createAccountsHandlers>['handleLogin'];
+  let handleRefresh: ReturnType<typeof createAccountsHandlers>['handleRefresh'];
+  let handleLogout: ReturnType<typeof createAccountsHandlers>['handleLogout'];
+  let handleChangeDisplayName: ReturnType<typeof createAccountsHandlers>['handleChangeDisplayName'];
+  let authMiddleware: ReturnType<typeof createAuthMiddleware>;
+
+  if (database.pool) {
+    const service = new AccountsService(database.pool, accountsConfig);
+    accountsService = service;
+    const handlers = createAccountsHandlers(service);
+    handleSignup = handlers.handleSignup;
+    handleLogin = handlers.handleLogin;
+    handleRefresh = handlers.handleRefresh;
+    handleLogout = handlers.handleLogout;
+    handleChangeDisplayName = handlers.handleChangeDisplayName;
+    authMiddleware = createAuthMiddleware(service);
+  } else {
+    // No database - provide no-op handlers that return service unavailable
+    const noDbHandler = async (_req: IncomingMessage, res: ServerResponse) => {
+      sendJson(res, 503, { error: 'database_not_available' });
+    };
+    handleSignup = noDbHandler;
+    handleLogin = noDbHandler;
+    handleRefresh = noDbHandler;
+    handleLogout = noDbHandler;
+    handleChangeDisplayName = noDbHandler;
+    authMiddleware = async (_req: IncomingMessage, res: ServerResponse) => {
+      sendJson(res, 503, { error: 'database_not_available' });
+    };
+  }
+
   const world = new CubeWorld(netProtoConfig, log, plantWorld, resourceWorld, interestManager);
 
   // Periodic plant persistence (T03)
@@ -620,21 +670,70 @@ async function main(): Promise<void> {
 
     if (method === 'OPTIONS') {
       response.writeHead(204, {
-        'access-control-allow-methods': 'GET, HEAD, OPTIONS',
-        'access-control-allow-headers': 'content-type',
+        'access-control-allow-methods': 'GET, HEAD, POST, OPTIONS',
+        'access-control-allow-headers': 'content-type, authorization',
         'access-control-max-age': '600',
       });
       response.end();
       return;
     }
 
-    if (method !== 'GET' && method !== 'HEAD') {
+    const url = new URL(request.url ?? '/', `http://${request.headers.host ?? 'localhost'}`);
+
+    // T08C: Accounts endpoints (allow POST)
+    if (url.pathname === '/auth/signup') {
+      if (method === 'POST') {
+        await handleSignup(request, response);
+        return;
+      }
       sendJson(response, 405, { error: 'method_not_allowed' });
       return;
     }
 
-    const url = new URL(request.url ?? '/', `http://${request.headers.host ?? 'localhost'}`);
+    if (url.pathname === '/auth/login') {
+      if (method === 'POST') {
+        await handleLogin(request, response);
+        return;
+      }
+      sendJson(response, 405, { error: 'method_not_allowed' });
+      return;
+    }
 
+    if (url.pathname === '/auth/refresh') {
+      if (method === 'POST') {
+        await handleRefresh(request, response);
+        return;
+      }
+      sendJson(response, 405, { error: 'method_not_allowed' });
+      return;
+    }
+
+    if (url.pathname === '/auth/logout') {
+      if (method === 'POST') {
+        await handleLogout(request, response);
+        return;
+      }
+      sendJson(response, 405, { error: 'method_not_allowed' });
+      return;
+    }
+
+    if (url.pathname === '/auth/me/display-name') {
+      if (method === 'POST') {
+        await authMiddleware(request, response, async () => {
+          const accountId = (request as IncomingMessage & { accountId?: string }).accountId;
+          if (!accountId) {
+            sendJson(response, 401, { error: 'unauthorized' });
+            return;
+          }
+          await handleChangeDisplayName(request, response, accountId);
+        });
+        return;
+      }
+      sendJson(response, 405, { error: 'method_not_allowed' });
+      return;
+    }
+
+    // Health and readiness
     if (url.pathname === runtime.healthPath || url.pathname === runtime.readinessPath) {
       const report = buildHealthReport({
         version: SERVICE_VERSION,
@@ -1026,132 +1125,198 @@ async function main(): Promise<void> {
       return;
     }
 
-    const playerId = `player_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-
-    const { welcome } = world.addPlayer(ws, playerId);
-
-    // Send welcome message with plant info
-    const welcomeMsg = JSON.stringify({
-      type: MESSAGE_TYPE.WELCOME,
-      payload: { ...welcome, plantId: welcome.plantId },
-    });
-    ws.send(welcomeMsg);
+    // Wait for HELLO with auth before creating player
+    let helloReceived = false;
 
     ws.on('message', (data: Buffer) => {
       try {
         const message = JSON.parse(data.toString());
         const { type, payload } = message;
 
-        switch (type) {
-          case MESSAGE_TYPE.INPUT: {
-            const inputPayload = payload as InputPayload;
-            if (inputPayload.input && typeof inputPayload.input.tick === 'number') {
-              world.handleInput(playerId, inputPayload.input);
-            }
-            break;
-          }
-          case MESSAGE_TYPE.GROWTH_INTENT: {
-            const growthIntent = payload as { intent: GrowthIntent };
-            if (growthIntent?.intent && typeof growthIntent.intent.tick === 'number') {
-              world.handleGrowthIntent(playerId, growthIntent.intent);
-            }
-            break;
-          }
-          case MESSAGE_TYPE.PING: {
-            world.handlePing(ws);
-            break;
-          }
-          case MESSAGE_TYPE.HELLO: {
-            // Client version check
-            const hello = payload as HelloPayload;
-            if (hello.clientVersion !== netProtoConfig.protocolVersion) {
-              const error: ErrorPayload = {
-                code: 'VERSION_MISMATCH',
-                message: `Protocol version mismatch: server=${netProtoConfig.protocolVersion}, client=${hello.clientVersion}`,
-              };
-              const errorMsg = JSON.stringify({ type: MESSAGE_TYPE.ERROR, payload: error });
-              ws.send(errorMsg);
-              ws.close(4002, 'Version mismatch');
-            }
-            break;
-          }
-          case MESSAGE_TYPE.RESOURCE_QUERY: {
-            const query = payload as ResourceQueryPayload;
-            if (typeof query.tileX === 'number' && typeof query.tileZ === 'number') {
-              const resources = world.getTileResources(query.tileX, query.tileZ);
-              if (resources) {
-                const responseMsg = JSON.stringify({
-                  type: MESSAGE_TYPE.RESOURCE_UPDATE,
-                  payload: {
-                    tick: world.getTick(),
-                    tiles: [resources],
-                    width: 1,
-                    height: 1,
-                    tileSize: 1,
-                  },
-                });
-                ws.send(responseMsg);
-              }
-            }
-            break;
-          }
-          case MESSAGE_TYPE.PLANT_SYNC_REQUEST: {
-            // Send PLANT_SYNC with only active players' plants
-            const activePlantIds = new Set<string>();
-            for (const p of world.getPlayers().values()) {
-              if (p.plantId) activePlantIds.add(p.plantId);
-            }
-            const allPlants = world.getPlantWorld().getAllPlants();
-            const activePlants = allPlants.filter((p) => activePlantIds.has(p.id));
-            const syncPayload: PlantSyncPayload = {
-              plants: activePlants.map((p) => ({
-                id: p.id,
-                ownerId: p.ownerId,
-                rootNodeId: p.rootNodeId,
-                totalBiomass: p.totalBiomass,
-                totalUpkeep: p.totalUpkeep,
-                nodes: Array.from(p.nodes.values()).map((n) => ({
-                  id: n.id,
-                  plantId: n.plantId,
-                  type: n.type,
-                  layer: n.layer,
-                  x: n.x,
-                  y: n.y,
-                  z: n.z,
-                  biomass: n.biomass,
-                  age: n.age,
-                  parentId: n.parentId,
-                  children: n.children,
-                  statModifiers: n.statModifiers,
-                  resourceDrawWater: n.resourceDrawWater,
-                  resourceDrawNutrients: n.resourceDrawNutrients,
-                  upkeepBiomassPerSecond: n.upkeepBiomassPerSecond,
-                  growthDirectionBias: n.growthDirectionBias,
-                  lastGrowthTick: n.lastGrowthTick,
-                })),
-              })),
-            };
-            world.sendTo(ws, MESSAGE_TYPE.PLANT_SYNC, syncPayload);
-            break;
-          }
-          default:
-            log.warn('unknown message type', { type, playerId });
+        if (type === MESSAGE_TYPE.HELLO && !helloReceived) {
+          helloReceived = true;
+          handleHelloMessage(ws, payload);
+          return;
         }
+
+        // Ignore other messages until HELLO is processed
       } catch (error) {
         log.error('websocket message parse error', {
           error: error instanceof Error ? error.message : String(error),
-          playerId,
         });
       }
     });
 
     ws.on('close', () => {
-      world.removePlayer(playerId);
+      // Clean up if HELLO was never received
     });
 
     ws.on('error', (error: Error) => {
-      log.error('websocket error', { error: error.message, playerId });
+      log.error('websocket error', { error: error.message });
     });
+
+    // Set a timeout for HELLO
+    const helloTimeout = setTimeout(() => {
+      if (!helloReceived) {
+        log.warn('websocket closed: hello timeout');
+        ws.close(4008, 'Hello timeout');
+      }
+    }, 10000);
+    helloTimeout.unref();
+
+    async function handleHelloMessage(ws: WebSocket, payload: unknown) {
+      const hello = payload as HelloPayload;
+
+      if (hello.clientVersion !== netProtoConfig.protocolVersion) {
+        const error: ErrorPayload = {
+          code: 'VERSION_MISMATCH',
+          message: `Protocol version mismatch: server=${netProtoConfig.protocolVersion}, client=${hello.clientVersion}`,
+        };
+        const errorMsg = JSON.stringify({ type: MESSAGE_TYPE.ERROR, payload: error });
+        ws.send(errorMsg);
+        ws.close(4002, 'Version mismatch');
+        return;
+      }
+
+      // Verify access token if provided (T08C)
+      let accountId: string | null = null;
+      let accountRole: string | null = null;
+      if (hello.accessToken && accountsService) {
+        const authResult = await accountsService.verifyAccessToken(hello.accessToken);
+        if ('error' in authResult) {
+          const error: ErrorPayload = {
+            code: 'AUTH_FAILED',
+            message: authResult.error,
+          };
+          const errorMsg = JSON.stringify({ type: MESSAGE_TYPE.ERROR, payload: error });
+          ws.send(errorMsg);
+          ws.close(4001, 'Authentication failed');
+          return;
+        }
+        accountId = authResult.accountId;
+        accountRole = authResult.role;
+      }
+
+      // Store account info on the WebSocket
+      (ws as WebSocket & { accountId?: string; accountRole?: string }).accountId =
+        accountId ?? undefined;
+      (ws as WebSocket & { accountId?: string; accountRole?: string }).accountRole =
+        accountRole ?? undefined;
+
+      // Now create the player
+      const playerId = `player_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      const { welcome } = world.addPlayer(ws, playerId, accountId ?? undefined);
+
+      // Send welcome message with plant info
+      const welcomeMsg = JSON.stringify({
+        type: MESSAGE_TYPE.WELCOME,
+        payload: { ...welcome, plantId: welcome.plantId },
+      });
+      ws.send(welcomeMsg);
+
+      // Set up message handlers for this authenticated connection
+      ws.on('message', (data: Buffer) => {
+        try {
+          const message = JSON.parse(data.toString());
+          const { type, payload } = message;
+
+          switch (type) {
+            case MESSAGE_TYPE.INPUT: {
+              const inputPayload = payload as InputPayload;
+              if (inputPayload.input && typeof inputPayload.input.tick === 'number') {
+                world.handleInput(playerId, inputPayload.input);
+              }
+              break;
+            }
+            case MESSAGE_TYPE.GROWTH_INTENT: {
+              const growthIntent = payload as { intent: GrowthIntent };
+              if (growthIntent?.intent && typeof growthIntent.intent.tick === 'number') {
+                world.handleGrowthIntent(playerId, growthIntent.intent);
+              }
+              break;
+            }
+            case MESSAGE_TYPE.PING: {
+              world.handlePing(ws);
+              break;
+            }
+            case MESSAGE_TYPE.RESOURCE_QUERY: {
+              const query = payload as ResourceQueryPayload;
+              if (typeof query.tileX === 'number' && typeof query.tileZ === 'number') {
+                const resources = world.getTileResources(query.tileX, query.tileZ);
+                if (resources) {
+                  const responseMsg = JSON.stringify({
+                    type: MESSAGE_TYPE.RESOURCE_UPDATE,
+                    payload: {
+                      tick: world.getTick(),
+                      tiles: [resources],
+                      width: 1,
+                      height: 1,
+                      tileSize: 1,
+                    },
+                  });
+                  ws.send(responseMsg);
+                }
+              }
+              break;
+            }
+            case MESSAGE_TYPE.PLANT_SYNC_REQUEST: {
+              // Send PLANT_SYNC with only active players' plants
+              const activePlantIds = new Set<string>();
+              for (const p of world.getPlayers().values()) {
+                if (p.plantId) activePlantIds.add(p.plantId);
+              }
+              const allPlants = world.getPlantWorld().getAllPlants();
+              const activePlants = allPlants.filter((p) => activePlantIds.has(p.id));
+              const syncPayload: PlantSyncPayload = {
+                plants: activePlants.map((p) => ({
+                  id: p.id,
+                  ownerId: p.ownerId,
+                  rootNodeId: p.rootNodeId,
+                  totalBiomass: p.totalBiomass,
+                  totalUpkeep: p.totalUpkeep,
+                  nodes: Array.from(p.nodes.values()).map((n) => ({
+                    id: n.id,
+                    plantId: n.plantId,
+                    type: n.type,
+                    layer: n.layer,
+                    x: n.x,
+                    y: n.y,
+                    z: n.z,
+                    biomass: n.biomass,
+                    age: n.age,
+                    parentId: n.parentId,
+                    children: n.children,
+                    statModifiers: n.statModifiers,
+                    resourceDrawWater: n.resourceDrawWater,
+                    resourceDrawNutrients: n.resourceDrawNutrients,
+                    upkeepBiomassPerSecond: n.upkeepBiomassPerSecond,
+                    growthDirectionBias: n.growthDirectionBias,
+                    lastGrowthTick: n.lastGrowthTick,
+                  })),
+                })),
+              };
+              world.sendTo(ws, MESSAGE_TYPE.PLANT_SYNC, syncPayload);
+              break;
+            }
+            default:
+              log.warn('unknown message type', { type, playerId });
+          }
+        } catch (error) {
+          log.error('websocket message parse error', {
+            error: error instanceof Error ? error.message : String(error),
+            playerId,
+          });
+        }
+      });
+
+      ws.on('close', () => {
+        world.removePlayer(playerId);
+      });
+
+      ws.on('error', (error: Error) => {
+        log.error('websocket error', { error: error.message, playerId });
+      });
+    }
   });
 
   let shuttingDown = false;

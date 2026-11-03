@@ -89,6 +89,7 @@ export interface PlayerInput {
 
 export interface HelloPayload {
   clientVersion: number;
+  accessToken?: string;
 }
 
 export interface WelcomePayload {

@@ -20,6 +20,7 @@ const PREFIXES = {
   seed: 'seed',
   ledger: 'ledger',
   report: 'report',
+  session: 'sess',
 } as const;
 
 export type IdKind = keyof typeof PREFIXES;

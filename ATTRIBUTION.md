@@ -37,7 +37,14 @@ C01's asset loader will fail the build when a file has no entry in this manifest
 ## Notes
 
 The client bundles third-party **code** dependencies through pnpm (Three.js,
-Vite, `@vitejs/plugin-legacy`, `ws`, `pg`); their licenses travel with the
+Vite, `@vitejs/plugin-legacy`, `ws`, `pg`, `argon2`, `jsonwebtoken`); their licenses travel with the
 packages in `node_modules`, and none are committed as asset files. The UI still
 uses system fonts and hand-written CSS. No image, model, texture, sound or font
 file is committed, so the asset manifest stays empty.
+
+### Server runtime dependencies added in T08C
+
+| Package | Version | License | Purpose |
+|---|---|---|---|
+| `argon2` | 0.41.1 | Apache-2.0 / BSD-3-Clause | Argon2id password hashing |
+| `jsonwebtoken` | 9.0.2 | MIT | JWT access/refresh tokens |
