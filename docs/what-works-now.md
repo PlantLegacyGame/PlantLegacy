@@ -32,11 +32,12 @@ Honest list. No feature promises (T42, RULE_13). Updated at every gate.
   event log in Postgres). Offline simulation tiers (Active/Near/Dormant) with
   catch-up integration. Interest management with spatial cells and entity caps.
   Event bus for decoupled game events. Tick-budget metrics logged per tick.
-  Reconnect window implemented.
+  **Reconnect window (5 min) + PLANT_SYNC on join + PLANT_CREATED/PLANT_REMOVED broadcasts + PLANT_SYNC_REQUEST on tab visibility.**
 - **T08C accounts and sessions:** sign-up, login, logout, token refresh;
   argon2id password hashing; JWT access (15 min) + refresh (30 days) tokens with
   rotation; IP rate limits and account lockout after failed attempts; WebSocket
   auth via HELLO accessToken; plant ownerId = accountId for persistence.
+- **Background tab fix:** plants survive tab-out for 5 min (authenticated + anonymous), reclaim on reconnect with full PLANT_SYNC, ghost plants cleaned via PLANT_REMOVED.
 - Staging client on GitHub Pages, with the API served from the local compose
   stack through a tunnel.
 
