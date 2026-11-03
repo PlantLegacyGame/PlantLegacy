@@ -4,7 +4,7 @@ Current context for any human or AI session working in this repository. Keep it
 current at the end of every task (DESIGN.md, Session Protocol). `DESIGN.md` wins
 over this file whenever they disagree.
 
-**Phase:** 1 — The Living Sprout (in progress). **Implemented:** T00, O01, T03P, C01, **T00A** (resource model + onboarding), C02, T01 (growth + procedural renderer). **Added:** config/resources.json, server resource model. **Last updated:** 2026-11-03.
+**Phase:** 1 — The Living Sprout (in progress). **Implemented:** T00, O01, T03P, C01, **T00A** (resource model + onboarding), C02, T01 (growth + procedural renderer), **T03** (persistence, offline tiers, interest management, event bus). **Added:** config/resources.json, config/world.json, config/network.json, server resource model, PlantPersistence, PlantWorld tiers, InterestManager, EventBus. **Last updated:** 2026-11-03.
 
 ## 1. Stack
 
@@ -73,10 +73,15 @@ committed; CI installs with `--frozen-lockfile`.
 │       ├── src/core/config.ts # config load + env merge
 │       ├── src/core/version.ts
 │       ├── src/main.ts        # HTTP + WebSocket server, CubeWorld, /config routes
-│       ├── src/ops/db.ts      # Postgres reachability probe
+│       ├── src/ops/db.ts      # Postgres reachability probe + migrations
 │       ├── src/ops/health.ts  # pure report + readiness
 │       ├── src/ops/net.ts     # protocol types, net_proto config, movement validation
 │       ├── src/ops/log.ts     # JSON logger
+│       ├── src/ops/eventBus.ts    # T03 in-process pub/sub
+│       ├── src/ops/interestManager.ts  # T03 spatial interest management
+│       ├── src/ops/world.ts         # T03 world config loader
+│       ├── src/ops/persistence/     # T03 binary snapshot + event log
+│       ├── src/ops/plantWorld.ts    # T01 growth + T03 offline tiers
 │       └── tsconfig.json
 ├── packages/shared/
 │   └── src/
@@ -270,15 +275,16 @@ process itself.
 ### 5.5 Database probe
 
 `DatabaseProbe` (`apps/server/src/ops/db.ts`) owns a `pg.Pool`. `ping()` runs
-`select 1` and returns `ok` / `down`; no URL returns `skipped`. There are **no
-tables or migrations yet** — T03/T08A/O02 add them.
+`select 1` and returns `ok` / `down`; no URL returns `skipped`. T03 adds
+`world_plants` (binary snapshot + event log) and `world_events` tables with
+migrations in `apps/server/src/ops/persistence/001_create_plants_table.sql`.
 
 ### 5.6 Wire protocol (T03P)
 
 WebSocket at `/ws`, JSON messages `{ type: number, payload: object }`.
 `PROTOCOL_VERSION = 1`; the client sends `HELLO { clientVersion: 1 }` and the
-server answers with `WELCOME`. Client → server: `HELLO`, `INPUT`, `PING`.
-Server → client: `WELCOME`, `STATE`, `KEYFRAME`, `REJECT`, `PONG`, `ERROR`.
+server answers with `WELCOME`. Client → server: `HELLO`, `INPUT`, `PING`, `GROWTH_INTENT`, `RESOURCE_QUERY`, `PLANT_SYNC_REQUEST`.
+Server → client: `WELCOME`, `STATE`, `KEYFRAME`, `REJECT`, `PONG`, `ERROR`, `GROWTH_EVENT`, `RESOURCE_UPDATE`, `PLANT_SYNC`, `PLANT_CREATED`.
 The server validates movement (velocity, world bounds, quantization) and sends
 `REJECT` plus authoritative state. Unit tests confirm both velocity and bounds
 rejection fire. Full table, payload schemas:
@@ -287,6 +293,7 @@ rejection fire. Full table, payload schemas:
 ### 5.7 Events and ids
 
 `GAME_EVENTS` is the shared vocabulary from Appendix E. The bus itself is T03.
+Events: `PLANT_CREATED`, `PLANT_GROWTH`, `PLANT_DAMAGE`, `PLANT_DEATH`, `PLANT_TIER_CHANGE`, `PLAYER_JOINED`, `PLAYER_LEFT`, `RESOURCE_UPDATE`, `TICK_BUDGET_WARNING`.
 Ids are opaque strings with a readable prefix (`acct_`, `world_`, `p_`, `item_`,
 `gene_`, `seed_`, `ledger_`, `report_`) and are never assumed globally unique
 outside the account service (every gameplay row also carries `world_id`).
@@ -333,7 +340,7 @@ The full rationale log is in [`docs/decisions.md`](./docs/decisions.md).
 
 ## 8. Not built yet
 
-Persistence, accounts, chat, economy, database
+Accounts, chat, economy, database
 schema/migrations, admin/compliance tooling.
 
 The C02 procedural plant renderer v1 is complete: tapered tubes for
@@ -342,7 +349,9 @@ triplanar noise + wind + health tint, deterministic generation from node data,
 and 3 mutation visual signatures. T01 growth simulation is server-authoritative
 and working. **T00A resource model complete** (tile grid, simulation,
 photosynthesis, absorption, deposits, consumption triggers, diffusion, broadcasts,
-client readout connected).
+client readout connected). **T03 complete** (binary snapshot + event log persistence,
+Active/Near/Dormant offline tiers, interest management, event bus, tick-budget metrics,
+PLANT_SYNC/PLANT_CREATED/PLANT_SYNC_REQUEST).
 
 ## 9. Keeping this file current
 
