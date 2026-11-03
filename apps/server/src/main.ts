@@ -68,7 +68,7 @@ interface ConnectedPlayer {
   playerId: string;
   cubeId: string;
   plantId: string | null;
-  accountId: string;
+  accountId: string | undefined;
   lastInputTick: number;
   pendingInputs: Map<number, PlayerInput>;
   pendingGrowthIntents: Map<number, import('@plant-legacy/shared/growth').GrowthIntent>;
@@ -87,7 +87,7 @@ class CubeWorld {
   private reconnectWindowMs: number;
   private pendingRemovals = new Map<
     string,
-    { plantId: string; accountId: string; timeout: NodeJS.Timeout }
+    { plantId: string; accountId: string | undefined; timeout: NodeJS.Timeout }
   >();
 
   getPlayers(): Map<string, ConnectedPlayer> {
@@ -273,12 +273,14 @@ class CubeWorld {
       this.broadcast(MESSAGE_TYPE.PLANT_REMOVED, { plantId: player.plantId });
     }
 
-    // If player has a plant and accountId, schedule removal for reconnect window
-    if (player.plantId && player.accountId) {
+    // If player has a plant, schedule removal for reconnect window
+    if (player.plantId) {
       const plantId = player.plantId;
       const accountId = player.accountId;
+      const key = accountId ?? `anon_${plantId}`;
+
       const timeout = setTimeout(() => {
-        this.pendingRemovals.delete(accountId);
+        this.pendingRemovals.delete(key);
         const plant = this.plantWorld.getPlant(plantId);
         if (plant?.rootNodeId) {
           this.resourceWorld.onPlantDeath({
@@ -294,37 +296,22 @@ class CubeWorld {
         this.plantWorld.removePlant(plantId);
         this.log.info('plant removed after reconnect window expired', {
           plantId,
-          accountId,
+          accountId: accountId ?? 'anonymous',
         });
       }, this.reconnectWindowMs);
 
-      this.pendingRemovals.set(accountId, {
+      this.pendingRemovals.set(key, {
         plantId,
-        accountId,
+        accountId: accountId ?? undefined,
         timeout,
       });
 
       this.log.info('player disconnected, plant kept for reconnect window', {
         playerId,
         plantId,
-        accountId,
+        accountId: accountId ?? 'anonymous',
         windowMs: this.reconnectWindowMs,
       });
-    } else if (player.plantId) {
-      // No accountId (anonymous) - remove immediately
-      const plant = this.plantWorld.getPlant(player.plantId);
-      if (plant?.rootNodeId) {
-        this.resourceWorld.onPlantDeath({
-          id: plant.id,
-          ownerId: plant.ownerId,
-          worldId: plant.worldId,
-          nodes: plant.nodes,
-          totalBiomass: plant.totalBiomass,
-          totalUpkeep: plant.totalUpkeep,
-          rootNodeId: plant.rootNodeId,
-        });
-      }
-      this.plantWorld.removePlant(player.plantId);
     }
 
     this.players.delete(playerId);
@@ -418,6 +405,79 @@ class CubeWorld {
       newPlayerId,
       oldPlantId: pending.plantId,
       accountId,
+      totalPlayers: this.players.size,
+    });
+
+    return { cubeId, plantId: plant.id, welcome };
+  }
+
+  reclaimPlantById(
+    plantId: string,
+    newPlayerId: string,
+    ws: WebSocket,
+  ): { cubeId: string; plantId: string; welcome: WelcomePayload } | null {
+    const key = `anon_${plantId}`;
+    const pending = this.pendingRemovals.get(key);
+    if (!pending) return null;
+
+    // Cancel the removal timeout
+    clearTimeout(pending.timeout);
+    this.pendingRemovals.delete(key);
+
+    const plant = this.plantWorld.getPlant(plantId);
+    if (!plant) return null;
+
+    // Create new cube for the player
+    const cubeId = `cube_${newPlayerId}`;
+    const colorIndex = this.cubes.size % CUBE_COLORS.length;
+    const cube = createCube(cubeId, CUBE_COLORS[colorIndex]);
+
+    const playerCount = this.players.size + 1; // +1 for the new player
+    const angle = ((playerCount - 1) / Math.max(1, playerCount)) * 2 * Math.PI;
+    cube.x = Math.sin(angle) * 5;
+    cube.z = Math.cos(angle) * 5;
+    this.cubes.set(cubeId, cube);
+
+    // Register with interest manager
+    this.interestManager.registerClient(newPlayerId, cube.x, cube.z);
+
+    const player: ConnectedPlayer = {
+      ws,
+      playerId: newPlayerId,
+      cubeId,
+      plantId: plant.id,
+      accountId: undefined,
+      lastInputTick: 0,
+      pendingInputs: new Map(),
+      pendingGrowthIntents: new Map(),
+    };
+    this.players.set(newPlayerId, player);
+
+    const rootNodeId = plant.rootNodeId;
+    const rootNode = rootNodeId != null ? plant.nodes.get(rootNodeId) : undefined;
+
+    const welcome: WelcomePayload = {
+      playerId: newPlayerId,
+      cubeId,
+      plantId: plant.id,
+      tick: this.tick,
+      cubes: Array.from(this.cubes.values()),
+      rootNode: rootNode
+        ? {
+            id: rootNode.id,
+            x: rootNode.x,
+            y: rootNode.y,
+            z: rootNode.z,
+            type: 'root',
+            biomass: rootNode.biomass,
+          }
+        : { id: rootNodeId ?? '', x: 0, y: 0, z: 0, type: 'root', biomass: 0 },
+      totalBiomass: plant.totalBiomass,
+    };
+
+    this.log.info('anonymous player reconnected, plant reclaimed', {
+      newPlayerId,
+      plantId,
       totalPlayers: this.players.size,
     });
 
@@ -1370,10 +1430,28 @@ async function main(): Promise<void> {
           welcome = added.welcome;
         }
       } else {
-        // Anonymous player
-        playerId = `player_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-        const added = world.addPlayer(ws, playerId, undefined);
-        welcome = added.welcome;
+        // Anonymous player - check for plantId to reclaim
+        if (hello.plantId) {
+          const reclaimed = world.reclaimPlantById(
+            hello.plantId,
+            `player_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+            ws,
+          );
+          if (reclaimed) {
+            welcome = reclaimed.welcome;
+            playerId = reclaimed.welcome.playerId;
+          } else {
+            // No plant to reclaim, create new
+            playerId = `player_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+            const added = world.addPlayer(ws, playerId, undefined);
+            welcome = added.welcome;
+          }
+        } else {
+          // No plantId, create new anonymous player
+          playerId = `player_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+          const added = world.addPlayer(ws, playerId, undefined);
+          welcome = added.welcome;
+        }
       }
 
       // Send welcome message with plant info

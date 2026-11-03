@@ -173,6 +173,25 @@ const cubes = new Map<string, CubeState>();
 let inputTick = 0;
 let connecting = false;
 let plantId: string | null = null;
+
+// Persistent plant ID for reconnect/reclaim
+const STORAGE_KEY = 'plant-legacy-plant-id';
+function getStoredPlantId(): string | null {
+  try {
+    return localStorage.getItem(STORAGE_KEY);
+  } catch {
+    return null;
+  }
+}
+function setStoredPlantId(id: string | null): void {
+  try {
+    if (id) localStorage.setItem(STORAGE_KEY, id);
+    else localStorage.removeItem(STORAGE_KEY);
+  } catch {
+    // ignore
+  }
+}
+
 let growthIntentTick = 0;
 let lastGrownNodeId: string | null = null;
 let plantBiomass = 0;
@@ -668,7 +687,7 @@ function connect(): void {
 
     const hello = JSON.stringify({
       type: MESSAGE_TYPE.HELLO,
-      payload: { clientVersion: 1 },
+      payload: { clientVersion: 1, plantId: getStoredPlantId() },
     });
     ws?.send(hello);
   };
@@ -688,6 +707,7 @@ function connect(): void {
           playerId = welcome.playerId;
           myCubeId = welcome.cubeId;
           plantId = welcome.plantId;
+          setStoredPlantId(plantId);
           serverTick = welcome.tick;
           cubes.clear();
           // Populate initial cubes from welcome

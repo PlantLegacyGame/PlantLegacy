@@ -91,6 +91,7 @@ export interface PlayerInput {
 export interface HelloPayload {
   clientVersion: number;
   accessToken?: string;
+  plantId?: string;
 }
 
 export interface WelcomePayload {
