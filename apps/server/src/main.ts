@@ -20,11 +20,13 @@ import {
   MESSAGE_TYPE,
   type PlayerInput,
   type RejectPayload,
+  type ResourceQueryPayload,
   type StatePayload,
   validateMovement,
   type WelcomePayload,
 } from './ops/net.ts';
 import { PlantWorld } from './ops/plantWorld.ts';
+import { loadResourcesConfig, type PlantForResource, ResourceWorld } from './ops/resourceWorld.ts';
 
 const STARTED_AT = Date.now();
 const CUBE_COLORS = [
@@ -71,15 +73,18 @@ class CubeWorld {
   private log: ReturnType<typeof createLogger>;
   private tickInterval: NodeJS.Timeout | null = null;
   private plantWorld: PlantWorld;
+  private resourceWorld: ResourceWorld;
 
   constructor(
     config: ReturnType<typeof loadNetProtoConfig>,
     log: ReturnType<typeof createLogger>,
     plantWorld: PlantWorld,
+    resourceWorld: ResourceWorld,
   ) {
     this.config = config;
     this.log = log;
     this.plantWorld = plantWorld;
+    this.resourceWorld = resourceWorld;
   }
 
   addPlayer(
@@ -143,6 +148,18 @@ class CubeWorld {
     if (player) {
       this.cubes.delete(player.cubeId);
       if (player.plantId) {
+        const plant = this.plantWorld.getPlant(player.plantId);
+        if (plant?.rootNodeId) {
+          this.resourceWorld.onPlantDeath({
+            id: plant.id,
+            ownerId: plant.ownerId,
+            worldId: plant.worldId,
+            nodes: plant.nodes,
+            totalBiomass: plant.totalBiomass,
+            totalUpkeep: plant.totalUpkeep,
+            rootNodeId: plant.rootNodeId,
+          });
+        }
         this.plantWorld.removePlant(player.plantId);
       }
       this.players.delete(playerId);
@@ -249,6 +266,37 @@ class CubeWorld {
     const dt = 1 / this.config.tickRateHz;
     this.plantWorld.step(dt);
 
+    // Step resource world (T00A)
+    const plantsForResource = new Map<string, PlantForResource>();
+    for (const player of this.players.values()) {
+      if (player.plantId) {
+        const plant = this.plantWorld.getPlant(player.plantId);
+        if (plant) {
+          plantsForResource.set(plant.id, {
+            id: plant.id,
+            ownerId: plant.ownerId,
+            worldId: plant.worldId,
+            nodes: plant.nodes,
+            totalBiomass: plant.totalBiomass,
+            totalUpkeep: plant.totalUpkeep,
+            rootNodeId: plant.rootNodeId ?? '',
+          });
+        }
+      }
+    }
+    this.resourceWorld.step(dt, plantsForResource);
+
+    // Apply photosynthesis biomass gain
+    for (const plant of plantsForResource.values()) {
+      const biomassGain = this.resourceWorld.calculatePhotosynthesis(plant);
+      if (biomassGain > 0) {
+        const realPlant = this.plantWorld.getPlant(plant.id);
+        if (realPlant) {
+          realPlant.totalBiomass += biomassGain * dt;
+        }
+      }
+    }
+
     // Send state updates
     const isKeyframe = this.tick % this.config.keyframeIntervalTicks === 0;
 
@@ -265,6 +313,16 @@ class CubeWorld {
       };
       this.broadcast(MESSAGE_TYPE.STATE, state);
     }
+
+    // Broadcast resource updates every tick (T00A)
+    const resourceState = this.resourceWorld.getState();
+    this.broadcast(MESSAGE_TYPE.RESOURCE_UPDATE, {
+      tick: this.tick,
+      tiles: resourceState.tiles,
+      width: resourceState.width,
+      height: resourceState.height,
+      tileSize: resourceState.tileSize,
+    });
   }
 
   private processGrowthIntents(): void {
@@ -324,6 +382,13 @@ class CubeWorld {
   getPlayerCount(): number {
     return this.players.size;
   }
+
+  getTileResources(
+    tileX: number,
+    tileZ: number,
+  ): { light: number; moisture: number; minerals: number } | null {
+    return this.resourceWorld.getTileResourcesAt(tileX, tileZ);
+  }
 }
 
 async function main(): Promise<void> {
@@ -348,7 +413,16 @@ async function main(): Promise<void> {
     maxY: 100,
   });
 
-  const world = new CubeWorld(netProtoConfig, log, plantWorld);
+  // Resource world (T00A)
+  const resourcesConfig = loadResourcesConfig(configs);
+  const resourceWorld = new ResourceWorld(resourcesConfig, {
+    minX: netProtoConfig.worldBounds.minX,
+    maxX: netProtoConfig.worldBounds.maxX,
+    minZ: netProtoConfig.worldBounds.minZ,
+    maxZ: netProtoConfig.worldBounds.maxZ,
+  });
+
+  const world = new CubeWorld(netProtoConfig, log, plantWorld, resourceWorld);
 
   const handle = async (request: IncomingMessage, response: ServerResponse): Promise<void> => {
     applyCors(request, response, runtime.corsOrigins);
@@ -478,6 +552,22 @@ async function main(): Promise<void> {
           shader_quality: values.shader_quality?.value ?? 'high',
           max_gpu_buffers: values.max_gpu_buffers?.value ?? 8,
           compute_shader_workgroup_size: values.compute_shader_workgroup_size?.value ?? 64,
+          tube_ring_count: values.tube_ring_count?.value ?? 8,
+          tube_length_segments: values.tube_length_segments?.value ?? 4,
+          leaf_count_per_node: values.leaf_count_per_node?.value ?? 3,
+          leaf_size: values.leaf_size?.value ?? 1.5,
+          leaf_length_width_ratio: values.leaf_length_width_ratio?.value ?? 2.5,
+          l0_distance: values.l0_distance?.value ?? 50.0,
+          l1_distance: values.l1_distance?.value ?? 150.0,
+          l2_distance: values.l2_distance?.value ?? 500.0,
+          triangle_budget_l0: values.triangle_budget_l0?.value ?? 1500,
+          triangle_budget_l1: values.triangle_budget_l1?.value ?? 800,
+          wind_strength: values.wind_strength?.value ?? 0.3,
+          wind_speed: values.wind_speed?.value ?? 1.0,
+          health_tint_strength: values.health_tint_strength?.value ?? 0.5,
+          mutation_visual_0_param: values.mutation_visual_0_param?.value ?? 1.0,
+          mutation_visual_1_param: values.mutation_visual_1_param?.value ?? 1.5,
+          mutation_visual_2_param: values.mutation_visual_2_param?.value ?? 0.3,
         };
 
         sendJson(response, 200, plantRendererConfig);
@@ -500,6 +590,223 @@ async function main(): Promise<void> {
           shader_quality: 'high',
           max_gpu_buffers: 8,
           compute_shader_workgroup_size: 64,
+          tube_ring_count: 8,
+          tube_length_segments: 4,
+          leaf_count_per_node: 3,
+          leaf_size: 1.5,
+          leaf_length_width_ratio: 2.5,
+          l0_distance: 50.0,
+          l1_distance: 150.0,
+          l2_distance: 500.0,
+          triangle_budget_l0: 1500,
+          triangle_budget_l1: 800,
+          wind_strength: 0.3,
+          wind_speed: 1.0,
+          health_tint_strength: 0.5,
+          mutation_visual_0_param: 1.0,
+          mutation_visual_1_param: 1.5,
+          mutation_visual_2_param: 0.3,
+        });
+        return;
+      }
+    }
+
+    if (url.pathname === '/config/render') {
+      // C01: Serve render config
+      const fs = await import('node:fs/promises');
+      const path = await import('node:path');
+
+      try {
+        const configDir = runtime.configDir;
+        const renderPath = path.resolve(configDir, 'render.json');
+        const raw = await fs.readFile(renderPath, 'utf8');
+        const config = JSON.parse(raw);
+
+        const values = config.values || {};
+        const renderConfig = {
+          target_fps: values.target_fps?.value ?? 60,
+          fps_warning_threshold: values.fps_warning_threshold?.value ?? 0.85,
+          resolution_floor: values.resolution_floor?.value ?? 0.25,
+          max_pixel_ratio: values.max_pixel_ratio?.value ?? 2.0,
+          camera_smoothing: values.camera_smoothing?.value ?? 0.05,
+          camera_min_distance: values.camera_min_distance?.value ?? 10.0,
+          camera_max_distance: values.camera_max_distance?.value ?? 200.0,
+          camera_max_polar_angle: values.camera_max_polar_angle?.value ?? 1.52,
+          idle_drop_timeout_ms: values.idle_drop_timeout_ms?.value ?? 30000,
+          shadow_map_size: values.shadow_map_size?.value ?? 2048,
+          debug_overlay_enabled: values.debug_overlay_enabled?.value ?? true,
+          debug_overlay_key: values.debug_overlay_key?.value ?? '`',
+          pause_on_hidden: values.pause_on_hidden?.value ?? true,
+          quality_tiers: values.quality_tiers?.value ?? [
+            {
+              name: 'low',
+              pixel_ratio: 1.0,
+              shadow_map_size: 1024,
+              max_triangles: 50000,
+              antialiasing: false,
+            },
+            {
+              name: 'medium',
+              pixel_ratio: 1.5,
+              shadow_map_size: 2048,
+              max_triangles: 200000,
+              antialiasing: true,
+            },
+            {
+              name: 'high',
+              pixel_ratio: 2.0,
+              shadow_map_size: 2048,
+              max_triangles: 500000,
+              antialiasing: true,
+            },
+          ],
+        };
+
+        sendJson(response, 200, renderConfig);
+        return;
+      } catch {
+        sendJson(response, 200, {
+          target_fps: 60,
+          fps_warning_threshold: 0.85,
+          resolution_floor: 0.25,
+          max_pixel_ratio: 2.0,
+          camera_smoothing: 0.05,
+          camera_min_distance: 10.0,
+          camera_max_distance: 200.0,
+          camera_max_polar_angle: 1.52,
+          idle_drop_timeout_ms: 30000,
+          shadow_map_size: 2048,
+          debug_overlay_enabled: true,
+          debug_overlay_key: '`',
+          pause_on_hidden: true,
+          quality_tiers: [
+            {
+              name: 'low',
+              pixel_ratio: 1.0,
+              shadow_map_size: 1024,
+              max_triangles: 50000,
+              antialiasing: false,
+            },
+            {
+              name: 'medium',
+              pixel_ratio: 1.5,
+              shadow_map_size: 2048,
+              max_triangles: 200000,
+              antialiasing: true,
+            },
+            {
+              name: 'high',
+              pixel_ratio: 2.0,
+              shadow_map_size: 2048,
+              max_triangles: 500000,
+              antialiasing: true,
+            },
+          ],
+        });
+        return;
+      }
+    }
+
+    if (url.pathname === '/config/controls') {
+      // C01: Serve controls config
+      const fs = await import('node:fs/promises');
+      const path = await import('node:path');
+
+      try {
+        const configDir = runtime.configDir;
+        const controlsPath = path.resolve(configDir, 'controls.json');
+        const raw = await fs.readFile(controlsPath, 'utf8');
+        const config = JSON.parse(raw);
+
+        const values = config.values || {};
+        const bindingsArray = values.bindings_desktop?.value ?? [];
+        const bindingsObj: Record<string, unknown> = {};
+        for (const b of bindingsArray) {
+          if (b.action) bindingsObj[b.action] = b;
+        }
+        const controlsConfig = {
+          bindings: bindingsObj,
+          touch_min_target_px: values.touch_min_target_px?.value ?? 44,
+          hud_max_screen_fraction: values.hud_max_screen_fraction?.value ?? 0.2,
+          root_sight_mode: values.root_sight_mode?.value ?? 'toggle',
+          text_scale: values.text_scale?.value ?? 1.0,
+          context_dock_fade_ms: values.context_dock_fade_ms?.value ?? 150,
+        };
+
+        sendJson(response, 200, controlsConfig);
+        return;
+      } catch {
+        sendJson(response, 200, {
+          bindings: {},
+          touch_min_target_px: 44,
+          hud_max_screen_fraction: 0.2,
+          root_sight_mode: 'toggle',
+          text_scale: 1.0,
+          context_dock_fade_ms: 150,
+        });
+        return;
+      }
+    }
+
+    if (url.pathname === '/config/ui') {
+      // C01: Serve UI config
+      const fs = await import('node:fs/promises');
+      const path = await import('node:path');
+
+      try {
+        const configDir = runtime.configDir;
+        const uiPath = path.resolve(configDir, 'ui.json');
+        const raw = await fs.readFile(uiPath, 'utf8');
+        const config = JSON.parse(raw);
+
+        const values = config.values || {};
+        const uiConfig = {
+          text_scale: values.text_scale?.value ?? 1.0,
+          layers: values.layers?.value ?? {
+            world: 0,
+            hud: 100,
+            panel: 200,
+            menu: 300,
+            modal: 400,
+            toast: 500,
+            tooltip: 600,
+            debug: 700,
+          },
+          theme: values.theme?.value ?? {},
+          toast_duration_ms: values.toast_duration_ms?.value ?? 4000,
+          toast_max_stack: values.toast_max_stack?.value ?? 5,
+          hint_card_duration_ms: values.hint_card_duration_ms?.value ?? 10000,
+          hint_card_max_lines: values.hint_card_max_lines?.value ?? 3,
+          panel_default_width_px: values.panel_default_width_px?.value ?? 320,
+          panel_animation_ms: values.panel_animation_ms?.value ?? 200,
+          reduced_motion: values.reduced_motion?.value ?? false,
+          safe_area_padding_px: values.safe_area_padding_px?.value ?? 8,
+        };
+
+        sendJson(response, 200, uiConfig);
+        return;
+      } catch {
+        sendJson(response, 200, {
+          text_scale: 1.0,
+          layers: {
+            world: 0,
+            hud: 100,
+            panel: 200,
+            menu: 300,
+            modal: 400,
+            toast: 500,
+            tooltip: 600,
+            debug: 700,
+          },
+          theme: {},
+          toast_duration_ms: 4000,
+          toast_max_stack: 5,
+          hint_card_duration_ms: 10000,
+          hint_card_max_lines: 3,
+          panel_default_width_px: 320,
+          panel_animation_ms: 200,
+          reduced_motion: false,
+          safe_area_padding_px: 8,
         });
         return;
       }
@@ -575,6 +882,26 @@ async function main(): Promise<void> {
               const errorMsg = JSON.stringify({ type: MESSAGE_TYPE.ERROR, payload: error });
               ws.send(errorMsg);
               ws.close(4002, 'Version mismatch');
+            }
+            break;
+          }
+          case MESSAGE_TYPE.RESOURCE_QUERY: {
+            const query = payload as ResourceQueryPayload;
+            if (typeof query.tileX === 'number' && typeof query.tileZ === 'number') {
+              const resources = world.getTileResources(query.tileX, query.tileZ);
+              if (resources) {
+                const responseMsg = JSON.stringify({
+                  type: MESSAGE_TYPE.RESOURCE_UPDATE,
+                  payload: {
+                    tick: world.getTick(),
+                    tiles: [resources],
+                    width: 1,
+                    height: 1,
+                    tileSize: 1,
+                  },
+                });
+                ws.send(responseMsg);
+              }
             }
             break;
           }

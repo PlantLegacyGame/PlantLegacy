@@ -4,6 +4,7 @@ export {
   readBoolean,
   readInteger,
   readNumber,
+  readNumberArray,
   readObject,
   readString,
   readStringArray,

@@ -129,3 +129,16 @@ export function readObject<T = Record<string, unknown>>(
   if (entry.type !== 'object') throw new Error(`Config "${system}.${key}" is not an object.`);
   return entry.value as T;
 }
+
+export function readNumberArray(
+  configs: Map<string, ConfigFile>,
+  system: string,
+  key: string,
+): number[] {
+  const entry = requireEntry(configs, system, key);
+  if (entry.type !== 'array') throw new Error(`Config "${system}.${key}" is not an array.`);
+  if (!entry.value.every((item): item is number => typeof item === 'number')) {
+    throw new Error(`Config "${system}.${key}" must contain only numbers.`);
+  }
+  return [...entry.value];
+}

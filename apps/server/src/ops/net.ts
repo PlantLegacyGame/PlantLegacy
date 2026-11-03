@@ -52,6 +52,7 @@ export const MESSAGE_TYPE = {
   INPUT: 2,
   PING: 3,
   GROWTH_INTENT: 4,
+  RESOURCE_QUERY: 5,
 
   // Server -> Client
   WELCOME: 10,
@@ -61,6 +62,7 @@ export const MESSAGE_TYPE = {
   PONG: 14,
   ERROR: 15,
   GROWTH_EVENT: 16,
+  RESOURCE_UPDATE: 17,
 } as const;
 
 export type MessageType = (typeof MESSAGE_TYPE)[keyof typeof MESSAGE_TYPE];
@@ -118,6 +120,19 @@ export interface RejectPayload {
 export interface ErrorPayload {
   code: string;
   message: string;
+}
+
+export interface ResourceUpdatePayload {
+  tick: number;
+  tiles: Array<{ light: number; moisture: number; minerals: number }>;
+  width: number;
+  height: number;
+  tileSize: number;
+}
+
+export interface ResourceQueryPayload {
+  tileX: number;
+  tileZ: number;
 }
 
 export function quantizePosition(value: number, quantization: number): number {
