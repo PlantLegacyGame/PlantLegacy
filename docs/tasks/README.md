@@ -29,7 +29,7 @@ design document.
 | O01 | Repo and deploy pipeline | `[x]` | [O01.md](./O01.md) |
 | T03P | Networking gate (Gate 0) | `[x]` transport and 20 Hz loop work; velocity/bounds rejection effective and tested | [T03P.md](./T03P.md) |
 | C01 | Client foundation | `[x]` input abstraction, UI shell, quality tiers, debug overlay, pause-on-hidden, config routes | [C01.md](./C01.md) |
-| T00A | Resource model + onboarding | `[ ]` server-side resource model complete; client readout pending | [T00A.md](./T00A.md) |
+| T00A | Resource model + onboarding | `[x]` server and client resource model complete | [T00A.md](./T00A.md) |
 | T01 | Growth (renderer prototype committed under this label) | `[ ]` renderer prototype only; growth simulation pending | [T01.md](./T01.md) |
 
 ## Naming

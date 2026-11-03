@@ -4,7 +4,7 @@ Current context for any human or AI session working in this repository. Keep it
 current at the end of every task (DESIGN.md, Session Protocol). `DESIGN.md` wins
 over this file whenever they disagree.
 
-**Phase:** 1 — The Living Sprout (in progress). **Implemented:** T00, O01, T03P, C01, T00A (onboarding slice), C02, T01 (growth + procedural renderer). **Added:** config/resources.json, server resource model. **Last updated:** 2026-11-03.
+**Phase:** 1 — The Living Sprout (in progress). **Implemented:** T00, O01, T03P, C01, **T00A** (resource model + onboarding), C02, T01 (growth + procedural renderer). **Added:** config/resources.json, server resource model. **Last updated:** 2026-11-03.
 
 ## 1. Stack
 
@@ -340,9 +340,9 @@ The C02 procedural plant renderer v1 is complete: tapered tubes for
 roots/stems/vines, instanced leaves with L0/L1, shared plant material with
 triplanar noise + wind + health tint, deterministic generation from node data,
 and 3 mutation visual signatures. T01 growth simulation is server-authoritative
-and working. **T00A resource model server-side is complete** (tile grid, simulation,
-photosynthesis, absorption, deposits, consumption triggers, diffusion, broadcasts);
-client resource readout connection pending.
+and working. **T00A resource model complete** (tile grid, simulation,
+photosynthesis, absorption, deposits, consumption triggers, diffusion, broadcasts,
+client readout connected).
 
 ## 9. Keeping this file current
 
