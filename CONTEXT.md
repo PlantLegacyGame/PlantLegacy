@@ -4,9 +4,7 @@ Current context for any human or AI session working in this repository. Keep it
 current at the end of every task (DESIGN.md, Session Protocol). `DESIGN.md` wins
 over this file whenever they disagree.
 
-**Phase:** 0 — Foundation + Gate 0. **Implemented:** T00, O01, T03P, C01, T00A, C02, **T01**
-and the procedural plant renderer v1 (replaces the T01-labelled Root Sight prototype).
-**Last updated:** 2026-11-02.
+**Phase:** 1 — The Living Sprout (in progress). **Implemented:** T00, O01, T03P, C01, T00A (onboarding slice), C02, T01 (growth + procedural renderer). **Added:** config/resources.json, server resource model. **Last updated:** 2026-11-03.
 
 ## 1. Stack
 
@@ -26,8 +24,8 @@ and the procedural plant renderer v1 (replaces the T01-labelled Root Sight proto
 
 The **client** is bundled by Vite. The **server, shared package and tools** run
 TypeScript directly on Node with no bundler. There is still **no ORM, no game
-engine and no growth simulation**; the renderer draws a client-side test plant
-and server cube positions. Do not add a new framework without a task that
+engine**; the growth simulation is server-authoritative (T01) and the renderer
+draws server plant data and server cube positions. Do not add a new framework without a task that
 requires it.
 
 ## 2. Commands
@@ -61,8 +59,13 @@ committed; CI installs with `--frozen-lockfile`.
 │   │   ├── vite.config.ts     # dev proxy + GitHub Pages base path
 │   │   ├── scripts/           # legacy preview helpers (unused by `pnpm dev`)
 │   │   ├── src/main.ts        # Three.js scene, WebSocket client, input, hint card
+│   │   ├── src/config/clientConfig.ts    # C01 config loaders
 │   │   ├── src/config/plantRendererConfig.ts
+│   │   ├── src/input/InputBus.ts         # C01 named actions + producers
+│   │   ├── src/render/QualityController.ts  # C01 dynamic resolution
 │   │   ├── src/renderers/PlantRenderer.ts  # Root Sight shaders, ground, points
+│   │   ├── src/ui/UIShell.ts             # C01 DOM overlay layers, toasts
+│   │   ├── src/ui/DebugOverlay.ts        # C01 live metrics overlay
 │   │   ├── src/styles.css
 │   │   └── tsconfig.json
 │   └── server/
@@ -125,12 +128,13 @@ Browser (Vite + Three.js) ──HTTP /health,/ready,/config/*──▶ Server (n
 
 - **Client:** renders only. It sends input intents and draws server cube state;
   it holds no authority (RULE_4, RULE_27). Three.js scene, OrbitControls,
-  `PlantRenderer` (Root Sight shaders) and the T00A onboarding overlay.
+  `PlantRenderer` (Root Sight shaders), **C01 input abstraction, UI shell,
+  quality controller, debug overlay**, and the T00A onboarding overlay.
 - **Server:** one process, one world, one Postgres (RULE_31). `CubeWorld` runs a
   20 Hz tick, quantizes movement and broadcasts `STATE` / `KEYFRAME`. Velocity
-  and world-bounds rejection code exists but is currently ineffective; see the
-  known gaps in [`docs/protocol.md`](./protocol.md). Config is loaded and
-  validated before listening.
+  and world-bounds rejection are effective (unit tests prove rejection fires).
+  Config is loaded and validated before listening. **Serves `/config/render`, `/config/controls`,
+  `/config/ui` for C01 client foundation.**
 - **Database:** optional locally (`DATABASE_URL` unset → `skipped`), required in
   compose/staging (`READINESS_REQUIRES_DB=true`).
 - **Deploy split:** client on GitHub Pages; server + Postgres in Docker compose,
@@ -275,10 +279,9 @@ WebSocket at `/ws`, JSON messages `{ type: number, payload: object }`.
 `PROTOCOL_VERSION = 1`; the client sends `HELLO { clientVersion: 1 }` and the
 server answers with `WELCOME`. Client → server: `HELLO`, `INPUT`, `PING`.
 Server → client: `WELCOME`, `STATE`, `KEYFRAME`, `REJECT`, `PONG`, `ERROR`.
-The server is **intended** to validate movement (velocity, world bounds,
-quantization) and send `REJECT` plus authoritative state, but the velocity and
-bounds checks are currently ineffective (hardcoded speed, camelCase/snake_case
-mismatch). Full table, payload schemas and known gaps:
+The server validates movement (velocity, world bounds, quantization) and sends
+`REJECT` plus authoritative state. Unit tests confirm both velocity and bounds
+rejection fire. Full table, payload schemas:
 [`docs/protocol.md`](./protocol.md).
 
 ### 5.7 Events and ids
@@ -321,7 +324,7 @@ The full rationale log is in [`docs/decisions.md`](./docs/decisions.md).
 
 | Rule | Where |
 |---|---|
-| RULE_3 (no hardcoded tunables) | config validator + code review; ops/compliance/net_proto/onboarding/plant_renderer values live in config. Known gaps: `speed = 5.0` in `ops/net.ts`, WASD bindings and camera limits in `main.ts`, shader constants in `PlantRenderer.ts` |
+| RULE_3 (no hardcoded tunables) | config validator + code review; ops/compliance/net_proto/onboarding/plant_renderer values live in config. Known gaps: WASD bindings and camera limits in `main.ts`, shader constants in `PlantRenderer.ts` |
 | RULE_20 (no rarity) | `auditTree` + validator tests + CI |
 | RULE_23 (account-bound flags) | `auditTree` + `violatesAccountBoundInvariant` + tests |
 | Startup fails on invalid config | `loadRuntimeConfig` throws before `listen` |
@@ -330,14 +333,15 @@ The full rationale log is in [`docs/decisions.md`](./docs/decisions.md).
 
 ## 8. Not built yet
 
-Growth simulation, persistence, accounts, chat, economy, database
+Persistence, accounts, chat, economy, database
 schema/migrations, admin/compliance tooling.
 
 The C02 procedural plant renderer v1 is complete: tapered tubes for
 roots/stems/vines, instanced leaves with L0/L1, shared plant material with
 triplanar noise + wind + health tint, deterministic generation from node data,
-and 3 mutation visual signatures. T01 growth simulation is still not built;
-the next task in DESIGN.md order is **T01 Growth**.
+and 3 mutation visual signatures. T01 growth simulation is server-authoritative
+and working; the next task in DESIGN.md order is the **full T00A resource model**
+(tile grid, simulation, photosynthesis, absorption, deposits, consumption).
 
 ## 9. Keeping this file current
 
