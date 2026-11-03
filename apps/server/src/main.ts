@@ -267,6 +267,11 @@ class CubeWorld {
     this.cubes.delete(player.cubeId);
     this.interestManager.unregisterClient(playerId);
 
+    // Broadcast PLANT_REMOVED to all other players immediately
+    if (player.plantId) {
+      this.broadcast(MESSAGE_TYPE.PLANT_REMOVED, { plantId: player.plantId });
+    }
+
     // If player has a plant and accountId, schedule removal for reconnect window
     if (player.plantId && player.accountId) {
       const plantId = player.plantId;

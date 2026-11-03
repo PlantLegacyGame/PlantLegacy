@@ -66,6 +66,7 @@ export const MESSAGE_TYPE = {
   RESOURCE_UPDATE: 17,
   PLANT_SYNC: 18,
   PLANT_CREATED: 19,
+  PLANT_REMOVED: 20,
 } as const;
 
 export type MessageType = (typeof MESSAGE_TYPE)[keyof typeof MESSAGE_TYPE];
@@ -220,6 +221,10 @@ export interface PlantCreatedPayload {
       lastGrowthTick: number;
     }>;
   };
+}
+
+export interface PlantRemovedPayload {
+  plantId: string;
 }
 
 export function quantizePosition(value: number, quantization: number): number {

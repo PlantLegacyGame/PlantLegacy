@@ -154,6 +154,7 @@ const MESSAGE_TYPE = {
   RESOURCE_UPDATE: 17,
   PLANT_SYNC: 18,
   PLANT_CREATED: 19,
+  PLANT_REMOVED: 20,
 } as const;
 
 interface PlayerInput {
@@ -1038,6 +1039,33 @@ function connect(): void {
             plantRenderer.updatePlantData(allNodes);
           }
           setDetail(`New player joined: ${created.plant.id}`);
+          break;
+        }
+
+        case MESSAGE_TYPE.PLANT_REMOVED: {
+          const removed = payload as { plantId: string };
+          if (otherPlayerPlants.delete(removed.plantId)) {
+            // Update renderer with remaining plants
+            if (plantRenderer) {
+              const otherNodes: Array<{
+                id: string;
+                position: THREE.Vector3;
+                type: number;
+                radius: number;
+                parentId: string | null;
+                age: number;
+                health: number;
+                mutationFlags: number;
+                biomass: number;
+              }> = [];
+              for (const nodes of otherPlayerPlants.values()) {
+                otherNodes.push(...nodes.values());
+              }
+              const allNodes = [...plantNodes.values(), ...otherNodes];
+              plantRenderer.updatePlantData(allNodes);
+            }
+            setDetail(`Player left: ${removed.plantId}`);
+          }
           break;
         }
 
