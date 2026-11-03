@@ -127,8 +127,9 @@ class CubeWorld {
     const colorIndex = this.cubes.size % CUBE_COLORS.length;
     const cube = createCube(cubeId, CUBE_COLORS[colorIndex]);
 
-    // Position cubes in a circle
-    const angle = (this.cubes.size / Math.max(1, this.players.size + 1)) * 2 * Math.PI;
+    // Position cubes in a circle - use player count for stable positioning
+    const playerCount = this.players.size;
+    const angle = (playerCount / Math.max(1, playerCount + 1)) * 2 * Math.PI;
     cube.x = Math.sin(angle) * 5;
     cube.z = Math.cos(angle) * 5;
 
@@ -370,7 +371,8 @@ class CubeWorld {
     const colorIndex = this.cubes.size % CUBE_COLORS.length;
     const cube = createCube(cubeId, CUBE_COLORS[colorIndex]);
 
-    const angle = (this.cubes.size / Math.max(1, this.players.size + 1)) * 2 * Math.PI;
+    const playerCount = this.players.size + 1; // +1 for the new player
+    const angle = ((playerCount - 1) / Math.max(1, playerCount)) * 2 * Math.PI;
     cube.x = Math.sin(angle) * 5;
     cube.z = Math.cos(angle) * 5;
     this.cubes.set(cubeId, cube);
