@@ -347,6 +347,21 @@ class CubeWorld {
     clearTimeout(pending.timeout);
     this.pendingRemovals.delete(accountId);
 
+    // Remove old player with same accountId (transfer plant to new connection)
+    for (const [oldPlayerId, oldPlayer] of this.players.entries()) {
+      if (oldPlayer.accountId === accountId) {
+        this.cubes.delete(oldPlayer.cubeId);
+        this.interestManager.unregisterClient(oldPlayerId);
+        this.players.delete(oldPlayerId);
+        this.log.info('removed old player connection on reclaim', {
+          oldPlayerId,
+          newPlayerId,
+          accountId,
+        });
+        break;
+      }
+    }
+
     const plant = this.plantWorld.getPlant(pending.plantId);
     if (!plant) return null;
 
