@@ -84,6 +84,11 @@ class CubeWorld {
   private plantWorld: PlantWorld;
   private resourceWorld: ResourceWorld;
   private interestManager: InterestManager;
+  private reconnectWindowMs: number;
+  private pendingRemovals = new Map<
+    string,
+    { plantId: string; accountId: string; timeout: NodeJS.Timeout }
+  >();
 
   getPlayers(): Map<string, ConnectedPlayer> {
     return this.players;
@@ -103,12 +108,14 @@ class CubeWorld {
     plantWorld: PlantWorld,
     resourceWorld: ResourceWorld,
     interestManager: InterestManager,
+    reconnectWindowMs: number,
   ) {
     this.config = config;
     this.log = log;
     this.plantWorld = plantWorld;
     this.resourceWorld = resourceWorld;
     this.interestManager = interestManager;
+    this.reconnectWindowMs = reconnectWindowMs;
   }
 
   addPlayer(
@@ -255,11 +262,18 @@ class CubeWorld {
 
   removePlayer(playerId: string): void {
     const player = this.players.get(playerId);
-    if (player) {
-      this.cubes.delete(player.cubeId);
-      this.interestManager.unregisterClient(playerId);
-      if (player.plantId) {
-        const plant = this.plantWorld.getPlant(player.plantId);
+    if (!player) return;
+
+    this.cubes.delete(player.cubeId);
+    this.interestManager.unregisterClient(playerId);
+
+    // If player has a plant and accountId, schedule removal for reconnect window
+    if (player.plantId && player.accountId) {
+      const plantId = player.plantId;
+      const accountId = player.accountId;
+      const timeout = setTimeout(() => {
+        this.pendingRemovals.delete(accountId);
+        const plant = this.plantWorld.getPlant(plantId);
         if (plant?.rootNodeId) {
           this.resourceWorld.onPlantDeath({
             id: plant.id,
@@ -271,16 +285,121 @@ class CubeWorld {
             rootNodeId: plant.rootNodeId,
           });
         }
-        this.plantWorld.removePlant(player.plantId);
-      }
-      this.players.delete(playerId);
-      this.log.info('player left', {
-        playerId,
-        cubeId: player.cubeId,
-        plantId: player.plantId,
-        totalPlayers: this.players.size,
+        this.plantWorld.removePlant(plantId);
+        this.log.info('plant removed after reconnect window expired', {
+          plantId,
+          accountId,
+        });
+      }, this.reconnectWindowMs);
+
+      this.pendingRemovals.set(accountId, {
+        plantId,
+        accountId,
+        timeout,
       });
+
+      this.log.info('player disconnected, plant kept for reconnect window', {
+        playerId,
+        plantId,
+        accountId,
+        windowMs: this.reconnectWindowMs,
+      });
+    } else if (player.plantId) {
+      // No accountId (anonymous) - remove immediately
+      const plant = this.plantWorld.getPlant(player.plantId);
+      if (plant?.rootNodeId) {
+        this.resourceWorld.onPlantDeath({
+          id: plant.id,
+          ownerId: plant.ownerId,
+          worldId: plant.worldId,
+          nodes: plant.nodes,
+          totalBiomass: plant.totalBiomass,
+          totalUpkeep: plant.totalUpkeep,
+          rootNodeId: plant.rootNodeId,
+        });
+      }
+      this.plantWorld.removePlant(player.plantId);
     }
+
+    this.players.delete(playerId);
+    this.log.info('player left', {
+      playerId,
+      cubeId: player.cubeId,
+      plantId: player.plantId,
+      totalPlayers: this.players.size,
+    });
+  }
+
+  reclaimPlant(
+    accountId: string,
+    newPlayerId: string,
+    ws: WebSocket,
+  ): { cubeId: string; plantId: string; welcome: WelcomePayload } | null {
+    const pending = this.pendingRemovals.get(accountId);
+    if (!pending) return null;
+
+    // Cancel the removal timeout
+    clearTimeout(pending.timeout);
+    this.pendingRemovals.delete(accountId);
+
+    const plant = this.plantWorld.getPlant(pending.plantId);
+    if (!plant) return null;
+
+    // Create new cube for the player
+    const cubeId = `cube_${newPlayerId}`;
+    const colorIndex = this.cubes.size % CUBE_COLORS.length;
+    const cube = createCube(cubeId, CUBE_COLORS[colorIndex]);
+
+    const angle = (this.cubes.size / Math.max(1, this.players.size + 1)) * 2 * Math.PI;
+    cube.x = Math.sin(angle) * 5;
+    cube.z = Math.cos(angle) * 5;
+    this.cubes.set(cubeId, cube);
+
+    // Register with interest manager
+    this.interestManager.registerClient(newPlayerId, cube.x, cube.z);
+
+    const player: ConnectedPlayer = {
+      ws,
+      playerId: newPlayerId,
+      cubeId,
+      plantId: plant.id,
+      accountId: accountId,
+      lastInputTick: 0,
+      pendingInputs: new Map(),
+      pendingGrowthIntents: new Map(),
+    };
+    this.players.set(newPlayerId, player);
+
+    const rootNodeId = plant.rootNodeId;
+    const rootNode = rootNodeId != null ? plant.nodes.get(rootNodeId) : undefined;
+
+    const welcome: WelcomePayload = {
+      playerId: newPlayerId,
+      cubeId,
+      plantId: plant.id,
+      tick: this.tick,
+      cubes: Array.from(this.cubes.values()),
+      rootNode: rootNode
+        ? {
+            id: rootNode.id,
+            x: rootNode.x,
+            y: rootNode.y,
+            z: rootNode.z,
+            type: 'root',
+            biomass: rootNode.biomass,
+          }
+        : { id: rootNodeId ?? '', x: 0, y: 0, z: 0, type: 'root', biomass: 0 },
+      totalBiomass: plant.totalBiomass,
+    };
+
+    this.log.info('player reconnected, plant reclaimed', {
+      newPlayerId,
+      oldPlantId: pending.plantId,
+      accountId,
+      totalPlayers: this.players.size,
+    });
+
+    return { cubeId, plantId: plant.id, welcome };
   }
 
   handleInput(playerId: string, input: PlayerInput): void {
@@ -642,7 +761,14 @@ async function main(): Promise<void> {
     };
   }
 
-  const world = new CubeWorld(netProtoConfig, log, plantWorld, resourceWorld, interestManager);
+  const world = new CubeWorld(
+    netProtoConfig,
+    log,
+    plantWorld,
+    resourceWorld,
+    interestManager,
+    worldConfig.reconnectWindowMin * 60 * 1000, // convert minutes to ms
+  );
 
   // Periodic plant persistence (T03)
   let saveInterval: NodeJS.Timeout | null = null;
@@ -1203,9 +1329,30 @@ async function main(): Promise<void> {
       (ws as WebSocket & { accountId?: string; accountRole?: string }).accountRole =
         accountRole ?? undefined;
 
-      // Now create the player
-      const playerId = `player_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-      const { welcome } = world.addPlayer(ws, playerId, accountId ?? undefined);
+      // Check if this account has a plant pending reclaim (reconnect window)
+      let welcome: WelcomePayload;
+      let playerId: string;
+      if (accountId) {
+        const reclaimed = world.reclaimPlant(
+          accountId,
+          `player_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+          ws,
+        );
+        if (reclaimed) {
+          welcome = reclaimed.welcome;
+          playerId = reclaimed.welcome.playerId;
+        } else {
+          // No plant to reclaim, create new
+          playerId = `player_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+          const added = world.addPlayer(ws, playerId, accountId);
+          welcome = added.welcome;
+        }
+      } else {
+        // Anonymous player
+        playerId = `player_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+        const added = world.addPlayer(ws, playerId, undefined);
+        welcome = added.welcome;
+      }
 
       // Send welcome message with plant info
       const welcomeMsg = JSON.stringify({
