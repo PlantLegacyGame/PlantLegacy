@@ -11,8 +11,14 @@
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { loadControlsConfig, loadRenderConfig, loadUIConfig } from './config/clientConfig.js';
 import { loadPlantRendererConfig } from './config/plantRendererConfig.js';
+import { createInputBus, type InputBus } from './input/InputBus.js';
+import { createQualityController, type QualityController } from './render/QualityController.js';
 import { PlantRenderer } from './renderers/PlantRenderer.js';
+import { createDebugOverlay, type DebugOverlay } from './ui/DebugOverlay.js';
+import { createUIShell, type UIShell } from './ui/UIShell.js';
+import './styles.css';
 
 const serverOrigin =
   document.querySelector('meta[name="server-origin"]')?.getAttribute('content') ?? '';
@@ -50,7 +56,7 @@ let onboardingConfig: OnboardingConfig = {
 
 async function loadOnboardingConfig(): Promise<void> {
   try {
-    const response = await fetch(`${serverOrigin}/config/onboarding`, { cache: 'no-store' });
+    const response = await fetch(`${httpOrigin}/config/onboarding`, { cache: 'no-store' });
     if (response.ok) {
       const config = await response.json();
       onboardingConfig = config;
@@ -132,6 +138,7 @@ const MESSAGE_TYPE = {
   INPUT: 2,
   PING: 3,
   GROWTH_INTENT: 4,
+  RESOURCE_QUERY: 5,
   WELCOME: 10,
   STATE: 11,
   KEYFRAME: 12,
@@ -139,6 +146,7 @@ const MESSAGE_TYPE = {
   PONG: 14,
   ERROR: 15,
   GROWTH_EVENT: 16,
+  RESOURCE_UPDATE: 17,
 } as const;
 
 interface PlayerInput {
@@ -175,144 +183,25 @@ const plantNodes = new Map<
   }
 >();
 
-const keys = {
-  forward: false,
-  backward: false,
-  left: false,
-  right: false,
-};
+// C01: Input abstraction - replaces hardcoded keydown/keyup
+let inputBus: InputBus | null = null;
+let uiShell: UIShell | null = null;
+let debugOverlay: DebugOverlay | null = null;
+let qualityController: QualityController | null = null;
 
-// Three.js setup
-const app = document.getElementById('app');
-if (!app) throw new Error('App element not found');
-const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-renderer.setSize(window.innerWidth, window.innerHeight);
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFShadowMap;
-app.appendChild(renderer.domElement);
-
-// T00A: Hint card overlay (3 lines per RULE_13)
-const hintCard = document.createElement('div');
-hintCard.id = 'hint-card';
-hintCard.style.cssText = `
-    position: fixed;
-    bottom: 20px;
-    left: 50%;
-    transform: translateX(-50%);
-    background: rgba(20, 24, 15, 0.95);
-    border: 1px solid #2a281f;
-    border-radius: 8px;
-    padding: 16px 24px;
-    color: #efe9d8;
-    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
-    font-size: 14px;
-    line-height: 1.6;
-    text-align: center;
-    max-width: 90vw;
-    z-index: 100;
-    box-shadow: 0 4px 20px rgba(0,0,0,0.5);
-    opacity: 0;
-    transition: opacity 0.3s ease;
-    pointer-events: none;
-  `;
-document.body.appendChild(hintCard);
-
-// T00A: Resource readout overlay
-const resourceReadout = document.createElement('div');
-resourceReadout.id = 'resource-readout';
-resourceReadout.style.cssText = `
-    position: fixed;
-    top: 20px;
-    left: 20px;
-    background: rgba(20, 24, 15, 0.9);
-    border: 1px solid #2a281f;
-    border-radius: 8px;
-    padding: 12px 16px;
-    color: #efe9d8;
-    font-family: ui-monospace, "JetBrains Mono", monospace;
-    font-size: 12px;
-    line-height: 1.8;
-    z-index: 100;
-    min-width: 180px;
-  `;
-document.body.appendChild(resourceReadout);
-
-function updateResourceReadout(): void {
-  // Placeholder values - in real game these come from server
-  resourceReadout.innerHTML = `
-      <div>LIGHT: <span id="res-light">0.00</span> <span class="tooltip" data-tip="light">ⓘ</span></div>
-      <div>WATER: <span id="res-water">0.00</span> <span class="tooltip" data-tip="water">ⓘ</span></div>
-      <div>MINERALS: <span id="res-minerals">0.00</span> <span class="tooltip" data-tip="minerals">ⓘ</span></div>
-      <div>BIOMASS: <span id="res-biomass">${plantBiomass.toFixed(1)}</span> <span class="tooltip" data-tip="biomass">ⓘ</span></div>
-    `;
-
-  // Add tooltip listeners
-  document.querySelectorAll('.tooltip').forEach((el) => {
-    el.addEventListener('mouseenter', (e) => {
-      const tip = (e.target as HTMLElement).dataset.tip;
-      if (
-        tip &&
-        onboardingConfig.resource_tooltips[tip as keyof typeof onboardingConfig.resource_tooltips]
-      ) {
-        showTooltip(
-          e.target as HTMLElement,
-          onboardingConfig.resource_tooltips[
-            tip as keyof typeof onboardingConfig.resource_tooltips
-          ],
-        );
-      }
-    });
-    el.addEventListener('mouseleave', hideTooltip);
-  });
+// Node radii are derived from biomass but kept inside a readable range so a
+// newly grown stem is visible next to the much heavier root node.
+function nodeRadius(biomass: number): number {
+  return 0.18 + Math.min(1.2, Math.sqrt(Math.max(0, biomass)) * 0.07);
 }
 
-let tooltipEl: HTMLDivElement | null = null;
-function showTooltip(target: HTMLElement, text: string): void {
-  tooltipEl = document.createElement('div');
-  tooltipEl.style.cssText = `
-    position: fixed;
-    background: rgba(20, 24, 15, 0.98);
-    border: 1px solid #2a281f;
-    border-radius: 4px;
-    padding: 8px 12px;
-    color: #efe9d8;
-    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
-    font-size: 12px;
-    line-height: 1.4;
-    max-width: 280px;
-    z-index: 200;
-    pointer-events: none;
-    box-shadow: 0 2px 10px rgba(0,0,0,0.4);
-  `;
-  tooltipEl.textContent = text;
-  document.body.appendChild(tooltipEl);
+// T01: Plant Renderer
+let plantRenderer: PlantRenderer | null = null;
+let lastUpdateTime = performance.now();
 
-  const rect = target.getBoundingClientRect();
-  tooltipEl.style.left = `${rect.left + rect.width / 2 - tooltipEl.offsetWidth / 2}px`;
-  tooltipEl.style.top = `${rect.top - tooltipEl.offsetHeight - 8}px`;
-}
-
-function hideTooltip(): void {
-  if (tooltipEl) {
-    tooltipEl.remove();
-    tooltipEl = null;
-  }
-}
-
-function showHintCard(): void {
-  hintCard.innerHTML = onboardingConfig.hint_card_lines
-    .map((line) => `<div>${line}</div>`)
-    .join('');
-  hintCard.style.opacity = '1';
-
-  setTimeout(() => {
-    hintCard.style.opacity = '0';
-  }, onboardingConfig.show_hint_card_duration_ms);
-}
-
-const statusElement = document.getElementById('status');
-const detailElement = document.getElementById('detail');
+let statusElement: HTMLDivElement | null = null;
+let detailElement: HTMLDivElement | null = null;
+let hintCardElement: HTMLDivElement | null = null;
 
 function setStatus(text: string, state: 'pending' | 'ok' | 'down'): void {
   if (!statusElement) return;
@@ -325,12 +214,126 @@ function setDetail(text: string): void {
   detailElement.textContent = text;
 }
 
-// T01: Plant Renderer
-let plantRenderer: PlantRenderer | null = null;
-let lastUpdateTime = 0;
+async function initC01(): Promise<void> {
+  // Load C01 configs
+  const [renderConfig, controlsConfig, uiConfig] = await Promise.all([
+    loadRenderConfig(httpOrigin),
+    loadControlsConfig(httpOrigin),
+    loadUIConfig(httpOrigin),
+  ]);
+
+  // Build input bus
+  inputBus = createInputBus({ bindings: controlsConfig.bindings });
+
+  // Build UI shell
+  uiShell = createUIShell(uiConfig);
+
+  // Debug overlay
+  const debugLayer = uiShell.getLayer('debug');
+  if (debugLayer && renderConfig.debugOverlayEnabled) {
+    debugOverlay = createDebugOverlay(debugLayer, renderConfig.debugOverlayKey);
+    inputBus.subscribe((actionId, state) => {
+      if (actionId === 'debug_toggle' && state.pressed && debugOverlay) {
+        debugOverlay.setVisible(!debugOverlay.isVisible());
+      }
+    });
+  }
+
+  // Quality controller
+  qualityController = createQualityController({
+    targetFps: renderConfig.targetFps,
+    fpsWarningThreshold: renderConfig.fpsWarningThreshold,
+    resolutionFloor: renderConfig.resolutionFloor,
+    maxPixelRatio: renderConfig.maxPixelRatio,
+    qualityTiers: renderConfig.qualityTiers,
+  });
+
+  // Apply the camera and shadow tunables from config/render.json.
+  controls.dampingFactor = renderConfig.cameraSmoothing;
+  controls.minDistance = renderConfig.cameraMinDistance;
+  controls.maxDistance = renderConfig.cameraMaxDistance;
+  controls.maxPolarAngle = renderConfig.cameraMaxPolarAngle;
+  sunLight.shadow.mapSize.set(renderConfig.shadowMapSize, renderConfig.shadowMapSize);
+
+  // Growth intent action
+  inputBus.subscribe((actionId: string, state: { pressed: boolean }) => {
+    if (actionId === 'growth_intent' && state.pressed) {
+      sendGrowthIntent();
+    }
+    if (actionId === 'camera_recenter' && state.pressed) {
+      const rootNode = plantNodes.size > 0 ? Array.from(plantNodes.values())[0] : null;
+      if (rootNode) {
+        const target = new THREE.Vector3(
+          rootNode.position.x,
+          rootNode.position.y,
+          rootNode.position.z,
+        );
+        controls.target.copy(target);
+
+        // Dolly camera closer to target (distance ~20)
+        const direction = new THREE.Vector3().subVectors(camera.position, target).normalize();
+        const desiredDistance = 20;
+        camera.position.copy(target).add(direction.multiplyScalar(desiredDistance));
+        controls.update();
+      }
+    }
+  });
+
+  // Keyboard producer
+  window.addEventListener('keydown', (e) => {
+    if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
+      if (e.code === 'Enter') inputBus?.handleKeyDown(e.code);
+      return;
+    }
+    // Don't prevent default for browser shortcuts (Ctrl/Shift/Alt/Meta combos)
+    if (e.ctrlKey || e.shiftKey || e.altKey || e.metaKey) {
+      inputBus?.handleKeyDown(e.code);
+      return;
+    }
+    inputBus?.handleKeyDown(e.code);
+    e.preventDefault();
+  });
+
+  window.addEventListener('keyup', (e) => {
+    if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+    if (e.ctrlKey || e.shiftKey || e.altKey || e.metaKey) {
+      inputBus?.handleKeyUp(e.code);
+      return;
+    }
+    inputBus?.handleKeyUp(e.code);
+    e.preventDefault();
+  });
+
+  // Mouse producer
+  const canvas = document.querySelector('canvas');
+  if (canvas) {
+    canvas.addEventListener('mousedown', (e) => inputBus?.handleMouseDown(e.button));
+    canvas.addEventListener('mouseup', (e) => inputBus?.handleMouseUp(e.button));
+    canvas.addEventListener('wheel', (e) => inputBus?.handleWheel(e.deltaY), { passive: false });
+  }
+
+  // Visibility change: pause render loop & input when hidden
+  if (renderConfig.pauseOnHidden) {
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) {
+        // Could throttle WS or pause render; for now just note it
+        setDetail('Tab hidden — pausing');
+      } else {
+        setDetail('Tab visible — resuming');
+      }
+    });
+  }
+}
 
 async function initPlantRenderer(): Promise<void> {
-  const config = await loadPlantRendererConfig(serverOrigin);
+  // Reconnects create a fresh plant; dispose the previous renderer so its
+  // meshes and GPU buffers do not pile up.
+  if (plantRenderer) {
+    plantRenderer.dispose();
+    plantRenderer = null;
+  }
+
+  const config = await loadPlantRendererConfig(httpOrigin);
 
   plantRenderer = new PlantRenderer(renderer, scene, camera, {
     maxNodesPerPlant: config.maxNodesPerPlant,
@@ -365,12 +368,145 @@ async function initPlantRenderer(): Promise<void> {
   }
 }
 
+// Three.js setup
+const app = document.getElementById('app');
+if (!app) throw new Error('App element not found');
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFShadowMap;
+app.appendChild(renderer.domElement);
+
+// UI overlay elements
+statusElement = document.createElement('div');
+statusElement.id = 'status';
+statusElement.style.cssText = `
+    position: fixed;
+    top: 16px;
+    left: 16px;
+    z-index: 1000;
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    font-size: calc(14px * var(--text-scale));
+    font-weight: 600;
+    color: var(--leaf-500);
+    pointer-events: none;
+  `;
+document.body.appendChild(statusElement);
+
+detailElement = document.createElement('div');
+detailElement.id = 'detail';
+detailElement.style.cssText = `
+    position: fixed;
+    top: 40px;
+    left: 16px;
+    z-index: 1000;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: calc(12px * var(--text-scale));
+    color: var(--bone-300);
+    white-space: pre-wrap;
+    max-width: 400px;
+    pointer-events: none;
+  `;
+document.body.appendChild(detailElement);
+
+hintCardElement = document.createElement('div');
+hintCardElement.id = 'hint-card';
+hintCardElement.style.cssText = `
+      position: fixed;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(20, 24, 15, 0.95);
+      border: 1px solid var(--bark-700);
+      border-radius: 8px;
+      padding: 16px 24px;
+      color: var(--bone-100);
+      font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+      font-size: calc(14px * var(--text-scale));
+      line-height: 1.6;
+      text-align: center;
+      max-width: 90vw;
+      z-index: 100;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+      opacity: 0;
+      transition: opacity 0.3s ease;
+      pointer-events: none;
+    `;
+document.body.appendChild(hintCardElement);
+
+// T00A: Resource readout element (HUD layer)
+let resourceReadoutElement: HTMLDivElement | null = null;
+let resourceTooltipElements: {
+  light: HTMLSpanElement;
+  water: HTMLSpanElement;
+  minerals: HTMLSpanElement;
+} | null = null;
+
+function createResourceReadout(): void {
+  const layer = uiShell?.getLayer('hud');
+  if (!layer) return;
+
+  resourceReadoutElement = document.createElement('div');
+  resourceReadoutElement.id = 'resource-readout';
+  resourceReadoutElement.style.cssText = `
+      position: fixed;
+      top: 16px;
+      right: 16px;
+      z-index: 200;
+      background: rgba(20, 24, 15, 0.9);
+      border: 1px solid var(--bark-700);
+      border-radius: 8px;
+      padding: 12px 16px;
+      color: var(--bone-100);
+      font-family: ui-monospace, "JetBrains Mono", monospace;
+      font-size: calc(12px * var(--text-scale));
+      line-height: 1.8;
+      min-width: 180px;
+      pointer-events: auto;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+    `;
+
+  const lightEl = document.createElement('div');
+  lightEl.innerHTML = `<span style="color: var(--gold-400);">☀</span> Light: <span id="res-light">0</span>`;
+  const waterEl = document.createElement('div');
+  waterEl.innerHTML = `<span style="color: var(--water-400);">💧</span> Water: <span id="res-water">0</span>`;
+  const mineralsEl = document.createElement('div');
+  mineralsEl.innerHTML = `<span style="color: var(--mineral-400);">⛏</span> Minerals: <span id="res-minerals">0</span>`;
+
+  resourceReadoutElement.appendChild(lightEl);
+  resourceReadoutElement.appendChild(waterEl);
+  resourceReadoutElement.appendChild(mineralsEl);
+  layer.appendChild(resourceReadoutElement);
+
+  // Store tooltip references
+  resourceTooltipElements = {
+    light: document.getElementById('res-light') as HTMLSpanElement,
+    water: document.getElementById('res-water') as HTMLSpanElement,
+    minerals: document.getElementById('res-minerals') as HTMLSpanElement,
+  };
+
+  // Add hover tooltips
+  if (resourceTooltipElements) {
+    lightEl.title = onboardingConfig.resource_tooltips.light;
+    waterEl.title = onboardingConfig.resource_tooltips.water;
+    mineralsEl.title = onboardingConfig.resource_tooltips.minerals;
+  }
+}
+
+function updateResourceReadout(light: number, water: number, minerals: number): void {
+  if (!resourceTooltipElements) return;
+  resourceTooltipElements.light.textContent = light.toFixed(1);
+  resourceTooltipElements.water.textContent = water.toFixed(1);
+  resourceTooltipElements.minerals.textContent = minerals.toFixed(1);
+}
+
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x14180f);
-scene.fog = new THREE.Fog(0x14180f, 50, 200);
+scene.fog = new THREE.Fog(0x14180f, 60, 260);
 
-const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 500);
-camera.position.set(0, 30, 40);
+const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 800);
+camera.position.set(0, 18, 26);
 camera.lookAt(0, 0, 0);
 
 const controls = new OrbitControls(camera, renderer.domElement);
@@ -381,11 +517,26 @@ controls.minDistance = 10;
 controls.maxDistance = 200;
 controls.maxPolarAngle = Math.PI / 2 - 0.05;
 
+// World ground. The previous build removed the ground plane assuming the
+// plant renderer drew one, which left the scene with only the clear colour.
+const ground = new THREE.Mesh(
+  new THREE.CircleGeometry(300, 64),
+  new THREE.MeshStandardMaterial({ color: 0x2f3824, roughness: 1, metalness: 0 }),
+);
+ground.rotation.x = -Math.PI / 2;
+ground.position.y = -0.03;
+ground.receiveShadow = true;
+scene.add(ground);
+
+const gridHelper = new THREE.GridHelper(400, 80, 0x555544, 0x3a3a2c);
+gridHelper.position.y = 0.01;
+scene.add(gridHelper);
+
 // Lighting
-const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
 scene.add(ambientLight);
 
-const sunLight = new THREE.DirectionalLight(0xffffee, 1.2);
+const sunLight = new THREE.DirectionalLight(0xffffee, 1.4);
 sunLight.position.set(50, 100, 50);
 sunLight.castShadow = true;
 sunLight.shadow.mapSize.width = 2048;
@@ -401,28 +552,15 @@ scene.add(sunLight);
 const hemisphereLight = new THREE.HemisphereLight(0x87ceeb, 0x8b4513, 0.3);
 scene.add(hemisphereLight);
 
-// Remove old ground plane - PlantRenderer handles ground now
-
-// Grid helper
-const gridHelper = new THREE.GridHelper(400, 80, 0x3a382f, 0x2a281f);
-scene.add(gridHelper);
-
-// Axes helper
-const axesHelper = new THREE.AxesHelper(20);
-scene.add(axesHelper);
-
-// Initial resource readout
-updateResourceReadout();
-
 function sendInput(): void {
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
 
   inputTick++;
   const input: PlayerInput = {
-    moveForward: keys.forward,
-    moveBackward: keys.backward,
-    moveLeft: keys.left,
-    moveRight: keys.right,
+    moveForward: inputBus?.isActive('camera_pan') ?? false,
+    moveBackward: inputBus?.isActive('camera_pan') ?? false,
+    moveLeft: inputBus?.isActive('camera_pan') ?? false,
+    moveRight: inputBus?.isActive('camera_pan') ?? false,
     tick: inputTick,
   };
 
@@ -434,7 +572,6 @@ function sendInput(): void {
 }
 
 function sendGrowthIntent(): void {
-  console.log('GROWTH_INTENT sending:', { plantId, plantNodesSize: plantNodes.size });
   if (!ws || ws.readyState !== WebSocket.OPEN || !plantId) return;
 
   growthIntentTick++;
@@ -450,7 +587,6 @@ function sendGrowthIntent(): void {
   camDir.normalize();
   const dir = new THREE.Vector3(camDir.x * 0.7, 0.7, camDir.z * 0.7).normalize();
 
-  // Bias toward growing down for roots, up for stems
   const nodeType = 'stem';
   const isAttack = false;
 
@@ -496,6 +632,10 @@ function connect(): void {
       const message = JSON.parse(event.data);
       const { type, payload } = message;
 
+      if (debugOverlay) {
+        debugOverlay.recordBytes(event.data.length, 0);
+      }
+
       switch (type) {
         case MESSAGE_TYPE.WELCOME: {
           const welcome = payload as WelcomePayload;
@@ -515,7 +655,7 @@ function connect(): void {
                 welcome.rootNode.z,
               ),
               type: 0, // root
-              radius: 0.05 + welcome.rootNode.biomass * 0.15,
+              radius: nodeRadius(welcome.rootNode.biomass),
               parentId: null,
               age: 10,
               health: 0.9,
@@ -524,16 +664,35 @@ function connect(): void {
             });
             plantBiomass = welcome.totalBiomass;
             lastGrownNodeId = welcome.rootNode.id;
-            updateResourceReadout();
+
+            // Frame the player's plant on spawn so the root is not a speck in
+            // the distance.
+            const target = new THREE.Vector3(
+              welcome.rootNode.x,
+              welcome.rootNode.y,
+              welcome.rootNode.z,
+            );
+            controls.target.copy(target);
+            camera.position.set(target.x + 12, target.y + 14, target.z + 20);
+            controls.update();
           }
-          // PlantRenderer handles its own objects
           setDetail(
             `Welcome! You are ${myCubeId}\nPlayer ID: ${playerId}\nServer tick: ${serverTick}\nT01: Growth Active — Press 'G' to grow stem from root`,
           );
           // T00A: Load onboarding config and show hint card on first spawn
           await loadOnboardingConfig();
           await initPlantRenderer();
-          showHintCard();
+          createResourceReadout();
+          // T00A: Show hint card (3 lines per RULE_13)
+          if (hintCardElement) {
+            hintCardElement.innerHTML = onboardingConfig.hint_card_lines
+              .map((line) => `<div>${line}</div>`)
+              .join('');
+            hintCardElement.style.opacity = '1';
+            setTimeout(() => {
+              hintCardElement.style.opacity = '0';
+            }, onboardingConfig.show_hint_card_duration_ms);
+          }
           break;
         }
 
@@ -541,20 +700,37 @@ function connect(): void {
         case MESSAGE_TYPE.KEYFRAME: {
           const state = payload as StatePayload | KeyframePayload;
           serverTick = state.tick;
+          if (debugOverlay) {
+            debugOverlay.recordBytes(0, event.data.length);
+          }
+          break;
+        }
+
+        case MESSAGE_TYPE.RESOURCE_UPDATE: {
+          const update = payload as {
+            tick: number;
+            tiles: Array<{ light: number; moisture: number; minerals: number }>;
+            width: number;
+            height: number;
+            tileSize: number;
+          };
+          serverTick = update.tick;
+          if (debugOverlay) {
+            debugOverlay.recordBytes(0, event.data.length);
+          }
+          // Use center tile for now (TODO: use actual plant root position)
+          const centerTileX = Math.floor(update.width / 2);
+          const centerTileZ = Math.floor(update.height / 2);
+          const tileIndex = centerTileZ * update.width + centerTileX;
+          if (tileIndex >= 0 && tileIndex < update.tiles.length) {
+            const tile = update.tiles[tileIndex];
+            updateResourceReadout(tile.light, tile.moisture, tile.minerals);
+          }
           break;
         }
 
         case MESSAGE_TYPE.GROWTH_EVENT: {
           const growth = payload as GrowthEventPayload;
-          console.log('GROWTH_EVENT:', {
-            plantId: growth.plantId,
-            myPlantId: plantId,
-            nodeId: growth.newNode.id,
-            nodeType: growth.newNode.type,
-            pos: [growth.newNode.x, growth.newNode.y, growth.newNode.z],
-            biomass: growth.newNode.biomass,
-            totalBiomass: growth.totalBiomass,
-          });
           if (growth.plantId !== plantId) break;
           const node = growth.newNode;
           const typeMap: Record<string, number> = {
@@ -565,7 +741,7 @@ function connect(): void {
             flower: 3,
             spore_sac: 3,
           };
-          const radius = 0.05 + node.biomass * 0.005;
+          const radius = nodeRadius(node.biomass);
           const health = Math.min(1, node.biomass / 10);
           plantNodes.set(node.id, {
             id: node.id,
@@ -580,7 +756,6 @@ function connect(): void {
           });
           plantBiomass = growth.totalBiomass ?? plantBiomass;
           lastGrownNodeId = node.id;
-          updateResourceReadout();
           if (plantRenderer) {
             plantRenderer.updatePlantData(Array.from(plantNodes.values()));
           }
@@ -626,60 +801,6 @@ function connect(): void {
   };
 }
 
-// Input handling
-window.addEventListener('keydown', (e) => {
-  switch (e.code) {
-    case 'KeyW':
-    case 'ArrowUp':
-      keys.forward = true;
-      e.preventDefault();
-      break;
-    case 'KeyS':
-    case 'ArrowDown':
-      keys.backward = true;
-      e.preventDefault();
-      break;
-    case 'KeyA':
-    case 'ArrowLeft':
-      keys.left = true;
-      e.preventDefault();
-      break;
-    case 'KeyD':
-    case 'ArrowRight':
-      keys.right = true;
-      e.preventDefault();
-      break;
-    case 'KeyG':
-      sendGrowthIntent();
-      break;
-  }
-});
-
-window.addEventListener('keyup', (e) => {
-  switch (e.code) {
-    case 'KeyW':
-    case 'ArrowUp':
-      keys.forward = false;
-      e.preventDefault();
-      break;
-    case 'KeyS':
-    case 'ArrowDown':
-      keys.backward = false;
-      e.preventDefault();
-      break;
-    case 'KeyA':
-    case 'ArrowLeft':
-      keys.left = false;
-      e.preventDefault();
-      break;
-    case 'KeyD':
-    case 'ArrowRight':
-      keys.right = false;
-      e.preventDefault();
-      break;
-  }
-});
-
 // Send input at 20Hz
 setInterval(sendInput, 50);
 
@@ -698,21 +819,68 @@ window.addEventListener('resize', () => {
 });
 
 // Render loop
+let measuredFps = 60;
 function animate(): void {
   requestAnimationFrame(animate);
   controls.update();
 
   // Update plant renderer
   if (plantRenderer) {
-    const now = Date.now();
-    const deltaTime = (now - lastUpdateTime) / 1000;
+    const now = performance.now();
+    const deltaTime = Math.min(0.25, (now - lastUpdateTime) / 1000);
     lastUpdateTime = now;
+    if (deltaTime > 0) measuredFps = 1 / deltaTime;
     plantRenderer.update(deltaTime);
+  }
+
+  // Quality controller: adjust pixel ratio based on the measured frame rate.
+  if (qualityController) {
+    qualityController.adjust(measuredFps, renderer.info.render.triangles ?? 0);
+    const ratio = qualityController.pixelRatio;
+    if (Number.isFinite(ratio) && Math.abs(renderer.getPixelRatio() - ratio) > 0.001) {
+      renderer.setPixelRatio(ratio);
+    }
+  }
+
+  // Sample debug metrics once per frame so the overlay reports the real fps.
+  if (debugOverlay) {
+    const info = renderer.info.render;
+    debugOverlay.update({ triangles: info.triangles, drawCalls: info.calls });
   }
 
   renderer.render(scene, camera);
 }
 
 // Start
+await initC01();
 connect();
 animate();
+
+declare global {
+  interface ImportMeta {
+    readonly env: { readonly DEV: boolean };
+  }
+}
+
+interface PlantLegacyDebugHandle {
+  renderer: THREE.WebGLRenderer;
+  scene: THREE.Scene;
+  camera: THREE.PerspectiveCamera;
+  controls: OrbitControls;
+  plantNodes: typeof plantNodes;
+  readonly plantRenderer: PlantRenderer | null;
+}
+
+// Development handle for inspecting the live scene from the browser console.
+if (import.meta.env.DEV) {
+  (window as Window & { __plantLegacy?: PlantLegacyDebugHandle }).__plantLegacy = {
+    renderer,
+    scene,
+    camera,
+    controls,
+    plantNodes,
+    get plantRenderer() {
+      return plantRenderer;
+    },
+  };
+}

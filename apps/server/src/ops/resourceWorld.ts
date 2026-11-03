@@ -1,10 +1,10 @@
 import type { ConfigFile } from '@plant-legacy/shared/config';
 import {
+  readArray,
   readBoolean,
   readInteger,
   readNumber,
   readNumberArray,
-  readObject,
 } from '@plant-legacy/shared/config';
 import { clamp, lerp } from '@plant-legacy/shared/math';
 
@@ -51,17 +51,17 @@ export interface ResourceWorldState {
 }
 
 export function loadResourcesConfig(configs: Map<string, ConfigFile>): ResourcesConfig {
-  const lightFactorCurveRaw = readObject<{ x: number; y: number }[]>(
+  const lightFactorCurveRaw = readArray<[number, number][]>(
     configs,
     'resources',
     'light_factor_curve',
   );
-  const moistureFactorCurveRaw = readObject<{ x: number; y: number }[]>(
+  const moistureFactorCurveRaw = readArray<[number, number][]>(
     configs,
     'resources',
     'moisture_factor_curve',
   );
-  const mineralFactorCurveRaw = readObject<{ x: number; y: number }[]>(
+  const mineralFactorCurveRaw = readArray<[number, number][]>(
     configs,
     'resources',
     'mineral_factor_curve',
@@ -84,9 +84,9 @@ export function loadResourcesConfig(configs: Map<string, ConfigFile>): Resources
     dungDeposit: readNumber(configs, 'resources', 'dung_deposit'),
     fertilizerDeposit: readNumber(configs, 'resources', 'fertilizer_deposit'),
     photosynthesisRate: readNumber(configs, 'resources', 'photosynthesis_rate'),
-    lightFactorCurve: lightFactorCurveRaw.map((p) => [p.x, p.y]),
-    moistureFactorCurve: moistureFactorCurveRaw.map((p) => [p.x, p.y]),
-    mineralFactorCurve: mineralFactorCurveRaw.map((p) => [p.x, p.y]),
+    lightFactorCurve: lightFactorCurveRaw,
+    moistureFactorCurve: moistureFactorCurveRaw,
+    mineralFactorCurve: mineralFactorCurveRaw,
     consumptionTriggerTileMineralThreshold: readInteger(
       configs,
       'resources',

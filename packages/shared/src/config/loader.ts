@@ -130,6 +130,16 @@ export function readObject<T = Record<string, unknown>>(
   return entry.value as T;
 }
 
+export function readArray<T = unknown[]>(
+  configs: Map<string, ConfigFile>,
+  system: string,
+  key: string,
+): T {
+  const entry = requireEntry(configs, system, key);
+  if (entry.type !== 'array') throw new Error(`Config "${system}.${key}" is not an array.`);
+  return entry.value as T;
+}
+
 export function readNumberArray(
   configs: Map<string, ConfigFile>,
   system: string,

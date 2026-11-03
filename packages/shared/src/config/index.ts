@@ -1,6 +1,7 @@
 export type { ConfigLoadResult } from './loader.ts';
 export {
   loadConfigDir,
+  readArray,
   readBoolean,
   readInteger,
   readNumber,
