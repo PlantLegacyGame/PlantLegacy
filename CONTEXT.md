@@ -340,8 +340,9 @@ The C02 procedural plant renderer v1 is complete: tapered tubes for
 roots/stems/vines, instanced leaves with L0/L1, shared plant material with
 triplanar noise + wind + health tint, deterministic generation from node data,
 and 3 mutation visual signatures. T01 growth simulation is server-authoritative
-and working; the next task in DESIGN.md order is the **full T00A resource model**
-(tile grid, simulation, photosynthesis, absorption, deposits, consumption).
+and working. **T00A resource model server-side is complete** (tile grid, simulation,
+photosynthesis, absorption, deposits, consumption triggers, diffusion, broadcasts);
+client resource readout connection pending.
 
 ## 9. Keeping this file current
 
