@@ -21,6 +21,7 @@ import {
 import { loadPlantRendererConfig } from './config/plantRendererConfig.js';
 import { createInputBus, type InputBus } from './input/InputBus.js';
 import { createQualityController, type QualityController } from './render/QualityController.js';
+import { EnvironmentRenderer } from './renderers/EnvironmentRenderer.js';
 import { type PlantNodeData, PlantRenderer } from './renderers/PlantRenderer.js';
 import { createDebugOverlay, type DebugOverlay } from './ui/DebugOverlay.js';
 import { createUIShell, type UIShell } from './ui/UIShell.js';
@@ -248,6 +249,9 @@ function nodeRadius(biomass: number, type = 1, y = 0): number {
 let plantRenderer: PlantRenderer | null = null;
 let lastUpdateTime = performance.now();
 
+// C03: Environment Renderer
+let environmentRenderer: EnvironmentRenderer | null = null;
+
 // T02: Root Sight state. Surface and underground are two modes of the same
 // independent camera; toggling never moves or mutates the plant.
 let rootSightConfig: RootSightConfig | null = null;
@@ -376,6 +380,17 @@ async function initC01(): Promise<void> {
   controls.maxDistance = renderConfig.cameraMaxDistance;
   controls.maxPolarAngle = renderConfig.cameraMaxPolarAngle;
   sunLight.shadow.mapSize.set(renderConfig.shadowMapSize, renderConfig.shadowMapSize);
+
+  // C03: Initialize environment rendering (sky dome, diurnal grading, fog, rain, ground soil tint)
+  environmentRenderer = new EnvironmentRenderer(
+    scene,
+    camera,
+    renderConfig,
+    sunLight,
+    ambientLight,
+    hemisphereLight,
+    soilCutawayUniforms,
+  );
 
   // Growth intent action
   inputBus.subscribe((actionId: string, state: { pressed: boolean }) => {
@@ -675,53 +690,8 @@ controls.minDistance = 10;
 controls.maxDistance = 200;
 controls.maxPolarAngle = Math.PI / 2 - 0.05;
 
-// World ground. T02 owns the Root Sight soil cutaway shader: the ground turns
-// semi-transparent inside the cutaway sphere so roots are revealed, then C03
-// reuses/refines the same technique for general environment cutaways.
-const groundMaterial = new THREE.MeshStandardMaterial({
-  color: 0x2f3824,
-  roughness: 1,
-  metalness: 0,
-  transparent: true,
-});
-groundMaterial.onBeforeCompile = (shader) => {
-  shader.uniforms.uRootSightProgress = soilCutawayUniforms.uRootSightProgress;
-  shader.uniforms.uRootSightCenter = soilCutawayUniforms.uRootSightCenter;
-  shader.uniforms.uRootSightRadius = soilCutawayUniforms.uRootSightRadius;
-  shader.uniforms.uRootSightSoilOpacity = soilCutawayUniforms.uRootSightSoilOpacity;
-
-  shader.vertexShader = shader.vertexShader
-    .replace('#include <common>', '#include <common>\nvarying vec3 vSoilWorldPos;')
-    .replace(
-      '#include <begin_vertex>',
-      '#include <begin_vertex>\nvSoilWorldPos = (modelMatrix * vec4(position, 1.0)).xyz;',
-    );
-
-  shader.fragmentShader = shader.fragmentShader
-    .replace(
-      '#include <common>',
-      `#include <common>
-varying vec3 vSoilWorldPos;
-uniform float uRootSightProgress;
-uniform vec3 uRootSightCenter;
-uniform float uRootSightRadius;
-uniform float uRootSightSoilOpacity;`,
-    )
-    .replace(
-      '#include <dithering_fragment>',
-      `#include <dithering_fragment>
-float soilDist = distance(vSoilWorldPos, uRootSightCenter);
-float soilCut = 1.0 - smoothstep(uRootSightRadius * 0.85, uRootSightRadius, soilDist);
-gl_FragColor.a = mix(1.0, uRootSightSoilOpacity, soilCut * uRootSightProgress);`,
-    );
-};
-groundMaterial.customProgramCacheKey = () => 'root-sight-soil-v1';
-
-const ground = new THREE.Mesh(new THREE.CircleGeometry(300, 64), groundMaterial);
-ground.rotation.x = -Math.PI / 2;
-ground.position.y = -0.03;
-ground.receiveShadow = true;
-scene.add(ground);
+// C03: EnvironmentRenderer manages the Sky Dome, Sun/Moon arcs, atmospheric fog,
+// rain particles, storm lightning, and refined ground terrain with soil moisture tinting.
 
 const gridHelper = new THREE.GridHelper(400, 80, 0x555544, 0x3a3a2c);
 const gridMaterial = gridHelper.material as THREE.LineBasicMaterial;
@@ -1025,17 +995,13 @@ function connect(): void {
             };
           };
 
-          // Dynamically adjust scene directional sunlight and ambient lighting to match server day/night & weather
-          sunLight.intensity = Math.max(0.05, 1.4 * weather.sunIntensity);
-          ambientLight.intensity = Math.max(0.12, 0.7 * weather.sunIntensity + 0.1);
-
-          // Rotate sun in sky arc based on server timeOfDay
-          const sunAngle = weather.timeOfDay * Math.PI * 2 - Math.PI / 2;
-          sunLight.position.set(
-            Math.cos(sunAngle) * 80,
-            Math.max(10, Math.sin(sunAngle) * 100),
-            Math.sin(sunAngle) * 60,
-          );
+          // C03: EnvironmentRenderer dynamically drives sky dome, sun/moon arcs, lights, fog, and rain
+          if (environmentRenderer) {
+            environmentRenderer.handleWeatherUpdate(weather);
+          } else {
+            sunLight.intensity = Math.max(0.05, 1.4 * weather.sunIntensity);
+            ambientLight.intensity = Math.max(0.12, 0.7 * weather.sunIntensity + 0.1);
+          }
 
           if (debugOverlay) {
             debugOverlay.recordBytes(0, event.data.length);
@@ -1397,6 +1363,11 @@ function animate(): void {
   // Update plant renderer
   if (plantRenderer) {
     plantRenderer.update(deltaTime);
+  }
+
+  // C03: Update environment renderer (sky dome, fog, rain particles, lightning)
+  if (environmentRenderer) {
+    environmentRenderer.update(deltaTime);
   }
 
   // Quality controller: adjust pixel ratio based on the measured frame rate.

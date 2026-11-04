@@ -1167,44 +1167,13 @@ async function main(): Promise<void> {
         const config = JSON.parse(raw);
 
         const values = config.values || {};
-        const renderConfig = {
-          target_fps: values.target_fps?.value ?? 60,
-          fps_warning_threshold: values.fps_warning_threshold?.value ?? 0.85,
-          resolution_floor: values.resolution_floor?.value ?? 0.25,
-          max_pixel_ratio: values.max_pixel_ratio?.value ?? 2.0,
-          camera_smoothing: values.camera_smoothing?.value ?? 0.05,
-          camera_min_distance: values.camera_min_distance?.value ?? 10.0,
-          camera_max_distance: values.camera_max_distance?.value ?? 200.0,
-          camera_max_polar_angle: values.camera_max_polar_angle?.value ?? 1.52,
-          idle_drop_timeout_ms: values.idle_drop_timeout_ms?.value ?? 30000,
-          shadow_map_size: values.shadow_map_size?.value ?? 2048,
-          debug_overlay_enabled: values.debug_overlay_enabled?.value ?? true,
-          debug_overlay_key: values.debug_overlay_key?.value ?? '`',
-          pause_on_hidden: values.pause_on_hidden?.value ?? true,
-          quality_tiers: values.quality_tiers?.value ?? [
-            {
-              name: 'low',
-              pixel_ratio: 1.0,
-              shadow_map_size: 1024,
-              max_triangles: 50000,
-              antialiasing: false,
-            },
-            {
-              name: 'medium',
-              pixel_ratio: 1.5,
-              shadow_map_size: 2048,
-              max_triangles: 200000,
-              antialiasing: true,
-            },
-            {
-              name: 'high',
-              pixel_ratio: 2.0,
-              shadow_map_size: 2048,
-              max_triangles: 500000,
-              antialiasing: true,
-            },
-          ],
-        };
+        const renderConfig: Record<string, unknown> = {};
+        for (const [key, entry] of Object.entries(values)) {
+          renderConfig[key] =
+            (entry as { value?: unknown })?.value !== undefined
+              ? (entry as { value: unknown }).value
+              : entry;
+        }
 
         sendJson(response, 200, renderConfig);
         return;

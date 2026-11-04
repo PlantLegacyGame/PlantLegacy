@@ -30,6 +30,46 @@ export interface RenderConfig {
     maxTriangles: number;
     antialiasing: boolean;
   }>;
+  // C03: Environment rendering
+  skyZenithDay: string;
+  skyHorizonDay: string;
+  skyZenithDusk: string;
+  skyHorizonDusk: string;
+  skyZenithNight: string;
+  skyHorizonNight: string;
+  skyZenithRain: string;
+  skyHorizonRain: string;
+  skyZenithStorm: string;
+  skyHorizonStorm: string;
+  skyZenithTelegraph: string;
+  skyHorizonTelegraph: string;
+  sunColorDay: string;
+  sunColorDusk: string;
+  sunColorNight: string;
+  sunIntensityDay: number;
+  sunIntensityNight: number;
+  ambientIntensityDay: number;
+  ambientIntensityNight: number;
+  fogNearClear: number;
+  fogFarClear: number;
+  fogNearRain: number;
+  fogFarRain: number;
+  fogNearStorm: number;
+  fogFarStorm: number;
+  rainParticleCount: number;
+  rainParticleSpeed: number;
+  rainBoxWidth: number;
+  rainBoxHeight: number;
+  rainParticleSize: number;
+  lightningFlashDurationMs: number;
+  lightningIntensityBoost: number;
+  lightningMinIntervalS: number;
+  lightningMaxIntervalS: number;
+  soilDryColor: string;
+  soilWetColor: string;
+  soilMineralTint: string;
+  terrainMeshSubdivisions: number;
+  terrainRadius: number;
 }
 
 export interface ControlsConfig {
@@ -112,6 +152,84 @@ interface RenderConfigResponse {
   pauseOnHidden?: boolean;
   quality_tiers?: QualityTierResponse[];
   qualityTiers?: QualityTierResponse[];
+  sky_zenith_day?: string;
+  skyZenithDay?: string;
+  sky_horizon_day?: string;
+  skyHorizonDay?: string;
+  sky_zenith_dusk?: string;
+  skyZenithDusk?: string;
+  sky_horizon_dusk?: string;
+  skyHorizonDusk?: string;
+  sky_zenith_night?: string;
+  skyZenithNight?: string;
+  sky_horizon_night?: string;
+  skyHorizonNight?: string;
+  sky_zenith_rain?: string;
+  skyZenithRain?: string;
+  sky_horizon_rain?: string;
+  skyHorizonRain?: string;
+  sky_zenith_storm?: string;
+  skyZenithStorm?: string;
+  sky_horizon_storm?: string;
+  skyHorizonStorm?: string;
+  sky_zenith_telegraph?: string;
+  skyZenithTelegraph?: string;
+  sky_horizon_telegraph?: string;
+  skyHorizonTelegraph?: string;
+  sun_color_day?: string;
+  sunColorDay?: string;
+  sun_color_dusk?: string;
+  sunColorDusk?: string;
+  sun_color_night?: string;
+  sunColorNight?: string;
+  sun_intensity_day?: number;
+  sunIntensityDay?: number;
+  sun_intensity_night?: number;
+  sunIntensityNight?: number;
+  ambient_intensity_day?: number;
+  ambientIntensityDay?: number;
+  ambient_intensity_night?: number;
+  ambientIntensityNight?: number;
+  fog_near_clear?: number;
+  fogNearClear?: number;
+  fog_far_clear?: number;
+  fogFarClear?: number;
+  fog_near_rain?: number;
+  fogNearRain?: number;
+  fog_far_rain?: number;
+  fogFarRain?: number;
+  fog_near_storm?: number;
+  fogNearStorm?: number;
+  fog_far_storm?: number;
+  fogFarStorm?: number;
+  rain_particle_count?: number;
+  rainParticleCount?: number;
+  rain_particle_speed?: number;
+  rainParticleSpeed?: number;
+  rain_box_width?: number;
+  rainBoxWidth?: number;
+  rain_box_height?: number;
+  rainBoxHeight?: number;
+  rain_particle_size?: number;
+  rainParticleSize?: number;
+  lightning_flash_duration_ms?: number;
+  lightningFlashDurationMs?: number;
+  lightning_intensity_boost?: number;
+  lightningIntensityBoost?: number;
+  lightning_min_interval_s?: number;
+  lightningMinIntervalS?: number;
+  lightning_max_interval_s?: number;
+  lightningMaxIntervalS?: number;
+  soil_dry_color?: string;
+  soilDryColor?: string;
+  soil_wet_color?: string;
+  soilWetColor?: string;
+  soil_mineral_tint?: string;
+  soilMineralTint?: string;
+  terrain_mesh_subdivisions?: number;
+  terrainMeshSubdivisions?: number;
+  terrain_radius?: number;
+  terrainRadius?: number;
 }
 
 interface ControlsConfigResponse {
@@ -199,6 +317,63 @@ function normalizeRenderConfig(data: RenderConfigResponse, fallback: RenderConfi
       maxTriangles: tier.max_triangles ?? tier.maxTriangles ?? 100000,
       antialiasing: tier.antialiasing ?? true,
     })),
+    skyZenithDay: data.sky_zenith_day ?? data.skyZenithDay ?? fallback.skyZenithDay,
+    skyHorizonDay: data.sky_horizon_day ?? data.skyHorizonDay ?? fallback.skyHorizonDay,
+    skyZenithDusk: data.sky_zenith_dusk ?? data.skyZenithDusk ?? fallback.skyZenithDusk,
+    skyHorizonDusk: data.sky_horizon_dusk ?? data.skyHorizonDusk ?? fallback.skyHorizonDusk,
+    skyZenithNight: data.sky_zenith_night ?? data.skyZenithNight ?? fallback.skyZenithNight,
+    skyHorizonNight: data.sky_horizon_night ?? data.skyHorizonNight ?? fallback.skyHorizonNight,
+    skyZenithRain: data.sky_zenith_rain ?? data.skyZenithRain ?? fallback.skyZenithRain,
+    skyHorizonRain: data.sky_horizon_rain ?? data.skyHorizonRain ?? fallback.skyHorizonRain,
+    skyZenithStorm: data.sky_zenith_storm ?? data.skyZenithStorm ?? fallback.skyZenithStorm,
+    skyHorizonStorm: data.sky_horizon_storm ?? data.skyHorizonStorm ?? fallback.skyHorizonStorm,
+    skyZenithTelegraph:
+      data.sky_zenith_telegraph ?? data.skyZenithTelegraph ?? fallback.skyZenithTelegraph,
+    skyHorizonTelegraph:
+      data.sky_horizon_telegraph ?? data.skyHorizonTelegraph ?? fallback.skyHorizonTelegraph,
+    sunColorDay: data.sun_color_day ?? data.sunColorDay ?? fallback.sunColorDay,
+    sunColorDusk: data.sun_color_dusk ?? data.sunColorDusk ?? fallback.sunColorDusk,
+    sunColorNight: data.sun_color_night ?? data.sunColorNight ?? fallback.sunColorNight,
+    sunIntensityDay: data.sun_intensity_day ?? data.sunIntensityDay ?? fallback.sunIntensityDay,
+    sunIntensityNight:
+      data.sun_intensity_night ?? data.sunIntensityNight ?? fallback.sunIntensityNight,
+    ambientIntensityDay:
+      data.ambient_intensity_day ?? data.ambientIntensityDay ?? fallback.ambientIntensityDay,
+    ambientIntensityNight:
+      data.ambient_intensity_night ?? data.ambientIntensityNight ?? fallback.ambientIntensityNight,
+    fogNearClear: data.fog_near_clear ?? data.fogNearClear ?? fallback.fogNearClear,
+    fogFarClear: data.fog_far_clear ?? data.fogFarClear ?? fallback.fogFarClear,
+    fogNearRain: data.fog_near_rain ?? data.fogNearRain ?? fallback.fogNearRain,
+    fogFarRain: data.fog_far_rain ?? data.fogFarRain ?? fallback.fogFarRain,
+    fogNearStorm: data.fog_near_storm ?? data.fogNearStorm ?? fallback.fogNearStorm,
+    fogFarStorm: data.fog_far_storm ?? data.fogFarStorm ?? fallback.fogFarStorm,
+    rainParticleCount:
+      data.rain_particle_count ?? data.rainParticleCount ?? fallback.rainParticleCount,
+    rainParticleSpeed:
+      data.rain_particle_speed ?? data.rainParticleSpeed ?? fallback.rainParticleSpeed,
+    rainBoxWidth: data.rain_box_width ?? data.rainBoxWidth ?? fallback.rainBoxWidth,
+    rainBoxHeight: data.rain_box_height ?? data.rainBoxHeight ?? fallback.rainBoxHeight,
+    rainParticleSize: data.rain_particle_size ?? data.rainParticleSize ?? fallback.rainParticleSize,
+    lightningFlashDurationMs:
+      data.lightning_flash_duration_ms ??
+      data.lightningFlashDurationMs ??
+      fallback.lightningFlashDurationMs,
+    lightningIntensityBoost:
+      data.lightning_intensity_boost ??
+      data.lightningIntensityBoost ??
+      fallback.lightningIntensityBoost,
+    lightningMinIntervalS:
+      data.lightning_min_interval_s ?? data.lightningMinIntervalS ?? fallback.lightningMinIntervalS,
+    lightningMaxIntervalS:
+      data.lightning_max_interval_s ?? data.lightningMaxIntervalS ?? fallback.lightningMaxIntervalS,
+    soilDryColor: data.soil_dry_color ?? data.soilDryColor ?? fallback.soilDryColor,
+    soilWetColor: data.soil_wet_color ?? data.soilWetColor ?? fallback.soilWetColor,
+    soilMineralTint: data.soil_mineral_tint ?? data.soilMineralTint ?? fallback.soilMineralTint,
+    terrainMeshSubdivisions:
+      data.terrain_mesh_subdivisions ??
+      data.terrainMeshSubdivisions ??
+      fallback.terrainMeshSubdivisions,
+    terrainRadius: data.terrain_radius ?? data.terrainRadius ?? fallback.terrainRadius,
   };
 }
 
@@ -328,6 +503,45 @@ export async function loadRenderConfig(serverOrigin: string): Promise<RenderConf
         antialiasing: true,
       },
     ],
+    skyZenithDay: '#4A7A96',
+    skyHorizonDay: '#C8D6D4',
+    skyZenithDusk: '#2A2038',
+    skyHorizonDusk: '#D4553A',
+    skyZenithNight: '#0B0E14',
+    skyHorizonNight: '#1B202A',
+    skyZenithRain: '#2E3A44',
+    skyHorizonRain: '#5A6E7C',
+    skyZenithStorm: '#181C22',
+    skyHorizonStorm: '#2C333D',
+    skyZenithTelegraph: '#242820',
+    skyHorizonTelegraph: '#454A36',
+    sunColorDay: '#FFFFEE',
+    sunColorDusk: '#FFA066',
+    sunColorNight: '#7088A8',
+    sunIntensityDay: 1.4,
+    sunIntensityNight: 0.15,
+    ambientIntensityDay: 0.6,
+    ambientIntensityNight: 0.15,
+    fogNearClear: 70.0,
+    fogFarClear: 320.0,
+    fogNearRain: 25.0,
+    fogFarRain: 160.0,
+    fogNearStorm: 15.0,
+    fogFarStorm: 100.0,
+    rainParticleCount: 1500,
+    rainParticleSpeed: 28.0,
+    rainBoxWidth: 60.0,
+    rainBoxHeight: 35.0,
+    rainParticleSize: 0.25,
+    lightningFlashDurationMs: 120,
+    lightningIntensityBoost: 4.0,
+    lightningMinIntervalS: 3.5,
+    lightningMaxIntervalS: 9.0,
+    soilDryColor: '#4A4536',
+    soilWetColor: '#1B2014',
+    soilMineralTint: '#5A8FA8',
+    terrainMeshSubdivisions: 48,
+    terrainRadius: 300.0,
   });
 }
 

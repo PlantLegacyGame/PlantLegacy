@@ -98,6 +98,222 @@
       "type": "boolean",
       "value": true,
       "notes": "Pause the render loop and stop sending INPUT when the tab is hidden."
+    },
+    "sky_zenith_day": {
+      "type": "color",
+      "value": "#4A7A96",
+      "notes": "Sky zenith color during clear day."
+    },
+    "sky_horizon_day": {
+      "type": "color",
+      "value": "#C8D6D4",
+      "notes": "Sky horizon color during clear day."
+    },
+    "sky_zenith_dusk": {
+      "type": "color",
+      "value": "#2A2038",
+      "notes": "Sky zenith color during dawn/dusk transitions."
+    },
+    "sky_horizon_dusk": {
+      "type": "color",
+      "value": "#D4553A",
+      "notes": "Sky horizon color during dawn/dusk transitions."
+    },
+    "sky_zenith_night": {
+      "type": "color",
+      "value": "#0B0E14",
+      "notes": "Sky zenith color during night."
+    },
+    "sky_horizon_night": {
+      "type": "color",
+      "value": "#1B202A",
+      "notes": "Sky horizon color during night."
+    },
+    "sky_zenith_rain": {
+      "type": "color",
+      "value": "#2E3A44",
+      "notes": "Sky zenith color during rain."
+    },
+    "sky_horizon_rain": {
+      "type": "color",
+      "value": "#5A6E7C",
+      "notes": "Sky horizon color during rain."
+    },
+    "sky_zenith_storm": {
+      "type": "color",
+      "value": "#181C22",
+      "notes": "Sky zenith color during thunderstorm."
+    },
+    "sky_horizon_storm": {
+      "type": "color",
+      "value": "#2C333D",
+      "notes": "Sky horizon color during thunderstorm."
+    },
+    "sky_zenith_telegraph": {
+      "type": "color",
+      "value": "#242820",
+      "notes": "Sky zenith color during storm telegraph phase."
+    },
+    "sky_horizon_telegraph": {
+      "type": "color",
+      "value": "#454A36",
+      "notes": "Sky horizon color during storm telegraph phase."
+    },
+    "sun_color_day": {
+      "type": "color",
+      "value": "#FFFFEE",
+      "notes": "Directional sun color during clear day."
+    },
+    "sun_color_dusk": {
+      "type": "color",
+      "value": "#FFA066",
+      "notes": "Directional sun color during dusk/dawn."
+    },
+    "sun_color_night": {
+      "type": "color",
+      "value": "#7088A8",
+      "notes": "Directional celestial light color during night (moonlight)."
+    },
+    "sun_intensity_day": {
+      "type": "number",
+      "value": 1.4,
+      "range": [0.1, 3.0],
+      "notes": "Direct solar light intensity at peak noon."
+    },
+    "sun_intensity_night": {
+      "type": "number",
+      "value": 0.15,
+      "range": [0.01, 0.8],
+      "notes": "Direct celestial light intensity at midnight."
+    },
+    "ambient_intensity_day": {
+      "type": "number",
+      "value": 0.6,
+      "range": [0.05, 1.5],
+      "notes": "Ambient light intensity during day."
+    },
+    "ambient_intensity_night": {
+      "type": "number",
+      "value": 0.15,
+      "range": [0.01, 0.8],
+      "notes": "Ambient light intensity during night."
+    },
+    "fog_near_clear": {
+      "type": "number",
+      "value": 70.0,
+      "range": [10.0, 200.0],
+      "notes": "Fog near distance during clear weather."
+    },
+    "fog_far_clear": {
+      "type": "number",
+      "value": 320.0,
+      "range": [100.0, 800.0],
+      "notes": "Fog far distance during clear weather."
+    },
+    "fog_near_rain": {
+      "type": "number",
+      "value": 25.0,
+      "range": [5.0, 100.0],
+      "notes": "Fog near distance during rain."
+    },
+    "fog_far_rain": {
+      "type": "number",
+      "value": 160.0,
+      "range": [50.0, 400.0],
+      "notes": "Fog far distance during rain."
+    },
+    "fog_near_storm": {
+      "type": "number",
+      "value": 15.0,
+      "range": [2.0, 50.0],
+      "notes": "Fog near distance during active storm."
+    },
+    "fog_far_storm": {
+      "type": "number",
+      "value": 100.0,
+      "range": [30.0, 300.0],
+      "notes": "Fog far distance during active storm."
+    },
+    "rain_particle_count": {
+      "type": "integer",
+      "value": 1500,
+      "range": [0, 5000],
+      "notes": "Number of precipitation particles simulated in camera volume."
+    },
+    "rain_particle_speed": {
+      "type": "number",
+      "value": 28.0,
+      "range": [5.0, 60.0],
+      "notes": "Vertical descent speed of rain particles in m/s."
+    },
+    "rain_box_width": {
+      "type": "number",
+      "value": 60.0,
+      "range": [20.0, 200.0],
+      "notes": "Horizontal dimensions of rain bounding volume centered on camera."
+    },
+    "rain_box_height": {
+      "type": "number",
+      "value": 35.0,
+      "range": [10.0, 100.0],
+      "notes": "Vertical dimension of rain bounding volume."
+    },
+    "rain_particle_size": {
+      "type": "number",
+      "value": 0.25,
+      "range": [0.05, 1.5],
+      "notes": "Rendered size of rain streaks."
+    },
+    "lightning_flash_duration_ms": {
+      "type": "integer",
+      "value": 120,
+      "range": [20, 500],
+      "notes": "Duration of an atmospheric lightning flash in milliseconds."
+    },
+    "lightning_intensity_boost": {
+      "type": "number",
+      "value": 4.0,
+      "range": [1.0, 10.0],
+      "notes": "Peak light intensity multiplier during lightning flash."
+    },
+    "lightning_min_interval_s": {
+      "type": "number",
+      "value": 3.5,
+      "range": [1.0, 30.0],
+      "notes": "Minimum delay in seconds between lightning strikes during thunderstorm."
+    },
+    "lightning_max_interval_s": {
+      "type": "number",
+      "value": 9.0,
+      "range": [3.0, 60.0],
+      "notes": "Maximum delay in seconds between lightning strikes during thunderstorm."
+    },
+    "soil_dry_color": {
+      "type": "color",
+      "value": "#4A4536",
+      "notes": "Terrain soil tint when moisture is low."
+    },
+    "soil_wet_color": {
+      "type": "color",
+      "value": "#1B2014",
+      "notes": "Terrain soil tint when moisture is high or after rain."
+    },
+    "soil_mineral_tint": {
+      "type": "color",
+      "value": "#5A8FA8",
+      "notes": "Subtle mineral accent tone on ground terrain."
+    },
+    "terrain_mesh_subdivisions": {
+      "type": "integer",
+      "value": 48,
+      "range": [8, 128],
+      "notes": "Subdivision radial segments of the terrain ground mesh."
+    },
+    "terrain_radius": {
+      "type": "number",
+      "value": 300.0,
+      "range": [50.0, 800.0],
+      "notes": "World radius of the ground terrain mesh."
     }
   }
 }
