@@ -34,6 +34,7 @@ import {
 import { PlantPersistence } from './ops/persistence/plantPersistence.ts';
 import { PlantWorld } from './ops/plantWorld.ts';
 import { loadResourcesConfig, type PlantForResource, ResourceWorld } from './ops/resourceWorld.ts';
+import { loadDayNightConfig, loadWeatherConfig, WeatherSystem } from './ops/weather.ts';
 import { loadWorldConfig } from './ops/world.ts';
 
 const STARTED_AT = Date.now();
@@ -83,6 +84,7 @@ class CubeWorld {
   private tickInterval: NodeJS.Timeout | null = null;
   private plantWorld: PlantWorld;
   private resourceWorld: ResourceWorld;
+  private weatherSystem: WeatherSystem;
   private interestManager: InterestManager;
   private reconnectWindowMs: number;
   private pendingRemovals = new Map<
@@ -107,6 +109,7 @@ class CubeWorld {
     log: ReturnType<typeof createLogger>,
     plantWorld: PlantWorld,
     resourceWorld: ResourceWorld,
+    weatherSystem: WeatherSystem,
     interestManager: InterestManager,
     reconnectWindowMs: number,
   ) {
@@ -114,6 +117,7 @@ class CubeWorld {
     this.log = log;
     this.plantWorld = plantWorld;
     this.resourceWorld = resourceWorld;
+    this.weatherSystem = weatherSystem;
     this.interestManager = interestManager;
     this.reconnectWindowMs = reconnectWindowMs;
   }
@@ -612,7 +616,17 @@ class CubeWorld {
         }
       }
     }
-    this.resourceWorld.step(dt, plantsForResource);
+    // Update weather & day/night simulation (T07)
+    this.weatherSystem.update(dt);
+    const weatherBroadcast = this.weatherSystem.getBroadcast();
+
+    this.resourceWorld.step(
+      dt,
+      plantsForResource,
+      this.weatherSystem.getMoistureDepositPerSecond(),
+      this.weatherSystem.getWeatherLightMultiplier(),
+      this.weatherSystem.getTimeOfDay(),
+    );
 
     // Apply photosynthesis biomass gain
     for (const plant of plantsForResource.values()) {
@@ -650,6 +664,12 @@ class CubeWorld {
       width: resourceState.width,
       height: resourceState.height,
       tileSize: resourceState.tileSize,
+    });
+
+    // Broadcast weather & day/night updates every tick (T07)
+    this.broadcast(MESSAGE_TYPE.WEATHER_UPDATE, {
+      tick: this.tick,
+      ...weatherBroadcast,
     });
 
     // Log tick budget periodically
@@ -856,11 +876,17 @@ async function main(): Promise<void> {
     };
   }
 
+  // Weather system (T07)
+  const weatherConfig = loadWeatherConfig(configs);
+  const dayNightConfig = loadDayNightConfig(configs);
+  const weatherSystem = new WeatherSystem(weatherConfig, dayNightConfig);
+
   const world = new CubeWorld(
     netProtoConfig,
     log,
     plantWorld,
     resourceWorld,
+    weatherSystem,
     interestManager,
     worldConfig.reconnectWindowMin * 60 * 1000, // convert minutes to ms
   );

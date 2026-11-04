@@ -67,6 +67,7 @@ export const MESSAGE_TYPE = {
   PLANT_SYNC: 18,
   PLANT_CREATED: 19,
   PLANT_REMOVED: 20,
+  WEATHER_UPDATE: 21,
 } as const;
 
 export type MessageType = (typeof MESSAGE_TYPE)[keyof typeof MESSAGE_TYPE];

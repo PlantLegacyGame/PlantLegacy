@@ -4,8 +4,123 @@
     "version": "0.1.0",
     "schema": "extended-1",
     "owner_task": "T07",
-    "status": "stub",
-    "notes": "Declared by T00. Populated by T07 per DESIGN.md Part 5."
+    "status": "active",
+    "notes": "Weather state machine configuration: clear, rain, and thunderstorm phases, transitions, and environmental impacts per DESIGN.md Part 5 T07."
   },
-  "values": {}
+  "values": {
+    "clear_duration_min_s": {
+      "type": "integer",
+      "value": 180,
+      "range": [30, 1800],
+      "notes": "Minimum duration of clear weather in seconds"
+    },
+    "clear_duration_max_s": {
+      "type": "integer",
+      "value": 420,
+      "range": [30, 3600],
+      "notes": "Maximum duration of clear weather in seconds"
+    },
+    "rain_duration_min_s": {
+      "type": "integer",
+      "value": 120,
+      "range": [20, 1200],
+      "notes": "Minimum duration of rain in seconds"
+    },
+    "rain_duration_max_s": {
+      "type": "integer",
+      "value": 300,
+      "range": [20, 2400],
+      "notes": "Maximum duration of rain in seconds"
+    },
+    "storm_telegraph_duration_s": {
+      "type": "integer",
+      "value": 45,
+      "range": [10, 300],
+      "notes": "Duration of thunderstorm telegraph phase in seconds"
+    },
+    "storm_active_duration_s": {
+      "type": "integer",
+      "value": 90,
+      "range": [10, 300],
+      "notes": "Duration of thunderstorm active phase in seconds"
+    },
+    "storm_aftermath_duration_s": {
+      "type": "integer",
+      "value": 60,
+      "range": [30, 600],
+      "notes": "Duration of thunderstorm aftermath phase in seconds"
+    },
+    "rain_moisture_gain_per_s": {
+      "type": "number",
+      "value": 0.8,
+      "range": [0.0, 5.0],
+      "notes": "Moisture deposited to soil tiles per second during rain"
+    },
+    "storm_moisture_gain_per_s": {
+      "type": "number",
+      "value": 1.6,
+      "range": [0.0, 10.0],
+      "notes": "Moisture deposited to soil tiles per second during active thunderstorm"
+    },
+    "clear_light_multiplier": {
+      "type": "number",
+      "value": 1.0,
+      "range": [0.5, 1.5],
+      "notes": "Ambient daylight multiplier during clear weather"
+    },
+    "rain_light_multiplier": {
+      "type": "number",
+      "value": 0.65,
+      "range": [0.2, 1.0],
+      "notes": "Ambient daylight multiplier during rain"
+    },
+    "storm_light_multiplier": {
+      "type": "number",
+      "value": 0.35,
+      "range": [0.1, 0.8],
+      "notes": "Ambient daylight multiplier during active storm"
+    },
+    "storm_wind_damage_threshold": {
+      "type": "number",
+      "value": 18.0,
+      "range": [5.0, 50.0],
+      "notes": "Wind force threshold above which unreinforced canopy nodes suffer damage"
+    },
+    "storm_wind_damage_rate": {
+      "type": "number",
+      "value": 1.5,
+      "range": [0.0, 10.0],
+      "notes": "Damage per second applied to vulnerable exposed canopy nodes during active storm"
+    },
+    "lightning_frequency_per_minute": {
+      "type": "number",
+      "value": 4.0,
+      "range": [0.0, 20.0],
+      "notes": "Average lightning strikes per minute during active thunderstorm"
+    },
+    "lightning_damage_radius": {
+      "type": "number",
+      "value": 6.0,
+      "range": [1.0, 20.0],
+      "notes": "Radial damage impact of a lightning strike on ground or high canopy"
+    },
+    "lightning_damage_amount": {
+      "type": "number",
+      "value": 25.0,
+      "range": [5.0, 100.0],
+      "notes": "Base damage dealt to nodes caught in a lightning strike radius"
+    },
+    "forecast_window_s": {
+      "type": "integer",
+      "value": 180,
+      "range": [30, 600],
+      "notes": "How far in advance players can read the weather forecast"
+    },
+    "biome_weather_modifier": {
+      "type": "number",
+      "value": 1.0,
+      "range": [0.5, 2.0],
+      "notes": "Biome modifier (constant 1.0 in MVP per DESIGN.md)"
+    }
+  }
 }

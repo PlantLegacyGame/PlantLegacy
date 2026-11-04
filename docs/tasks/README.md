@@ -35,6 +35,7 @@ design document.
 | T08C | Accounts and Sessions | `[x]` argon2id, JWT access/refresh, rate limits, lockout, WebSocket auth | [T08C.md](./T08C.md) |
 | C02 | Procedural Plant Renderer v1 | `[x]` Raymarched Signed Distance Fields (SDF) with polynomial smooth minimum (smin) organic fusion inside local bounding volumes; primitives fuse into a single continuous anatomical membrane | [C02.md](./C02.md) |
 | T02 | Root Sight | `[x]` Two-mode camera and volumetric ground cutaway integrated with continuous SDF organism renderer; subterranean roots highlight in green/orange through cutaway | [T02.md](./T02.md) |
+| T07 | Weather and Day/Night | `[x]` Server-authoritative day/night cycle, clear/rain/storm state machine with 3-phase thunderstorm cycle, forecast and soil moisture integration | [T07.md](./T07.md) |
 
 ## Naming
 

@@ -206,21 +206,28 @@ export class ResourceWorld {
     return this.tiles.map((t) => ({ ...t }));
   }
 
-  step(dt: number, plants: Map<string, PlantForResource>): void {
+  step(
+    dt: number,
+    plants: Map<string, PlantForResource>,
+    weatherMoistureRate = 0,
+    weatherLightMult = 1.0,
+    timeOfDay = 0.5,
+  ): void {
     this.tick++;
-    this.updateLight(plants);
-    this.updateMoisture(dt, plants);
+    this.timeOfDay = timeOfDay;
+    this.updateLight(plants, weatherLightMult);
+    this.updateMoisture(dt, plants, weatherMoistureRate);
     this.updateMinerals(dt, plants);
     this.diffuseResources();
   }
 
-  private updateLight(plants: Map<string, PlantForResource>): void {
+  private updateLight(plants: Map<string, PlantForResource>, weatherLightMult = 1.0): void {
     const dayNightIndex = Math.floor(this.timeOfDay * this.config.dayNightCurve.length);
     const dayNightMultiplier = this.config.dayNightCurve[dayNightIndex] ?? 1.0;
 
     for (let tz = 0; tz < this.height; tz++) {
       for (let tx = 0; tx < this.width; tx++) {
-        const baseLight = this.config.tileLightBase * dayNightMultiplier;
+        const baseLight = this.config.tileLightBase * dayNightMultiplier * weatherLightMult;
         let canopyShade = 0;
 
         for (const plant of plants.values()) {
@@ -243,14 +250,19 @@ export class ResourceWorld {
     }
   }
 
-  private updateMoisture(dt: number, plants: Map<string, PlantForResource>): void {
+  private updateMoisture(
+    dt: number,
+    plants: Map<string, PlantForResource>,
+    weatherMoistureRate = 0,
+  ): void {
     for (let tz = 0; tz < this.height; tz++) {
       for (let tx = 0; tx < this.width; tx++) {
         const idx = this.index(tx, tz);
         let moisture = this.tiles[idx].moisture;
 
-        if (this.isRaining) {
-          moisture += this.config.rainGainPerS * dt;
+        if (this.isRaining || weatherMoistureRate > 0) {
+          const rainGain = weatherMoistureRate > 0 ? weatherMoistureRate : this.config.rainGainPerS;
+          moisture += rainGain * dt;
         }
 
         moisture -= this.config.evaporationPerS * dt;

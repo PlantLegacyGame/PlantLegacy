@@ -39,6 +39,7 @@ Honest list. No feature promises (T42, RULE_13). Updated at every gate.
   argon2id password hashing; JWT access (15 min) + refresh (30 days) tokens with
   rotation; IP rate limits and account lockout after failed attempts; WebSocket
   auth via HELLO accessToken; plant ownerId = accountId for persistence.
+- **T07 Weather & Day/Night:** 5-state weather state machine (`clear`, `rain`, `thunderstorm_telegraph`, `thunderstorm_active`, `thunderstorm_aftermath`) with Markov transition probabilities, day/night diurnal orbital cycle (1800s day, 0.66 day fraction, dynamic solar elevation and intensity), server tick integration modifying `ResourceWorld` moisture deposition and canopy light reception in real time, client `WEATHER_UPDATE` broadcast handling adjusting directional sun and ambient lighting dynamically. Fully driven by `config/weather.json` and `config/daynight.json`.
 - **T02 Root Sight:** two-mode camera with volumetric soil cutaway shader on the ground plane, smooth transition (500 ms ease-out), high-contrast root highlighting (#4CAF50 for local player, #FF5722 for rival plants), independent camera target, `substrate_multiplier` (0.5) configured for T06 uproot crawl. Local-only toggle via `Tab` key or touch edge button.
 - **Background tab fix:** plants survive tab-out for 5 min (authenticated + anonymous), reclaim on reconnect with full PLANT_SYNC, ghost plants cleaned via PLANT_REMOVED.
 - Staging client on GitHub Pages, with the API served from the local compose
@@ -47,14 +48,14 @@ Honest list. No feature promises (T42, RULE_13). Updated at every gate.
 ## Not built yet
 
 Growth simulation (two-step pointing), chat, economy, damage,
-weather, mutation, inventory. Touch input not implemented (desktop only).
+mutation, inventory. Touch input not implemented (desktop only).
 
 The renderer has no interpolation between server ticks. Interest management
 not yet filtering STATE/KEYFRAME broadcasts. Binary protocol not on wire.
 
 ## Next
 
-Per DESIGN.md Part 4, the next tasks are **T07** (Weather and Day/Night) and **C03** (Environment Rendering). T07 depends on T00A + T03.
+Per DESIGN.md Part 4, the next tasks are **C03** (Environment Rendering) and **T05** (Chat, Emotes, Report/Block). C03 depends on C01, T07, and T00A.
 
 ## Explicitly not promised
 

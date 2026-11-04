@@ -4,8 +4,38 @@
     "version": "0.1.0",
     "schema": "extended-1",
     "owner_task": "T07",
-    "status": "stub",
-    "notes": "Declared by T00. Populated by T07 per DESIGN.md Part 5."
+    "status": "active",
+    "notes": "Day/night astronomical cycle length, day fraction, and condition mapping per DESIGN.md Part 5 T07."
   },
-  "values": {}
+  "values": {
+    "cycle_length_s": {
+      "type": "integer",
+      "value": 1800,
+      "range": [600, 7200],
+      "notes": "Full day/night planetary cycle length in seconds (30 minutes default)"
+    },
+    "day_fraction": {
+      "type": "number",
+      "value": 0.66,
+      "range": [0.4, 0.8],
+      "notes": "Fraction of cycle classified as daytime (sun above horizon)"
+    },
+    "dawn_dusk_transition_s": {
+      "type": "integer",
+      "value": 60,
+      "range": [10, 300],
+      "notes": "Duration of dawn and dusk transitions in seconds"
+    },
+    "condition_mapping": {
+      "type": "object",
+      "value": {
+        "clear": "sun",
+        "rain": "rain",
+        "thunderstorm_telegraph": "overcast",
+        "thunderstorm_active": "storm",
+        "thunderstorm_aftermath": "mist"
+      },
+      "notes": "Mapping from weather state to T13A booster condition tokens"
+    }
+  }
 }

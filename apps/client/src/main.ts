@@ -161,6 +161,7 @@ const MESSAGE_TYPE = {
   PLANT_SYNC: 18,
   PLANT_CREATED: 19,
   PLANT_REMOVED: 20,
+  WEATHER_UPDATE: 21,
 } as const;
 
 interface PlayerInput {
@@ -1006,6 +1007,38 @@ function connect(): void {
           if (tileIndex >= 0 && tileIndex < update.tiles.length) {
             const tile = update.tiles[tileIndex];
             updateResourceReadout(tile.light, tile.moisture, tile.minerals);
+          }
+          break;
+        }
+
+        case MESSAGE_TYPE.WEATHER_UPDATE: {
+          const weather = payload as {
+            timeOfDay: number;
+            isDay: boolean;
+            sunIntensity: number;
+            weatherState: string;
+            conditionToken: string;
+            stateTimeRemainingS: number;
+            forecast: {
+              nextWeatherState: string;
+              timeUntilNextStateS: number;
+            };
+          };
+
+          // Dynamically adjust scene directional sunlight and ambient lighting to match server day/night & weather
+          sunLight.intensity = Math.max(0.05, 1.4 * weather.sunIntensity);
+          ambientLight.intensity = Math.max(0.12, 0.7 * weather.sunIntensity + 0.1);
+
+          // Rotate sun in sky arc based on server timeOfDay
+          const sunAngle = weather.timeOfDay * Math.PI * 2 - Math.PI / 2;
+          sunLight.position.set(
+            Math.cos(sunAngle) * 80,
+            Math.max(10, Math.sin(sunAngle) * 100),
+            Math.sin(sunAngle) * 60,
+          );
+
+          if (debugOverlay) {
+            debugOverlay.recordBytes(0, event.data.length);
           }
           break;
         }
