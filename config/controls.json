@@ -35,6 +35,7 @@
         { "action": "chat_open", "keys": ["Enter"], "mouse": "", "mode": "press", "context": "" },
         { "action": "menu_open", "keys": ["Escape"], "mouse": "", "mode": "toggle", "context": "" },
         { "action": "debug_toggle", "keys": ["Backquote"], "mouse": "", "mode": "toggle", "context": "" },
+        { "action": "plant_regenerate", "keys": ["KeyR"], "mouse": "", "mode": "press", "context": "" },
         { "action": "move_forward", "keys": ["ArrowUp", "KeyW"], "mouse": "", "mode": "hold", "context": "" },
         { "action": "move_backward", "keys": ["ArrowDown", "KeyS"], "mouse": "", "mode": "hold", "context": "" },
         { "action": "move_left", "keys": ["ArrowLeft", "KeyA"], "mouse": "", "mode": "hold", "context": "" },

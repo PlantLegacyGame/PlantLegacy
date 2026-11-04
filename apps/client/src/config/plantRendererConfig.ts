@@ -10,8 +10,6 @@ export interface PlantRendererConfig {
   nodeSpacingMin: number;
   nodeSpacingMax: number;
   branchProbability: number;
-  rootSightEnabled: boolean;
-  rootSightOpacity: number;
   canopySightEnabled: boolean;
   photosynthesisVisualization: boolean;
   waterFlowVisualization: boolean;
@@ -24,6 +22,8 @@ export interface PlantRendererConfig {
   leafCountPerNode: number;
   leafSize: number;
   leafLengthWidthRatio: number;
+  petioleLength: number;
+  petioleThickness: number;
   l0Distance: number;
   l1Distance: number;
   l2Distance: number;
@@ -35,6 +35,10 @@ export interface PlantRendererConfig {
   mutation0Param: number;
   mutation1Param: number;
   mutation2Param: number;
+  sminBlendRadius: number;
+  maxRaymarchSteps: number;
+  raymarchHitEpsilon: number;
+  boundingBoxPadding: number;
 }
 
 let plantRendererConfig: PlantRendererConfig = {
@@ -44,8 +48,6 @@ let plantRendererConfig: PlantRendererConfig = {
   nodeSpacingMin: 0.5,
   nodeSpacingMax: 2.0,
   branchProbability: 0.15,
-  rootSightEnabled: true,
-  rootSightOpacity: 0.6,
   canopySightEnabled: true,
   photosynthesisVisualization: true,
   waterFlowVisualization: true,
@@ -54,10 +56,12 @@ let plantRendererConfig: PlantRendererConfig = {
   maxGpuBuffers: 8,
   computeShaderWorkgroupSize: 64,
   tubeRingCount: 8,
-  tubeLengthSegments: 4,
-  leafCountPerNode: 3,
-  leafSize: 1.5,
+  tubeLengthSegments: 8,
+  leafCountPerNode: 1,
+  leafSize: 1.2,
   leafLengthWidthRatio: 2.5,
+  petioleLength: 0.25,
+  petioleThickness: 0.015,
   l0Distance: 50.0,
   l1Distance: 150.0,
   l2Distance: 500.0,
@@ -66,9 +70,13 @@ let plantRendererConfig: PlantRendererConfig = {
   windStrength: 0.3,
   windSpeed: 1.0,
   healthTintStrength: 0.5,
-  mutation0Param: 1.0,
+  mutation0Param: 0.0,
   mutation1Param: 1.5,
   mutation2Param: 0.3,
+  sminBlendRadius: 0.25,
+  maxRaymarchSteps: 32,
+  raymarchHitEpsilon: 0.005,
+  boundingBoxPadding: 1.2,
 };
 
 type ConfigPayload = Record<string, unknown> & {
@@ -99,8 +107,6 @@ export async function loadPlantRendererConfig(serverOrigin: string): Promise<Pla
         nodeSpacingMin: readValue(payload, 'node_spacing_min', current.nodeSpacingMin),
         nodeSpacingMax: readValue(payload, 'node_spacing_max', current.nodeSpacingMax),
         branchProbability: readValue(payload, 'branch_probability', current.branchProbability),
-        rootSightEnabled: readValue(payload, 'root_sight_enabled', current.rootSightEnabled),
-        rootSightOpacity: readValue(payload, 'root_sight_opacity', current.rootSightOpacity),
         canopySightEnabled: readValue(payload, 'canopy_sight_enabled', current.canopySightEnabled),
         photosynthesisVisualization: readValue(
           payload,
@@ -133,6 +139,8 @@ export async function loadPlantRendererConfig(serverOrigin: string): Promise<Pla
           'leaf_length_width_ratio',
           current.leafLengthWidthRatio,
         ),
+        petioleLength: readValue(payload, 'petiole_length', current.petioleLength),
+        petioleThickness: readValue(payload, 'petiole_thickness', current.petioleThickness),
         l0Distance: readValue(payload, 'l0_distance', current.l0Distance),
         l1Distance: readValue(payload, 'l1_distance', current.l1Distance),
         l2Distance: readValue(payload, 'l2_distance', current.l2Distance),
@@ -144,6 +152,10 @@ export async function loadPlantRendererConfig(serverOrigin: string): Promise<Pla
         mutation0Param: readValue(payload, 'mutation_visual_0_param', current.mutation0Param),
         mutation1Param: readValue(payload, 'mutation_visual_1_param', current.mutation1Param),
         mutation2Param: readValue(payload, 'mutation_visual_2_param', current.mutation2Param),
+        sminBlendRadius: readValue(payload, 'smin_blend_radius', current.sminBlendRadius),
+        maxRaymarchSteps: readValue(payload, 'max_raymarch_steps', current.maxRaymarchSteps),
+        raymarchHitEpsilon: readValue(payload, 'raymarch_hit_epsilon', current.raymarchHitEpsilon),
+        boundingBoxPadding: readValue(payload, 'bounding_box_padding', current.boundingBoxPadding),
       };
     }
   } catch {

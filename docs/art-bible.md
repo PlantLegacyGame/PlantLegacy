@@ -16,6 +16,14 @@ one visual language; it is not a second spec.
 Stylized naturalism (D-18). PBR-lite, one directional light, hemispheric ambient,
 rim light on plants, aerial-perspective fog, per-time-of-day color grading.
 
+## Organism Anatomy & Visual Fusion (C02 / T02)
+
+Plants in Plant Legacy are living organisms, not collections of intersecting geometric blocks:
+1. **Unified Organism Skin (SDF `smin`):** Primitive capsules and node spheres are fused mathematically using smooth minimum (`smin`). Forking branches, lateral roots, and the root crown form smooth organic collars and fillets without polygon clipping, internal end-caps, or floating parts.
+2. **Seamless Root-to-Canopy Continuum:** The subterranean root system and the aboveground shoot/trunk are one continuous anatomical structure penetrating the ground at $y = 0$. In Root Sight, the earth peels back to reveal the subterranean anatomy of that same unbroken organism.
+3. **Continuous 3D Texture Language:** UV-free 3D Fractional Brownian Motion (fbm) noise flows across joints and branches without seam distortion or UV stretching. Woody bark on stems, fibrous pale texture on roots, and translucent chlorophyll on foliage.
+4. **Living Motion:** Procedural 3D wind field displaces branches organically (higher nodes sway further with time-varying harmonics) with zero CPU animation overhead.
+
 ## To be filled by
 
 - **C01** — quality tiers, dynamic resolution, debug overlay budget.

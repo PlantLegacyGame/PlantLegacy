@@ -694,6 +694,19 @@ class CubeWorld {
             totalBiomass: plant?.totalBiomass ?? 0,
           };
           this.broadcast(MESSAGE_TYPE.GROWTH_EVENT, growthPayload);
+        } else {
+          this.log.info('growth intent rejected', {
+            playerId: player.playerId,
+            plantId: intent.plantId,
+            nodeId: intent.nodeId,
+            reason: result.reason,
+            tick: this.tick,
+          });
+          const reject: RejectPayload = {
+            reason: result.reason || 'growth_failed',
+            originalType: MESSAGE_TYPE.GROWTH_INTENT,
+          };
+          this.send(player.ws, MESSAGE_TYPE.REJECT, reject);
         }
       }
     }
@@ -1040,8 +1053,6 @@ async function main(): Promise<void> {
           node_spacing_min: values.node_spacing_min?.value ?? 0.5,
           node_spacing_max: values.node_spacing_max?.value ?? 2.0,
           branch_probability: values.branch_probability?.value ?? 0.15,
-          root_sight_enabled: values.root_sight_enabled?.value ?? true,
-          root_sight_opacity: values.root_sight_opacity?.value ?? 0.6,
           canopy_sight_enabled: values.canopy_sight_enabled?.value ?? true,
           photosynthesis_visualization: values.photosynthesis_visualization?.value ?? true,
           water_flow_visualization: values.water_flow_visualization?.value ?? true,
@@ -1050,10 +1061,12 @@ async function main(): Promise<void> {
           max_gpu_buffers: values.max_gpu_buffers?.value ?? 8,
           compute_shader_workgroup_size: values.compute_shader_workgroup_size?.value ?? 64,
           tube_ring_count: values.tube_ring_count?.value ?? 8,
-          tube_length_segments: values.tube_length_segments?.value ?? 4,
-          leaf_count_per_node: values.leaf_count_per_node?.value ?? 3,
-          leaf_size: values.leaf_size?.value ?? 1.5,
+          tube_length_segments: values.tube_length_segments?.value ?? 8,
+          leaf_count_per_node: values.leaf_count_per_node?.value ?? 1,
+          leaf_size: values.leaf_size?.value ?? 1.2,
           leaf_length_width_ratio: values.leaf_length_width_ratio?.value ?? 2.5,
+          petiole_length: values.petiole_length?.value ?? 0.25,
+          petiole_thickness: values.petiole_thickness?.value ?? 0.015,
           l0_distance: values.l0_distance?.value ?? 50.0,
           l1_distance: values.l1_distance?.value ?? 150.0,
           l2_distance: values.l2_distance?.value ?? 500.0,
@@ -1062,9 +1075,13 @@ async function main(): Promise<void> {
           wind_strength: values.wind_strength?.value ?? 0.3,
           wind_speed: values.wind_speed?.value ?? 1.0,
           health_tint_strength: values.health_tint_strength?.value ?? 0.5,
-          mutation_visual_0_param: values.mutation_visual_0_param?.value ?? 1.0,
+          mutation_visual_0_param: values.mutation_visual_0_param?.value ?? 0.0,
           mutation_visual_1_param: values.mutation_visual_1_param?.value ?? 1.5,
           mutation_visual_2_param: values.mutation_visual_2_param?.value ?? 0.3,
+          smin_blend_radius: values.smin_blend_radius?.value ?? 0.25,
+          max_raymarch_steps: values.max_raymarch_steps?.value ?? 32,
+          raymarch_hit_epsilon: values.raymarch_hit_epsilon?.value ?? 0.005,
+          bounding_box_padding: values.bounding_box_padding?.value ?? 1.2,
         };
 
         sendJson(response, 200, plantRendererConfig);
@@ -1078,8 +1095,6 @@ async function main(): Promise<void> {
           node_spacing_min: 0.5,
           node_spacing_max: 2.0,
           branch_probability: 0.15,
-          root_sight_enabled: true,
-          root_sight_opacity: 0.6,
           canopy_sight_enabled: true,
           photosynthesis_visualization: true,
           water_flow_visualization: true,
@@ -1088,10 +1103,12 @@ async function main(): Promise<void> {
           max_gpu_buffers: 8,
           compute_shader_workgroup_size: 64,
           tube_ring_count: 8,
-          tube_length_segments: 4,
-          leaf_count_per_node: 3,
-          leaf_size: 1.5,
+          tube_length_segments: 8,
+          leaf_count_per_node: 1,
+          leaf_size: 1.2,
           leaf_length_width_ratio: 2.5,
+          petiole_length: 0.25,
+          petiole_thickness: 0.015,
           l0_distance: 50.0,
           l1_distance: 150.0,
           l2_distance: 500.0,
@@ -1100,9 +1117,13 @@ async function main(): Promise<void> {
           wind_strength: 0.3,
           wind_speed: 1.0,
           health_tint_strength: 0.5,
-          mutation_visual_0_param: 1.0,
+          mutation_visual_0_param: 0.0,
           mutation_visual_1_param: 1.5,
           mutation_visual_2_param: 0.3,
+          smin_blend_radius: 0.25,
+          max_raymarch_steps: 32,
+          raymarch_hit_epsilon: 0.005,
+          bounding_box_padding: 1.2,
         });
         return;
       }
@@ -1240,6 +1261,44 @@ async function main(): Promise<void> {
           root_sight_mode: 'toggle',
           text_scale: 1.0,
           context_dock_fade_ms: 150,
+        });
+        return;
+      }
+    }
+
+    if (url.pathname === '/config/root_sight') {
+      // T02: Serve Root Sight config
+      const fs = await import('node:fs/promises');
+      const path = await import('node:path');
+
+      try {
+        const configDir = runtime.configDir;
+        const rootSightPath = path.resolve(configDir, 'root_sight.json');
+        const raw = await fs.readFile(rootSightPath, 'utf8');
+        const config = JSON.parse(raw);
+
+        const values = config.values || {};
+        const rootSightConfig = {
+          cutaway_radius: values.cutaway_radius?.value ?? 50,
+          transition_ms: values.transition_ms?.value ?? 500,
+          soil_opacity: values.soil_opacity?.value ?? 0.3,
+          own_root_highlight_color: values.own_root_highlight_color?.value ?? '#4CAF50',
+          rival_root_highlight_color: values.rival_root_highlight_color?.value ?? '#FF5722',
+          substrate_multiplier: values.substrate_multiplier?.value ?? 0.5,
+          camera_target: values.camera_target?.value ?? 'own_plant',
+        };
+
+        sendJson(response, 200, rootSightConfig);
+        return;
+      } catch {
+        sendJson(response, 200, {
+          cutaway_radius: 50,
+          transition_ms: 500,
+          soil_opacity: 0.3,
+          own_root_highlight_color: '#4CAF50',
+          rival_root_highlight_color: '#FF5722',
+          substrate_multiplier: 0.5,
+          camera_target: 'own_plant',
         });
         return;
       }

@@ -11,11 +11,17 @@
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { loadControlsConfig, loadRenderConfig, loadUIConfig } from './config/clientConfig.js';
+import {
+  loadControlsConfig,
+  loadRenderConfig,
+  loadRootSightConfig,
+  loadUIConfig,
+  type RootSightConfig,
+} from './config/clientConfig.js';
 import { loadPlantRendererConfig } from './config/plantRendererConfig.js';
 import { createInputBus, type InputBus } from './input/InputBus.js';
 import { createQualityController, type QualityController } from './render/QualityController.js';
-import { PlantRenderer } from './renderers/PlantRenderer.js';
+import { type PlantNodeData, PlantRenderer } from './renderers/PlantRenderer.js';
 import { createDebugOverlay, type DebugOverlay } from './ui/DebugOverlay.js';
 import { createUIShell, type UIShell } from './ui/UIShell.js';
 import './styles.css';
@@ -195,41 +201,11 @@ function setStoredPlantId(id: string | null): void {
 }
 
 let growthIntentTick = 0;
-let lastGrownNodeId: string | null = null;
 let plantBiomass = 0;
-const plantNodes = new Map<
-  string,
-  {
-    id: string;
-    position: THREE.Vector3;
-    type: number;
-    radius: number;
-    parentId: string | null;
-    age: number;
-    health: number;
-    mutationFlags: number;
-    biomass: number;
-  }
->();
+const plantNodes = new Map<string, PlantNodeData>();
 
 // Other players' plants (plantId -> nodes)
-const otherPlayerPlants = new Map<
-  string,
-  Map<
-    string,
-    {
-      id: string;
-      position: THREE.Vector3;
-      type: number;
-      radius: number;
-      parentId: string | null;
-      age: number;
-      health: number;
-      mutationFlags: number;
-      biomass: number;
-    }
-  >
->();
+const otherPlayerPlants = new Map<string, Map<string, PlantNodeData>>();
 
 // C01: Input abstraction - replaces hardcoded keydown/keyup
 let inputBus: InputBus | null = null;
@@ -237,15 +213,54 @@ let uiShell: UIShell | null = null;
 let debugOverlay: DebugOverlay | null = null;
 let qualityController: QualityController | null = null;
 
-// Node radii are derived from biomass but kept inside a readable range so a
-// newly grown stem is visible next to the much heavier root node.
-function nodeRadius(biomass: number): number {
-  return 0.18 + Math.min(1.2, Math.sqrt(Math.max(0, biomass)) * 0.07);
+// Node radii are derived from biomass and tree height/depth with botanical Murray allometry:
+// Sturdy, thick trunk at base, gracefully tapering toward apical leader, slender fibrous roots,
+// and thin delicate lateral branchlets.
+function nodeRadius(biomass: number, type = 1, y = 0): number {
+  if (type === 0) {
+    // Root: taproot is firm near crown (0.05 - 0.08m), deep/lateral roots slenderize to 0.02 - 0.035m
+    const depth = Math.max(0, -y);
+    const depthTaper = 1.0 / (1.0 + depth * 0.35);
+    return Math.max(
+      0.018,
+      (0.035 + Math.min(0.07, Math.sqrt(Math.max(0, biomass)) * 0.012)) * depthTaper,
+    );
+  }
+  if (type === 3) {
+    // Leaf / foliage: delicate thin lamina (1.5cm - 4cm)
+    return 0.015 + Math.min(0.04, Math.sqrt(Math.max(0, biomass)) * 0.006);
+  }
+  // Stem / shoot / trunk:
+  // Height-based allometric tapering (Murray's Law / Pipe Model):
+  // At base (y near 0), thick sturdy trunk (up to 0.16m - 0.22m).
+  // At height (y > 2m), slender branches and twigs (0.03m - 0.05m).
+  const height = Math.max(0, y);
+  const heightTaper = 1.0 / (1.0 + height * 0.4);
+  const baseTrunkBonus = Math.max(0.0, 0.08 * (1.0 - Math.min(1.0, height / 1.5)));
+  return Math.max(
+    0.025,
+    (0.05 + baseTrunkBonus + Math.min(0.12, Math.sqrt(Math.max(0, biomass)) * 0.015)) * heightTaper,
+  );
 }
 
 // T01: Plant Renderer
 let plantRenderer: PlantRenderer | null = null;
 let lastUpdateTime = performance.now();
+
+// T02: Root Sight state. Surface and underground are two modes of the same
+// independent camera; toggling never moves or mutates the plant.
+let rootSightConfig: RootSightConfig | null = null;
+let rootSightEnabled = false;
+let rootSightProgress = 0;
+const rootSightTarget = new THREE.Vector3();
+
+// Shared by the soil cutaway shader and the per-frame transition update.
+const soilCutawayUniforms = {
+  uRootSightProgress: { value: 0 },
+  uRootSightCenter: { value: new THREE.Vector3() },
+  uRootSightRadius: { value: 50 },
+  uRootSightSoilOpacity: { value: 0.3 },
+};
 
 let statusElement: HTMLDivElement | null = null;
 let detailElement: HTMLDivElement | null = null;
@@ -262,13 +277,71 @@ function setDetail(text: string): void {
   detailElement.textContent = text;
 }
 
+// T02: Root Sight toggle and transition
+function toggleRootSight(): void {
+  if (!rootSightConfig) return;
+
+  rootSightEnabled = !rootSightEnabled;
+  setDetail(
+    rootSightEnabled
+      ? 'Root Sight: ON — Underground view active'
+      : 'Root Sight: OFF — Surface view',
+  );
+}
+
+/**
+ * The cutaway follows the configured camera target reference. `own_plant`
+ * (the default) keeps the cutaway on the viewer's root while the independent
+ * camera orbits; `camera_position` makes the cutaway follow the camera.
+ */
+function getRootSightTarget(out: THREE.Vector3): THREE.Vector3 {
+  if (rootSightConfig?.cameraTarget === 'camera_position') {
+    return out.copy(camera.position);
+  }
+  const ownRoot = Array.from(plantNodes.values()).find((node) => node.parentId === null);
+  return out.copy(ownRoot?.position ?? controls.target);
+}
+
+function updateRootSight(deltaTime: number): void {
+  if (!rootSightConfig) return;
+
+  const duration = rootSightConfig.transitionMs / 1000;
+  const goal = rootSightEnabled ? 1 : 0;
+  if (duration <= 0) {
+    rootSightProgress = goal;
+  } else {
+    const step = deltaTime / duration;
+    rootSightProgress =
+      rootSightProgress < goal
+        ? Math.min(goal, rootSightProgress + step)
+        : Math.max(goal, rootSightProgress - step);
+  }
+
+  // Ease-out for the visual blend while the state itself stays linear, so a
+  // toggle mid-transition reverses cleanly.
+  const eased = 1 - (1 - rootSightProgress) ** 3;
+  getRootSightTarget(rootSightTarget);
+
+  soilCutawayUniforms.uRootSightProgress.value = eased;
+  soilCutawayUniforms.uRootSightCenter.value.copy(rootSightTarget);
+  soilCutawayUniforms.uRootSightRadius.value = rootSightConfig.cutawayRadius;
+  soilCutawayUniforms.uRootSightSoilOpacity.value = rootSightConfig.soilOpacity;
+
+  gridMaterial.opacity = 1 - 0.85 * eased;
+
+  plantRenderer?.setRootSightState(rootSightEnabled, eased, rootSightTarget);
+}
+
 async function initC01(): Promise<void> {
   // Load C01 configs
-  const [renderConfig, controlsConfig, uiConfig] = await Promise.all([
+  const [renderConfig, controlsConfig, uiConfig, loadedRootSightConfig] = await Promise.all([
     loadRenderConfig(httpOrigin),
     loadControlsConfig(httpOrigin),
     loadUIConfig(httpOrigin),
+    loadRootSightConfig(httpOrigin),
   ]);
+
+  rootSightConfig = loadedRootSightConfig;
 
   // Build input bus
   inputBus = createInputBus({ bindings: controlsConfig.bindings });
@@ -324,6 +397,24 @@ async function initC01(): Promise<void> {
         camera.position.copy(target).add(direction.multiplyScalar(desiredDistance));
         controls.update();
       }
+    }
+    if (import.meta.env.DEV && actionId === 'plant_regenerate' && state.pressed) {
+      // Generate a test plant at origin for visual critique
+      if (plantRenderer) {
+        const testNodes = plantRenderer.generateTestPlant();
+        plantRenderer.rebuild();
+        plantRenderer.updatePlantData(testNodes);
+        // Center camera on origin
+        controls.target.set(0, 0, 0);
+        camera.position.set(0, 20, 30);
+        controls.update();
+        setDetail(
+          `Generated test plant at origin (${testNodes.length} nodes). Orbit camera to inspect.`,
+        );
+      }
+    }
+    if (actionId === 'root_sight_toggle' && state.pressed && rootSightConfig) {
+      toggleRootSight();
     }
   });
 
@@ -394,6 +485,8 @@ async function initPlantRenderer(): Promise<void> {
     leafCountPerNode: config.leafCountPerNode,
     leafSize: config.leafSize,
     leafLengthWidthRatio: config.leafLengthWidthRatio,
+    petioleLength: config.petioleLength,
+    petioleThickness: config.petioleThickness,
     l0Distance: config.l0Distance,
     l1Distance: config.l1Distance,
     l2Distance: config.l2Distance,
@@ -405,28 +498,25 @@ async function initPlantRenderer(): Promise<void> {
     mutation0Param: config.mutation0Param,
     mutation1Param: config.mutation1Param,
     mutation2Param: config.mutation2Param,
-    rootSightEnabled: config.rootSightEnabled,
-    rootSightOpacity: config.rootSightOpacity,
+    sminBlendRadius: config.sminBlendRadius,
+    maxRaymarchSteps: config.maxRaymarchSteps,
+    raymarchHitEpsilon: config.raymarchHitEpsilon,
+    boundingBoxPadding: config.boundingBoxPadding,
+    rootSightEnabled,
     canopySightEnabled: config.canopySightEnabled,
     photosynthesisViz: config.photosynthesisVisualization,
     waterFlowViz: config.waterFlowVisualization,
     nutrientFlowViz: config.nutrientFlowVisualization,
     nodeSize: 1.0,
+    // T02: Root Sight specific
+    rootSightCutawayRadius: rootSightConfig?.cutawayRadius ?? 50.0,
+    ownRootHighlightColor: rootSightConfig?.ownRootHighlightColor ?? '#4CAF50',
+    rivalRootHighlightColor: rootSightConfig?.rivalRootHighlightColor ?? '#FF5722',
   });
 
   // Initialize with existing plant nodes (root node from WELCOME, or empty)
   if (plantRenderer) {
-    const otherNodes: Array<{
-      id: string;
-      position: THREE.Vector3;
-      type: number;
-      radius: number;
-      parentId: string | null;
-      age: number;
-      health: number;
-      mutationFlags: number;
-      biomass: number;
-    }> = [];
+    const otherNodes: PlantNodeData[] = [];
     for (const nodes of otherPlayerPlants.values()) {
       otherNodes.push(...nodes.values());
     }
@@ -584,18 +674,57 @@ controls.minDistance = 10;
 controls.maxDistance = 200;
 controls.maxPolarAngle = Math.PI / 2 - 0.05;
 
-// World ground. The previous build removed the ground plane assuming the
-// plant renderer drew one, which left the scene with only the clear colour.
-const ground = new THREE.Mesh(
-  new THREE.CircleGeometry(300, 64),
-  new THREE.MeshStandardMaterial({ color: 0x2f3824, roughness: 1, metalness: 0 }),
-);
+// World ground. T02 owns the Root Sight soil cutaway shader: the ground turns
+// semi-transparent inside the cutaway sphere so roots are revealed, then C03
+// reuses/refines the same technique for general environment cutaways.
+const groundMaterial = new THREE.MeshStandardMaterial({
+  color: 0x2f3824,
+  roughness: 1,
+  metalness: 0,
+  transparent: true,
+});
+groundMaterial.onBeforeCompile = (shader) => {
+  shader.uniforms.uRootSightProgress = soilCutawayUniforms.uRootSightProgress;
+  shader.uniforms.uRootSightCenter = soilCutawayUniforms.uRootSightCenter;
+  shader.uniforms.uRootSightRadius = soilCutawayUniforms.uRootSightRadius;
+  shader.uniforms.uRootSightSoilOpacity = soilCutawayUniforms.uRootSightSoilOpacity;
+
+  shader.vertexShader = shader.vertexShader
+    .replace('#include <common>', '#include <common>\nvarying vec3 vSoilWorldPos;')
+    .replace(
+      '#include <begin_vertex>',
+      '#include <begin_vertex>\nvSoilWorldPos = (modelMatrix * vec4(position, 1.0)).xyz;',
+    );
+
+  shader.fragmentShader = shader.fragmentShader
+    .replace(
+      '#include <common>',
+      `#include <common>
+varying vec3 vSoilWorldPos;
+uniform float uRootSightProgress;
+uniform vec3 uRootSightCenter;
+uniform float uRootSightRadius;
+uniform float uRootSightSoilOpacity;`,
+    )
+    .replace(
+      '#include <dithering_fragment>',
+      `#include <dithering_fragment>
+float soilDist = distance(vSoilWorldPos, uRootSightCenter);
+float soilCut = 1.0 - smoothstep(uRootSightRadius * 0.85, uRootSightRadius, soilDist);
+gl_FragColor.a = mix(1.0, uRootSightSoilOpacity, soilCut * uRootSightProgress);`,
+    );
+};
+groundMaterial.customProgramCacheKey = () => 'root-sight-soil-v1';
+
+const ground = new THREE.Mesh(new THREE.CircleGeometry(300, 64), groundMaterial);
 ground.rotation.x = -Math.PI / 2;
 ground.position.y = -0.03;
 ground.receiveShadow = true;
 scene.add(ground);
 
 const gridHelper = new THREE.GridHelper(400, 80, 0x555544, 0x3a3a2c);
+const gridMaterial = gridHelper.material as THREE.LineBasicMaterial;
+gridMaterial.transparent = true;
 gridHelper.position.y = 0.01;
 scene.add(gridHelper);
 
@@ -606,8 +735,8 @@ scene.add(ambientLight);
 const sunLight = new THREE.DirectionalLight(0xffffee, 1.4);
 sunLight.position.set(50, 100, 50);
 sunLight.castShadow = true;
-sunLight.shadow.mapSize.width = 2048;
-sunLight.shadow.mapSize.height = 2048;
+sunLight.shadow.mapSize.width = 1024;
+sunLight.shadow.mapSize.height = 1024;
 sunLight.shadow.camera.near = 10;
 sunLight.shadow.camera.far = 200;
 sunLight.shadow.camera.left = -100;
@@ -642,19 +771,109 @@ function sendGrowthIntent(): void {
   if (!ws || ws.readyState !== WebSocket.OPEN || !plantId) return;
 
   growthIntentTick++;
-  // Grow from the most recently added node so stems chain, not all from root
-  const growFrom = lastGrownNodeId ? plantNodes.get(lastGrownNodeId) : null;
-  const rootNode = plantNodes.size > 0 ? Array.from(plantNodes.values())[0] : null;
-  const parentNode = growFrom ?? rootNode;
-  if (!parentNode) return;
 
-  // Grow stems upward (canopy) with camera direction mixed in
+  const isRootSight = rootSightEnabled;
+  const allNodes = Array.from(plantNodes.values());
+  const seedNode = allNodes.length > 0 ? allNodes[0] : null;
+  if (!seedNode) return;
+
+  // Separate true root branches from the origin seed node
+  const rootBranches = allNodes.filter((n) => n.type === 0 && n.id !== seedNode.id);
+  const stems = allNodes.filter((n) => n.type >= 1);
+
+  let parentNode: PlantNodeData | null = null;
+  let nodeType: 'root' | 'stem' = 'stem';
+  let dir = new THREE.Vector3(0, 1, 0);
+
   const camDir = new THREE.Vector3(0, 0, -1);
   camDir.applyQuaternion(camera.quaternion);
   camDir.normalize();
-  const dir = new THREE.Vector3(camDir.x * 0.7, 0.7, camDir.z * 0.7).normalize();
 
-  const nodeType = 'stem';
+  if (isRootSight) {
+    // Mode 1: Underground Root Sight -> Branching radial root architecture
+    nodeType = 'root';
+    if (rootBranches.length === 0) {
+      // Primary radicle taproot down
+      parentNode = seedNode;
+      dir = new THREE.Vector3(0, -0.95, 0);
+      setDetail('Anchoring primary taproot into deep soil strata...');
+    } else {
+      // Lateral fibrous root branching spreading into soil with phyllotaxis
+      const rootAngle = rootBranches.length * 2.39996; // ~137.5° golden angle
+      parentNode =
+        rootBranches.length % 2 === 0
+          ? seedNode
+          : rootBranches[Math.floor(rootBranches.length / 3)];
+      dir = new THREE.Vector3(
+        Math.cos(rootAngle) * 0.72 + camDir.x * 0.15,
+        -0.62,
+        Math.sin(rootAngle) * 0.72 + camDir.z * 0.15,
+      ).normalize();
+      setDetail('Spreading lateral fibrous root network into the soil...');
+    }
+  } else {
+    // Mode 2: Canopy / Surface Mode -> Real Botanical Morphogenesis
+    if (stems.length === 0) {
+      // Stage 0: Embryo Germination - seed sprouts upward
+      parentNode = seedNode;
+      nodeType = 'stem';
+      dir = new THREE.Vector3(0, 1.0, 0);
+      setDetail('The seed germinates! An apical sprout shoots upward toward the light.');
+    } else if (stems.length === 1 && rootBranches.length === 0) {
+      // Stage 1: Radicle Anchor - seed splits and anchors primary taproot into soil
+      parentNode = seedNode;
+      nodeType = 'root';
+      dir = new THREE.Vector3(0, -0.95, 0);
+      setDetail('The seed splits! A primary radicle taproot anchors into the earth.');
+    } else if (stems.length === 1 && rootBranches.length === 1) {
+      // Stage 2: Shoot Internode 2 - stem grows taller, unfurling foliage
+      parentNode = stems[0];
+      nodeType = 'stem';
+      dir = new THREE.Vector3(0.06, 0.95, -0.04).normalize();
+      setDetail('The sprout grows taller, unfurling young foliage.');
+    } else if (rootBranches.length < Math.floor(stems.length / 2)) {
+      // Stage 3: Lateral Root Crown - spread anchor roots into topsoil
+      parentNode = seedNode;
+      nodeType = 'root';
+      const rootAngle = rootBranches.length * 2.39996;
+      dir = new THREE.Vector3(
+        Math.cos(rootAngle) * 0.72,
+        -0.6,
+        Math.sin(rootAngle) * 0.72,
+      ).normalize();
+      setDetail('A lateral anchor root spreads into topsoil for moisture and stability.');
+    } else if (stems.length >= 3 && stems.length % 3 === 0) {
+      // Stage 4: Lateral Canopy Branching - branch outward with phyllotaxis and leaves
+      const branchParentIndex = Math.max(0, stems.length - 2);
+      parentNode = stems[branchParentIndex];
+      nodeType = 'stem';
+      const branchAngle = stems.length * 2.39996;
+      dir = new THREE.Vector3(
+        Math.cos(branchAngle) * 0.72,
+        0.62,
+        Math.sin(branchAngle) * 0.72,
+      ).normalize();
+      setDetail('A lateral branch emerges with lush young leaves.');
+    } else {
+      // Stage 5: Apical Leader Growth - main shoot grows taller toward sun
+      const highestStem = stems.reduce(
+        (prev, curr) => (curr.position.y > prev.position.y ? curr : prev),
+        stems[0],
+      );
+      parentNode = highestStem;
+      nodeType = 'stem';
+      const swayAngle = stems.length * 2.39996;
+      dir = new THREE.Vector3(
+        Math.cos(swayAngle) * 0.12,
+        0.95,
+        Math.sin(swayAngle) * 0.12,
+      ).normalize();
+      setDetail('Apical leader reaches upward with new internodes and foliage.');
+    }
+  }
+
+  if (!parentNode) return;
+
   const isAttack = false;
 
   const intent: GrowthIntent = {
@@ -729,15 +948,19 @@ function connect(): void {
                 welcome.rootNode.z,
               ),
               type: 0, // root
-              radius: nodeRadius(welcome.rootNode.biomass),
+              radius: nodeRadius(welcome.rootNode.biomass, 0, welcome.rootNode.y),
               parentId: null,
               age: 10,
               health: 0.9,
               mutationFlags: 0,
               biomass: welcome.rootNode.biomass,
+              isOwnPlant: true,
+              spawnTime: performance.now(),
             });
             plantBiomass = welcome.totalBiomass;
-            lastGrownNodeId = welcome.rootNode.id;
+            if (plantRenderer) {
+              plantRenderer.updatePlantData(Array.from(plantNodes.values()));
+            }
           }
 
           // Request full plant sync on reconnect to get all nodes
@@ -798,37 +1021,30 @@ function connect(): void {
             flower: 3,
             spore_sac: 3,
           };
-          const radius = nodeRadius(node.biomass);
+          const nodeTypeNum = typeMap[node.type] ?? 0;
+          const radius = nodeRadius(node.biomass, nodeTypeNum, node.y);
           const health = Math.min(1, node.biomass / 10);
           const nodeData = {
             id: node.id,
             position: new THREE.Vector3(node.x, node.y, node.z),
-            type: typeMap[node.type] ?? 0,
+            type: nodeTypeNum,
             radius,
             parentId: node.parentId,
             age: node.age,
             health,
             mutationFlags: 0,
             biomass: node.biomass,
+            isOwnPlant: false, // Will be set to true below for own plant
+            spawnTime: performance.now(), // Trigger 0.9s real-time growth emergence animation
           };
 
           if (growth.plantId === plantId) {
             // Local player's plant
+            nodeData.isOwnPlant = true;
             plantNodes.set(node.id, nodeData);
             plantBiomass = growth.totalBiomass ?? plantBiomass;
-            lastGrownNodeId = node.id;
             if (plantRenderer) {
-              const otherNodes: Array<{
-                id: string;
-                position: THREE.Vector3;
-                type: number;
-                radius: number;
-                parentId: string | null;
-                age: number;
-                health: number;
-                mutationFlags: number;
-                biomass: number;
-              }> = [];
+              const otherNodes: PlantNodeData[] = [];
               for (const nodes of otherPlayerPlants.values()) {
                 otherNodes.push(...nodes.values());
               }
@@ -836,7 +1052,7 @@ function connect(): void {
               plantRenderer.updatePlantData(allNodes);
             }
             setDetail(
-              `Grew ${node.type} at (${node.x.toFixed(1)}, ${node.y.toFixed(1)}, ${node.z.toFixed(1)})`,
+              `Grew ${node.type} #${plantNodes.size} at (${node.x.toFixed(1)}, ${node.y.toFixed(1)}, ${node.z.toFixed(1)}) — Biomass: ${plantBiomass.toFixed(1)}`,
             );
           } else {
             // Other player's plant
@@ -852,7 +1068,16 @@ function connect(): void {
 
         case MESSAGE_TYPE.REJECT: {
           const reject = payload as RejectPayload;
-          setDetail(`REJECTED: ${reject.reason}\n${detailElement?.textContent || ''}`);
+          const readableReason =
+            reject.reason === 'growth_on_cooldown'
+              ? 'Cooldown (0.5s) — wait a moment to grow'
+              : reject.reason === 'insufficient_biomass' ||
+                  reject.reason === 'insufficient_biomass_for_node'
+                ? 'Insufficient biomass to grow'
+                : reject.reason === 'cannot_cross_layer'
+                  ? 'Cannot cross layer directly'
+                  : reject.reason;
+          setDetail(`Growth Notice: ${readableReason}`);
           break;
         }
 
@@ -913,21 +1138,24 @@ function connect(): void {
                 health: number;
                 mutationFlags: number;
                 biomass: number;
+                isOwnPlant: boolean;
               }
             >();
             for (const node of plant.nodes) {
-              const radius = nodeRadius(node.biomass);
+              const nodeTypeNum = typeMap[node.type] ?? 0;
+              const radius = nodeRadius(node.biomass, nodeTypeNum, node.y);
               const health = Math.min(1, node.biomass / 10);
               otherPlant.set(node.id, {
                 id: node.id,
                 position: new THREE.Vector3(node.x, node.y, node.z),
-                type: typeMap[node.type] ?? 0,
+                type: nodeTypeNum,
                 radius,
                 parentId: node.parentId,
                 age: node.age,
                 health,
                 mutationFlags: 0,
                 biomass: node.biomass,
+                isOwnPlant: false,
               });
             }
             otherPlayerPlants.set(plant.id, otherPlant);
@@ -1005,37 +1233,30 @@ function connect(): void {
               health: number;
               mutationFlags: number;
               biomass: number;
+              isOwnPlant: boolean;
             }
           >();
           for (const node of created.plant.nodes) {
-            const radius = nodeRadius(node.biomass);
+            const nodeTypeNum = typeMap[node.type] ?? 0;
+            const radius = nodeRadius(node.biomass, nodeTypeNum);
             const health = Math.min(1, node.biomass / 10);
             otherPlant.set(node.id, {
               id: node.id,
               position: new THREE.Vector3(node.x, node.y, node.z),
-              type: typeMap[node.type] ?? 0,
+              type: nodeTypeNum,
               radius,
               parentId: node.parentId,
               age: node.age,
               health,
               mutationFlags: 0,
               biomass: node.biomass,
+              isOwnPlant: false,
             });
           }
           otherPlayerPlants.set(created.plant.id, otherPlant);
           // Update renderer with all plants
           if (plantRenderer) {
-            const otherNodes: Array<{
-              id: string;
-              position: THREE.Vector3;
-              type: number;
-              radius: number;
-              parentId: string | null;
-              age: number;
-              health: number;
-              mutationFlags: number;
-              biomass: number;
-            }> = [];
+            const otherNodes: PlantNodeData[] = [];
             for (const nodes of otherPlayerPlants.values()) {
               otherNodes.push(...nodes.values());
             }
@@ -1051,17 +1272,7 @@ function connect(): void {
           if (otherPlayerPlants.delete(removed.plantId)) {
             // Update renderer with remaining plants
             if (plantRenderer) {
-              const otherNodes: Array<{
-                id: string;
-                position: THREE.Vector3;
-                type: number;
-                radius: number;
-                parentId: string | null;
-                age: number;
-                health: number;
-                mutationFlags: number;
-                biomass: number;
-              }> = [];
+              const otherNodes: PlantNodeData[] = [];
               for (const nodes of otherPlayerPlants.values()) {
                 otherNodes.push(...nodes.values());
               }
@@ -1140,12 +1351,18 @@ function animate(): void {
   requestAnimationFrame(animate);
   controls.update();
 
+  const now = performance.now();
+  const deltaTime = Math.min(0.25, (now - lastUpdateTime) / 1000);
+  lastUpdateTime = now;
+  if (deltaTime > 0) measuredFps = 1 / deltaTime;
+
+  // T02: Update Root Sight transition and cutaway state
+  if (rootSightConfig) {
+    updateRootSight(deltaTime);
+  }
+
   // Update plant renderer
   if (plantRenderer) {
-    const now = performance.now();
-    const deltaTime = Math.min(0.25, (now - lastUpdateTime) / 1000);
-    lastUpdateTime = now;
-    if (deltaTime > 0) measuredFps = 1 / deltaTime;
     plantRenderer.update(deltaTime);
   }
 

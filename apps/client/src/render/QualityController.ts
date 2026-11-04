@@ -87,15 +87,16 @@ export class QualityController {
     const target = this.targetFps * this.warningThreshold;
 
     if (fps > 0 && fps < target) {
-      // Under budget: drop resolution toward the floor.
-      const next = this.currentPixelRatio - 0.1;
-      this.currentPixelRatio = this.clampPixelRatio(Math.max(next, this.floor));
+      // Under budget: drop resolution toward the floor (minimum 0.8 to prevent pixelated soup).
+      const effectiveFloor = Math.max(0.8, this.floor);
+      const next = this.currentPixelRatio - 0.05;
+      this.currentPixelRatio = this.clampPixelRatio(Math.max(next, effectiveFloor));
       return;
     }
 
-    if (fps >= this.targetFps && this.currentPixelRatio < this.ceiling) {
-      // Headroom: climb back up.
-      const next = this.currentPixelRatio + 0.1;
+    if (fps >= target + 8 && this.currentPixelRatio < this.ceiling) {
+      // Headroom: climb back up smoothly.
+      const next = this.currentPixelRatio + 0.05;
       this.currentPixelRatio = this.clampPixelRatio(Math.min(next, this.ceiling));
       return;
     }

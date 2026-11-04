@@ -62,6 +62,16 @@ export interface UIConfig {
   safeAreaPaddingPx: number;
 }
 
+export interface RootSightConfig {
+  cutawayRadius: number;
+  transitionMs: number;
+  soilOpacity: number;
+  ownRootHighlightColor: string;
+  rivalRootHighlightColor: string;
+  substrateMultiplier: number;
+  cameraTarget: 'own_plant' | 'camera_position';
+}
+
 interface QualityTierResponse {
   name?: string;
   pixel_ratio?: number;
@@ -141,6 +151,23 @@ interface UIConfigResponse {
   safeAreaPaddingPx?: number;
 }
 
+interface RootSightConfigResponse {
+  cutaway_radius?: number;
+  cutawayRadius?: number;
+  transition_ms?: number;
+  transitionMs?: number;
+  soil_opacity?: number;
+  soilOpacity?: number;
+  own_root_highlight_color?: string;
+  ownRootHighlightColor?: string;
+  rival_root_highlight_color?: string;
+  rivalRootHighlightColor?: string;
+  substrate_multiplier?: number;
+  substrateMultiplier?: number;
+  camera_target?: 'own_plant' | 'camera_position';
+  cameraTarget?: 'own_plant' | 'camera_position';
+}
+
 function normalizeRenderConfig(data: RenderConfigResponse, fallback: RenderConfig): RenderConfig {
   const tiers: QualityTierResponse[] =
     data.quality_tiers ?? data.qualityTiers ?? fallback.qualityTiers;
@@ -212,6 +239,26 @@ function normalizeUIConfig(data: UIConfigResponse, fallback: UIConfig): UIConfig
   };
 }
 
+function normalizeRootSightConfig(
+  data: RootSightConfigResponse,
+  fallback: RootSightConfig,
+): RootSightConfig {
+  return {
+    cutawayRadius: data.cutaway_radius ?? data.cutawayRadius ?? fallback.cutawayRadius,
+    transitionMs: data.transition_ms ?? data.transitionMs ?? fallback.transitionMs,
+    soilOpacity: data.soil_opacity ?? data.soilOpacity ?? fallback.soilOpacity,
+    ownRootHighlightColor:
+      data.own_root_highlight_color ?? data.ownRootHighlightColor ?? fallback.ownRootHighlightColor,
+    rivalRootHighlightColor:
+      data.rival_root_highlight_color ??
+      data.rivalRootHighlightColor ??
+      fallback.rivalRootHighlightColor,
+    substrateMultiplier:
+      data.substrate_multiplier ?? data.substrateMultiplier ?? fallback.substrateMultiplier,
+    cameraTarget: data.camera_target ?? data.cameraTarget ?? fallback.cameraTarget,
+  };
+}
+
 async function fetchFlat<T>(serverOrigin: string, path: string, fallback: T): Promise<T> {
   try {
     const response = await fetch(`${serverOrigin}${path}`, { cache: 'no-store' });
@@ -228,6 +275,12 @@ async function fetchFlat<T>(serverOrigin: string, path: string, fallback: T): Pr
       }
       if (path === '/config/ui') {
         return normalizeUIConfig(data as UIConfigResponse, fallback as UIConfig) as T;
+      }
+      if (path === '/config/root_sight') {
+        return normalizeRootSightConfig(
+          data as RootSightConfigResponse,
+          fallback as RootSightConfig,
+        ) as T;
       }
       return data as T;
     }
@@ -311,5 +364,17 @@ export async function loadUIConfig(serverOrigin: string): Promise<UIConfig> {
     panelAnimationMs: 200,
     reducedMotion: false,
     safeAreaPaddingPx: 8,
+  });
+}
+
+export async function loadRootSightConfig(serverOrigin: string): Promise<RootSightConfig> {
+  return fetchFlat<RootSightConfig>(serverOrigin, '/config/root_sight', {
+    cutawayRadius: 50,
+    transitionMs: 500,
+    soilOpacity: 0.3,
+    ownRootHighlightColor: '#4CAF50',
+    rivalRootHighlightColor: '#FF5722',
+    substrateMultiplier: 0.5,
+    cameraTarget: 'own_plant',
   });
 }

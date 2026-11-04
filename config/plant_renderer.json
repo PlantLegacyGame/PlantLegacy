@@ -1,11 +1,11 @@
 {
   "_meta": {
     "system": "plant_renderer",
-    "version": "0.1.0",
+    "version": "1.0.0",
     "schema": "extended-1",
     "owner_task": "C02",
-    "status": "draft",
-    "notes": "Procedural plant renderer v1: tapered tubes, instanced leaves, shared material, L0/L1 levels"
+    "status": "active",
+    "notes": "Procedural plant renderer v1: raymarched SDF with smin primitive fusion, shared organism material, L0/L1 levels"
   },
   "values": {
     "max_nodes_per_plant": {
@@ -43,17 +43,6 @@
       "value": 0.15,
       "range": [0.0, 1.0],
       "notes": "Probability of branching per node"
-    },
-    "root_sight_enabled": {
-      "type": "boolean",
-      "value": true,
-      "notes": "Enable Root Sight shader (roots visible underground)"
-    },
-    "root_sight_opacity": {
-      "type": "number",
-      "value": 0.6,
-      "range": [0.1, 1.0],
-      "notes": "Opacity of underground root visualization"
     },
     "canopy_sight_enabled": {
       "type": "boolean",
@@ -101,19 +90,19 @@
     },
     "tube_length_segments": {
       "type": "integer",
-      "value": 4,
-      "range": [2, 8],
-      "notes": "Number of length segments per tube segment"
+      "value": 8,
+      "range": [4, 16],
+      "notes": "Number of length segments per tube segment (more = smoother curves)"
     },
     "leaf_count_per_node": {
       "type": "integer",
-      "value": 3,
-      "range": [1, 8],
+      "value": 1,
+      "range": [1, 3],
       "notes": "Number of leaves per canopy node"
     },
     "leaf_size": {
       "type": "number",
-      "value": 1.5,
+      "value": 1.2,
       "range": [0.5, 5.0],
       "notes": "Base leaf size multiplier"
     },
@@ -122,6 +111,18 @@
       "value": 2.5,
       "range": [1.5, 5.0],
       "notes": "Leaf length to width ratio"
+    },
+    "petiole_length": {
+      "type": "number",
+      "value": 0.25,
+      "range": [0.1, 1.0],
+      "notes": "Length of petiole (leaf stem) connecting leaf to branch"
+    },
+    "petiole_thickness": {
+      "type": "number",
+      "value": 0.015,
+      "range": [0.005, 0.05],
+      "notes": "Thickness of petiole"
     },
     "l0_distance": {
       "type": "number",
@@ -178,7 +179,7 @@
     },
     "mutation_visual_0_param": {
       "type": "number",
-      "value": 1.0,
+      "value": 0.0,
       "range": [0.0, 5.0],
       "notes": "Shader parameter for mutation visual 0 (emissive intensity)"
     },
@@ -203,6 +204,30 @@
       "value": 0.3,
       "range": [0.0, 1.0],
       "notes": "Shader parameter for mutation visual 2 (leaf color variation)"
+    },
+    "smin_blend_radius": {
+      "type": "number",
+      "value": 0.08,
+      "range": [0.02, 0.5],
+      "notes": "Polynomial smooth minimum blend radius (k) for organic primitive fusion"
+    },
+    "max_raymarch_steps": {
+      "type": "integer",
+      "value": 32,
+      "range": [12, 128],
+      "notes": "Maximum sphere tracing steps per ray"
+    },
+    "raymarch_hit_epsilon": {
+      "type": "number",
+      "value": 0.005,
+      "range": [0.001, 0.05],
+      "notes": "Distance threshold for surface hit detection"
+    },
+    "bounding_box_padding": {
+      "type": "number",
+      "value": 1.2,
+      "range": [0.1, 2.0],
+      "notes": "Padding around plant bounding volume to account for blend radius and foliage"
     }
   }
 }

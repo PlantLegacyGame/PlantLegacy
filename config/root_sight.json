@@ -1,11 +1,52 @@
 {
   "_meta": {
     "system": "root_sight",
-    "version": "0.1.0",
+    "version": "1.0.0",
     "schema": "extended-1",
     "owner_task": "T02",
-    "status": "stub",
-    "notes": "Declared by T00. Populated by T02 per DESIGN.md Part 5."
+    "status": "active",
+    "notes": "Root Sight two-mode camera, soil cutaway, and reroot substrate multiplier"
   },
-  "values": {}
+  "values": {
+    "cutaway_radius": {
+      "type": "number",
+      "value": 50,
+      "range": [5, 500],
+      "notes": "Radius of the underground cutaway sphere around the camera target"
+    },
+    "transition_ms": {
+      "type": "integer",
+      "value": 500,
+      "range": [0, 3000],
+      "notes": "Smooth transition duration between surface and underground modes (0 = instant)"
+    },
+    "soil_opacity": {
+      "type": "number",
+      "value": 0.3,
+      "range": [0, 0.9],
+      "notes": "Opacity of soil inside the cutaway (0 = invisible, 0.9 = nearly opaque)"
+    },
+    "own_root_highlight_color": {
+      "type": "color",
+      "value": "#4CAF50",
+      "notes": "High-contrast color for the viewer's own roots"
+    },
+    "rival_root_highlight_color": {
+      "type": "color",
+      "value": "#FF5722",
+      "notes": "Distinct color for nearby rival roots"
+    },
+    "substrate_multiplier": {
+      "type": "number",
+      "value": 0.5,
+      "range": [0.1, 1.0],
+      "notes": "Movement multiplier for uprooted reroot crawl (T06); applies whether Root Sight is on or off"
+    },
+    "camera_target": {
+      "type": "enum",
+      "value": "own_plant",
+      "enum": ["own_plant", "camera_position"],
+      "notes": "Default cutaway target reference; the camera is an independent entity"
+    }
+  }
 }

@@ -10,13 +10,13 @@
   "values": {
     "root_growth_speed": {
       "type": "number",
-      "value": 6.0,
+      "value": 0.85,
       "range": [0.1, 10.0],
       "notes": "Root layer growth speed in units per second"
     },
     "canopy_growth_speed": {
       "type": "number",
-      "value": 6.0,
+      "value": 0.95,
       "range": [0.1, 10.0],
       "notes": "Canopy layer growth speed in units per second"
     },

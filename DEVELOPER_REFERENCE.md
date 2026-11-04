@@ -1,10 +1,10 @@
 # Plant Legacy — Complete Developer Reference
 
-**Last Updated:** 2026-11-02  
+**Last Updated:** 2026-11-03  
 **Current Phase:** Gate 0 complete; Gate 1 run-up (Week 3-24)  
-**Completed Tasks:** T00, O01, **T03P**, **C02**, **T01**  
-**Partial Tasks:** C01 (foundation slice), T00A (onboarding slice)  
-**Next Task:** **C03 Environment Rendering** (DESIGN.md Part 6.1)
+**Completed Tasks:** T00, O01, **T03P**, **C01**, **T00A**, **T01**, **C02**, **T03**, **T08C**, **T02**  
+**Partial Tasks:** None (Phase 1 tasks in sequence)  
+**Next Task:** **T07 Weather and Day/Night** (DESIGN.md Part 5)
 
 ---
 
@@ -15,16 +15,19 @@
 | T00 | ✅ Complete | Foundation: monorepo, 75 config files, config validator, rarity ban (RULE_20), account-bound invariant (RULE_23) |
 | O01 | ✅ Complete | Repo + deploy pipeline: pnpm, Biome, CI, Docker, GitHub Pages, `/health` + `/ready` |
 | T03P | ✅ Complete | WebSocket + JSON protocol, 20 Hz authoritative cubes; velocity/bounds rejection effective and tested |
-| C01 | ⚠️ Partial | Vite + Three.js client, OrbitControls, WebSocket; no input abstraction, UI shell or debug overlay |
-| C02 | ✅ Complete | Procedural plant renderer v1: tapered tubes, instanced leaves, shared material, triplanar noise, wind, health tint, 3 mutation signatures, L0/L1 |
-| T00A | ⚠️ Partial | 3-line hint card and resource tooltips; tile grid and resource simulation not built |
+| C01 | ✅ Complete | Input abstraction, UI shell, quality tiers, debug overlay, pause-on-hidden, config routes |
+| C02 | ✅ Complete | Procedural plant renderer v1: Raymarched SDF with polynomial smooth minimum (smin) organic fusion inside local bounding volumes; seamless living organism |
+| T00A | ✅ Complete | Tile grid resource model (light/moisture/minerals), simulation, photosynthesis, absorption, onboarding overlays |
 | T01 | ✅ Complete | Server-authoritative typed-node growth: biomass cost, root competition, canopy shading, root attack; client renders growing plant via C02; biomass UI readout; 'G' key to grow |
+| T03 | ✅ Complete | Persistence (binary snapshot + event log), offline tiers (Active/Near/Dormant), interest management, event bus, tick budget |
+| T08C | ✅ Complete | Accounts and sessions: argon2id, JWT access/refresh, rate limits, lockout, WebSocket auth |
+| T02 | ✅ Complete | Root Sight: two-mode camera and soil cutaway integrated with continuous SDF organism renderer; subterranean roots highlight in green/orange through cutaway |
 
 ### What Works Now (Live)
 - **Local dev:** `pnpm dev` → server (8080) + Vite client (4173) with hot reload
 - **Staging:** GitHub Pages at `https://plantlegacygame.github.io/PlantLegacy/`, API via Cloudflare quick tunnel
 - **Protocol:** WebSocket v1 documented in `docs/protocol.md`; two tabs, server-authoritative cubes
-- **Client:** Three.js scene, OrbitControls, C02 procedural plant renderer (tapered tubes + instanced leaves, shared material, triplanar noise, wind, health tint, mutation signatures, L0/L1), onboarding overlays
+- **Client:** Three.js scene, OrbitControls, C02 procedural plant renderer (Raymarched SDF with polynomial smooth minimum primitive fusion into one seamless organism, shared material, 3D triplanar noise, vertex wind sway, health tint, mutation signatures, L0/L1), T02 Root Sight cutaway, onboarding overlays
 - **Config:** 75 files in `config/` (extended-1 format), validated at startup + CI
 
 ---

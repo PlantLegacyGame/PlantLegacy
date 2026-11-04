@@ -4,7 +4,7 @@ Current context for any human or AI session working in this repository. Keep it
 current at the end of every task (DESIGN.md, Session Protocol). `DESIGN.md` wins
 over this file whenever they disagree.
 
-**Phase:** 1 — The Living Sprout (in progress). **Implemented:** T00, O01, T03P, C01, **T00A** (resource model + onboarding), C02, T01 (growth + procedural renderer), **T03** (persistence, offline tiers, interest management, event bus), **T08C** (accounts + sessions). **Added:** config/resources.json, config/world.json, config/network.json, config/accounts.json, server resource model, PlantPersistence, PlantWorld tiers, InterestManager, EventBus, AccountsService. **Last updated:** 2026-11-03.
+**Phase:** 1 — The Living Sprout (in progress). **Implemented:** T00, O01, T03P, C01, **T00A** (resource model + onboarding), T01 (growth simulation), **T03** (persistence, offline tiers, interest management, event bus), **T08C** (accounts + sessions), **C02** (Raymarched SDF procedural organism renderer with `smin` organic fusion, Murray's law allometric tapering, thin-lamina foliage, and 0.9s real-time emergence animation), **T02** (Root Sight unified organism integration). **Added:** config/resources.json, config/world.json, config/network.json, config/accounts.json, config/plant_renderer.json, config/root_sight.json, server resource model, PlantPersistence, PlantWorld tiers, InterestManager, EventBus, AccountsService. **Last updated:** 2026-11-04.
 
 ## 1. Stack
 
@@ -166,6 +166,10 @@ preflight. Other methods are `405`. Responses carry
 | GET | `/` | 200 | `{ name, version, world, note }` |
 | GET | `/config/onboarding` | 200 | `{ hint_card_lines, show_hint_card_duration_ms, resource_tooltips }` |
 | GET | `/config/plant_renderer` | 200 | flat `plant_renderer` values (`max_nodes_per_plant`, …) |
+| GET | `/config/render` | 200 | flat `render` values (quality tiers, camera smoothing, …) |
+| GET | `/config/controls` | 200 | flat `controls` values (bindings, text scale, …) |
+| GET | `/config/ui` | 200 | flat `ui` values (theme tokens, z-indexes, …) |
+| GET | `/config/root_sight` | 200 | flat `root_sight` values (`cutaway_radius`, `soil_opacity`, …) |
 | * | anything else | 404 | `{ error: "not_found" }` |
 
 The `/config/*` routes read the file from `CONFIG_DIR` on each request and fall
@@ -344,13 +348,15 @@ The full rationale log is in [`docs/decisions.md`](./docs/decisions.md).
 
 ## 8. Not built yet
 
-Accounts, chat, economy, database
-schema/migrations, admin/compliance tooling.
+Chat, economy, damage pipeline, weather/daynight, inventory, admin/compliance tooling.
 
-The C02 procedural plant renderer v1 is complete: tapered tubes for
-roots/stems/vines, instanced leaves with L0/L1, shared plant material with
-triplanar noise + wind + health tint, deterministic generation from node data,
-and 3 mutation visual signatures. T01 growth simulation is server-authoritative
+
+**C02 procedural plant renderer** is completed using **Raymarched Signed Distance Fields (SDF) with smooth minimum (`smin`) organic fusion** inspired by the procedural creature architecture of *Hatched* by SublimeOrange (`https://www.reddit.com/r/IndieDev/comments/1x9mmly/im_a_solo_dev_building_hatched_a/`). Instead of floating primitive cylinders clipping with flat caps, the organism's tapered capsule segments, joint spheres, root crown, and parametric foliage melt into a continuous living membrane with smooth branch collars and seamless root-to-canopy transition at $y = 0$.
+
+**T02 Root Sight** two-mode camera and volumetric ground cutaway are fully integrated with the unified SDF organism: subterranean root branches are revealed as part of that single continuous body, highlighting viewer roots in `#4CAF50` and rival roots in `#FF5722`.
+
+
+T01 growth simulation is server-authoritative
 and working. **T00A resource model complete** (tile grid, simulation,
 photosynthesis, absorption, deposits, consumption triggers, diffusion, broadcasts,
 client readout connected). **T03 complete** (binary snapshot + event log persistence,

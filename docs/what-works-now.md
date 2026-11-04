@@ -23,9 +23,11 @@ Honest list. No feature promises (T42, RULE_13). Updated at every gate.
   Config served via `/config/render`, `/config/controls`, `/config/ui`.
 - **T00A onboarding:** dismissible three-line hint card and tooltips on the
   light / water / minerals readout, loaded from `/config/onboarding`.
-- **T01 growth:** server-authoritative typed-node growth with root competition,
-  canopy shading, root attack. Procedural plant renderer v1 (C02) renders
-  growing plants.
+- **T01 growth & C02 plant renderer:** server-authoritative typed-node growth with root competition, canopy shading, root attack. **C02 procedural plant renderer** renders plants as unified organic living bodies via Raymarched Signed Distance Fields (SDF) with polynomial smooth minimum (`smin`) primitive fusion, continuous 3D triplanar noise, vertex wind sway, Inigo Quilez ambient occlusion (AO), and local bounding volumes. Features botanical Murray's law allometric tapering (sturdy base trunk tapering into delicate twigs aloft), paper-thin elliptic lancet foliage (eliminating hockey-puck disc thickness), smooth branch collar fillets without joint lumpiness, and real-time 0.9s growth emergence animations for seed split, shoot elongation, and leaf unfurling. Full geometric bounding box frustum culling guarantees branches extending from bases behind the camera remain fully visible.
+
+
+
+
 - **T00A:** tile resource model (light/moisture/minerals), onboarding hint card
   and tooltips.
 - **T03 multiplayer world:** plants persist across disconnect (binary snapshot +
@@ -37,6 +39,7 @@ Honest list. No feature promises (T42, RULE_13). Updated at every gate.
   argon2id password hashing; JWT access (15 min) + refresh (30 days) tokens with
   rotation; IP rate limits and account lockout after failed attempts; WebSocket
   auth via HELLO accessToken; plant ownerId = accountId for persistence.
+- **T02 Root Sight:** two-mode camera with volumetric soil cutaway shader on the ground plane, smooth transition (500 ms ease-out), high-contrast root highlighting (#4CAF50 for local player, #FF5722 for rival plants), independent camera target, `substrate_multiplier` (0.5) configured for T06 uproot crawl. Local-only toggle via `Tab` key or touch edge button.
 - **Background tab fix:** plants survive tab-out for 5 min (authenticated + anonymous), reclaim on reconnect with full PLANT_SYNC, ghost plants cleaned via PLANT_REMOVED.
 - Staging client on GitHub Pages, with the API served from the local compose
   stack through a tunnel.
@@ -44,14 +47,14 @@ Honest list. No feature promises (T42, RULE_13). Updated at every gate.
 ## Not built yet
 
 Growth simulation (two-step pointing), chat, economy, damage,
-weather, mutation, inventory, and a real Root Sight toggle (the shader exists;
-the camera/soil cutaway does not). Touch input not implemented (desktop only).
+weather, mutation, inventory. Touch input not implemented (desktop only).
+
 The renderer has no interpolation between server ticks. Interest management
 not yet filtering STATE/KEYFRAME broadcasts. Binary protocol not on wire.
 
 ## Next
 
-Per DESIGN.md Part 4, the next tasks are **T02** (Root Sight), **T07** (Weather and Day/Night), **C03** (Environment Rendering). **T02** depends on T01 + C01.
+Per DESIGN.md Part 4, the next tasks are **T07** (Weather and Day/Night) and **C03** (Environment Rendering). T07 depends on T00A + T03.
 
 ## Explicitly not promised
 

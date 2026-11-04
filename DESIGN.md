@@ -434,12 +434,12 @@ Every task returns: implementation, config file(s), README of tunables (type/ran
 **Config.** Token lifetimes, rate limits, password rules, username rules (length, characters).
 **AI prompt.** "Build T08C accounts per spec. No email at this stage. Hash with argon2id. Add rate limits and lockout. Admin role created only by CLI/seed script."
 
-### C02 · Procedural Plant Renderer v1 — `config/render.json`
+### C02 · Procedural Plant Renderer v1 — `config/plant_renderer.json`
 **Depends on:** C01, T01.
-**Must support.** Part 14.1.1–14.1.3: node graph to tapered tubes (root/stem/vine), instanced leaves, shared plant material (triplanar noise, wind in vertex shader, health tint), incremental append on growth, L0 and L1 levels, deterministic output from node data (all clients see the same plant), three example mutation visual flags mapped to shader parameters.
-**Acceptance.** Plant visibly grows above and below ground. Adding a node does not rebuild the whole mesh. Fifty L0 plants meet the desktop budget (Part 13.4). Two clients render the same plant identically.
-**Config.** Ring counts, leaf parameters, detail distances, triangle budgets.
-**AI prompt.** "Build C02: procedural tubes, instanced leaves, one shared plant material, incremental buffer append, L0/L1 levels. No per-plant materials. No per-frame allocations. Budgets from render.json."
+**Must support.** Part 14.1: Raymarched Signed Distance Fields (SDF) with smooth minimum (`smin`) organism fusion inside local bounding volumes. Fuses modular mathematical primitives (tapered capsule segments for roots/stems/vines, joint spheres, root crown) into one continuous, seamless living organism without floating parts or flat clipping seams. Shared plant material with 3D triplanar noise, vertex wind sway, health tint, L0 and L1 levels, deterministic output from node data (all clients see identical geometry), three mutation visual flags mapped to shader parameters.
+**Acceptance.** Plant visibly grows as a continuous, unified organism above and below ground. Branch junctions form smooth organic collars. Adding a node appends to the primitive buffer without rebuilding mesh topology. Fifty L0 plants meet the desktop budget. Two clients render the same plant identically.
+**Config.** `config/plant_renderer.json` (blend radius `smin_blend_radius`, raymarch step parameters, leaf parameters, detail distances, quality presets).
+**AI prompt.** "Build C02: Raymarched SDF organism renderer with smin primitive fusion, bounding volume evaluation, triplanar noise, wind sway, L0/L1 levels. Fuses primitive parts into one seamless living organism. All tunables in config/plant_renderer.json."
 
 ### C02b · Renderer Polish and LOD — `config/render.json`
 **Depends on:** C02, T03, T04.
@@ -1922,38 +1922,61 @@ Rules:
 
 # Part 14 — Client Rendering
 
-## 14.1 Procedural Plant Rendering (C02)
+## 14.1 Procedural Plant Rendering (C02) — The Unified Organism Architecture
 
-> This is the general technique used for procedural creatures, adapted to plants. If the user pastes the Reddit link's text, the spec can be aligned to the exact method.
+> **Design Alignment:** Based on the procedural creature architecture demonstrated in *Hatched* by SublimeOrange (`https://www.reddit.com/r/IndieDev/comments/1x9mmly/im_a_solo_dev_building_hatched_a/`, `https://sublimeorange.itch.io/hatched`), adapted for botanical organisms.
 
-### 14.1.1 The Idea
+### 14.1.1 The Idea: Primitives Fused into a Uniform Organism
 
-The server sends a plant's **node graph** (position, type, radius, parent, age, health, mutation visual flags). The client **builds the body from that graph** with code. Nothing is hand-modeled per plant, so infinite variety costs no extra art.
+The server sends a plant's **node graph** (position, type, radius, parent, age, health, mutation visual flags). The client builds the organism's body from that graph in real time.
 
-### 14.1.2 Mesh Generation
+**The Golden Principle:** Players and their plants are constructed from modular mathematical primitives (tapered capsules, joint spheres, root crowns, leaf blades), but they **must never look like floating, disconnected, colored primitive parts clipping into each other**. Instead, a specialized **organism fusion shader** blends the primitive components into a single, cohesive, living anatomical membrane with seamless organic junctions.
 
-| Node type | Method |
-|---|---|
-| root / stem / vine | A **tapered tube** swept along a smoothed curve through parent→child nodes. Radius from node data, ring count from detail level. At branch points, rings are blended with a smooth junction ring so there are no visible seams. |
-| leaf | A **parametric leaf** (width, length, curl, vein pattern, serration) from one small base shape. Placed with **instancing**, one instance per leaf, with per-instance color/size/phase in an instance attribute buffer. |
-| flower | Parametric petal ring generator (petal count, shape, droop). Instanced. |
-| spore_sac | Soft sphere/ellipsoid with vertex displacement in the shader. |
-| roots (Root Sight) | Same tube generator, different material (see Part 19). |
+### 14.1.2 Signed Distance Fields (SDF) and the Smooth Minimum (`smin`) Operator
 
-Efficient updates: when a node is added, **append** new rings/instances to the plant's buffers; do not rebuild the whole mesh. Rebuild only on pruning or detail-level change.
+Rather than generating separate polygonal cylinders with flat end-caps that clip through each other at angles, the primary rendering architecture for L0/L1 plants uses **Raymarched Signed Distance Fields (SDF)** evaluated within a local Bounding Box volume:
 
-### 14.1.3 The "One Shader to Bind Them All"
+1. **Primitive Distance Functions:**
+   - **Tapered Capsule / Cone (`sdCapsule`):** Swept segment between parent node $\mathbf{a}$ and child node $\mathbf{b}$ with radii $r_a, r_b$ derived from node biomass:
+     $$\text{sdCapsule}(\mathbf{p}, \mathbf{a}, \mathbf{b}, r_a, r_b) = \left\| (\mathbf{p} - \mathbf{a}) - (\mathbf{b} - \mathbf{a}) \cdot h \right\| - \text{mix}(r_a, r_b, h)$$
+     where $h = \text{clamp}\left(\frac{(\mathbf{p} - \mathbf{a}) \cdot (\mathbf{b} - \mathbf{a})}{\|\mathbf{b} - \mathbf{a}\|^2}, 0.0, 1.0\right)$.
+   - **Joint Spheres (`sdSphere`):** Spherical padding at node junctions and a root crown ellipsoid at $y = 0$ anchoring the plant through the soil boundary:
+     $$\text{sdSphere}(\mathbf{p}, \mathbf{c}, r) = \|\mathbf{p} - \mathbf{c}\| - r$$
+   - **Parametric Foliage / Leaves:** Flattened teardrop ellipsoids attached seamlessly to branch/stem nodes.
 
-A single shared plant material with per-plant uniforms and per-vertex attributes handles:
+2. **The Fusion Operator — Polynomial Smooth Minimum (`smin`):**
+   Neighboring primitives are united using Inigo Quilez's polynomial smooth minimum:
+   $$\text{smin}(a, b, k) = \text{mix}(b, a, h) - k \cdot h \cdot (1.0 - h)$$
+   $$h = \text{clamp}\left(0.5 + 0.5 \cdot \frac{b - a}{k}, 0.0, 1.0\right)$$
+   where $k$ is the tunable organic blend radius (configured in `plant_renderer.json`).
+   - **Seamless Property Interpolation:** The fusion operator interpolates not only distance $d$, but also surface type (root vs stem vs leaf), tissue health, and player ownership (`isOwnPlant`), allowing bark, leaf petiole, and taproot colors to melt into each other without harsh seam boundaries.
+   - **Branch Junctions:** Where two or more branches fork from a trunk, `smin` automatically synthesizes smooth, organic branch collars/fillets without any mesh topology holes, overlapping z-fighting faces, or visible seams.
 
-- Base color gradients along the body (age, health, mutation tint) and **triplanar noise** for bark/root texture so no UVs are needed.
-- **Wind and sway in the vertex shader** using node depth as the bend weight (tips move more). No CPU animation cost.
-- **Damage/wilt** by blending toward a desaturated, thinner look using the health attribute.
-- Subsurface-style translucency approximation for leaves (cheap, stylized).
-- A rim-light term for the stylized-naturalism look (Part 19).
-- **Mutation signatures** applied as shader parameters and decal/instance variants, never as unique hand-made meshes.
+3. **Bounding Volume Raymarching & Depth Integration:**
+   - The shader executes on an oriented/axis-aligned Bounding Box mesh that tightly encloses all nodes of the plant plus blend padding ($k$). Pixels outside the bounding box are never raymarched, maintaining 60 fps performance.
+   - Sphere tracing steps through the distance field. When a ray hits ($\text{dist} < \epsilon$), the true world-space position is transformed to clip space and written directly to `gl_FragDepth`:
+     $$\text{clip} = \mathbf{P} \cdot \mathbf{V} \cdot \begin{bmatrix} \mathbf{p}_{\text{hit}} \\ 1 \end{bmatrix}, \quad \text{gl\_FragDepth} = \frac{\text{clip}.z}{\text{clip}.w} \cdot 0.5 + 0.5$$
+     This guarantees pixel-perfect depth testing against the ground plane, grid lines, and other scene geometry.
+   - Surface normals are evaluated via central differences gradient:
+     $$\mathbf{n} = \text{normalize}\left(\begin{bmatrix} d(\mathbf{p} + \epsilon \mathbf{e}_x) - d(\mathbf{p} - \epsilon \mathbf{e}_x) \\ d(\mathbf{p} + \epsilon \mathbf{e}_y) - d(\mathbf{p} - \epsilon \mathbf{e}_y) \\ d(\mathbf{p} + \epsilon \mathbf{e}_z) - d(\mathbf{p} - \epsilon \mathbf{e}_z) \end{bmatrix}\right)$$
 
-Same shader, same lighting model, same noise language means every plant looks like it belongs to one world. This is also what keeps draw calls low: plants share materials and are batched by detail level.
+### 14.1.3 The "One Shader to Bind Them All" (Material, Noise & Root Sight)
+
+A single shared shader material evaluates the entire organism:
+
+- **Continuous 3D Triplanar Noise:** 4-octave Fractional Brownian Motion (fbm) noise perturbs the surface normal and color in 3D world coordinates. Because coordinates are evaluated in 3D world space rather than UV coordinates, textures flow seamlessly across joints with zero stretching or visible seams.
+- **Dynamic Wind Displacement:** Ray query positions $\mathbf{p}$ are displaced prior to distance evaluation using a time-varying coherent wind field. Sway magnitude scales smoothly with height $y$, giving the plant organic, fluid motion with zero CPU animation cost.
+- **Continuous Root-to-Canopy Transition & Root Sight (T02):**
+  - The subterranean root system ($y < 0$) and the canopy ($y > 0$) form a single, unbroken physical continuum through the soil plane.
+  - When **Root Sight** is activated, the ground plane cutaway opens, and the shader illuminates the subterranean root system of the organism:
+    - Viewer's own roots highlight in `uOwnRootHighlightColor` (`#4CAF50`).
+    - Rival roots highlight in `uRivalRootHighlightColor` (`#FF5722`).
+- **Stylized Naturalism Lighting (Part 19):**
+  - Sun directional light + hemispheric ambient light.
+  - Subsurface scattering approximation (translucent backlight through foliage and tender stems).
+  - Subtle rim lighting for silhouette readability.
+  - Health tinting (desaturating toward brown/wilted tones as health drops).
+  - Three mutation visual signatures (bioluminescent emissive glow, thickened bark, variegated leaf coloration).
 
 ### 14.1.4 Where IK Belongs in a Plant Game
 

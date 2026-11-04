@@ -16,13 +16,13 @@
     },
     "fps_warning_threshold": {
       "type": "number",
-      "value": 0.85,
+      "value": 0.7,
       "range": [0.5, 0.95],
       "notes": "Fraction of target_fps at which the client downgrades resolution."
     },
     "resolution_floor": {
       "type": "number",
-      "value": 0.25,
+      "value": 0.85,
       "range": [0.1, 1.0],
       "notes": "Minimum renderer pixel ratio relative to devicePixelRatio."
     },
@@ -64,7 +64,7 @@
     },
     "shadow_map_size": {
       "type": "integer",
-      "value": 2048,
+      "value": 1024,
       "range": [512, 4096],
       "notes": "Directional light shadow map dimension."
     },
