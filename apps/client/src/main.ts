@@ -692,6 +692,28 @@ function setRootSightEnabled(enabled: boolean): void {
       focusCameraOnNode(crownNode);
     }
   }
+
+  if (enabled) {
+    controls.maxPolarAngle = Math.PI - 0.05;
+    // Find lowest root node (or radicle) to focus and center on
+    const ownNodes = Array.from(plantNodes.values()).filter((n) => n.isOwnPlant);
+    const rootNodes = ownNodes.filter(
+      (n) => n.layer === 'root' || n.type === 0 || n.position.y < -0.01,
+    );
+    if (rootNodes.length > 0) {
+      rootNodes.sort((a, b) => a.position.y - b.position.y); // Lowest y first
+      focusCameraOnNode(rootNodes[0]);
+    }
+  } else {
+    controls.maxPolarAngle = renderConfig?.cameraMaxPolarAngle ?? Math.PI / 2 - 0.05;
+    // Return camera focus smoothly to crown / seed / stem
+    const crownNode =
+      Array.from(plantNodes.values()).find((n) => n.isOwnPlant && n.parentId === null) ??
+      Array.from(plantNodes.values()).find((n) => n.isOwnPlant);
+    if (crownNode) {
+      focusCameraOnNode(crownNode);
+    }
+  }
 }
 
 function toggleRootSight(): void {
@@ -701,6 +723,26 @@ function toggleRootSight(): void {
   setDetail(
     isEnabled ? 'Root Sight: ON — Underground view active' : 'Root Sight: OFF — Surface view',
   );
+
+  if (isEnabled) {
+    controls.maxPolarAngle = Math.PI - 0.05;
+    const ownNodes = Array.from(plantNodes.values()).filter((n) => n.isOwnPlant);
+    const rootNodes = ownNodes.filter(
+      (n) => n.layer === 'root' || n.type === 0 || n.position.y < -0.01,
+    );
+    if (rootNodes.length > 0) {
+      rootNodes.sort((a, b) => a.position.y - b.position.y);
+      focusCameraOnNode(rootNodes[0]);
+    }
+  } else {
+    controls.maxPolarAngle = renderConfig?.cameraMaxPolarAngle ?? Math.PI / 2 - 0.05;
+    const crownNode =
+      Array.from(plantNodes.values()).find((n) => n.isOwnPlant && n.parentId === null) ??
+      Array.from(plantNodes.values()).find((n) => n.isOwnPlant);
+    if (crownNode) {
+      focusCameraOnNode(crownNode);
+    }
+  }
 
   if (isEnabled) {
     controls.maxPolarAngle = Math.PI - 0.05;
@@ -759,6 +801,10 @@ function updateRootSight(deltaTime: number): void {
     rootSightConfig.cutawayRadius,
     3.0,
   );
+  if (isEnabled && eased > 0.01) {
+    const allNodes = Array.from(plantNodes.values());
+    webgpuRenderer?.updateRootAura(allNodes);
+  }
 }
 
 async function initC01(): Promise<void> {
@@ -1224,6 +1270,13 @@ async function initC01(): Promise<void> {
   const canvas = renderer.domElement;
   // Ensure canvas can receive focus for keyboard events
   canvas.setAttribute('tabindex', '0');
+
+  // Smoothed growth direction dragging state (silky smooth, non-rigid)
+  const smoothedGrowthDir = new THREE.Vector3(0, -1, 0);
+  let smoothedGrowthDist = 1.0;
+  let isGrowthAtMaxReach = false;
+  let isGrowthAngleClamped = false;
+
   const startGrowthDragFromEvent = (e: MouseEvent | PointerEvent): boolean => {
     const gState = growthSelectionStateMachineGetState(growthSelectionMachine);
     if (gState !== 'option_selected' && gState !== 'drawing') return false;
@@ -1247,6 +1300,17 @@ async function initC01(): Promise<void> {
       console.warn('[PlantLegacy] Growth drag: no selected option type');
       return false;
     }
+
+    const initConstraints =
+      NODE_GROWTH_CONSTRAINTS[optionType as NodeType] ?? NODE_GROWTH_CONSTRAINTS.stem;
+    const initialClamped = clampGrowthDirectionByGene(
+      optionType,
+      initConstraints.downwardPreferred ? { x: 0, y: -1, z: 0 } : { x: 0.05, y: 0.998, z: 0.05 },
+    );
+    smoothedGrowthDir.set(initialClamped.x, initialClamped.y, initialClamped.z);
+    smoothedGrowthDist = Math.min(1.0, initConstraints.maxReach * 0.7);
+    isGrowthAtMaxReach = false;
+    isGrowthAngleClamped = false;
 
     growthSelectionStateMachineStartDrawing(
       growthSelectionMachine,
@@ -1473,61 +1537,39 @@ async function initC01(): Promise<void> {
     const dx = targetPosition.x - start.x;
     const dy = targetPosition.y - start.y;
     const dz = targetPosition.z - start.z;
-    const distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
-
-    // Get the node and its type
-    const node = plantNodes.get(drawingData.nodeId);
-    if (!node) return { isValid: false, reason: 'Node not found', distance };
+    const rawDist = Math.hypot(dx, dy, dz);
 
     const nodeType = drawingData.selectedOptionType;
     const constraints =
       NODE_GROWTH_CONSTRAINTS[nodeType as NodeType] ?? NODE_GROWTH_CONSTRAINTS.stem;
 
-    // Use end-tangent of traced path (matches intent direction) when available.
-    const path = drawingData.path ?? [];
-    let tdx = dx,
-      tdy = dy,
-      tdz = dz,
-      tdist = distance;
-    if (path.length >= 2) {
-      for (let i = path.length - 1; i >= 1; i--) {
-        const a = path[i - 1],
-          b = path[i];
-        const lx = b.x - a.x,
-          ly = b.y - a.y,
-          lz = b.z - a.z;
-        const ll = Math.hypot(lx, ly, lz);
-        if (ll > 0.03) {
-          tdx = lx;
-          tdy = ly;
-          tdz = lz;
-          tdist = ll;
-          break;
-        }
-      }
+    let targetDir = { x: dx, y: dy, z: dz };
+    if (rawDist > 0.05) {
+      targetDir = { x: dx / rawDist, y: dy / rawDist, z: dz / rawDist };
+    } else {
+      targetDir = constraints.downwardPreferred
+        ? { x: 0, y: -1, z: 0 }
+        : { x: 0.05, y: 0.998, z: 0.05 };
     }
 
-    if (tdist < 0.001) {
-      const fallback = clampGrowthDirectionByGene(
-        nodeType,
-        constraints.downwardPreferred ? { x: 0, y: -1, z: 0 } : { x: 0, y: 1, z: 0 },
-      );
-      return { isValid: true, distance: constraints.maxReach * 0.7, clampedDirection: fallback };
-    }
+    const clamped = clampGrowthDirectionByGene(nodeType, targetDir);
+    const targetDist = Math.max(0.35, Math.min(rawDist, constraints.maxReach));
 
-    const rawDir = { x: tdx / tdist, y: tdy / tdist, z: tdz / tdist };
-    const clampedDirection = clampGrowthDirectionByGene(nodeType, rawDir);
-    const clampedDistance = Math.max(0.3, Math.min(distance, constraints.maxReach));
+    isGrowthAtMaxReach = rawDist >= constraints.maxReach - 0.05;
+    isGrowthAngleClamped = Math.abs(clamped.y - targetDir.y) > 0.08;
+
+    // Smooth exponential damping (alpha = 0.35) makes the 3D line silky smooth and responsive
+    smoothedGrowthDir.lerp(new THREE.Vector3(clamped.x, clamped.y, clamped.z), 0.35).normalize();
+    smoothedGrowthDist += (targetDist - smoothedGrowthDist) * 0.35;
 
     return {
       isValid: true,
-      distance: clampedDistance,
-      clampedDirection,
-      reason: distance < 0.02 ? 'Drag to trace a growth path' : undefined,
+      distance: smoothedGrowthDist,
+      clampedDirection: { x: smoothedGrowthDir.x, y: smoothedGrowthDir.y, z: smoothedGrowthDir.z },
     };
   }
 
-  // Visual preview: draw the gene-constrained 3D growth vector with arrowhead at tip.
+  // Visual preview: draw the gene-constrained 3D growth vector, reach guide, and legible constraints HUD.
   function updateGrowthDirectionLine(
     _start: { x: number; y: number; z: number },
     _end: { x: number; y: number; z: number },
@@ -1540,20 +1582,12 @@ async function initC01(): Promise<void> {
     const constraints =
       NODE_GROWTH_CONSTRAINTS[nodeType as NodeType] ?? NODE_GROWTH_CONSTRAINTS.stem;
 
-    let endPos = _end;
-    if (drawingData?.direction) {
-      const reach = Math.max(
-        0.4,
-        Math.min(drawingData.distance || constraints.maxReach, constraints.maxReach),
-      );
-      endPos = {
-        x: _start.x + drawingData.direction.x * reach,
-        y: _start.y + drawingData.direction.y * reach,
-        z: _start.z + drawingData.direction.z * reach,
-      };
-    }
-
-    const path3 = [{ x: _start.x, y: _start.y, z: _start.z }, endPos];
+    const reach = Math.max(0.35, Math.min(smoothedGrowthDist, constraints.maxReach));
+    const endPos = {
+      x: _start.x + smoothedGrowthDir.x * reach,
+      y: _start.y + smoothedGrowthDir.y * reach,
+      z: _start.z + smoothedGrowthDir.z * reach,
+    };
 
     const w = window.innerWidth;
     const h = window.innerHeight;
@@ -1562,60 +1596,144 @@ async function initC01(): Promise<void> {
     const ctx = growthDirectionOverlayCtx;
     ctx.clearRect(0, 0, w, h);
 
-    const pts: { x: number; y: number }[] = [];
-    for (const p of path3) {
-      const v = new THREE.Vector3(p.x, p.y, p.z).project(camera);
-      if (v.z > 1 || v.z < -1) continue;
-      pts.push({ x: (v.x * 0.5 + 0.5) * w, y: (-v.y * 0.5 + 0.5) * h });
-    }
-    if (pts.length < 2) return;
+    // Project start node to screen
+    const vStart = new THREE.Vector3(_start.x, _start.y, _start.z).project(camera);
+    if (vStart.z > 1 || vStart.z < -1) return;
+    const sx = (vStart.x * 0.5 + 0.5) * w;
+    const sy = (-vStart.y * 0.5 + 0.5) * h;
 
-    const color = isValid ? '#4caf50' : '#f44336';
+    // Project end tip to screen
+    const vEnd = new THREE.Vector3(endPos.x, endPos.y, endPos.z).project(camera);
+    if (vEnd.z > 1 || vEnd.z < -1) return;
+    const ex = (vEnd.x * 0.5 + 0.5) * w;
+    const ey = (-vEnd.y * 0.5 + 0.5) * h;
+
     ctx.save();
-    ctx.strokeStyle = color;
-    ctx.fillStyle = color;
+
+    // 1. Draw Allowed Growth Sector / Cone Guide (Gene angle & reach boundary)
+    const guidePts: { x: number; y: number }[] = [];
+    const sampleAngles = 16;
+    const midY = (constraints.minY + constraints.maxY) * 0.5;
+    const maxR = constraints.maxReach;
+    const horizRadius = Math.sqrt(Math.max(0.01, 1 - midY * midY)) * maxR;
+
+    for (let i = 0; i <= sampleAngles; i++) {
+      const theta = (i / sampleAngles) * Math.PI * 2;
+      const gx = _start.x + Math.cos(theta) * horizRadius;
+      const gy = _start.y + midY * maxR;
+      const gz = _start.z + Math.sin(theta) * horizRadius;
+      const vp = new THREE.Vector3(gx, gy, gz).project(camera);
+      if (vp.z <= 1 && vp.z >= -1) {
+        guidePts.push({ x: (vp.x * 0.5 + 0.5) * w, y: (-vp.y * 0.5 + 0.5) * h });
+      }
+    }
+
+    if (guidePts.length >= 3) {
+      ctx.beginPath();
+      ctx.setLineDash([4, 6]);
+      ctx.strokeStyle = 'rgba(129, 199, 132, 0.35)';
+      ctx.lineWidth = 1.5;
+      ctx.moveTo(guidePts[0].x, guidePts[0].y);
+      for (let i = 1; i < guidePts.length; i++) {
+        ctx.lineTo(guidePts[i].x, guidePts[i].y);
+      }
+      ctx.closePath();
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
+    // 2. Draw Trajectory Vector Line with gradient and glow
+    const isClamped = isGrowthAtMaxReach || isGrowthAngleClamped;
+    const strokeColor = !isValid ? '#f44336' : isClamped ? '#ffb74d' : '#4caf50';
+    const glowColor = !isValid
+      ? 'rgba(244, 67, 54, 0.4)'
+      : isClamped
+        ? 'rgba(255, 183, 77, 0.4)'
+        : 'rgba(76, 175, 80, 0.4)';
+
+    ctx.beginPath();
+    ctx.moveTo(sx, sy);
+    ctx.lineTo(ex, ey);
+    ctx.strokeStyle = strokeColor;
     ctx.lineWidth = 4;
     ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
-    ctx.shadowColor = color;
-    ctx.shadowBlur = 8;
-    ctx.beginPath();
-    ctx.moveTo(pts[0].x, pts[0].y);
-    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+    ctx.shadowColor = glowColor;
+    ctx.shadowBlur = 10;
     ctx.stroke();
     ctx.shadowBlur = 0;
 
-    // Arrowhead at path tip, oriented by last visible segment.
-    const tip = pts[pts.length - 1];
-    let prev = pts[pts.length - 2];
-    for (let i = pts.length - 2; i >= 0; i--) {
-      const dx = tip.x - pts[i].x;
-      const dy = tip.y - pts[i].y;
-      if (dx * dx + dy * dy > 9) {
-        prev = pts[i];
-        break;
-      }
-    }
-    const angle = Math.atan2(tip.y - prev.y, tip.x - prev.x);
+    // 3. Arrowhead at tip
+    const dx = ex - sx;
+    const dy = ey - sy;
+    const angle = Math.atan2(dy, dx);
     const headLen = 14;
+    ctx.fillStyle = strokeColor;
     ctx.beginPath();
-    ctx.moveTo(tip.x, tip.y);
+    ctx.moveTo(ex, ey);
     ctx.lineTo(
-      tip.x - headLen * Math.cos(angle - Math.PI / 7),
-      tip.y - headLen * Math.sin(angle - Math.PI / 7),
+      ex - headLen * Math.cos(angle - Math.PI / 7),
+      ey - headLen * Math.sin(angle - Math.PI / 7),
     );
     ctx.lineTo(
-      tip.x - headLen * Math.cos(angle + Math.PI / 7),
-      tip.y - headLen * Math.sin(angle + Math.PI / 7),
+      ex - headLen * Math.cos(angle + Math.PI / 7),
+      ey - headLen * Math.sin(angle + Math.PI / 7),
     );
     ctx.closePath();
     ctx.fill();
 
-    // Origin marker
-    ctx.fillStyle = '#fff';
+    // 4. Ghost Bud Preview at tip (concentric glowing circles)
     ctx.beginPath();
-    ctx.arc(pts[0].x, pts[0].y, 4, 0, Math.PI * 2);
+    ctx.arc(ex, ey, 9, 0, Math.PI * 2);
+    ctx.fillStyle = isClamped ? 'rgba(255, 183, 77, 0.25)' : 'rgba(129, 199, 132, 0.25)';
     ctx.fill();
+    ctx.strokeStyle = strokeColor;
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.arc(ex, ey, 3.5, 0, Math.PI * 2);
+    ctx.fillStyle = '#ffffff';
+    ctx.fill();
+
+    // 5. Origin Marker at node
+    ctx.beginPath();
+    ctx.arc(sx, sy, 4.5, 0, Math.PI * 2);
+    ctx.fillStyle = '#ffffff';
+    ctx.fill();
+    ctx.strokeStyle = strokeColor;
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    // 6. Legible Status Badge / Constraints Tooltip
+    const label = drawingData?.selectedOptionLabel ?? nodeType;
+    let badgeText = `${label} • ${reach.toFixed(2)}m`;
+    if (isGrowthAtMaxReach) {
+      badgeText = `${label} • ${reach.toFixed(2)}m (Max Reach)`;
+    } else if (isGrowthAngleClamped) {
+      badgeText = `${label} • ${reach.toFixed(2)}m (Gene Angle Clamped)`;
+    }
+
+    ctx.font = '600 12px system-ui, -apple-system, sans-serif';
+    const textMetrics = ctx.measureText(badgeText);
+    const badgeW = textMetrics.width + 16;
+    const badgeH = 24;
+    const badgeX = Math.min(w - badgeW - 12, Math.max(12, ex + 14));
+    const badgeY = Math.min(h - badgeH - 12, Math.max(12, ey - 28));
+
+    // Badge background
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.88)';
+    ctx.strokeStyle = strokeColor;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.roundRect(badgeX, badgeY, badgeW, badgeH, 12);
+    ctx.fill();
+    ctx.stroke();
+
+    // Badge text
+    ctx.fillStyle = isClamped ? '#ffe0b2' : '#e8f5e9';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(badgeText, badgeX + 8, badgeY + badgeH / 2);
+
     ctx.restore();
   }
 
@@ -1632,28 +1750,24 @@ async function initC01(): Promise<void> {
     const raycaster = new THREE.Raycaster();
     raycaster.setFromCamera(mouse, camera);
 
-    const optionType = drawingData.selectedOptionType;
-    const isRootLike =
-      optionType === 'root' || optionType === 'radicle' || optionType === 'lateral_root';
-    // For roots/germination, intersect a plane below the node so dragging produces a clear downward direction.
-    if (isRootLike) {
-      const depth = Math.min(-0.25, drawingData.nodePosition.y - 0.8);
-      const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -depth);
-      const p = new THREE.Vector3();
-      if (raycaster.ray.intersectPlane(plane, p)) return p;
+    // Camera-facing drag plane through the node
+    // Provides 1-to-1 linear screen drag without singularities or horizon jumps
+    const camDir = new THREE.Vector3();
+    camera.getWorldDirection(camDir);
+    const nodePos = new THREE.Vector3(
+      drawingData.nodePosition.x,
+      drawingData.nodePosition.y,
+      drawingData.nodePosition.z,
+    );
+    const dragPlane = new THREE.Plane().setFromNormalAndCoplanarPoint(
+      camDir.clone().negate(),
+      nodePos,
+    );
+    const hit = new THREE.Vector3();
+    if (raycaster.ray.intersectPlane(dragPlane, hit)) {
+      return hit;
     }
-
-    // Primary: plane at the node's Y (good for canopy drag in screen space)
-    const nodePlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -drawingData.nodePosition.y);
-    const pNode = new THREE.Vector3();
-    if (raycaster.ray.intersectPlane(nodePlane, pNode)) return pNode;
-
-    const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
-    const intersectPoint = new THREE.Vector3();
-    if (raycaster.ray.intersectPlane(groundPlane, intersectPoint)) return intersectPoint;
-
-    // Fallback: point along ray at fixed distance from camera
-    return raycaster.ray.origin.clone().add(raycaster.ray.direction.clone().multiplyScalar(8));
+    return nodePos.clone().add(camDir.multiplyScalar(2));
   };
 
   const handleGrowthDrawMove = (e: MouseEvent | PointerEvent) => {
@@ -1700,45 +1814,34 @@ async function initC01(): Promise<void> {
 
     const drawingData = growthSelectionStateMachineGetDrawingData(growthSelectionMachine);
     let result = growthSelectionStateMachineConfirmDrawing(growthSelectionMachine);
-    // Derive direction from drag even if client-side validation rejected (server is authoritative for final rules).
     if (!result && drawingData) {
       const node = plantNodes.get(drawingData.nodeId);
       const t = drawingData.selectedOptionType;
-      const end = drawingData.currentEndPosition;
-      let dir: { x: number; y: number; z: number } | null = null;
-      if (node && end) {
-        const dx = end.x - drawingData.nodePosition.x;
-        const dy = end.y - drawingData.nodePosition.y;
-        const dz = end.z - drawingData.nodePosition.z;
-        const len = Math.hypot(dx, dy, dz);
-        if (len > 0.001) {
-          dir = clampGrowthDirectionForOption(t, { x: dx / len, y: dy / len, z: dz / len });
-        }
-      }
-      if (!dir) {
-        dir = clampGrowthDirectionForOption(
-          t,
-          t === 'root' || t === 'radicle' || t === 'lateral_root'
-            ? { x: 0, y: -1, z: 0 }
-            : t === 'leaf' || t === 'cotyledon'
-              ? { x: 0.45, y: 0.45, z: 0.1 }
-              : t === 'vine'
-                ? { x: 0.7, y: 0.15, z: 0.2 }
-                : { x: 0.1, y: 1, z: 0.05 },
-        );
-      }
+      const dir = {
+        x: smoothedGrowthDir.x,
+        y: smoothedGrowthDir.y,
+        z: smoothedGrowthDir.z,
+      };
       if (node) {
-        result = { nodeId: drawingData.nodeId, optionType: t, direction: dir, distance: 1 };
-        console.log('[PlantLegacy] Using drag/fallback growth direction', {
+        result = {
+          nodeId: drawingData.nodeId,
+          optionType: t,
+          direction: dir,
+          distance: smoothedGrowthDist,
+        };
+        console.log('[PlantLegacy] Using smoothed growth direction', {
           optionType: t,
           dir,
-          reason: drawingData.validationReason,
         });
       }
     }
     if (result) {
-      // Clamp final direction too, to satisfy server rules while preserving drag bias
-      const clamped = clampGrowthDirectionForOption(result.optionType, result.direction);
+      // Clamp final direction to satisfy server rules while preserving player bias
+      const clamped = clampGrowthDirectionForOption(result.optionType, {
+        x: smoothedGrowthDir.x,
+        y: smoothedGrowthDir.y,
+        z: smoothedGrowthDir.z,
+      });
       confirmGrowth(result.nodeId, result.optionType, clamped);
       uiShell?.toast({
         message: `Sent ${result.optionType} growth...`,

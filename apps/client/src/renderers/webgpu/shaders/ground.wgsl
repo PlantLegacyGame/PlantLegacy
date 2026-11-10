@@ -44,21 +44,63 @@ fn vs_main(input: VertexInput) -> VertexOutput {
 
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4f {
-  // Root Sight soil cutaway: when Root Sight is active, peel back the soil
-  // within the cutaway circle around rootSightCenter so underground roots are revealed
+  var rimShade: f32 = 1.0;
+
+  // Root Sight organic cutaway:
+  // Instead of a rigid spherical cutaway, we carve smooth organic envelopes ("air bubbles")
+  // around each underground root and subterranean growth.
   if (frame.rootSightEnabled != 0u && frame.rootSightProgress > 0.01) {
-    let d = distance(input.worldPosition.xz, frame.rootSightCenter.xz);
-    let cutRadius = frame.rootSightRadius * frame.rootSightProgress;
-    if (d < cutRadius) {
-      discard;
+    let progress = frame.rootSightProgress;
+    let baseRadius = max(1.2, frame.rootSightAuraRadius * 0.75) * progress;
+    let k: f32 = 0.55; // Smooth minimum blend radius between bubbles
+
+    // Start with the focal root sight center (seed / base)
+    let centerDist = distance(input.worldPosition.xz, frame.rootSightCenter.xz) - (baseRadius * 0.85);
+    var minEnvelopeDist: f32 = centerDist;
+
+    // Union smooth envelopes around all subterranean nodes (roots, radicles of all plants)
+    let count = min(frame.rootAuraNodeCount, 64u);
+    for (var i: u32 = 0u; i < count; i++) {
+      let texCoord = vec2f((f32(i) + 0.5) / 64.0, 0.5);
+      let nodeData = textureSample(rootAuraTexture, rootAuraSampler, texCoord);
+      let nodePos = nodeData.xyz;
+      let nodeRadius = max(0.3, nodeData.w);
+
+      // Organic bubble radius around this root element
+      let r = baseRadius * (0.8 + nodeRadius * 0.5);
+      let d = distance(input.worldPosition.xz, nodePos.xz) - r;
+
+      // Smooth minimum blend
+      let h = clamp(0.5 + 0.5 * (d - minEnvelopeDist) / k, 0.0, 1.0);
+      minEnvelopeDist = mix(d, minEnvelopeDist, h) - k * h * (1.0 - h);
+    }
+
+    // Cutaway with smooth dithered edge and soil rim darkening
+    let edgeWidth: f32 = 0.18;
+    if (minEnvelopeDist < 0.0) {
+      if (minEnvelopeDist < -edgeWidth) {
+        discard;
+      }
+      // Smooth dithered edge in transition zone [-edgeWidth, 0.0]
+      let alpha = (minEnvelopeDist + edgeWidth) / edgeWidth;
+      let dither = hash2(input.clipPosition.xy);
+      if (dither > alpha) {
+        discard;
+      }
+    }
+
+    // Darken and soften dirt along the cutaway rim for natural soil depth
+    if (minEnvelopeDist >= 0.0 && minEnvelopeDist < 0.5) {
+      rimShade = smoothstep(0.0, 0.5, minEnvelopeDist);
     }
   }
 
-  // Solid soil color with very subtle low-frequency variation
+  // Solid soil color with subtle low-frequency variation
   let baseColor = vec3f(0.22, 0.16, 0.11);
   // Large-scale noise (scale 0.002 = variation every ~500 units)
   let noise = valueNoise(input.worldPosition.xz * 0.002) * 0.02;
-  let color = baseColor + vec3f(noise);
+  var color = baseColor + vec3f(noise);
+  color = mix(baseColor * 0.65, color, rimShade);
   
   return vec4f(color, 1.0);
 }

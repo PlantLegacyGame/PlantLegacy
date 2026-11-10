@@ -281,11 +281,20 @@ uniform float uSunIntensity;`,
         .replace(
           '#include <dithering_fragment>',
           `#include <dithering_fragment>
-  // Root Sight: cut away soil around center to reveal underground roots
+  // Root Sight: cut away soil around center to reveal underground roots with smooth dithered edge
   if (uRootSightProgress > 0.01) {
     float distToCenter = distance(vSoilWorldPos.xz, uRootSightCenter.xz);
-    if (distToCenter < uRootSightRadius * uRootSightProgress) {
-      discard;
+    float cutRadius = uRootSightRadius * uRootSightProgress;
+    float edgeWidth = 0.22;
+    if (distToCenter < cutRadius) {
+      if (distToCenter < cutRadius - edgeWidth) {
+        discard;
+      }
+      float alpha = (distToCenter - (cutRadius - edgeWidth)) / edgeWidth;
+      float dither = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
+      if (dither < (1.0 - alpha)) {
+        discard;
+      }
     }
   }
 

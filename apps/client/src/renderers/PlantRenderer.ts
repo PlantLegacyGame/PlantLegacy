@@ -509,9 +509,9 @@ class PlantRenderer {
    * Creates a 64x1 texture with root node positions for SDF aura blending
    */
   private updateRootAura(nodes: PlantNodeData[]): void {
-    // Collect root nodes (y < 0 or root layer)
+    // Collect subterranean nodes (y < 0 or root layer) of player or rivals
     const rootNodes = nodes.filter(
-      (n) => n.isOwnPlant && (n.layer === 'root' || n.position.y < 0 || n.type === 0),
+      (n) => n.layer === 'root' || (n.position && n.position.y < -0.01) || n.type === 0,
     );
 
     this.rootAuraNodeCount = Math.min(rootNodes.length, 64);
@@ -1320,13 +1320,8 @@ void main() {
       // Combine global cutaway with SDF aura
       float strength = max(baseStrength, auraStrength) * uRootSightProgress;
       
-      // Highlight roots: own roots green, rival roots orange
-      // For now, highlight all roots in the aura zone
-      // In future, could track which plant each root belongs to
-      if (p.y < 0.0) {
-        vec3 highlight = uOwnRootHighlightColor; // Default to own color
-        col = mix(col, highlight, 0.8 * strength);
-      }
+      // Regular root sight: keep natural botanical bark/soil colors
+      // Peeling back soil reveals roots without artificial neon recoloring
     }
   }
   

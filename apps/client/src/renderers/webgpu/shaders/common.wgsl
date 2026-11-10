@@ -82,32 +82,9 @@ fn applyRootSight(
   isOwn: f32,
   frame: FrameUniforms,
 ) -> vec3f {
-  if (frame.rootSightEnabled == 0u) {
-    return color;
-  }
-
-  let isRoot = nodeType < 0.5 || worldPosition.y < -0.05;
-  
-  // Compute SDF-based unified root aura
-  let auraStrength = sampleRootAuraSDF(worldPosition, frame);
-  
-  if (!isRoot) {
-    return color;
-  }
-
-  let distanceToFocus = distance(worldPosition, frame.rootSightCenter.xyz);
-  let inside = 1.0 - smoothstep(
-    frame.rootSightRadius * 0.85,
-    frame.rootSightRadius,
-    distanceToFocus,
-  );
-  var strength = inside * frame.rootSightProgress;
-  let highlight = mix(frame.rivalRootColor.rgb, frame.ownRootColor.rgb, isOwn);
-  
-  // Combine with SDF aura strength
-  strength = max(strength, auraStrength * frame.rootSightProgress);
-  
-  return mix(color, highlight, 0.75 * strength);
+  // Regular root sight preserves the plant and roots' natural botanical bark/soil colors.
+  // Visibility is achieved organically by peeling back the soil envelopes rather than neon recoloring.
+  return color;
 }
 
 fn sampleRootAuraSDF(worldPos: vec3f, frame: FrameUniforms) -> f32 {

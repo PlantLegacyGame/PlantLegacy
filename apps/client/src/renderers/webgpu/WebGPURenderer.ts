@@ -551,11 +551,26 @@ export class WebGPURenderer {
       ],
     });
 
-    // Ground pipeline bind group (uses frame uniforms only)
+    // Ground pipeline bind group (uses frame uniforms and root aura for organic cutaways)
     this.groundBindGroup = device.createBindGroup({
       label: 'Ground plane bind group',
       layout: this.groundPipeline.getBindGroupLayout(0),
-      entries: [{ binding: 0, resource: frameBinding }],
+      entries: [
+        { binding: 0, resource: frameBinding },
+        {
+          binding: 8,
+          resource:
+            this.rootAuraTexture?.createView() ??
+            device
+              .createTexture({
+                size: [1, 1],
+                format: 'rgba16float',
+                usage: GPUTextureUsage.TEXTURE_BINDING,
+              })
+              .createView(),
+        },
+        { binding: 9, resource: this.rootAuraSampler ?? device.createSampler() },
+      ],
     });
 
     this.billboardBindGroup = device.createBindGroup({
@@ -648,8 +663,8 @@ export class WebGPURenderer {
   }
 
   /**
-   * Update root aura texture from plant nodes (called from main.ts updateRootSight).
-   * Stores up to 64 root positions for per-root highlights in Root Sight mode.
+   * Update root aura texture from plant nodes (called from main.ts updateRootSight and updatePlants).
+   * Stores up to 64 subterranean positions for organic cutaways and subterranean visibility.
    */
   updateRootAura(nodes: PlantNodeData[]): void {
     if (!this.rootAuraTexture || !this.initialized) return;
@@ -657,18 +672,25 @@ export class WebGPURenderer {
     const device = this.device.getDevice();
     if (!device) return;
 
-    const ownRoots = nodes.filter((n) => n.type === 0 && n.isOwnPlant);
-    this.rootAuraNodeCount = Math.min(ownRoots.length, 64);
+    const subterranean = nodes.filter(
+      (n) =>
+        n.type === 0 ||
+        (n.position && n.position.y < -0.01) ||
+        n.nodeType === 'radicle' ||
+        n.nodeType === 'root' ||
+        n.nodeType === 'lateral_root',
+    );
+    this.rootAuraNodeCount = Math.min(subterranean.length, 64);
 
     if (this.rootAuraNodeCount === 0) return;
 
     const auraData = new Float32Array(64 * 4);
     for (let i = 0; i < this.rootAuraNodeCount; i++) {
-      const r = ownRoots[i];
+      const r = subterranean[i];
       auraData[i * 4 + 0] = r.position.x;
       auraData[i * 4 + 1] = r.position.y;
       auraData[i * 4 + 2] = r.position.z;
-      auraData[i * 4 + 3] = 1; // valid flag
+      auraData[i * 4 + 3] = Math.max(0.25, r.radius || 0.35); // organic bubble radius scale
     }
 
     device.queue.writeTexture(
@@ -693,6 +715,7 @@ export class WebGPURenderer {
 
     this.pendingNodes = nodes;
     this.pendingNowMs = nowMs;
+    this.updateRootAura(nodes);
 
     const countChanged = nodes.length !== this.lastBuildNodeCount;
     let latestSpawn = Number.NEGATIVE_INFINITY;
@@ -1163,19 +1186,19 @@ export class WebGPURenderer {
     this.frameU32[68] = this.rootSightEnabled ? 1 : 0;
     data[69] = this.rootSightProgress;
     data[70] = this.rootSightRadius;
-    data[71] = this.rootSightRadius * 2;
-    data[72] = this.config.tierThresholds[0];
-    data[73] = this.config.tierThresholds[1];
-    data[74] = this.config.tierThresholds[2];
-    data[75] = this.config.tierThresholds[3];
-    data[76] = this.config.hysteresisPromote;
-    data[77] = this.config.hysteresisDemote;
-    data[78] = this.config.minDwellTime;
-    data[79] = this.config.pointSizeScale;
-    data[80] = camera.projectionMatrix.elements[5];
-    data[81] = this.deltaTime;
-    this.frameU32[82] = this.rootAuraNodeCount; // rootAuraNodeCount
-    data[83] = this.rootSightAuraRadius;
+    data[71] = this.rootSightAuraRadius;
+    this.frameU32[72] = this.rootAuraNodeCount;
+    data[73] = this.config.tierThresholds[0];
+    data[74] = this.config.tierThresholds[1];
+    data[75] = this.config.tierThresholds[2];
+    data[76] = this.config.tierThresholds[3];
+    data[77] = this.config.hysteresisPromote;
+    data[78] = this.config.hysteresisDemote;
+    data[79] = this.config.minDwellTime;
+    data[80] = this.config.pointSizeScale;
+    data[81] = camera.projectionMatrix.elements[5];
+    data[82] = this.deltaTime;
+    data[83] = 0;
     data[84] = 0;
     data[85] = 0;
     data[86] = 0;
