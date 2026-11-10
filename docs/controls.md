@@ -13,8 +13,11 @@
 | Move right | `D` / `ArrowRight` | Sent as `PlayerInput.moveRight` |
 | Orbit camera | Left-drag | `OrbitControls`, with damping |
 | Pan camera | Right-drag | `OrbitControls` |
-| Zoom | Scroll wheel | `OrbitControls`, clamped to 10–200 units |
-| Root Sight toggle | `Tab` | Toggles volumetric ground cutaway |
+| Zoom (mouse) | Scroll wheel | `OrbitControls`, smooth continuous zoom |
+| Zoom (keyboard) | `-` / `+` (or `=`) | Smooth keyboard zoom with acceleration/damping |
+| Focus node | Click on player node | Recenters and smoothly frames node at ideal zoom distance |
+| Growth draw | Click option + Drag | Silky-smooth gene-constrained 3D vector with HUD guide |
+| Root Sight toggle | `Tab` | Toggles organic ground cutaways & subterranean camera elevation |
 | Emote wheel | `G` | Opens emote selection |
 | Growth intent | `E` | Opens growth panel on selected node |
 

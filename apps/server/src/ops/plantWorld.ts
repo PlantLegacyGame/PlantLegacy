@@ -12,6 +12,7 @@ import type {
 } from '@plant-legacy/shared/growth';
 import {
   canCrossLayer,
+  clampGrowthDirectionByGene,
   getAvailableGrowthTypes,
   getLayerForNodeType,
   getNodeTypeDefinition,
@@ -1136,7 +1137,8 @@ export class PlantWorld {
       }
     }
 
-    const dir = normalizeDirection(intent.direction);
+    const clampedDir = clampGrowthDirectionByGene(targetType, intent.direction);
+    const dir = normalizeDirection(clampedDir);
     const speed = getGrowthSpeed(this.config, targetLayer);
     const newX = parentNode.x + dir.x * speed;
     const newY = parentNode.y + dir.y * speed;
