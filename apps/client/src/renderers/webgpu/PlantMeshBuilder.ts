@@ -43,6 +43,7 @@ function packNode(plantIndex: number, nodeType: number, isOwn: boolean): number 
 function getVisualNodeType(node: PlantNodeData): number {
   // Map string nodeType to visual types for distinct rendering
   const nt = node.nodeType?.toLowerCase();
+  if (nt === 'seed' || node.isSeed) return 4; // Seed - botanical teardrop
   if (nt === 'flower') return 5; // Flower - pink/red
   if (nt === 'spore_sac') return 6; // Spore sac - brown/orange
   if (nt === 'vine') return 2; // Vine - green (already type 2)
@@ -345,6 +346,47 @@ class MeshAccumulator {
     }
   }
 
+  addSeed(center: THREE.Vector3, radius: number, packed: number): void {
+    const sides = 12;
+    const rings = 8;
+    const start = this.vertexCount;
+
+    // Organic botanical seed shape:
+    // Slightly teardrop/ovoid (tapered top, rounded bottom, gentle lateral flattening)
+    for (let ring = 0; ring <= rings; ring += 1) {
+      const v = ring / rings; // 0 (top) to 1 (bottom)
+      const phi = v * Math.PI;
+      // Botanical seed profile: wider lower-middle, slightly pointed apex
+      const y = Math.cos(phi); // +1 at top, -1 at bottom
+      // Teardrop curve: slightly pinched near top (v near 0)
+      const profile = Math.sin(phi) * (1.0 + 0.15 * Math.cos(phi));
+      const yScaled = y * 1.2; // Slightly taller than wide
+
+      for (let side = 0; side <= sides; side += 1) {
+        const u = side / sides;
+        const theta = u * Math.PI * 2;
+        // Subtle lateral flattening (seeds like sunflower, bean, or acorn are slightly oval in cross section)
+        const x = profile * Math.cos(theta) * 0.95;
+        const z = profile * Math.sin(theta) * 0.85;
+
+        const pos = new THREE.Vector3(x, yScaled, z).multiplyScalar(radius).add(center);
+        const normal = new THREE.Vector3(x, y * 0.8, z).normalize();
+        this.pushVertex(pos, normal, u, v, packed);
+      }
+    }
+
+    for (let ring = 0; ring < rings; ring += 1) {
+      for (let side = 0; side < sides; side += 1) {
+        const a = start + ring * (sides + 1) + side;
+        const b = start + ring * (sides + 1) + side + 1;
+        const c = start + (ring + 1) * (sides + 1) + side;
+        const d = start + (ring + 1) * (sides + 1) + side + 1;
+        this.addTriangle(a, c, b);
+        this.addTriangle(b, c, d);
+      }
+    }
+  }
+
   toVertexArray(): Float32Array {
     const buffer = new ArrayBuffer(this.packedValues.length * MESH_VERTEX_STRIDE);
     const floats = new Float32Array(buffer);
@@ -495,19 +537,21 @@ export function buildPlantMesh(
     assignRadii(root);
 
     // Check if this is a seed plant (first node is a seed that hasn't grown beyond cotyledon)
-    const isSeedPlant = root.isSeed === true;
+    const isSeedPlant = root.isSeed === true || root.nodeType === 'seed';
 
     if (isSeedPlant) {
-      // Render seed as a small ovoid at ground level
-      const seedRadius = Math.max(0.03, Math.min(0.05, root.radius * 0.5));
+      // Render botanical teardrop seed firmly resting on the ground surface
+      const seedRadius = Math.max(0.07, Math.min(0.12, root.radius * 1.3));
+      // Position seed center slightly above 0 so its rounded base penetrates into the soil
+      // and its tapered apex points upright into the air without floating.
       const seedCenter = new THREE.Vector3(
         root.position.x,
-        root.position.y + seedRadius * 0.8,
+        root.position.y + seedRadius * 0.25,
         root.position.z,
       );
-      mesh.addJoint(seedCenter, seedRadius, packNode(plantIndex, getVisualNodeType(root), isOwn));
-      box.expandByPoint(seedCenter.clone().add(new THREE.Vector3(0, seedRadius, 0)));
-      box.expandByPoint(seedCenter.clone().add(new THREE.Vector3(0, -seedRadius, 0)));
+      mesh.addSeed(seedCenter, seedRadius, packNode(plantIndex, 4, isOwn));
+      box.expandByPoint(seedCenter.clone().add(new THREE.Vector3(0, seedRadius * 1.3, 0)));
+      box.expandByPoint(seedCenter.clone().add(new THREE.Vector3(0, -seedRadius * 1.3, 0)));
     } else {
       // Normal plant with root - render seed coat base (crown at surface)
       // Only render the crown/junction at surface, NO underground root tubes
@@ -536,8 +580,14 @@ export function buildPlantMesh(
       const growthEase = rawT * rawT * (3.0 - 2.0 * rawT); // smoothstep
       if (growthEase < 0.02) return;
 
-      const animatedPosition = parent.position.clone().lerp(node.position, growthEase);
-      const branch = new THREE.Vector3().subVectors(animatedPosition, parent.position);
+      // For a seed parent, attach from the base of the seed at ground level (y = 0)
+      const parentAttachPos =
+        parent.isSeed || parent.nodeType === 'seed'
+          ? new THREE.Vector3(parent.position.x, 0, parent.position.z)
+          : parent.position;
+
+      const animatedPosition = parentAttachPos.clone().lerp(node.position, growthEase);
+      const branch = new THREE.Vector3().subVectors(animatedPosition, parentAttachPos);
       if (branch.lengthSq() > 1e-8) {
         branch.normalize();
 
@@ -550,7 +600,12 @@ export function buildPlantMesh(
         const rB = Math.max(0.01, nodeRadius * Math.max(0.25, growthEase));
 
         // Use simpler root geometry (fewer sides) for underground roots
-        const isRoot = node.type === 0 || parent.type === 0;
+        const isRoot =
+          node.type === 0 ||
+          parent.type === 0 ||
+          node.nodeType === 'radicle' ||
+          node.nodeType === 'root' ||
+          node.nodeType === 'lateral_root';
         const tubeSides = isRoot ? rootSides : sides;
 
         // Root-specific: stronger joint blending for organic fusion
@@ -558,10 +613,10 @@ export function buildPlantMesh(
         const jointRadius = Math.max(rA, rB) * jointMult;
 
         const visualNodeType = getVisualNodeType(node);
-        mesh.addJoint(parent.position, jointRadius, packNode(plantIndex, visualNodeType, isOwn));
+        mesh.addJoint(parentAttachPos, jointRadius, packNode(plantIndex, visualNodeType, isOwn));
 
         // Organic curvature with botanical gravitropism
-        const length = parent.position.distanceTo(animatedPosition);
+        const length = parentAttachPos.distanceTo(animatedPosition);
 
         // Roots grow downward (gravitropism), stems grow upward (phototropism)
         const tropismStrength = isRoot ? 0.25 : 0.15; // Roots curve more naturally
@@ -575,7 +630,7 @@ export function buildPlantMesh(
 
         // Add gravitropic bias: roots bend downward, stems bend slightly upward
         const gravityBias = isRoot ? -0.1 : 0.05;
-        const controlPoint = parent.position
+        const controlPoint = parentAttachPos
           .clone()
           .add(animatedPosition)
           .multiplyScalar(0.5)
@@ -583,7 +638,7 @@ export function buildPlantMesh(
           .addScaledVector(new THREE.Vector3(0, 1, 0), gravityBias * length);
 
         mesh.addCurvedTube(
-          parent.position,
+          parentAttachPos,
           animatedPosition,
           controlPoint,
           rA,

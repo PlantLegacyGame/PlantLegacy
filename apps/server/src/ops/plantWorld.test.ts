@@ -462,7 +462,8 @@ describe('PlantWorld', () => {
       );
       for (let i = 0; i < 80; i++) world.step(0.1, new Set([plant.id]), 220 + c * 80 + i);
     }
-    const updatedPlant = world.getPlant(plant.id)!;
+    const updatedPlant = world.getPlant(plant.id);
+    assert(updatedPlant);
     updatedPlant.storedWater = 1000;
     updatedPlant.storedMinerals = 1000;
     const rootId = updatedPlant.rootNodeId ?? crownId;
@@ -520,7 +521,8 @@ describe('PlantWorld', () => {
       );
       for (let i = 0; i < 80; i++) world.step(0.1, new Set([plant.id]), 220 + c * 80 + i);
     }
-    const updatedPlant = world.getPlant(plant.id)!;
+    const updatedPlant = world.getPlant(plant.id);
+    assert(updatedPlant);
     updatedPlant.storedWater = 1000;
     updatedPlant.storedMinerals = 1000;
     for (let i = 0; i < 40; i++) world.step(0.1, new Set([plant.id]), 500 + i);
@@ -582,7 +584,8 @@ describe('PlantWorld', () => {
       );
       for (let i = 0; i < 80; i++) world.step(0.1, new Set([plant.id]), 220 + c * 80 + i);
     }
-    const updatedPlant = world.getPlant(plant.id)!;
+    const updatedPlant = world.getPlant(plant.id);
+    assert(updatedPlant);
     updatedPlant.storedWater = 1000;
     updatedPlant.storedMinerals = 1000;
     for (let i = 0; i < 40; i++) world.step(0.1, new Set([plant.id]), 500 + i);
@@ -638,7 +641,8 @@ describe('PlantWorld', () => {
       );
       for (let i = 0; i < 80; i++) world.step(0.1, new Set([plant.id]), 220 + c * 80 + i);
     }
-    const updatedPlant = world.getPlant(plant.id)!;
+    const updatedPlant = world.getPlant(plant.id);
+    assert(updatedPlant);
     updatedPlant.storedWater = 1000;
     updatedPlant.storedMinerals = 1000;
     for (let i = 0; i < 40; i++) world.step(0.1, new Set([plant.id]), 500 + i);
@@ -710,7 +714,8 @@ describe('PlantWorld', () => {
       );
       for (let i = 0; i < 80; i++) world.step(0.1, new Set([plant.id]), 220 + c * 80 + i);
     }
-    const updatedPlant = world.getPlant(plant.id)!;
+    const updatedPlant = world.getPlant(plant.id);
+    assert(updatedPlant);
     updatedPlant.storedWater = 1000;
     updatedPlant.storedMinerals = 1000;
     for (let i = 0; i < 40; i++) world.step(0.1, new Set([plant.id]), 500 + i);

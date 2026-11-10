@@ -44,12 +44,21 @@ fn vs_main(input: VertexInput) -> VertexOutput {
 
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4f {
+  // Root Sight soil cutaway: when Root Sight is active, peel back the soil
+  // within the cutaway circle around rootSightCenter so underground roots are revealed
+  if (frame.rootSightEnabled != 0u && frame.rootSightProgress > 0.01) {
+    let d = distance(input.worldPosition.xz, frame.rootSightCenter.xz);
+    let cutRadius = frame.rootSightRadius * frame.rootSightProgress;
+    if (d < cutRadius) {
+      discard;
+    }
+  }
+
   // Solid soil color with very subtle low-frequency variation
   let baseColor = vec3f(0.22, 0.16, 0.11);
   // Large-scale noise (scale 0.002 = variation every ~500 units)
   let noise = valueNoise(input.worldPosition.xz * 0.002) * 0.02;
   let color = baseColor + vec3f(noise);
   
-  // Always opaque ground - root cutaway handled by plant shader
   return vec4f(color, 1.0);
 }

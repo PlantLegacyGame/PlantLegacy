@@ -488,6 +488,10 @@ function nodeRadius(biomass: number, type = 1, y = 0): number {
       (0.035 + Math.min(0.07, Math.sqrt(Math.max(0, biomass)) * 0.012)) * depthTaper,
     );
   }
+  if (type === 4) {
+    // Seed: 6-12cm botanical teardrop seed radius
+    return Math.max(0.07, Math.min(0.12, 0.07 + Math.sqrt(Math.max(0, biomass)) * 0.01));
+  }
   if (type === 3) {
     // Leaf / foliage: delicate thin lamina (1.5cm - 4cm)
     return 0.015 + Math.min(0.04, Math.sqrt(Math.max(0, biomass)) * 0.006);
@@ -2282,6 +2286,11 @@ function renderGrowthOptions(result: GrowthOptionsView): void {
         e.stopPropagation();
         // Select this growth option, then drag from the selected node to set direction
         growthSelectionStateMachineSelectOption(growthSelectionMachine, opt.type, opt.label);
+        // If player selects a subterranean root option (radicle, root, lateral_root),
+        // automatically enable Root Sight so the player can see underground growth!
+        if (opt.type === 'radicle' || opt.type === 'root' || opt.type === 'lateral_root') {
+          setRootSightEnabled(true);
+        }
         controls.enabled = false;
         controls.enableRotate = false;
         controls.enablePan = false;
@@ -2544,7 +2553,7 @@ function connect(): void {
           if (welcome.nodes && welcome.nodes.length > 0) {
             for (const node of welcome.nodes) {
               const typeMap: Record<string, number> = {
-                seed: 0,
+                seed: 4,
                 radicle: 0,
                 root: 0,
                 lateral_root: 0,
@@ -2819,7 +2828,7 @@ function connect(): void {
           });
 
           const typeMap: Record<string, number> = {
-            seed: 0,
+            seed: 4,
             radicle: 0,
             root: 0,
             lateral_root: 0,
@@ -2862,6 +2871,16 @@ function connect(): void {
             for (const node of incomingNodes) {
               const nodeData = toNodeData(node, true);
               plantNodes.set(node.id, nodeData);
+              // If new node is subterranean (radicle or root), engage Root Sight
+              // so the player immediately watches the new root sprout and grow!
+              if (
+                node.type === 'radicle' ||
+                node.type === 'root' ||
+                node.type === 'lateral_root' ||
+                node.layer === 'root'
+              ) {
+                setRootSightEnabled(true);
+              }
               // Track growing nodes for client-side animation
               if ((nodeData.growthProgress ?? 1.0) < 1.0) {
                 growingNodes.set(node.id, { startTime: now, duration: DEFAULT_GROWTH_DURATION_MS });
@@ -3134,7 +3153,7 @@ function connect(): void {
             })),
           });
           const typeMap: Record<string, number> = {
-            seed: 0,
+            seed: 4,
             radicle: 0,
             root: 0,
             lateral_root: 0,
@@ -3294,7 +3313,7 @@ function connect(): void {
             biomass: created.plant.totalBiomass,
           });
           const typeMap: Record<string, number> = {
-            seed: 0,
+            seed: 4,
             radicle: 0,
             root: 0,
             lateral_root: 0,

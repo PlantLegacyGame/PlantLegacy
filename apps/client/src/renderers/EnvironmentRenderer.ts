@@ -281,6 +281,14 @@ uniform float uSunIntensity;`,
         .replace(
           '#include <dithering_fragment>',
           `#include <dithering_fragment>
+  // Root Sight: cut away soil around center to reveal underground roots
+  if (uRootSightProgress > 0.01) {
+    float distToCenter = distance(vSoilWorldPos.xz, uRootSightCenter.xz);
+    if (distToCenter < uRootSightRadius * uRootSightProgress) {
+      discard;
+    }
+  }
+
   // C03: Soil moisture darkening & subtle mineral accents
   vec3 dynamicSoil = mix(uSoilDryColor, uSoilWetColor, clamp(uSoilMoisture, 0.0, 1.0));
   float mineralNoise = fract(sin(dot(vSoilWorldPos.xz, vec2(12.9898, 78.233))) * 43758.5453);
@@ -293,9 +301,6 @@ uniform float uSunIntensity;`,
   float NdotL = max(dot(groundNormal, normalize(-uSunDir)), 0.0);
   vec3 lightColor = uSunColor * uSunIntensity * NdotL;
   gl_FragColor.rgb = dynamicSoil * (0.35 + 0.65 * lightColor);
-  
-  // Root Sight: Soil remains fully visible as terrain background
-  // No individual node cutaways - roots are highlighted via SDF aura in PlantRenderer
   gl_FragColor.a = 1.0;`,
         );
     };

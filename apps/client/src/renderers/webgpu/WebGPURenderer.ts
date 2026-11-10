@@ -793,9 +793,9 @@ export class WebGPURenderer {
   }
 
   private createGroundVertexBuffer(device: GPUDevice): void {
-    // Large ground plane at y = -0.03 (matching Three.js ground position)
+    // Large ground plane at y = 0.0 (matching Three.js ground plane position)
     const size = 500;
-    const y = -0.03;
+    const y = 0.0;
     const half = size / 2;
 
     // 2 triangles = 6 vertices

@@ -45,16 +45,6 @@ fn vs_main(input: VertexInput) -> VertexOutput {
   let nodeType = f32((input.packed >> 16u) & 0xffu);
   let isOwn = f32((input.packed >> 24u) & 0x1u);
 
-  // Underground roots: hide only when camera is ABOVE ground (looking down through ground plane).
-  // If camera is underground, roots are visible (no real soil volume blocks view).
-  // Smooth transition to prevent flickering at ground boundary
-  let cameraAboveGround = frame.cameraPos.y > 0.1;
-  let nodeUnderground = input.position.y < -0.02;
-  let hideFactor = select(0.0, 1.0, frame.rootSightEnabled == 0u && cameraAboveGround && nodeUnderground);
-  if (hideFactor > 0.5) {
-    return hiddenVertex();
-  }
-
   var worldPosition = windOffset(input.position, frame);
 
   // Outline type (8): expand along normal for outline effect
@@ -97,8 +87,8 @@ fn fs_main(input: VertexOutput, @builtin(front_facing) frontFacing: bool) -> @lo
     // Leaf: vibrant green
     baseColor = vec3f(0.20, 0.70, 0.25);
   } else if (input.nodeType < 4.5) {
-    // Seed: brown
-    baseColor = vec3f(0.35, 0.25, 0.15);
+    // Seed: rich organic brown with subtle golden-amber seed-coat tone
+    baseColor = vec3f(0.42, 0.28, 0.16);
   } else if (input.nodeType < 5.5) {
     // Flower: pink/red
     baseColor = vec3f(0.95, 0.35, 0.45);

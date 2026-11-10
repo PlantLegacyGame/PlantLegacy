@@ -444,8 +444,12 @@ class PlantRenderer {
       const color = getNodeColor(nodeTypeStr, node.health);
 
       // Add node for endpoints and junctions
+      const nodePos = node.position.clone();
+      if (nodeTypeStr === 'seed' || node.isSeed) {
+        nodePos.y += node.radius * 0.25;
+      }
       sdfNodes.push({
-        position: node.position.clone(),
+        position: nodePos,
         radius: node.radius,
         primitive,
         color,
