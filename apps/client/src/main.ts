@@ -447,6 +447,55 @@ const cameraPanState = {
   right: false,
 };
 
+// Smooth keyboard zoom state (- / + keys)
+const keyboardZoomState = {
+  in: false,
+  out: false,
+};
+
+// Smooth camera focus and zoom animation
+const cameraFocusTarget = new THREE.Vector3();
+let isCameraFocusing = false;
+const CAMERA_FOCUS_LERP_SPEED = 4.5; // Lerp rate per second for smooth arrival
+let targetCameraDistance = -1; // Desired distance from target; smoothly lerps when > 0
+
+function focusCameraOnNode(nodeData: PlantNodeData, immediate = false): void {
+  const nodePos = nodeData.position.clone();
+  // If it's a seed, offset to visual seed center
+  if (nodeData.isSeed || nodeData.nodeType === 'seed') {
+    nodePos.y += (nodeData.radius || 0.08) * 0.25;
+  }
+
+  cameraFocusTarget.copy(nodePos);
+  isCameraFocusing = true;
+
+  // Frame distance: 1.8m to 3.5m based on node size so it is centered and seen in its entirety
+  const frameDist = Math.max(1.8, Math.min(3.5, (nodeData.radius || 0.05) * 25));
+  targetCameraDistance = frameDist;
+
+  // Subterranean nodes: open Root Sight cutaway and allow underground camera elevation
+  if (nodePos.y < -0.05 || nodeData.layer === 'root' || nodeData.type === 0) {
+    setRootSightEnabled(true);
+    controls.maxPolarAngle = Math.PI - 0.05;
+    // If camera is high above ground, smoothly guide its position down towards subterranean angle
+    if (camera.position.y > 0.8) {
+      const offset = camera.position.clone().sub(controls.target);
+      offset.y = Math.max(-0.4, Math.min(0.6, offset.y * 0.4));
+      if (offset.lengthSq() < 1e-4) offset.set(0.5, 0.2, 0.8);
+      offset.normalize().multiplyScalar(frameDist);
+      camera.position.copy(nodePos).add(offset);
+    }
+  } else {
+    // Canopy node: reset to standard surface maxPolarAngle
+    controls.maxPolarAngle = renderConfig?.cameraMaxPolarAngle ?? Math.PI / 2 - 0.05;
+  }
+
+  if (immediate) {
+    controls.target.copy(nodePos);
+    isCameraFocusing = false;
+  }
+}
+
 // Growth animation tracking - nodes with growthProgress < 1.0
 const growingNodes = new Map<string, { startTime: number; duration: number }>();
 const DEFAULT_GROWTH_DURATION_MS = 5000; // 5 seconds default
@@ -621,16 +670,57 @@ function setRootSightEnabled(enabled: boolean): void {
   setDetail(
     isEnabled ? 'Root Sight: ON — Underground view active' : 'Root Sight: OFF — Surface view',
   );
+
+  if (enabled) {
+    controls.maxPolarAngle = Math.PI - 0.05;
+    // Find lowest root node (or radicle) to focus and center on
+    const ownNodes = Array.from(plantNodes.values()).filter((n) => n.isOwnPlant);
+    const rootNodes = ownNodes.filter(
+      (n) => n.layer === 'root' || n.type === 0 || n.position.y < -0.01,
+    );
+    if (rootNodes.length > 0) {
+      rootNodes.sort((a, b) => a.position.y - b.position.y); // Lowest y first
+      focusCameraOnNode(rootNodes[0]);
+    }
+  } else {
+    controls.maxPolarAngle = renderConfig?.cameraMaxPolarAngle ?? Math.PI / 2 - 0.05;
+    // Return camera focus smoothly to crown / seed / stem
+    const crownNode =
+      Array.from(plantNodes.values()).find((n) => n.isOwnPlant && n.parentId === null) ??
+      Array.from(plantNodes.values()).find((n) => n.isOwnPlant);
+    if (crownNode) {
+      focusCameraOnNode(crownNode);
+    }
+  }
 }
 
 function toggleRootSight(): void {
   if (!rootSightMachine) return;
-
   rootSightStateMachineToggle(rootSightMachine);
   const isEnabled = rootSightStateMachineIsEnabled(rootSightMachine);
   setDetail(
     isEnabled ? 'Root Sight: ON — Underground view active' : 'Root Sight: OFF — Surface view',
   );
+
+  if (isEnabled) {
+    controls.maxPolarAngle = Math.PI - 0.05;
+    const ownNodes = Array.from(plantNodes.values()).filter((n) => n.isOwnPlant);
+    const rootNodes = ownNodes.filter(
+      (n) => n.layer === 'root' || n.type === 0 || n.position.y < -0.01,
+    );
+    if (rootNodes.length > 0) {
+      rootNodes.sort((a, b) => a.position.y - b.position.y);
+      focusCameraOnNode(rootNodes[0]);
+    }
+  } else {
+    controls.maxPolarAngle = renderConfig?.cameraMaxPolarAngle ?? Math.PI / 2 - 0.05;
+    const crownNode =
+      Array.from(plantNodes.values()).find((n) => n.isOwnPlant && n.parentId === null) ??
+      Array.from(plantNodes.values()).find((n) => n.isOwnPlant);
+    if (crownNode) {
+      focusCameraOnNode(crownNode);
+    }
+  }
 }
 
 // T00A: Hint card toggle
@@ -1067,6 +1157,37 @@ async function initC01(): Promise<void> {
       if (e.code === 'Enter') inputBus?.handleKeyDown(e.code);
       return;
     }
+
+    // Block accidental browser page zoom (Ctrl + + / - / 0 / Wheel)
+    if (e.ctrlKey || e.metaKey) {
+      if (e.key === '+' || e.key === '=' || e.key === '-' || e.key === '_' || e.key === '0') {
+        e.preventDefault();
+        if (e.key === '0') {
+          targetCameraDistance = renderConfig?.cameraStartDistance ?? 6;
+        }
+        return;
+      }
+    }
+
+    // Smooth keyboard 3D camera zoom with - and + keys
+    if (e.key === '+' || e.key === '=' || e.code === 'NumpadAdd') {
+      e.preventDefault();
+      keyboardZoomState.in = true;
+      return;
+    }
+    if (e.key === '-' || e.key === '_' || e.code === 'NumpadSubtract') {
+      e.preventDefault();
+      keyboardZoomState.out = true;
+      return;
+    }
+
+    // Support Tab for Root Sight toggle (documented standard key)
+    if (e.code === 'Tab' && !e.ctrlKey && !e.altKey && !e.metaKey) {
+      e.preventDefault();
+      toggleRootSight();
+      return;
+    }
+
     // Don't prevent default for browser shortcuts (Ctrl/Shift/Alt/Meta combos)
     if (e.ctrlKey || e.shiftKey || e.altKey || e.metaKey) {
       inputBus?.handleKeyDown(e.code);
@@ -1078,6 +1199,18 @@ async function initC01(): Promise<void> {
 
   window.addEventListener('keyup', (e) => {
     if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+
+    if (e.key === '+' || e.key === '=' || e.code === 'NumpadAdd') {
+      e.preventDefault();
+      keyboardZoomState.in = false;
+      return;
+    }
+    if (e.key === '-' || e.key === '_' || e.code === 'NumpadSubtract') {
+      e.preventDefault();
+      keyboardZoomState.out = false;
+      return;
+    }
+
     if (e.ctrlKey || e.shiftKey || e.altKey || e.metaKey) {
       inputBus?.handleKeyUp(e.code);
       return;
@@ -1310,7 +1443,13 @@ async function initC01(): Promise<void> {
       return;
     }
 
-    if (clickedNodeId) requestGrowthOptions(clickedNodeId);
+    if (clickedNodeId) {
+      const clickedNode = plantNodes.get(clickedNodeId);
+      if (clickedNode) {
+        focusCameraOnNode(clickedNode);
+      }
+      requestGrowthOptions(clickedNodeId);
+    }
   });
 
   // Client-side gene-based growth direction clamping & validation
@@ -2881,6 +3020,8 @@ function connect(): void {
               ) {
                 setRootSightEnabled(true);
               }
+              // Focus camera on growing node to center it smoothly in the middle of the screen
+              focusCameraOnNode(nodeData);
               // Track growing nodes for client-side animation
               if ((nodeData.growthProgress ?? 1.0) < 1.0) {
                 growingNodes.set(node.id, { startTime: now, duration: DEFAULT_GROWTH_DURATION_MS });
@@ -3555,6 +3696,46 @@ let measuredFps = 60;
 function renderFrame(deltaTime: number): void {
   // WASD / arrows pan the camera and its target together (ADR-022).
   applyCameraPan(deltaTime);
+
+  // Smooth keyboard camera zoom (- and + keys)
+  if (keyboardZoomState.in || keyboardZoomState.out) {
+    const currentDist = camera.position.distanceTo(controls.target);
+    const zoomRate = 2.0; // Scaled by current distance for smooth logarithmic feel
+    let delta = 0;
+    if (keyboardZoomState.in) delta -= currentDist * zoomRate * deltaTime;
+    if (keyboardZoomState.out) delta += currentDist * zoomRate * deltaTime;
+
+    const minD = controls.minDistance || 0.5;
+    const maxD = controls.maxDistance || 100;
+    const newDist = Math.max(minD, Math.min(maxD, currentDist + delta));
+
+    const dir = camera.position.clone().sub(controls.target).normalize();
+    camera.position.copy(controls.target).addScaledVector(dir, newDist);
+    targetCameraDistance = -1; // Manual zoom takes precedence
+  }
+
+  // Smooth camera target recenter/focus on selected or growing node
+  if (isCameraFocusing) {
+    const t = Math.min(1.0, deltaTime * CAMERA_FOCUS_LERP_SPEED);
+    controls.target.lerp(cameraFocusTarget, t);
+    if (controls.target.distanceTo(cameraFocusTarget) < 0.005) {
+      controls.target.copy(cameraFocusTarget);
+      isCameraFocusing = false;
+    }
+  }
+
+  // Smooth camera distance framing
+  if (targetCameraDistance > 0 && !keyboardZoomState.in && !keyboardZoomState.out) {
+    const currentDist = camera.position.distanceTo(controls.target);
+    const distT = Math.min(1.0, deltaTime * 3.5);
+    const newDist = THREE.MathUtils.lerp(currentDist, targetCameraDistance, distT);
+    const dir = camera.position.clone().sub(controls.target).normalize();
+    camera.position.copy(controls.target).addScaledVector(dir, newDist);
+    if (Math.abs(currentDist - targetCameraDistance) < 0.02) {
+      targetCameraDistance = -1;
+    }
+  }
+
   controls.update();
 
   // Update selection marker orientation to face camera (billboard)
