@@ -51,13 +51,23 @@ Feed this section before any system spec. These override everything else.
 ```text
 RULE_1: Player IS the plant. Never "character controls a plant."
 
-RULE_2: Multiplayer has no intelligent NPCs. Players are the only minds
-        in the shared world. Campaign may have NPCs, but they belong to
-        a separate space. Companions (T11) are tamed wild beasts: no
-        speech, no quests, not intelligent agents. Scripted herbivore
-        events (T06) are ambient events, not persistent agents. If a
-        proposed entity can converse or pursue goals, it belongs to the
-        campaign.
+RULE_2 (amended [V5.4], approved 2026-11-09): Multiplayer has no
+        intelligent NPCs. Players are the only minds in the shared
+        world. Campaign may have intelligent NPCs, but they belong to a
+        separate space. Companions (T11) are tamed wild beasts: no
+        speech, no quests, not intelligent agents. Reactive non-sapient
+        fauna (T54) are allowed: they may perceive local stimuli, have
+        needs (hunger, thirst, fear, fatigue), and answer with
+        deterministic reflexes (graze, drink, flee, herd, struggle,
+        attack, seek shelter). They may vocalize with animal sounds
+        (growls, chirps, distress calls, warning cries, mating calls);
+        they may not use human words or language. They do not speak
+        human language, converse, pursue story goals, exercise judgment,
+        form factions, use tools strategically, or plan. They can be
+        trapped, injured and killed by plants and by the environment.
+        Scripted herbivore events (T06) remain ambient events; T54 adds
+        persistent reactive fauna. If a proposed entity can converse or
+        pursue goals, it belongs to the campaign.
 
 RULE_3: No hardcoded values. Every tunable lives in config/*.json with
         a range and a default. Config supports arrays, schemas, enums,
@@ -87,9 +97,13 @@ RULE_7: BUILD SYSTEMS, NOT OUTCOMES. Do not create specific emergent
         proper noun or marketable name, reject it and build the general
         capability instead. Never build a named culture tool.
 
-RULE_8: The planet is one continuous world across seasons. Between
-        seasons, deep time passes and the same planet transforms. It is
-        never regenerated from scratch.
+RULE_8 (clarified [V5.4], approved 2026-11-09): The planet is one
+        continuous world across seasons. There are no world resets.
+        Between seasons, deep time
+        passes and the same planet transforms. A season-end calamity is
+        a burial, not a wipe: it kills plants and lays their traces
+        under sediment; the planet is never regenerated from scratch or
+        restored to a blank state.
 
 RULE_9: Everything should produce social possibility. If a system could
         not, in principle, produce a moment someone tells their friend
@@ -134,9 +148,14 @@ RULE_17: All item and gene mutations are server-authoritative
 RULE_18: No in-game livestream integration. Opt-in spectating only.
          The camera is an independent entity from day one.
 
-RULE_19: Companions are tamed wild beasts, not intelligent NPCs. They
-         have needs, loyalty, and directives, but do not converse,
-         pursue story goals, or exercise judgment.
+RULE_19 (clarified [V5.4], approved 2026-11-09): Companions are tamed
+        wild beasts, not intelligent NPCs. They have needs, loyalty, and
+        directives, but do not speak human language, converse, pursue
+        story goals, or exercise judgment. They may vocalize with animal
+        sounds. Untamed reactive fauna (T54) follow the same ceiling:
+        needs and reflexes only. Taming a fauna makes it a companion
+        (T11); it does not grant it speech, human words, goals, or
+        judgment.
 
 RULE_20: The game does not surface item or gene rarity. Any schema field
          named "rarity" is a bug.
@@ -147,9 +166,12 @@ RULE_21: Booster grades are POTENCY GRADES, not rarity. A grade is
          purchasable and tradeable. Standard and above are account-bound
          and earn-only.
 
-RULE_22: Every unit of damage passes through one damage pipeline with
-         four source types: weather, roots, tools (v2), herbivores. No
-         system may apply damage outside it.
+RULE_22 (amended [V5.4], approved 2026-11-09): Every unit of damage passes
+        through one damage pipeline. Damage to plants has four source
+        types: weather, roots, tools (v2), herbivores. Damage to fauna
+        uses the same pipeline with source types plant, weather, and
+        fauna. Every record carries source, target, amount, and time. No
+        system may apply damage outside it.
 
 RULE_23: Item behavior is expressed only by four explicit flags:
          tradeable, mailable, listable, account_bound. account_bound=true
@@ -222,6 +244,14 @@ RULE_31: FREE-FIRST OPS. Choose free hosting and free assets first, and
 | Symbiosis | Declared root-link sharing resources. Post-MVP. |
 | Parasitism | Attaching to another plant to drain resources. MVP at Gate 2. |
 | Companion | Tamed wild beast. Not intelligent NPC. Post-MVP. |
+| **[V5.4]** Reactive fauna | Persistent non-sapient animal simulated by T54. It has needs and deterministic reflexes (graze, drink, flee, herd, struggle, attack, seek shelter), but no speech, story goals, judgment, factions, or planning. It can be trapped, injured and killed by plants. |
+| **[V5.4]** Influence map | A coarse server-side grid of derived values (threat, food, water, fire, shelter) recomputed at low frequency and read by fauna reflexes. Not a client surface and not a hidden player score. |
+| **[V5.4]** Material cell | One cell in the T55 simulation grid: material id, mass, temperature, moisture and state flags. Updated by cellular-automaton rules at a decoupled cadence. |
+| **[V5.4]** Volumetric terrain chunk | A sparse 3D block of terrain occupancy/material data (T56) that can represent overhangs, arches, caves and stacked layers. Persisted as a binary snapshot. |
+| **[V5.4]** World object | Any server-owned, streamed entity in T58: plant, fauna, terrain feature, fragment, structure, seed or other config-defined type. Behaviour is a config-defined state machine, never uploaded code. |
+| **[V5.4]** Calamity burial | The season-end event (T20) that kills plants and lays their traces under sediment. It is not a world reset; the planet and its history persist. |
+| **[V5.4]** Succession | The T59 process by which bare or degraded ground passes through pioneer, grass, shrub and forest stages, and by which dead matter becomes soil again. |
+| **[V5.4]** Parametric terrain feature | A T57 surface/sweep/carve primitive defined by control points, radius, taper, noise and blend parameters. General capability, not a named structure. |
 | Spore | Currency. Earned by play, purchasable with real money. No artificial earn cap. Consumed in-game currency, not stored value. |
 | Spore sac | Canopy organ renamed to avoid collision with currency. |
 | Dung | World item dropped by herbivore events and plant death. Two uses: consume for Spores, or apply to soil for minerals. |
@@ -335,7 +365,7 @@ Task IDs: **T** = game system from v5.2, **C** = client task, **O** = operations
 | 28 | **T10** Parasitism | W42 | T01, T06, T08B | First cut if Gate 2 slips. |
 | 29 | **T20 partial** Season and deep time | W43–44 | T06A, T07, T16, T13A | Calamity, pre-build, time-lapse. **Checkpoint 13 (W44).** |
 | 30 | **C05** Menus and screens | W45–47 | C01, C04, T08A, T16, T06A, T20, T08C, T12 | **Checkpoint 14 (W47).** Spawn, inventory, ledger viewer, death screen, season screen, settings, login. |
-| 31 | **C02b** Renderer polish and LOD | W48–49 | C02, T03, T04 | IK moments, LOD L2/L3, 12 mutation signatures. |
+| 31 | **C02b** Merged into C02 | — | C02, T03, T04 | All LOD, mutation signatures, IK now in unified C02. No separate week. |
 | 32 | **O02** Migrations, backups, restore drill | W50 | O01, T03 | |
 | — | **Gate 2 playtest** (shortened full season cycle) | W51 | all above | **Checkpoint 15 (W51).** |
 | — | **Buffer and fixes** | W52 | | **GATE 2 = end of W52.** |
@@ -363,7 +393,7 @@ Task IDs: **T** = game system from v5.2, **C** = client task, **O** = operations
 | — | **Gate 3 playtest** (public-alpha candidate) | W78 | all above except the real-money switch if cut | Explicit playtest week. **Checkpoint 25 (W78).** |
 | — | **Buffer and public-alpha launch prep** | W79–80 | | **GATE 3 = end of W80 (public alpha).** |
 
-**Check of the arithmetic.** Gate 1: 22 task-weeks + 1 playtest + 1 buffer = 24. Gate 2: 26 task-weeks + 1 + 1 = 28 (W25–52). Gate 3: 25 task-weeks + 1 playtest + 2 buffer = 28 (W53–80). Total 80 weeks. Task-weeks overall: 22 + 26 + 25 = 73. Gate 1's 22 task-weeks include the 2 weeks of Phase 0 (tasks 1–2).
+**Check of the arithmetic.** Gate 1: 22 task-weeks + 1 playtest + 1 buffer = 24. Gate 2: 24 task-weeks + 1 + 1 = 26 (W25–50, C02b merged into C02 saves 2 weeks). Gate 3: 25 task-weeks + 1 playtest + 2 buffer = 28 (W53–80). Total 78 weeks. Task-weeks overall: 22 + 24 + 25 = 71. Gate 1's 22 task-weeks include the 2 weeks of Phase 0 (tasks 1–2).
 
 ## B3. Gates, Checkpoints, Cut Lists
 
@@ -405,7 +435,7 @@ Task IDs: **T** = game system from v5.2, **C** = client task, **O** = operations
 ### B3.3 Cut lists (pre-decided; cut features, never gates)
 **Gate 1** — Must have: T00+O01, T03P, C01, T00A, T01, C02, T03, T08C, T02, T05 (proximity **and** world chat, plus report/block), T07 day/night, C03, T06, T08A, C04. Cut in this order: (1) T05 emotes (chat stays); (2) T07 thunderstorm active phase; (3) T04 down to schema + 3 mutations; (4) T02 transition polish; (5) C03 weather visuals down to simple particles. **Never cut:** T00A, T01, C02, T02, T03, T08C, T05 chat, T06, T07 day/night, T08A.
 
-**Gate 2** — Must have: all of Gate 1 plus T08, T08B, T16, T17, T15, T13, T51 extraction, T06A, T13A, T12, T20 calamity and pre-build, C05, O02. Cut in this order: (1) T10 parasitism; (2) T14 marketplace UI/auction/preview, but keep the T14 seller/listing data model and the named `getSellerReputation` stub; if T14 UI is cut, schedule the T14 data model + stub at Gate 3 before T43; (3) T13A condition matrix (keep boosters with conditions constant 1.0); (4) T51 graft (keep extraction); (5) T20 time-lapse polish; (6) C02b polish beyond L2. **Never cut:** T16, T06A, T20 calamity, T13, T15, T08B, O02.
+**Gate 2** — Must have: all of Gate 1 plus T08, T08B, T16, T17, T15, T13, T51 extraction, T06A, T13A, T12, T20 calamity and pre-build, C05, O02. Cut in this order: (1) T10 parasitism; (2) T14 marketplace UI/auction/preview, but keep the T14 seller/listing data model and the named `getSellerReputation` stub; if T14 UI is cut, schedule the T14 data model + stub at Gate 3 before T43; (3) T13A condition matrix (keep boosters with conditions constant 1.0); (4) T51 graft (keep extraction); (5) T20 time-lapse polish. **Never cut:** T16, T06A, T20 calamity, T13, T15, T08B, O02.
 
 **Gate 3** — Must have: all of Gate 2 plus T43, T44, T45, T50, T46, T23, T26, T40, T41, T42, C06, H01. Cut in this order: (1) optional T25 capabilities only; keep the T25 core stub (root tunneling/voids and canopy light-blocking persistence) required by T26; (2) T24; (3) T46; (4) T44 guild-reputation integration; (5) C07 mobile app (ship desktop and PWA); (6) real-money switch ("coming soon"). **Never cut:** T40 before any real-money or public exposure, T41, T42, T23, T26, H01, T16-dependent tombstone behavior.
 
@@ -434,18 +464,62 @@ Every task returns: implementation, config file(s), README of tunables (type/ran
 **Config.** Token lifetimes, rate limits, password rules, username rules (length, characters).
 **AI prompt.** "Build T08C accounts per spec. No email at this stage. Hash with argon2id. Add rate limits and lockout. Admin role created only by CLI/seed script."
 
-### C02 · Procedural Plant Renderer v1 — `config/plant_renderer.json`
+### C02 · Procedural Plant Renderer (Unified WebGPU SDF) — `config/plant_renderer.json`
 **Depends on:** C01, T01.
-**Must support.** Part 14.1: Raymarched Signed Distance Fields (SDF) with smooth minimum (`smin`) organism fusion inside local bounding volumes. Fuses modular mathematical primitives (tapered capsule segments for roots/stems/vines, joint spheres, root crown) into one continuous, seamless living organism without floating parts or flat clipping seams. Shared plant material with 3D triplanar noise, vertex wind sway, health tint, L0 and L1 levels, deterministic output from node data (all clients see identical geometry), three mutation visual flags mapped to shader parameters.
-**Acceptance.** Plant visibly grows as a continuous, unified organism above and below ground. Branch junctions form smooth organic collars. Adding a node appends to the primitive buffer without rebuilding mesh topology. Fifty L0 plants meet the desktop budget. Two clients render the same plant identically.
-**Config.** `config/plant_renderer.json` (blend radius `smin_blend_radius`, raymarch step parameters, leaf parameters, detail distances, quality presets).
-**AI prompt.** "Build C02: Raymarched SDF organism renderer with smin primitive fusion, bounding volume evaluation, triplanar noise, wind sway, L0/L1 levels. Fuses primitive parts into one seamless living organism. All tunables in config/plant_renderer.json."
+**Replaces:** Previous C02 (WebGL2 SDF) + C02b (WebGPU mesh LOD). Single unified renderer.
 
-### C02b · Renderer Polish and LOD — `config/render.json`
+**Must support.** Part 14.1: Raymarched Signed Distance Fields (SDF) with polynomial smooth minimum (`smin`) organic fusion, implemented in **WebGPU compute + fragment shaders** (WGSL). Not WebGL2.
+
+Fuses modular mathematical primitives (tapered capsule segments for roots/stems/vines, joint spheres, root crown) into one continuous, seamless living organism without floating parts or flat clipping seams. Shared plant material with 3D triplanar noise, vertex wind sway, health tint, L0–L3 LOD tiers via primitive count reduction + impostor spheres, deterministic output from node data (all clients see identical geometry), twelve mutation visual flags mapped to shader parameters.
+
+**Architecture:**
+- **Compute pass** (cull.wgsl): Frustum culling, per-plant LOD tier assignment (L0 full prims, L1 reduced prims, L2 impostor sphere, L3 culled), hysteresis/dwell timer
+- **Raymarch pass** (mesh.wgsl): Bounding volume AABB test → SDF raymarch with `smin` blending → anatomical coloring + lighting + mutation visuals
+- **Impostor sphere pass** (impostor.wgsl): L2 distant plants as **single ellipsoid SDF per plant** with procedural surface (bark noise + canopy color + mutation hints). No billboards. One sphere trace per pixel, converges in 5-10 steps.
+- **Transparent WebGPU canvas** layered over Three.js environment (sky, terrain, weather from C03)
+- **WebGL2 fallback**: If WebGPU unavailable, use simplified mesh renderer (current PlantMeshBuilder) with improved joint blending — not SDF
+
+**LOD Tier Definition:**
+| Tier | Distance | Primitive Budget | Technique |
+|------|----------|------------------|-----------|
+| L0 | < 50m | 192 prims (full) | Full `smin` raymarch |
+| L1 | 50–150m | 48 prims (trunk + major branches only) | Reduced `smin` raymarch, 24 steps |
+| L2 | 150–500m | 1 ellipsoid/plant | **Impostor sphere SDF** — procedural bark + canopy color, 10 steps |
+| L3 | > 500m | 0 | Culled (minimap dot only) |
+
+**Impostor Sphere Details (L2):**
+- Ellipsoid axes derived from plant bounding box (width, height, depth)
+- Surface: `sdEllipsoid(p, radii)` + 3D noise for bark texture
+- Color: canopy hue from plant's mutation flags + health tint
+- No billboards, no atlas generation, no cross-fade artifacts
+- 5-10 raymarch steps (ellipsoid SDF is analytic, no iteration needed for hit)
+- Mutation signatures: color shifts only (no geometry)
+
+**Acceptance.** Plant visibly grows as a continuous, unified organism above and below ground. Branch junctions form smooth organic collars (no visible joint spheres). Adding a node appends to primitive buffer without rebuilding mesh topology. Fifty L0 plants meet desktop budget. Two clients render the same plant identically. WebGPU preferred; WebGL2 fallback works without SDF. L2 impostor spheres render at 60fps for 1000+ distant plants.
+
+**Config.** `config/plant_renderer.json` (blend radius `smin_blend_radius`, raymarch step parameters per LOD, LOD distance thresholds, ellipsoid noise params, leaf parameters, detail distances, quality presets, WebGL2 fallback config).
+
+**AI prompt.** "Build C02 unified WebGPU SDF plant renderer: compute culling + LOD assignment, raymarch fragment shader with smin organic fusion (L0/L1), impostor ellipsoid sphere SDF pass for L2 (procedural bark/canopy, no billboards), transparent canvas over Three.js environment. WebGL2 fallback = mesh renderer with smooth joint blending (no SDF). All tunables in config/plant_renderer.json."
+
+### C02b · Merged into C02 (Unified WebGPU SDF)
 **Depends on:** C02, T03, T04.
-**Must support.** L2 impostors and L3 dots; IK for reroot crawl and tumbling (FABRIK/CCD on tagged root tips only); vine reaching; leaf sun-tracking; **twelve mutation visual signatures** matching the T04 table; wilt/damage visuals; culling; instancing batches; mobile tier tuning.
-**Acceptance.** 100 plants on desktop and 40 on phone within budget; 1,000 plants in range handled by LOD without exceeding the bandwidth cap; IK never changes server state (RULE_27).
-**AI prompt.** "Build C02b: L2/L3 levels, IK only for tagged moving nodes, mutation signature library, wilt effects, batching. Cosmetic only; server remains authoritative."
+**Status:** Merged. All LOD, mutation signatures, IK, culling, instancing now part of unified C02 WebGPU SDF renderer above. This task entry retained for dependency matrix compatibility only — no separate implementation.
+
+**Must support.** (Handled by C02)
+- L2 **impostor ellipsoid spheres** (no billboards) — single SDF per distant plant with procedural bark/canopy
+- L3 culled (minimap only)
+- IK for reroot crawl and tumbling (FABRIK/CCD on tagged root tips only) — cosmetic only, server authoritative
+- Vine reaching animation; leaf sun-tracking
+- **Twelve mutation visual signatures** matching T04 table
+- Wilt/damage visuals
+- Frustum culling, instancing batches, hysteresis/dwell LOD promotion
+- Mobile tier tuning (reduced raymarch steps, smaller prim budgets)
+
+**Acceptance.** 100 plants on desktop and 40 on phone within budget; 1,000 plants in range handled by LOD without exceeding bandwidth cap; IK never changes server state (RULE_27). WebGL2 fallback mesh renderer meets same LOD targets without SDF.
+
+**Config.** Part of `config/plant_renderer.json` (LOD thresholds, ellipsoid noise params, mutation signature params, WebGL2 fallback config).
+
+**AI prompt.** "No separate implementation — all features in C02 unified WebGPU SDF renderer. Ensure LOD transitions are smooth, impostor ellipsoids use procedural surface (no billboards, no atlas), WebGL2 fallback has smooth joint blending."
 
 ### C03 · Environment Rendering — `config/render.json`
 **Depends on:** C01, T07, T00A.
@@ -497,6 +571,126 @@ Every task returns: implementation, config file(s), README of tunables (type/ran
 **Must support.** Bot clients scaling 50 → 500 → 2,000; tick-budget verification under offline load; 24-hour soak for leaks; chaos disconnects; restore drill; basic security review (auth, rate limits, input validation).
 **Acceptance.** Active-tier tick time stays under budget; no memory growth over 24 h; restore drill passes.
 
+## B5.5 Task Integration Blueprint — Building Blocks & Data Flow
+*This section shows how each task is a building block: what it PRODUCES (outputs), what it CONSUMES (inputs from other tasks), and what DEPENDS ON IT (downstream consumers). Use this to trace data flow from foundation to castle.*
+
+### Foundation Layer (Phase 0)
+
+| Task | Produces (Outputs) | Consumes (Inputs) | Consumed By (Downstream) |
+|------|-------------------|-------------------|--------------------------|
+| **T00 + O01** | Repo scaffold, CI/CD, config schema, validator, `CONTEXT.md`, Docker compose, health endpoint, all empty `config/*.json` | — | **Every task** — config files, CI, repo structure, dev environment |
+| **T03P** | WebSocket protocol v1, server-authoritative cube movement, message codec, quantization, rejection logic | T00 (repo, config) | **T03** (world server), **C01** (client connection), **T07** (weather broadcast), **T08C** (auth over WS) |
+
+### Core Simulation Layer (Phase 1)
+
+| Task | Produces (Outputs) | Consumes (Inputs) | Consumed By (Downstream) |
+|------|-------------------|-------------------|--------------------------|
+| **T00A** | Tile grid (light/moisture/minerals), photosynthesis formula, consumption triggers, resource readout API, onboarding hint card | T00 (config), **T07** (`time_of_day`) | **T01** (growth costs), **T04** (mutation triggers), **T07** (rain→moisture), **C01/C03** (resource readout), **C04** (HUD tooltips) |
+| **T01** | Node graph (root/canopy), growth intents → server validation, root competition, canopy shading, root attack damage | T00A (resource tiles, costs), **T03** (broadcast) | **T03** (persistence), **T02** (root sight data), **T04** (adaptive pressure), **T06** (damage pipeline), **C02** (renderer input), **C04** (growth UI) |
+| **T03** | Persistent world state, Active/Near/Dormant tiers, interest management, event bus, binary protocol, snapshot+event log, reconnect window | T03P (protocol), T01 (plant state), T00A (resource sync) | **T08C** (sessions), **T05** (chat channels), **T04** (mutation events), **T06** (death events), **T08A** (inventory), **T16** (ledger), **C02** (plant data), **C03** (environment sync) |
+| **T08C** | Argon2id auth, JWT tokens, session management, rate limits, `account_id`, `world_id` on all gameplay rows | T03 (world, WS) | **T05** (chat auth), **T08A** (inventory owner), **T14** (marketplace auth), **T45** (mail auth), **C07** (app wrappers) |
+
+### Rendering & Visual Layer (Phase 1)
+
+| Task | Produces (Outputs) | Consumes (Inputs) | Consumed By (Downstream) |
+|------|-------------------|-------------------|--------------------------|
+| **C01** | Three.js scene, CameraRig (independent entity), InputBus (named actions), UI shell (layers, toasts), QualityController, asset pipeline, debug overlay | T00, T03P (protocol) | **C02** (renderer), **C03** (environment), **C04** (HUD), **C05** (menus), **T02** (Root Sight camera), **C09** (touch) |
+| **C02** | **Unified WebGPU SDF renderer**: compute culling (L0/L1/L2), raymarch `smin` fusion (L0/L1), impostor ellipsoid spheres (L2), transparent canvas over Three.js, WebGL2 mesh fallback | C01 (scene, camera), T01 (node graph), T04 (mutation signatures) | **T02** (Root Sight integration), **C03** (compositing), **C04** (growth selection) |
+| **T02** | Root Sight toggle, volumetric cutaway shader (owned here), 3D proximity aura, substrate multiplier for reroot crawl | T01 (root nodes), C01 (CameraRig) | **C03** (reuses cutaway shader), **C02** (Root Sight uniforms), **T06** (reroot crawl speed) |
+| **C03** | Sky dome, sun/moon arcs, atmospheric fog, rain particles, storm lightning, soil moisture tinting, Root Sight cutaway (reused from T02) | C01 (scene), T07 (weather/time), T00A (tile data) | **C02** (compositing target), **C04** (weather HUD) |
+| **T07** | Day/night cycle (`time_of_day`), weather state machine (clear/rain/thunderstorm), forecast broadcast, condition mapping | T00A (rain→moisture), T3 (broadcast) | **T00A** (light curve), **T01** (growth conditions), **T13A** (booster conditions), **C03** (visuals), **C04** (forecast UI) |
+
+### Gameplay Systems Layer (Phase 1-2)
+
+| Task | Produces (Outputs) | Consumes (Inputs) | Consumed By (Downstream) |
+|------|-------------------|-------------------|--------------------------|
+| **T04** | Data-driven mutations (triggers, effects, maintenance, visual signatures), **adaptive pressure** (8 growth categories → gene tag weights), `mutation_acquired`/`shed` events | T00A (env triggers), T01 (growth events), T03 (event bus) | **T08B** (achievements), **T15** (gene items), **T12** (archetype biases), **T24** (expansion), **C02** (12 visual signatures), **T06A** (death record genes) |
+| **T05** | Proximity chat, world chat, emote wheel, **Roblox-style report/block** (context snapshots, rate limits), illegal-content-only policy enforcement | T03 (channels), T08C (auth) | **T40** (admin triage), **C04** (chat panel), **T14** (trade chat) |
+| **T06** | State machine (rooted→uprooted→tumbling→reroot→rooted), **damage pipeline** (4 sources: weather/roots/tools/herbivores), kill credit, dung drops, fragments/remains, reroot crawl | T01 (root attack), T02 (substrate multiplier), T07 (weather damage), T03 (broadcast) | **T04** (mutation triggers), **T08B** (kill events), **T16** (ledger), **T51** (fragments from damage), **T06A** (death pipeline), **C04** (damage UI) |
+| **T08A** | Row-locked inventory (Postgres), `spore_balance`, item flags (tradeable/mailable/listable/account_bound), bundle create/open, fragments, offspring seeds, duplication audit | T03 (transactions), T08C (owner) | **T08** (session stipend), **T08B** (prestige), **T13** (currency), **T14** (marketplace), **T15** (gene items), **T51** (extraction), **T06A** (heirloom), **T13A** (boosters), **T45** (mail attachments), **C04** (inventory UI), **C05** (inventory screen) |
+| **C04** | Context dock (valid actions only), rebinding screen, text-size slider, resource tooltips, hint card, chat panel (proximity/world), report dialog, notifications | C01 (UI shell), T00A (resources), T07 (weather), T08A (inventory), T05 (chat), T06 (damage) | **C05** (menus build on HUD), **T02** (Root Sight toggle), **T08** (session end screen) |
+
+### Economy & Identity Layer (Phase 2-3)
+
+| Task | Produces (Outputs) | Consumes (Inputs) | Consumed By (Downstream) |
+|------|-------------------|-------------------|--------------------------|
+| **T16** | Permanent ledger (edit/ownership history), tombstones on erasure, cold storage archive, gene/fragment provenance, review edit/erasure entries | T03 (persistence), T08A (item events) | **T17** (naming history), **T15** (gene removal entries), **T43** (reputation reviews), **T44** (guild disband), **T06A** (heirloom traces), **C05** (ledger viewer) |
+| **T17** | Player naming on all objects (species, companions, genes, listings, guilds, structures), names in tooltips/inspection/marketplace/chat, ledger persistence | T16 (ledger) | **T14** (listing names), **T44** (guild names), **C05** (naming UI) |
+| **T15** | Gene items (inventory), shared ID space (discovered + traded), mint-on-acquisition, gene removal ledger entries, `mints_per_plant_mutation` limit | T04 (mutations), T08A (inventory), T16 (ledger) | **T51** (extraction uses ID space), **T14** (gene listings), **T06A** (heirloom gene check), **T22** (bloodline tracing) |
+| **T13** | Spore currency (earn: session/territory/mutations/kills/exploration/dung/seasonal; spend: fertilizer/gene stabilization/companions/cosmetics/market fees/territory), store UI, P2W line (inferior/common purchasable, standard+ earn-only + account-bound), Essence crafting | T08A (spore_balance), T08 (session stipend) | **T13A** (booster prices), **T14** (market currency), **T06A** (Spore retrieval), **T51** (extraction cost), **T45** (mail Spore), **C05** (store UI) |
+| **T51** | Fragments (from pruning/damage/remains), gene extraction (fragment→gene, self-extract, remains), provenance ledger, graft (chance/cooldown/limits), `fragment_dropped`/`collected`/`gene_extracted`/`grafted` events | T15 (gene schema), T13 (Spore cost), T06 (fragments), T16 (provenance), T08A (transactions) | **T14** (fragment listings), **T06A** (heirloom genes from fragments), **T22** (bloodline) |
+| **T06A** | **Three death paths**: (1) new seed, (2) heirloom from inventory genes, (3) heirloom via Spore retrieval; **seed viability preview** (upkeep vs income risk band); seed production from flowers; death grant; calamity grant (default false); pre-build queue | T06 (death pipeline), T08A (genes), T15 (gene items), T16 (ledger), T13 (Spore cost) | **T20** (season calamity uses death pipeline), **C05** (death/heirloom screen), **T14** (heirloom trading), **T22** (bloodline) |
+| **T13A** | 3 tiers × 3 types (growth/mutation/healing) × condition matrix (day/night × sun/rain/storm), forecast-dependent, active-conditions UI, **never wasted** (min_effect floor), stacking, P2W cap | T07 (conditions), T08A (inventory), T13 (currency), T15 (mutation chance type) | **T14** (booster listings), **T20** (season rewards), **C05** (booster UI) |
+| **T14** | UI marketplace (buyout/auction, filters, 3D previews, seller reputation), trade/gift-to-guild (stubs), premium Spore tab, **item flags enforced server-side**, heirloom seeds tradable, Starter Packs not | T08A (inventory), T15 (genes), T13A (boosters), T06A (heirlooms), T43 (reputation stub), T44 (gift stub) | **T43** (reputation uses seller data), **T45** (gift bundles), **C05** (marketplace shell), **C04** (trade UI) |
+| **T12** | Archetype selection at spawn, base stats, starting mutations/biases, growth curve character, visible via inspection | T01 (growth), T04 (mutations) | **C05** (spawn screen) |
+
+### World Evolution & Polish (Phase 2-3)
+
+| Task | Produces (Outputs) | Consumes (Inputs) | Consumed By (Downstream) |
+|------|-------------------|-------------------|--------------------------|
+| **T20** | Same planet across seasons, rule-based deep-time transformation (drift/erosion/volcanism/sea level/biome), scars fossilize, replayable time-lapse, **season-end calamity kills all via T06A**, lineage via queued heirloom only, season rewards for standard+ boosters | T06A (death pipeline), T07 (weather), T16 (ledger), T13A (rewards) | **T18** (season relics), **T39** (climate memory), **T48** (minimap aggregation), **C05** (season screen) |
+| **C05** | Login/sign-up, spawn/archetype select, inventory, ledger viewer, death/heirloom screen, season countdown/time-lapse, settings, reconnect, **empty shells** for marketplace/mail/guild | C01, C04, T08A, T16, T06A, T20, T08C, T12 | **C09** (touch layout), **C07** (app wrappers) |
+
+### Launch Readiness (Phase 4-6 / Gate 3)
+
+| Task | Produces (Outputs) | Consumes (Inputs) | Consumed By (Downstream) |
+|------|-------------------|-------------------|--------------------------|
+| **T43** | Consumer-style reputation (1-5 stars + review), verified-transaction flag, transparent aggregation, reviewer edit/erase (tombstone), entity response | T08B (account), T16 (ledger), T14 (seller data stub) | **T44** (guild reputation), **T46** (status), **T28** (observation) |
+| **T44** | Player-formed guilds (name/motto/roster, roles, Spore cost), guild reputation aggregate, leader disband (tombstone), no mechanical buffs | T08B, T16, T43 | **T45** (gift-to-guild), **T46** (status), **T28** (observation) |
+| **T45** | Inbox (system/player mail), attachments via T08A transactions, Starter Packs system-mail only, expiry per category, **Gift Bundles** (tradeable/mailable/listable containers, no account-bound contents) | T08A (inventory), T43 (reputation) | **T50** (Starter Pack delivery), **C05** (mail shell) |
+| **T40** | 5-line illegal-content policy, admin triage page (reports + context snapshots, RULE_6 actions only), ledger entries on admin actions, admin role isolation, age gate, ToS, privacy | T00, T05 (report flow), T17, T43, T44, T45 | **Real-money switch** (gate), **T41** (anti-cheat) |
+| **H01** | Bot scaling 50→500→2000, tick-budget verification, 24h soak, chaos disconnects, restore drill, security review | **All Gate 3 tasks except real-money switch** | **Launch** |
+
+---
+
+### Data Flow Summary: Foundation → Castle
+
+```
+T00+O01 (Foundation)
+    │
+    ├─→ T03P (Protocol) ──→ T03 (World Server) ──→ T08C (Accounts)
+    │                           │                        │
+    │                           ├─→ T01 (Growth) ──→ T04 (Mutation) ──→ T15 (Genes)
+    │                           │                        │                  │
+    │                           │                        │                  ├─→ T51 (Extraction/Graft)
+    │                           │                        │                  ├─→ T06A (Heirloom)
+    │                           │                        │                  └─→ T14 (Marketplace)
+    │                           │                        │
+    │                           ├─→ T07 (Weather) ──→ T13A (Boosters)
+    │                           │                        │
+    │                           ├─→ T06 (Damage/Death) ──→ T06A (Heirloom/Viability)
+    │                           │                        │
+    │                           ├─→ T08A (Inventory) ──→ T08 (Session) ──→ T08B (Progress)
+    │                           │                        │                  │
+    │                           │                        │                  ├─→ T16 (Ledger) ──→ T17 (Naming)
+    │                           │                        │                  │                  │
+    │                           │                        │                  │                  ├─→ T43 (Reputation)
+    │                           │                        │                  │                  │      │
+    │                           │                        │                  │                  │      ├─→ T44 (Guilds)
+    │                           │                        │                  │                  │      │
+    │                           │                        │                  │                  │      └─→ T46 (Status)
+    │                           │                        │                  │                  │
+    │                           │                        │                  └─→ T06A (Heirloom) ──→ T20 (Seasons)
+    │                           │                        │
+    │                           └─→ T05 (Chat/Reports) ──→ T40 (Compliance)
+    │
+    ├─→ C01 (Client Foundation) ──→ C02 (WebGPU SDF Renderer)
+    │                           │                  │
+    │                           │                  ├─→ T02 (Root Sight shader + aura)
+    │                           │                  │
+    │                           │                  └─→ C03 (Environment) ← T07, T00A
+    │                           │
+    │                           └─→ C04 (HUD/Controls) ← T00A, T07, T08A, T05, T06
+    │                                                │
+    │                           └─→ C05 (Menus/Screens) ← C04, T08A, T16, T06A, T20, T12
+    │
+    └─→ (Gate 3) → T40→T41→T42 → H01 (Hardening) → Real-money switch → Launch
+```
+
+**Key Principle:** Every task output feeds 1+ downstream tasks. No task is an island. If you build a task, you immediately unlock its consumers. If you skip a task, its dependents cannot be built.
+
+---
+
 ## B5. Dependency Matrix (replaces Appendix D)
 | Task | Depends on |
 |---|---|
@@ -530,7 +724,6 @@ Every task returns: implementation, config file(s), README of tunables (type/ran
 | T10 | T01, T06, T08B |
 | T20 | T06A, T07, T16, T13A |
 | C05 | C01, C04, T08A, T16, T06A, T20, T08C, T12 |
-| C02b | C02, T03, T04 |
 | O02 | O01, T03 |
 | T43 | T08B, T16, T14 (T14 may be deferred; T14 seller/listing stub required if T14 UI is cut) |
 | T44 | T08B, T16, T43 |
@@ -550,6 +743,46 @@ Every task returns: implementation, config file(s), README of tunables (type/ran
 | H01 | all Gate 3 tasks except the real-money Spore switch |
 | Real-money switch | T13, T40, T41, T42 |
 
+## B5.6 Quick Reference: Task → Config File → Key Data Produced
+
+| Task | Config File | Key Data Structures Produced (Server) | Key Client Artifacts |
+|------|-------------|----------------------------------------|----------------------|
+| **T00 + O01** | `ops.json`, all `config/*.json` (empty) | Repo, CI, validator, Docker, health endpoint, `CONTEXT.md` | Dev environment, config schema |
+| **T03P** | `net_proto.json` | Protocol v1, message codec, quantization, rejection logic | WebSocket client, message types |
+| **T00A** | `resources.json`, `daynight.json` | Tile grid (light/moisture/minerals 0–100), photosynthesis formula, consumption triggers, resource readout API | Resource readout HUD, onboarding hint card |
+| **T01** | `growth.json` | Node graph (root/canopy), growth validation, root competition, canopy shading, root attack | Plant node data for C02, growth intent UI |
+| **T03** | `world.json`, `network.json` | Active/Near/Dormant tiers, interest cells, event bus, binary protocol, snapshot+event log, reconnect | Plant sync (STATE/KEYFRAME), interest area updates |
+| **T08C** | `accounts.json` | Argon2id auth, JWT tokens, sessions, `account_id`, `world_id` on all rows | Login/sign-up UI, token storage |
+| **C01** | `render.json`, `controls.json`, `ui.json` | Three.js scene, CameraRig, InputBus, UI shell, QualityController, asset pipeline | All client rendering/input/UI |
+| **C02** | `plant_renderer.json` | WebGPU SDF renderer (cull, raymarch, impostor), transparent canvas, WebGL2 fallback | PlantRenderer, WebGPUPlantRenderer classes |
+| **T02** | `root_sight.json` | Root Sight shader (cutaway + aura), substrate multiplier, camera target logic | Root Sight toggle, cutaway uniforms |
+| **C03** | `render.json` | Sky dome, sun/moon arcs, fog, rain, lightning, soil tint, cutaway (reused from T02) | EnvironmentRenderer class |
+| **T07** | `weather.json`, `daynight.json` | Day/night cycle, weather state machine (clear/rain/thunderstorm), forecast, condition mapping | Weather HUD, condition tokens for boosters |
+| **T04** | `mutations.json` | Mutation triggers/effects/maintenance/visuals, **adaptive pressure** (8 categories → tag weights), events | Mutation visual signatures (C02), gene pool weights |
+| **T05** | `chat.json`, `emotes.json`, `reports.json` | Proximity/world chat, emote wheel, report/block (context snapshots, rate limits) | Chat panel, report dialog |
+| **T06** | `uproot.json`, `damage.json`, `tumbling.json`, `fragments.json` | State machine, damage pipeline (4 sources), kill credit, dung, fragments/remains, reroot crawl | Damage UI, death screen, reroot controls |
+| **T08A** | `inventory.json`, `item_flags.json` | Row-locked inventory, `spore_balance`, item flags, bundles, fragments, offspring seeds, duplication audit | Inventory UI, `spore_balance` HUD |
+| **C04** | `ui.json`, `controls.json` | Context dock, rebinding, text-size, resource tooltips, hint card, chat panel, report dialog | HUD, growth selection UI |
+| **T16** | `ledger.json` | Permanent ledger (edit/ownership), tombstones, cold storage, gene/fragment provenance, review entries | Ledger viewer, naming history |
+| **T17** | `naming.json` | Naming on all objects, tooltips/inspection/marketplace/chat, ledger persistence | Naming UI |
+| **T15** | `genes.json` | Gene items, shared ID space, mint-on-acquisition, `mints_per_plant_mutation` limit | Gene inventory, marketplace listings |
+| **T13** | `spores.json` | Spore earn/spend sources, store UI, P2W line, Essence crafting | Currency HUD, store UI |
+| **T51** | `fragments.json`, `extraction.json` | Fragments (sources/pickup/decay), extraction (fragment/self/remains), provenance ledger, graft | Fragment UI, extraction/graft UI |
+| **T06A** | `heirlooms.json` | 3 death paths, **seed viability preview**, seed production, death grant, calamity grant, pre-build queue | Death/heirloom screen, viability preview |
+| **T13A** | `boosters.json` | 3 tiers × 3 types × condition matrix, forecast-dependent, min_effect, stacking, P2W cap | Booster UI, active conditions display |
+| **T14** | `marketplace.json` | Buyout/auction, filters, 3D previews, seller reputation, trade/gift stubs, item flags enforced | Marketplace UI, trade window |
+| **T12** | `archetypes.json` | Archetype base stats, starting mutations, growth curve | Spawn screen |
+| **T20** | `deep_time.json` | Planet persistence, deep-time transform, scars fossilize, time-lapse, calamity via T06A, season rewards | Season screen, time-lapse viewer |
+| **C05** | `ui.json` | Login, spawn, inventory, ledger, death/heirloom, season, settings, reconnect, empty shells | All menu screens |
+| **T43** | `reputation.json` | 1–5 star reviews, verified-transaction, transparent aggregation, reviewer edit/erase (tombstone) | Reputation display, seller profile |
+| **T44** | `guilds.json` | Guilds (name/motto/roster/roles), guild reputation, disband tombstone, no buffs | Guild UI, gift-to-guild stub |
+| **T45** | `mail.json`, `gift_bundles.json` | Inbox (system/player), attachments via T08A, Starter Packs (system only), Gift Bundles | Mail UI, gift bundle UI |
+| **T40** | `compliance.json`, `reports.json` | 5-line policy, admin triage (context snapshots), age gate, ToS, privacy | Admin page, report flow |
+| **H01** | `ops.json` | Bot scaling, tick-budget, 24h soak, chaos disconnects, restore drill, security review | Launch readiness |
+| **Real-money** | — | Spore purchase flow, compliance/labeling | Store "coming soon" or live |
+
+---
+
 ## B6. Why 13 / 26 / 52 Does Not Hold, and What a 13-Week Gate Could Hold
 With client work counted, the work needed just to reach the original "week 13" milestone (foundation, networking gate, client foundation, resource model, growth, procedural renderer, world server, accounts, Root Sight) is **exactly 13 weeks with no playtest and no buffer**. That is why it is Checkpoint 4, not Gate 1.
 
@@ -561,6 +794,8 @@ I recommend against it, because it moves the feeling of failure to week 13 inste
 
 ## B7. Post-Alpha (Beta) Order — unscheduled
 Recommended order, dependencies respected: T47, T48, T30, T34, T36, T35, T09, T11, T13B, T22, T18, T19, T21, T27, T28, T29, T37, T38, T39, T31, T49, **T53**, T32, T33. Re-run the weeks arithmetic before scheduling any of them.
+
+**V5.4 extension order (approved; after the beta order or slotted where dependencies allow):** T55 → T56 → C10 → T57 → T54 → C11 → T59 → T58 → O04. T54 may run earlier because it depends only on Gate 1 systems (T01, T03, T06, T07). T58 waits for T55/T56/T57. O04 waits for T03/T08C/O02/H01 and should not start before there is a measured need for more than one World.
 
 ## B8. Repo File System
 
@@ -624,7 +859,7 @@ plant-legacy/
 │  │  ├─ app/                     # state, session, scenes
 │  │  ├─ render/
 │  │  │  ├─ camera/ (rig, orbit, rootsight, spectator, map, timelapse)
-│  │  │  ├─ plants/ (graph, tubes, leaves, flowers, lod, ik, material)
+│  │  │  ├─ plants/ (webgpu-sdf: cull.wgsl, mesh.wgsl, impostor.wgsl, raymarch.wgsl, PlantPrimitiveBuilder.ts, WebGPUPlantRenderer.ts)
 │  │  │  ├─ environment/ (terrain, sky, weather, cutaway)
 │  │  │  └─ shaders/  pools/  quality/
 │  │  ├─ input/                   # actions, bindings, keyboard, mouse, touch, context rules
@@ -792,11 +1027,13 @@ Each spec is a block. Feed one to the AI at a time. Every AI session returns imp
 
 **Must support.** Data-driven mutations: trigger (chance, environment, consumption, action), effect (stat, ability, cosmetic, structural, expressive), maintenance cost, visual signature. Unbounded table; no cap on stacked mutations; every mutation costs upkeep; too many for environment kills plant. Plant can shed mutation for short penalty. No rarity field; no rarity UI. Movement block schema `{translocate, parts, drift, rerootSpeed}`. If simple MVP mutation sets `movement.rerootSpeed`, it multiplies MVP reroot crawl speed (T06). Full locomotion post-MVP reads same block. Environment triggers read light, moisture, minerals, weather state, time of day, biome modifier (constant 1.0 in MVP). Consumption triggers use T00A definition. Discovered and traded gene records share one schema and one ID space. Emits `mutation_acquired`, `mutation_shed` (T15 and T08B subscribe).
 
-**Acceptance.** Mutations config-only to add. Maintenance scales and can kill. Shedding works with cooldown/penalty. Cosmetic, structural, expressive variants exist. Triggers fire from T00A/T07 data. Movement block exists and crawl modifier works.
+**Adaptive pressure (guided growth).** The server tracks recent investment in each growth category (root, stem, leaf, flower, spore_sac, vine, defense, storage) with exponential decay (configurable half-life). When a mutation triggers, the mutation pool is weighted by: `(base_weight) × (environment_bias) × (1 + adaptive_pressure[gene_tags])`. Categories map to gene tags (e.g., root investment → `Root`, `WaterStorage` tags; defense investment → `Toxic`, `Thorns` tags). This lets players steer mutation odds by sustained playstyle without removing randomness. Config controls: `adaptive_pressure_enabled`, `decay_half_life_ticks`, `max_pressure_multiplier`, `category_to_tag_map`.
 
-**Config.** Chance per growth event 0–0.5. Weight tables. Maintenance 0–100 biomass/s. Shed cooldown 0–10 min; penalty 0–60 s. Gene ID space. Mutation schema with movement block.
+**Acceptance.** Mutations config-only to add. Maintenance scales and can kill. Shedding works with cooldown/penalty. Cosmetic, structural, expressive variants exist. Triggers fire from T00A/T07 data. Movement block exists and crawl modifier works. Adaptive pressure tracks 8 categories, decays, biases mutation weights per gene tags, configurable on/off and strength.
 
-**AI prompt.** "Build data-driven mutation system with triggers reading T00A/T07 data, maintenance, shedding, movement block whose `rerootSpeed` modifies MVP crawl, events on acquire/shed. No rarity field. Return example table of at least 12 mutations."
+**Config.** Chance per growth event 0–0.5. Weight tables. Maintenance 0–100 biomass/s. Shed cooldown 0–10 min; penalty 0–60 s. Gene ID space. Mutation schema with movement block. `adaptive_pressure_enabled` (bool), `decay_half_life_ticks` (100–100000), `max_pressure_multiplier` (1.0–10.0), `category_to_tag_map` (schema_array).
+
+**AI prompt.** "Build data-driven mutation system with triggers reading T00A/T07 data, maintenance, shedding, movement block whose `rerootSpeed` modifies MVP crawl, events on acquire/shed. Add adaptive pressure: track investment in 8 growth categories with exponential decay, bias mutation pool weights by category→tag mapping. All tunables in config. No rarity field. Return example table of at least 12 mutations."
 
 ### T06 · Uprooted, Damage, Tumbling — `config/uproot.json`, `config/damage.json`, `config/tumbling.json`, `config/fragments.json`
 **Depends on:** T01, T02, T03, **T07** (no weather stub needed; build T07 first).
@@ -933,12 +1170,13 @@ Each spec is a block. Feed one to the AI at a time. Every AI session returns imp
 - **[V5.3] Heirloom seed remains a blank vessel [Part 5, T06A].** Restored mutations always come from the owner's own latest death record. A bought or traded heirloom seed never imports another player's build.
 - **[V5.3] First-ever seed [Part 5, T06A].** A new account spawns on Path 1 (no item needed).
 - **[V5.3/v5.3.1] Planting a held heirloom seed (post-MVP) [T06A planting bullet / T22].** A held heirloom seed may be placed in soil to mark where your descendant will spawn. A planted seed is a world entity that the damage pipeline can affect. It is not controlled while you are alive (RULE_1: you are one plant). This is owned by T22 (or a separate post-MVP seed-planting task), not T53. T53 covers offspring seeds from cross-pollination only.
+- **Seed viability preview.** Before confirming any heirloom seed (at death screen, seed production, or pre-build queue), the UI shows a server-computed estimate: projected upkeep (biomass × k1 + mutation_load × k2) vs projected income (photosynthesis at spawn tile light/moisture/minerals, root absorption at local soil). Output: a risk band (Low / Medium / High / Critical) with a one-line breakdown such as "upkeep exceeds likely income by 35%." Estimate reads T00A tile data at the intended spawn location (current plant position for death/pre-build; chosen tile for seed production). It is an estimate, not a guarantee — actual weather, competition, and herbivores will differ. Config: `viability_preview_enabled`, `risk_band_thresholds` (array of 3 numbers for band boundaries), `income_projection_ticks` (how many ticks to simulate for the estimate).
 
-**Acceptance.** Three paths work. Gene check and Spore retrieval server-authoritative. Cost scales. Ledger entries written. Death record written. Descendant carries ancestor name/history. Pre-build works and queues next seed. Seed production from mature flower works. Death grant works. Calamity default respects config. No bloodline tracing MVP. Duplication audited. No rarity.
+**Acceptance.** Three paths work. Gene check and Spore retrieval server-authoritative. Cost scales. Ledger entries written. Death record written. Descendant carries ancestor name/history. Pre-build works and queues next seed. Seed production from mature flower works. Death grant works. Calamity default respects config. No bloodline tracing MVP. Duplication audited. No rarity. Viability preview shows at death screen, seed production confirmation, and pre-build queue; reads server tile data; displays risk band + one-line breakdown; configurable on/off.
 
-**Config.** Gene cost curve. Spore retrieval cost curve. Gene consumption rule consumed vs copied. Heirloom seed flags. Pre-build on. Death record schema. Name/history compression. `max_seeds_per_life`, `seed_biomass_cost`, `flower_min_age`, `seed_cooldown`, `death_grant_seed`, `calamity_grant_seed`.
+**Config.** Gene cost curve. Spore retrieval cost curve. Gene consumption rule consumed vs copied. Heirloom seed flags. Pre-build on. Death record schema. Name/history compression. `max_seeds_per_life`, `seed_biomass_cost`, `flower_min_age`, `seed_cooldown`, `death_grant_seed`, `calamity_grant_seed`. `viability_preview_enabled` (bool), `risk_band_thresholds` (number[3]), `income_projection_ticks` (integer).
 
-**AI prompt.** "Build T06A heirloom-at-death. Three paths: new seed; heirloom with inventory genes; heirloom with Spore-retrieved genes; paths mixable per gene. Heirloom seed is blank vessel; restored set only from owner's latest death record. Gene items keyed by mutation ID. Server-authoritative gene check and Spore payment. Write death record `{plant_id, parent_seed_id, genes[], season, owner_id}`. Write ledger entries. Pre-build queues next seed. Seed production from mature flower with config limits and cooldown. Death grant. `calamity_grant_seed` default false. Heirloom seeds tradable/mailable per flags; audit duplication. No bloodline tracing. No rarity."
+**AI prompt.** "Build T06A heirloom-at-death. Three paths: new seed; heirloom with inventory genes; heirloom with Spore-retrieved genes; paths mixable per gene. Heirloom seed is blank vessel; restored set only from owner's latest death record. Gene items keyed by mutation ID. Server-authoritative gene check and Spore payment. Write death record `{plant_id, parent_seed_id, genes[], season, owner_id}`. Write ledger entries. Pre-build queues next seed. Seed production from mature flower with config limits and cooldown. Death grant. `calamity_grant_seed` default false. Heirloom seeds tradable/mailable per flags; audit duplication. No bloodline tracing. No rarity. Add seed viability preview: before confirm, server computes upkeep vs projected income at spawn tile, shows risk band (Low/Medium/High/Critical) with one-line breakdown. Configurable. All values in config."
 
 ### T13A · Booster System, MVP — `config/boosters.json`
 **Depends on:** T07, T08A, T13, T15.
@@ -1251,6 +1489,8 @@ Every config file named in any task exists in `config/`.
 
 `_meta`, `growth.json`, `root_sight.json`, `net_proto.json`, `network.json`, `world.json`, `resources.json`, `daynight.json`, `mutations.json`, `chat.json`, `emotes.json`, `uproot.json`, `damage.json`, `tumbling.json`, `weather.json`, `session.json`, `inventory.json`, `item_flags.json`, `fragments.json`, `extraction.json`, `account_progress.json`, `achievements.json`, `prestige.json`, `accounts.json`, `reports.json`, `symbiosis.json`, `parasitism.json`, `companions.json`, `archetypes.json`, `spores.json`, `boosters.json`, `marketplace.json`, `genes.json`, `reputation.json`, `guilds.json`, `mail.json`, `gift_packs.json`, `gift_bundles.json`, `ledger.json`, `naming.json`, `heirlooms.json`, `relics.json`, `annotations.json`, `deep_time.json`, `paid_spawn.json`, `minimap.json`, `growth_scale.json`, `terrain.json`, `persistence.json`, `messaging.json`, `status.json`, `observation.json`, `gifts.json`, `spectating.json`, `spectator.json`, `spectating_ui.json`, `water.json`, `campaign.json`, `tutorial.json`, `territory.json`, `clips.json`, `epoch_map.json`, `leaderboards.json`, `climate_memory.json`, `compliance.json`, `anticheat.json`, `liveops.json`, `ops.json`, `controls.json`, `ui.json`, `render.json`, `audio.json`, `profiles.json`, `reproduction.json`.
 
+**V5.4 approved config files (not created yet; see Part 11).** `fauna.json` (T54), `materials.json` (T55), `terrain_volume.json` (T56), `terrain_features.json` (T57), `world_objects.json` (T58), `succession.json` (T59), `orchestration.json` (O04). These are added to `config/` only when the corresponding v5.4 task is approved and started; the current T00 count stays at 75.
+
 **Consistency notes.** Spores have no artificial earn cap. Ledger supports erasure with tombstones. Water has no special aquatic mutation categories. Item and gene rarity removed entirely. Booster tier naming fixed. T30/T34/T36 use distinct config files. Standard+ boosters and Essence are account-bound. Starter Packs are account-bound. Gift Bundles are tradeable/mailable/listable but cannot contain account-bound items. **[V5.3] Item enum now includes `fragment` and `offspring_seed`. Fragment flags: tradeable, mailable, listable true; not account-bound. Offspring seed default: account-bound until planted (pending Part 16 item 3).**
 
 ## 6.3 Item-flag table (Appendix C update) **[V5.3]**
@@ -1379,6 +1619,18 @@ Rule: `account_bound=true` forces other three false. Gift Bundle contents may no
 - *(v5.3.1)* T43 may run against a deferred T14 *UI*, but it requires the T14 seller/listing data model and the named `getSellerReputation` stub. If T14 UI is cut at Gate 2, T14 (or its data model + stub) must land at Gate 3 before T43.
 - *(v5.3.1)* The T25 cut order keeps the **T25 core stub** (root tunneling/voids and canopy light-blocking persistence) required by T26; only optional T25 capabilities are cut.
 - *(v5.3.1)* Planting a held heirloom seed is owned by **T22** (or a separate post-MVP seed-planting task), **not** T53. T53 covers offspring seeds from cross-pollination only.
+- **Unified plant renderer (C02):** Single WebGPU SDF raymarching renderer with compute-driven LOD (C02b merged). WebGL2 fallback uses mesh renderer with smooth joint blending. Eliminates dual-renderer fallback, double-rendering, and "frankenstein" joint artifacts. WebGPU primary path; WebGL2 fallback only when WebGPU unavailable.
+
+**V5.4 extension decisions (approved 2026-11-09; see Part 16).**
+
+- Reactive non-sapient fauna are allowed in multiplayer. Intelligent NPCs remain campaign-only. Fauna may have needs and reflexes; they may not converse, pursue story goals, exercise judgment, form factions, or plan.
+- There are no world resets. A season-end calamity buries the old world under sediment; it does not wipe or regenerate it.
+- The damage pipeline is target-agnostic and covers plant and fauna damage, with a single record shape.
+- Material simulation runs on a decoupled cellular-automaton cadence inside the existing tick budget. It does not raise the 20 Hz gameplay tick.
+- Volumetric terrain is stored as sparse binary chunks, never as per-voxel database rows.
+- World objects are streamed and persisted through the existing T03 interest/persistence layer. Behaviour is config-defined state machines, not uploaded code.
+- Cloud scale is many single-process Worlds with a global account service. No microservices or queues by default; an exception needs an ADR and a measured reason.
+- Ecological succession and recovery failsafes are in scope post-alpha. Player actions may degrade land, but may not cause irreversible ecological collapse.
 
 ---
 
@@ -1735,9 +1987,11 @@ The best moments will not be designed. They will be discovered. Build the possib
 
 **Must support.** Campaign on separate planet from multiplayer; no shared World/world state. Narrative with NPC plants/humans/aliens allowed in campaign only. Missions have clear goals/victory conditions. Solo and co-op 2–4. Campaign progress unlocks multiplayer content: archetypes, gene hints, cosmetics. Speedrun-friendly with leaderboards.
 
-**Acceptance.** Separate planet. NPCs exist in campaign. Missions have clear victory conditions. Solo/co-op supported. Progress unlocks multiplayer content. Speedrun leaderboards.
+**V5.4 clarification.** Campaign is the only place for intelligent NPCs: conversation, story goals, judgment, factions, quests. Multiplayer's ceiling is T54 reactive fauna (needs and reflexes, no speech/goals/judgment). Campaign AI never shares a World or a code path with multiplayer.
 
-**Config.** Campaign mission schema. Co-op player count. Tutorial mission ID. Unlock mapping.
+**Acceptance.** Separate planet. NPCs exist in campaign. Missions have clear victory conditions. Solo/co-op supported. Progress unlocks multiplayer content. Speedrun leaderboards. Campaign is the only intelligent-NPC space.
+
+**Config.** Campaign mission schema. Co-op player count. Tutorial mission ID. Unlock mapping. `intelligent_npc_enabled` (campaign only, default true). `multiplayer_intelligent_npc_enabled` (must be false).
 
 **AI prompt.** "Build campaign mode on separate planet. Missions clear victory conditions, solo/co-op 2–4, NPCs allowed. Progress unlocks multiplayer archetypes/gene hints/cosmetics. Speedrun leaderboards. All config in `campaign.json`."
 
@@ -1772,6 +2026,252 @@ The best moments will not be designed. They will be discovered. Build the possib
 **Config.** Pollination range. Consent prompt behavior. Recombination gene count cap. Offspring seed flags. Planted-seed lifecycle.
 
 **AI prompt.** "Build T53 reproduction: cross-pollination with consent, offspring seeds with recombined blueprint (capped), planted seeds as world entities affected by the damage pipeline. T53 covers offspring seeds only, not planting a held heirloom seed. Flags per approved Part 16 item 3 decision. No named features. All config in `reproduction.json`."
+
+---
+
+## V5.4 extension tasks (approved 2026-11-09; not in the 80-week gate plan)
+
+**Status:** approved, not started. These tasks extend the existing plant-organism design rather than replacing it. Merge them into the build order and create their config files when their turn comes; the current 75-file config count is unchanged until then.
+
+**Rule dependencies:** RULE_2, RULE_8, RULE_19 and RULE_22 are amended in Part 2 and approved (Part 16, items 9–14).
+
+### T54 · Reactive Fauna — `config/fauna.json`
+
+**Depends on:** T01, T03, T06, T07. T55 recommended for fire/water/lava perception.
+
+**Must support.**
+- Persistent, server-authoritative fauna entities streamed through T03 interest management, with Active/Near/Dormant tiers. Offline fauna use reduced ticks and catch-up integration.
+- **Non-sapient only.** Species are config-defined and may have needs (hunger, thirst, fear, fatigue, herd), senses (sight, smell, vibration), and deterministic reflexes: graze, drink, flee, herd, sleep, seek shelter, attack a plant, struggle, escape. No human words or language, quests, story goals, judgment, factions, strategic planning, tool use, or learning that constitutes planning.
+- **Vocalizations.** Fauna may emit config-defined animal sounds (growls, chirps, distress calls, warning cries, mating calls, herd contact calls). Sounds are triggered by reflexes and needs, have a range and cooldown, and can be heard by nearby players and other fauna. They are never human words or language and never carry quest or story content. A distress call may attract predators or alert nearby fauna; that is a reflex chain, not communication with intent.
+- **Influence maps.** Coarse server-side grids (threat, food, water, fire, shelter) recomputed at a configurable low frequency. Fauna read them for direction choice. Maps are not a hidden player score and are not sent to clients as UI.
+- **Two-way plant interaction.** Herbivores bite configured plant nodes through the T06 damage pipeline (source `herbivore`). Plants may entangle or trap fauna with vines/roots (source `plant`); trapped fauna struggle, damage the trapping nodes, and escape when their strength exceeds the trap strength. A trapped animal can be killed. Death yields dung, biomass and/or fragments per config; kill credit goes to the plant owner. This is the python-vine case: the plant is the trap, the animal reacts, and either side can lose.
+- **Environmental reaction.** Fauna flee fire/lava, seek water when thirsty, avoid storms, and react to material changes from T55 when present. Without T55, use T07 weather and T00A resources.
+- **Population control.** Per-species caps, spawn sources, despawn rules, and no unbounded exponential growth. Local extinction is possible; T59 seed banks and migration can restore populations.
+- **Events.** `FAUNA_SPAWNED`, `FAUNA_MOVED`, `FAUNA_NEEDS_CHANGED`, `FAUNA_ATTACKED_PLANT`, `FAUNA_TRAPPED`, `FAUNA_ESCAPED`, `FAUNA_DIED`, `FAUNA_TAMED`, `FAUNA_VOCALIZED`.
+- **Taming hook.** A configured interaction may convert a fauna into a T11 companion. Taming does not grant speech, goals, or judgment.
+- No client authority. No hardcoded species or numbers. No rarity field.
+
+**Acceptance.**
+- Fauna persist, stream, and simulate offline at reduced tiers.
+- Herbivores damage plants through the T06 pipeline; plants can trap and kill fauna; trapped fauna struggle and can escape; kill credit and drops work.
+- Fauna react to fire/water/weather and to plant presence using influence maps.
+- Fauna vocalize with animal sounds that nearby players and fauna can hear; no human words or language anywhere in the path.
+- No dialogue, quests, judgment, factions, or planning anywhere in the multiplayer path.
+- Population caps and spawn/despawn rules prevent runaway growth.
+- Species and all tunables are config-only; determinism holds for a fixed seed and input sequence.
+
+**Config.** `max_fauna_per_world`; `species` (schema array: id, body size, diet, needs rates, sense radii, movement speed, fear/hunger thresholds, herd size, attack damage, health, dung drop, tameable); `vocalizations` (schema array: id, trigger, range, cooldown, volume, pitch); `influence_map` (cell size, update Hz, decay); `spawn_sources`; `population_caps`; `offline_tick`; `trap_strength`; `struggle_damage`; `escape_threshold`; `kill_credit_window` (reuse T06).
+
+**AI prompt.** "Build T54 reactive fauna: persistent non-sapient animals with needs and deterministic reflexes, influence maps, interest-managed streaming, offline tiers, herbivore damage through the T06 pipeline, plant entangle/trap/kill interactions, environmental reactions, animal vocalizations (no human words), population caps, and a T11 taming hook. No speech, quests, story goals, judgment, factions, or planning. All values in `fauna.json`."
+
+---
+
+### T55 · Material Simulation — `config/materials.json`
+
+**Depends on:** T00A, T03, T07. T56 for 3D flow (the first slice may run on the 2D tile grid).
+
+**Must support.**
+- A material layer over the existing T00A tile grid (and T56 chunks when present): material id, mass, temperature, moisture and state flags per cell.
+- Cellular-automaton rules on a decoupled cadence (config; initial default 2 Hz) inside the T03 tick budget. The gameplay tick stays at 20 Hz. Initial defaults: 2 Hz, 64 active chunks, ~10% of the tick budget. Deterministic update order; fixed-point or quantized values for replay.
+- Config-defined materials and elements. Materials: air, soil, rock, sand, water, lava, organic matter, wood, stone, metal, ash, ice (extendable). Elements: fire, water, wind, earth (extendable).
+- **State transitions by strength comparison.** Element strength versus material resistance/threshold determines ignition, wetting, drying, weathering, melting, freezing, combustion, erosion and rusting. The reaction table is config data.
+- **Dynamic environment.** Water flows downhill and settles; sand collapses; lava flows and cools to rock; fire ignites, spreads and extinguishes; rain wets and extinguishes; smoke and steam are derived effects. Vegetation spread is driven by T59/T01, not a separate system.
+- **Damage integration.** Any material transition that damages a plant or fauna emits a damage record through the RULE_22 pipeline. No parallel damage path.
+- **Persistence.** Material deltas in the T03 event log; periodic binary snapshots; never one DB row per cell.
+- **Interest management.** Only material deltas for subscribed cells/chunks are broadcast; per-client caps apply.
+- Client visuals are delivered by C10; T55 owns server state.
+
+**Acceptance.**
+- Water flows and settles; sand collapses; fire ignites wood and spreads; rain wets/extinguishes; lava cools to rock; metal weathers; all driven by config.
+- Deterministic replay for a fixed seed and input sequence.
+- Tick budget respected; CA cadence configurable; active-chunk cap holds; no spike.
+- Only interested clients receive deltas; no client writes.
+- Material damage routes through the damage pipeline.
+- State persists across restart and compacts.
+
+**Config.** `material_definitions` (schema array); `element_definitions`; `reaction_matrix`; `ca_hz` (default 2); `flow_rate`; `settle_threshold`; temperature and moisture ranges; `chunk_size`; `max_active_chunks` (default 64); `tick_budget_share` (default 0.10); `snapshot_interval`; `interest_radius`.
+
+**AI prompt.** "Build T55 material simulation: material cells with mass/temperature/moisture/state, config-defined materials/elements, CA rules at a decoupled cadence, flow/collapse/fire/lava/weathering transitions by strength comparison, T07 forcing, T06 damage integration, binary persistence and interest-managed deltas. All values in `materials.json`."
+
+---
+
+### T56 · Volumetric Terrain — `config/terrain_volume.json`
+
+**Depends on:** T03, T25, T26, C03, T55.
+
+**Must support.**
+- Sparse 3D chunk grid (config chunk size, e.g. 32³) storing occupancy, material and a signed-distance/iso-surface value. Supports overhangs, arches, caves and stacked layers.
+- **First release is full multi-layer/overhang terrain (approved Option B), not a surface-plus-caves slice.** Arches above ground, caves above caves, disconnected shelves and stacked layers are in scope from the first T56 release.
+- Deterministic generation from a world seed plus T57 parametric features. The existing flat ground becomes the initial surface layer.
+- Server-authoritative occupancy/collision queries for roots, fauna, water and objects. Roots can tunnel and leave voids (T25); erosion and sedimentation update the volume (T26/T55).
+- **Persistence.** Binary chunk snapshots plus an event log, time-sliced. No per-voxel DB rows. Chunks load and unload by interest.
+- **Interest management.** Clients receive only nearby chunk meshes/deltas; per-client chunk cap.
+- **LOD.** Chunk mesh/SDF LOD, frustum and occlusion culling; phone budget from Part 13.4.
+- Root Sight cutaway works through volumetric terrain, not just the flat plane.
+- No client authority; all edits are server-validated intents.
+
+**Acceptance.**
+- Overhangs, arches, caves and multi-layer structures exist and are collidable from the first release; no later scope switch is required.
+- Roots can tunnel into terrain; water/fire enter caves when T55 is present.
+- The client renders streamed chunks with LOD; no seams; Root Sight works.
+- Chunks persist and reload; no per-voxel rows; no tick spike.
+- Performance stays within Part 13.4 budgets.
+
+**Config.** `chunk_size`; `world_height`; `terrain_mode` (default `multi_layer`); `generation` (seed, surface params, cave density, overhang density, stacked-layer count); `material_palette`; `lod_distances`; `max_chunks_per_client`; `max_active_chunks`; `collision_margin`; `snapshot_interval`; `interest_radius`.
+
+**AI prompt.** "Build T56 volumetric terrain: sparse 3D chunks with occupancy/material/SDF, overhangs/arches/caves, deterministic generation, root tunneling and erosion hooks, server-authoritative collision, binary chunk persistence, interest-managed streaming and LOD. All values in `terrain_volume.json`."
+
+---
+
+### C10 · Volumetric Terrain and Material Rendering — `config/render.json`
+
+**Depends on:** C03, T55, T56.
+
+**Must support.**
+- Stream and render terrain chunks (mesh or SDF raymarch) with material blending, ambient occlusion, cave dampness/darkness and fog.
+- Dynamic material visuals: water surface/flow, sand, lava emissive/cooling, fire/smoke/steam, wet/dry soil tint, driven by server material state.
+- LOD, frustum/occlusion culling, chunk pooling and cross-fade; no per-frame allocations.
+- Root Sight cutaway integration and cave cutaway.
+- Dev-only debug view for chunk bounds, material ids and collision.
+- Performance targets: desktop 60 fps ≤1.5M tris/≤400 calls; phone 60 fps ≤400K/≤150 calls; low-end 30 fps fallback.
+- The client never edits terrain or material state.
+
+**Acceptance.**
+- Terrain and dynamic materials render correctly with LOD and culling.
+- Root Sight works in caves/overhangs.
+- No seams, no visible pop beyond configured cross-fade.
+- Performance budgets met on target tiers.
+- Debug view is dev-only.
+
+**Config.** Chunk render distance; LOD thresholds; material shader quality; water/lava/fire particle budgets; cross-fade ms; occlusion settings.
+
+**AI prompt.** "Build C10 volumetric terrain and material rendering: streamed chunk meshes/SDF with LOD, material blending, caves, water/lava/fire/smoke visuals, Root Sight cutaway, pooling and culling, dev debug view. All values in `render.json`."
+
+---
+
+### T57 · Parametric Terrain Features — `config/terrain_features.json`
+
+**Depends on:** T56.
+
+**Must support.**
+- General parametric primitives: Bézier surface patch, spline sweep, extrusion, volume carve, noise blend, and Boolean add/subtract. No named outcomes or proper-noun features (RULE_7).
+- Parameters: control points, radius/taper, twist, noise amplitude/frequency, blend radius, material, orientation, seed. A small parameter set controls shape and scale.
+- Deterministic rasterization into T56 chunks; features blend into the existing surface and can be edited or eroded later.
+- Config schema and validator; feature definitions are data, not code.
+- A dev-only preview/edit tool may be added; it writes config or server intents, never client-authoritative terrain.
+- Features persist as part of the chunk snapshot plus a feature definition record for reproducibility.
+
+**Acceptance.**
+- Overhangs, arches, caves and sweeps can be generated from parameters and blend into terrain.
+- Deterministic for a fixed seed; no named outcomes; config-only.
+- Features collide, render, persist, and can be eroded or tunneled.
+- No client-authoritative edits.
+
+**Config.** Feature schema (type, control points, radius, taper, twist, noise, blend, material, seed); validation limits; max features per chunk; preview settings.
+
+**AI prompt.** "Build T57 parametric terrain features: Bézier patches, spline sweeps, extrusions, volume carves, noise blends, Boolean add/subtract, deterministic rasterization into T56 chunks, config-only definitions, dev preview. General primitives only, no named outcomes. All values in `terrain_features.json`."
+
+---
+
+### T58 · World Object Streaming and Behaviour — `config/world_objects.json`
+
+**Depends on:** T03, T55, T56, T57.
+
+**Must support.**
+- A general server-owned object registry: id, type, transform, material, state, owner, persistence policy, interest cell, LOD.
+- Object types are config-defined and include plants, fauna, terrain features, fragments, seeds, structures and future types. Existing plants migrate into the registry without changing the wire contract.
+- **Streaming.** Create/update/remove messages to interested clients; per-client caps; LOD; offline tiers.
+- **Persistence.** Binary snapshot plus event log per object type, time-sliced. Relational data (items, ledger) stays in normal rows.
+- **Behaviour.** Config-defined state machines/components (id, states, transitions, stimuli, actions, cooldowns, budgets). No arbitrary uploaded code, no eval, no client scripts. Behaviour runs server-side, deterministically, inside the tick budget. **Confirmed boundary (approved Option A): config-defined state machines only; no sandboxed plugin model.**
+- **Interaction hooks.** Damage, use, harvest, tame, open, grow, decay. Hooks route through the owning system (T06, T01, T54, etc.), never duplicate rules.
+- Events and ledger provenance for object creation, destruction and transfer.
+
+**Acceptance.**
+- Objects stream and persist; offline tiers work; per-client caps hold.
+- Behaviour is config-only and deterministic; no arbitrary code path exists.
+- Existing plants work through the registry; new types can be added without a protocol rewrite.
+- Interaction hooks route to the correct owning system.
+- Tick-budget and LOD budgets hold.
+
+**Config.** Object type schema; behaviour schema; persistence policy; LOD bands; per-client cap; snapshot interval; event-log compaction; interaction hook table.
+
+**AI prompt.** "Build T58 world object registry: streamed/persisted server-owned objects, config-defined types and behaviour state machines, interest/LOD/offline tiers, interaction hooks to T01/T06/T54, ledger provenance. No uploaded code. All values in `world_objects.json`."
+
+---
+
+### T59 · Ecological Succession and Failsafes — `config/succession.json`
+
+**Depends on:** T55, T20, T26, T39, T54.
+
+**Must support.**
+- Succession stages: bare substrate → pioneer → grass → shrub → woodland → forest, driven by moisture, minerals, light, temperature, disturbance, seed bank and time. Stage definitions and thresholds are config.
+- **Dead matter conversion.** Dead roots/plants/fauna → organic matter → soil minerals. Erosion and sedimentation move material and fill pits. Mining tailings/spoil flows and converts to soil, then grass.
+- **Disturbance resets.** Fire, lava, flooding, over-grazing and root tunneling reset stages locally; recovery remains possible.
+- **Failsafes.** Degraded regions below configured thresholds receive recovery pulses (seed rain, rain, mycorrhiza, herbivore migration). Recovery is **natural, measured in real-time days, and weather-dependent**: wet, mild weather accelerates it; drought, fire or repeated disturbance delays it. It is guaranteed within a configured maximum recovery time; no irreversible ecological collapse from player actions. Recovery is slow enough to matter.
+- **T20/T39 hooks.** Fossilization, biome shifts and climate memory feed deep-time transformation.
+- Deterministic, tick-budgeted, server-authoritative; visuals via C10.
+- No named outcomes or proper-noun biomes.
+
+**Acceptance.**
+- Forests regrow under sufficient conditions; pits/tailings fill and become soil/grass; degraded land recovers over time.
+- Fire/lava/flood/over-grazing reset stages locally; no irreversible collapse.
+- Recovery takes real-time days and responds to weather; wet/mild periods speed it up, drought/fire/repeated disturbance delay it; a configured maximum is always reachable.
+- Succession reads T55 material state and T20/T39 climate memory.
+- Deterministic and within tick budget.
+- Config-only; no named outcomes.
+
+**Config.** Stage definitions; transition thresholds; growth rates; seed bank; recovery pulses; `recovery_real_time_days`; `weather_dependency`; `max_recovery_time`; disturbance resets; erosion/sedimentation rates; tailings conversion; deep-time hooks.
+
+**AI prompt.** "Build T59 ecological succession and failsafes: stage progression, dead matter to soil, erosion/sedimentation filling pits, tailings to soil/grass, disturbance resets, recovery pulses preventing irreversible collapse, T20/T39 hooks, deterministic and tick-budgeted. All values in `succession.json`."
+
+---
+
+### C11 · Reactive Fauna Rendering — `config/render.json`, `config/fauna.json`
+
+**Depends on:** C02, C03, T54.
+
+**Must support.**
+- Render streamed fauna with LOD (mesh → billboard → dot), simple procedural bodies/animation, herd motion, grazing/drinking/fleeing/struggling states, and trap/entangle visuals.
+- Play `FAUNA_VOCALIZED` animal sounds (growls, chirps, distress calls, warning cries, mating calls) at the server-specified position, range and volume. No human words or speech synthesis. Distance attenuation and a per-frame voice budget apply.
+- No needs bars or hidden AI display in the world. An optional inspection readout may show plain facts when the player targets a fauna (RULE_13).
+- Pooling, culling and phone budgets.
+- Server state only; no client-side fauna decisions.
+
+**Acceptance.**
+- Fauna render and animate from server state at LOD.
+- Trapped/struggling states are visible.
+- Vocalizations play from server events; no human words.
+- Performance and voice budgets met.
+- No editorializing UI.
+
+**Config.** Fauna render budgets; LOD thresholds; animation rates; vocalization voice budget; debug toggle.
+
+**AI prompt.** "Build C11 fauna rendering: streamed LOD bodies, procedural animation, grazing/drinking/fleeing/struggling/trapped visuals, server-driven animal vocalizations with no human words, pooling and culling, plain inspection facts only. All values in `render.json` and `fauna.json`."
+
+---
+
+### O04 · Cloud-Native World Orchestration — `config/orchestration.json`
+
+**Depends on:** T03, T08C, O02, H01.
+
+**Must support.**
+- Many Worlds, each one process plus one Postgres (RULE_14/RULE_31). A global account/routing service sends players to a World; accounts are global.
+- **First release: many Worlds per host (approved Option A).** Several World processes share a host; the router sends players to the least-loaded suitable World. Per-World on-demand allocation (start/stop/scale by population/season) is the later target and must be addable behind the same routing contract without a client rewrite. The orchestrator holds no gameplay state. No Redis/queue/microservices by default; any exception needs an ADR and a measured reason.
+- **Globally persistent universe.** No world resets. Worlds can be archived/restored. Calamity burial is a state transition, not a wipe.
+- **Streaming.** Procedural assets/state come from the World; static client/assets come from a CDN; no pre-baked world mesh is required.
+- Health/readiness, cost caps, free-first hosting, and graceful drain.
+- Client reconnect/routing without a rewrite.
+
+**Acceptance.**
+- Add/remove a World without a client rewrite; account routing works. The first release runs many Worlds per host; on-demand allocation can be added behind the same contract.
+- No reset path exists; archive/restore preserves state.
+- World processes are isolated; one World failure does not corrupt another.
+- Cost caps and readiness checks work.
+- No default microservices/queues; exceptions documented.
+
+**Config.** `worlds_per_host` (first release); world pool size; allocation thresholds (later); drain timeout; routing policy; archive/restore; cost caps; health intervals.
+
+**AI prompt.** "Build O04 cloud-native World orchestration: many single-process Worlds with global account routing, starting with many Worlds per host, on-demand allocation addable later behind the same contract, archive/restore with no resets, health/cost caps, graceful drain, CDN static assets. No default microservices/queues. All values in `orchestration.json`."
 
 ---
 
@@ -1815,10 +2315,25 @@ Each row is a decision made (or that follows directly from answers). "Needs appr
 | D-27 | Stale `A…` references replaced with real Part/Task references (see Appendix F). | Review #7 |
 | D-28 | T15 no longer defers extraction to post-MVP; T51 owns extraction/graft, T14 owns gene listing, T22 owns bloodline. | Review #8 |
 | D-29 | Vocabulary rows for heirloom seeds and gene items updated to match built systems. | Review #9 |
-| D-30 | Dependency matrix completed: `C03`, `C05`, `C02b`, `T14`, `T20`, `T43`, `H01`. | Review #10 |
+| D-30 | Dependency matrix completed: `C03`, `C05`, `T14`, `T20`, `T43`, `H01` (C02b merged into C02). | Review #10 |
 | D-31 | Duplicate Part 8.2 heading and merge artifact removed. | Review #11 |
 | D-32 | RULE_16 checkpoint weeks corrected to W13 / W36 / W67. | Review #12 |
 | D-33 | Heirloom-seed planting separated from T53 offspring seeds; owned by T22 (or a separate post-MVP task). | Review #13 |
+| D-34 | Unified plant renderer: C02 (WebGL2 SDF) + C02b (WebGPU mesh LOD) merged into single C02 WebGPU SDF renderer with WebGL2 mesh fallback. Eliminates double-rendering, "frankenstein" joint look, and fallback confusion. WebGPU primary; WebGL2 fallback uses improved mesh blending. | User decision |
+
+**V5.4 extension rows (approved 2026-11-09).**
+
+| ID | Decision | Source |
+|---|---|---|
+| D-35 | Reactive non-sapient fauna are allowed in multiplayer. They may perceive, have needs, use deterministic reflexes, and vocalize with animal sounds; they may not use human words or language, converse, pursue story goals, exercise judgment, form factions, or plan. Intelligent NPCs remain campaign-only. | User answer + design |
+| D-36 | There are no world resets. A season-end calamity is a burial under sediment, not a wipe or regeneration. | User answer |
+| D-37 | The damage pipeline is target-agnostic: plant damage has weather/roots/tools/herbivores sources; fauna damage has plant/weather/fauna sources. One record shape. | Design |
+| D-38 | Material simulation runs on a decoupled cellular-automaton cadence inside the existing tick budget; the gameplay tick stays at 20 Hz. Initial defaults: 2 Hz, 64 active chunks, ~10% of the tick budget. | Design + user approval |
+| D-39 | Volumetric terrain is stored as sparse binary chunks, never as per-voxel database rows. The first T56 release is full multi-layer/overhang terrain, not a surface-plus-caves slice. | Design + user approval |
+| D-40 | World-object behaviour is config-defined state machines, never uploaded or client-side code. Confirmed: no sandboxed plugin model. | Design + user approval |
+| D-41 | Cloud scale remains many single-process Worlds with a global account service; no default microservices or queues. First release runs many Worlds per host; per-World on-demand allocation is a later step behind the same routing contract. | Design + RULE_31 + user approval |
+| D-42 | Ecological succession and recovery failsafes are in scope post-alpha; player actions may degrade land but may not cause irreversible collapse. Recovery is natural, measured in real-time days, weather-dependent, and guaranteed within a configured maximum. | User answer + design |
+| D-43 | Parametric terrain features are general surface/sweep/carve primitives, not named structures (RULE_7). | Design |
 
 ---
 
@@ -1830,7 +2345,7 @@ Each row is a decision made (or that follows directly from answers). "Needs appr
 
 | Layer | Choice | Why |
 |---|---|---|
-| Client renderer | Three.js (WebGL2; optional WebGPU renderer later) | Runs in every browser with no install, smallest download, best AI-assistance coverage, and full control over procedural meshes and custom shaders. |
+| Client renderer | Three.js (WebGL2) + **WebGPU SDF raymarching (C02)** | Three.js for environment/UI; WebGPU compute+raymarch for plants (organic fusion via smin). WebGL2 fallback = mesh renderer with smooth joint blending. |
 | Client UI | HTML/CSS overlay (Preact or plain TS components) | Text scaling, key remapping, chat, inventory and menus are far easier in DOM than in canvas, and they stay crisp on every device. |
 | Client build | Vite + TypeScript | Fast iteration, easy static hosting. |
 | Network | WebSocket now (binary messages). WebTransport later if needed. | Works in all browsers. |
@@ -1901,7 +2416,7 @@ Rules:
 - **Distance bands** → detail levels:
   - **L0** (near): full node graph, procedural mesh, IK/animation cosmetics. Updated at network rate.
   - **L1**: simplified graph (trunk + major branches), no leaf instancing detail. Low update rate.
-  - **L2**: impostor (billboard or low-poly proxy). Position, size, health bucket only.
+  - **L2**: **impostor ellipsoid sphere SDF**. Position, size, health bucket, canopy color, mutation hue. Single sphere trace per pixel.
   - **L3**: a dot on the globe minimap texture (T48 aggregation, post-MVP).
 - Spectators (T34) are never in spatial cells.
 
@@ -1992,7 +2507,7 @@ Do **not** run IK on every node of every plant; run it only for L0 plants and on
 ### 14.1.5 Level of Detail and Performance Rules
 
 - Ring count, leaf count and curve smoothing scale with distance bands (13.7).
-- L1 merges a plant into one buffer; L2 is an impostor refreshed only when the plant's shape changes meaningfully.
+- L1 merges a plant into one buffer; L2 **impostor ellipsoid sphere SDF** refreshed only when the plant's shape (bounding box) changes meaningfully.
 - Geometry budgets per plant at L0 are config values (start: 40 K triangles desktop, 12 K phone).
 - GPU instancing everywhere possible; one material per detail level; no per-plant materials.
 - Update rate for animation scales down with distance.
@@ -2015,6 +2530,130 @@ Rules: switching cameras never changes plant state; camera positions are never s
 ## 14.3 Root Sight Shader Ownership (v5.3.1 clarification)
 
 The **Root Sight cutaway shader is implemented by T02** and used by T02's camera mode. **C03 reuses and refines** it for general environment cutaways (terrain slicing, spectator cutaways if needed). C03 does not provide the shader used by T02. This ordering matters because T02 is scheduled (W13) before C03 (W15), and because the Root Sight look is defined in Part 19.6 and must be stable before environment polish begins.
+
+---
+
+# Part 14.2 — GPU-Driven Rendering Architecture (WebGPU Compute)
+
+> **Design Alignment:** This architecture replaces the WebGL2 SDF raymarching approach for the 10k-plant target. WebGPU compute shaders are required; a WebGL2 fallback would be a reduced L0/L1 path without compute-driven culling, **procedural impostor spheres**, or GPU skinning. The numbers below are estimates to verify in the stress test (H01).
+>
+> **Implementation status (C02b slice, 2026-11-04):** the shipped WebGPU path is a v1 compute-driven LOD renderer: a transparent WebGPU canvas over the WebGL environment, one merged branch/leaf mesh for tiers 0/1, **impostor ellipsoid sphere SDF for tier 2**, per-plant frustum culling plus hysteresis/dwell in `cull.wgsl`, and a WebGL2 fallback. Impostor sphere SDF, VRAM slot pools, GPU skinning, texture arrays, cross-fade, and the L2/L3 mutation library are designed below but **not implemented yet**.
+
+## 14.2.1 VRAM Budget and Pool Management
+
+**Assumptions:** 1080p, 2 GB-class GPU, ~800 MB budget for rendering.
+
+| Allocation | Estimate | Notes |
+|---|---|---|
+| Skeletons & genes (10k plants) | ~40 MB | 24 B/node, ≤400 nodes/plant, ≤10 KB/plant |
+| Branch tables | ~10 MB | 32 B/branch, ≤100 branches/plant |
+| Near meshes (Tier 0) | ~20 MB | 256 slots × ~80 KB |
+| Mid meshes (Tier 1) | ~26 MB | 1,280 slots × ~20 KB |
+| Leaf instances | ~4 MB | ~120k × 32 B |
+| Impostors | ~170 MB | 1k multi-view (8×64², ~131 KB) + 9k single-view (32², ~4 KB) |
+| Texture arrays | ~40 MB | Leaf color/normal, bark color/normal |
+| Shadows (4 cascades 2048²) | ~67 MB | Depth only |
+| Render targets | 100–180 MB | More with MSAA |
+| Light volume | ~8 MB | |
+| **Total (1080p)** | **~520–600 MB** | **~1 GB at 4K** |
+
+**Pool Management:**
+- Each tier uses fixed-size slot pools inside large buffers, each pool ≤128 MB (WebGPU default binding limit). No fragmentation, no per-frame allocation.
+- A plant holds one slot in its current tier. Tier change = free old slot + claim new slot.
+- Priority = projected screen size × importance. Own plant, target, party members get boost. Pool full → lowest priority demoted.
+- No browser VRAM query. Count own allocations; pick conservative cap from startup benchmark. On device loss, rebuild from skeletons (kept in memory).
+
+## 14.2.2 Junction Smoothing (Baked at Mesh Gen)
+
+- Child branch tube starts inside parent tube (not on surface).
+- Junction zone = first ~1–2 parent radii. Two tube distance fields blended with polynomial smooth-min:
+  ```
+  h = max(k - |a-b|, 0) / k
+  result = min(a,b) - h²·k/4
+  k ≈ 0.3 × min(parent_radius, child_radius)
+  ```
+- Vertices pushed onto blended surface along field gradient (finite differences, 1–2 iterations). Same gradient gives exact normal.
+- Baked once at mesh generation → zero runtime cost. ~2 rings × 8 vertices per junction.
+- Estimate: <0.1 ms/plant on GPU, time-sliced.
+- Animation weights blended across junction (prevents tearing during sway).
+- Bark UVs blended in zone or use triplanar mapping.
+- Far tiers skip smoothing (junctions sub-pixel).
+
+## 14.2.3 Leaf Cards
+
+- **Near (Tier 0):** 6-vertex, 4-triangle shaped card with bent midrib. Ellipse fills ~79% of bounding rect → removes wasted alpha-discard area.
+- **Far (Tier 1+):** 2-triangle quad.
+- Edges: alpha-to-coverage with 4× MSAA if budget allows; else alpha test + coverage-preserving mipmaps + SMAA. Decide by measuring.
+- Overdraw: canopy close-up = 10–30×. Solution: depth-only pre-pass (alpha test), then main pass with depth-equal → each pixel lit once.
+- Compute pass culls leaves/frame (frustum + tier), appends survivors to compact list with indirect args.
+- Shadow passes use every-other leaf at larger size.
+- Two-sided with cheap translucency term → backlit leaves glow.
+
+## 14.2.4 Per-Vertex Animation Data (GPU Skinning)
+
+**Vertex layout (~20 B):**
+- `position`: 3×f16 + pad (8 B)
+- `normal`: octahedral (4 B)
+- `uv`: 2×f16 (4 B)
+- `packed`: branchId (u16), bendWeight (unorm8), stiffness (unorm8) (4 B)
+
+**Branch table record:** basePos, direction, parentId, length, swayPhase.
+
+**Near plants (Tier 0):** Compute pass each frame. Walks branch tree parent-first, writes pose (rotation about branch base) per branch to pose buffer. ~20k poses for 200 plants. Vertex shader fetches own + parent pose, blends by bendWeight. GPU skinning where bones = branches. Joints stay continuous.
+
+**Movement IK:** Writes into same pose buffer. No separate animation system.
+
+**Leaves:** Store branchId. Transform = branchPose × localTransform + high-freq flutter (per-leaf phase hash).
+
+**Mid plants (Tier 1):** Skip compute. Analytic sway: trunk bend by height, flutter by level, driven by baked stiffness/bendWeight.
+
+**Wind:** One global noise field sampled by worldPos + time.
+
+## 14.2.5 Texture Arrays
+
+WebGPU limits: 256 layers/array, 8192 max dim, 16 sampled textures/stage.
+
+**Arrays:**
+- Leaf color + alpha
+- Leaf normal + detail
+- Bark color
+- Bark normal + detail
+
+All layers in array share size (e.g., 256² leaves, 512² bark). Add second array per size class only if needed.
+
+**Compression:** KTX2 + Basis Universal → transcodes to BC7 (desktop), ASTC (Apple/mobile), ETC2 (elsewhere). Check feature flags at startup.
+
+**Channel packing:** normal XY, roughness, emission mask (alpha). Emission mask drives bioluminescence.
+
+**Gene → layer index:** Plant's leaf shape = layer number. Hybrids/mutations = two layer indices + blend factor (two samples).
+
+**Per-plant uniqueness (procedural in shader):** Hue shift (perceptual space), vein pattern, gradient tint, per-leaf random variation (hash). Memory stays flat.
+
+**Filtering:** Anisotropic on bark, coverage-preserving mips on leaves.
+
+**Sources:** ambientCG, Poly Haven (CC0), or procedural at build time.
+
+## 14.2.6 Detail Level Switching (Projected Size at 1080p)
+
+| Tier | Description | Projected px (1080p) |
+|---|---|---|
+| 0 | Full mesh, full leaves, IK, real shadows | > 300 |
+| 1 | Reduced mesh, fewer larger leaves, analytic sway, blob shadow | 80–300 |
+| 2 | **Impostor ellipsoid sphere SDF** (procedural bark + canopy) | 12–80 |
+| 3 | **Impostor ellipsoid sphere SDF** (simplified, color only) | 2–12 |
+| 4 | Colored point / density texture (minimap) | < 2 |
+
+**Rank-based assignment (constant cost):**
+- Compute pass: every plant's projected size (10k entries, trivial), sort, assign top ~256 → Tier 0, next ~1,280 → Tier 1, etc. Pixel thresholds act as floors.
+- Hysteresis: promote at 1.15×, demote at 0.85×, min dwell ~0.5 s.
+
+**Hiding the swap:**
+- Cross-fade with dithered (blue-noise) transparency over ~0.3 s, rendering both tiers during overlap. Cap transitions/frame (protects generation budget).
+- Impostors baked as albedo/normal/emission (not lit color) → relit live. Weather, time, glow match mesh.
+- Impostor quads bent with same wind field + stiffness → motion matches at switch.
+- Prefetch next tier at ~0.7× threshold (velocity prediction). Show lower tier until ready, never nothing. New arrivals = Tier 3 → upgrade progressively.
+- Giants: cap vertex count/plant so huge Tier 0 doesn't blow slot.
+- WebGPU: no multi-draw-indirect → one indirect draw per batch/tier. ~30–60 draws/pass (trivial for CPU).
 
 ---
 
@@ -2049,6 +2688,15 @@ Free tiers change often. These were checked in November 2026 and must be re-chec
 6. **`spore_sac` function.** v5.2 renamed it but never says what it does. Suggested default: it emits spores used for cross-pollination range in T53 (Beta). Keep, change, or cut?
 7. **Worker threads.** Approve only if profiling shows the single thread cannot hold the tick budget.
 8. **Accessibility extras.** Part 19 lists cheap options (non-color cues, reduced motion). They are optional. Opt in or out.
+
+**V5.4 extension approvals — resolved 2026-11-09.**
+
+9. **Reactive fauna rule amendment — approved.** RULE_2 / RULE_19 allow persistent non-sapient fauna with needs and reflexes; intelligent NPCs remain campaign-only. RULE_22 extends the damage pipeline to fauna targets. Refinement: fauna and companions may vocalize with animal sounds (growls, chirps, distress calls), but not human words or language.
+10. **Volumetric terrain scope — full multi-layer (Option B).** The first T56 release commits to full multi-layer/overhang terrain, not a surface-plus-caves slice. Arches, caves above caves and stacked layers are in scope from the start.
+11. **Material simulation budget — 2 Hz, 64 active chunks, ~10% of the tick budget.** Starting values; raise only after profiling shows headroom. The gameplay tick stays at 20 Hz.
+12. **Cloud orchestration model — many Worlds per host first (Option A).** Several World processes share a host. Per-World on-demand allocation remains the later target and must be addable behind the same routing contract without a client rewrite.
+13. **Succession failsafe strength — natural recovery in real-time days, weather-dependent, guaranteed within a configured maximum.** Recovery is slow enough to matter and never permanently impossible.
+14. **World-object scripting boundary — config-defined state machines only (Option A).** No sandboxed plugin model. A plugin model would need a separate ADR, security review and determinism plan.
 
 ---
 
@@ -2167,12 +2815,72 @@ Rules:
 
 ## 17.6 The Growth Interaction (Desktop and Mobile)
 
-1. **Select.** Click/tap a node or tip of your plant (canopy or, in Root Sight, root). Eligible tips highlight with a plain outline; non-growable nodes do not select.
-2. **Aim.** Move the pointer (or, on touch, press and hold the target area) and a **preview path** shows direction, node count, biomass cost and expected time, using only numbers (no "good/bad" language).
-3. **Commit.** Click/tap to set the target. The server validates and starts growth; the client shows growth as server data arrives. Growth is continuous and interruptible (T01), so you can re-aim at any time.
-4. **Cancel.** Esc / right-click (desktop), Cancel button (touch).
+There is **no quick-grow key**. Growth is always a deliberate two-step choice:
+pick where it grows, then pick what grows there.
 
-Edge cases: if the target is invalid (out of range, blocked, not enough biomass) the preview line turns dashed with a plain reason ("Not enough biomass"); the action cannot be committed.
+1. **Select.** Click/tap a node or tip of your plant (canopy or, in Root Sight, root). Eligible tips highlight with a plain outline; non-growable nodes do not select.
+2. **Choose the node type.** The dock lists the node types this plant can currently grow at that parent — leaf, stem, branch, trunk, flower, spore sac, root, and later types. The list is constrained by the plant's genes and by the selected parent. Locked types are shown with a plain reason, not hidden.
+3. **Aim.** Move the pointer (or, on touch, press and hold the target area) and a **preview path** shows direction, node type, node count, **energy cost**, **biomass gain** and expected time, using only numbers (no "good/bad" language).
+4. **Commit.** Click/tap to set the target. The server validates parent, direction, type, gene availability, energy cost and bounds, then starts growth; the client shows growth as server data arrives. Growth is continuous and interruptible (T01), so you can re-aim at any time.
+5. **Cancel.** Esc / right-click (desktop), Cancel button (touch).
+
+Edge cases: if the target is invalid (out of range, blocked, gene-locked, not enough energy) the preview line turns dashed with a plain reason ("Not enough energy"); the action cannot be committed.
+
+## 17.6.1 Player Decisions (2026-11-06)
+
+These decisions are binding for the Phase 1 implementation. Rationale is in
+`docs/decisions.md` ADR-018 through ADR-029.
+
+**Growth and economy.**
+
+- Biomass is organism **mass**. Energy is the spendable currency for growth and
+  upkeep, produced by photosynthesis from light + moisture + minerals.
+- Growing **spends energy and adds biomass**. It never deletes body mass.
+- Node options are **gene-gated**. A plant cannot grow a type its genes do not
+  allow, even if it can afford it.
+- The growth option list, costs, gains, times and reasons come from the
+  **server** (ADR-028). The client never hardcodes them.
+- Players may direct growth; undirected/autonomous growth (for example, toward
+  the sun) can be **paused** by a setting or button so the plant banks energy.
+  Auto-growth is off unless the player turns it on.
+
+**Germination.**
+
+- Germination is **player-triggered**, not automatic. The player chooses when to
+  attempt it.
+- The attempt is **always allowed**. Success requires the seed tile's
+  **moisture and light** thresholds and enough energy; the server decides.
+- Committing below either threshold **fails and destroys the seed/plant**. This
+  lets a player deliberately kill a seed they no longer want.
+- Resource values crossing a threshold never germinate a seed by themselves.
+- A player may deliberately **delay germination** to wait for rain or better
+  light. The seed persists until a successful attempt or death.
+
+**Persistence, accounts, and the dev engine.**
+
+- Default local/dev behaviour is **session-only** (ADR-029). Reloading the page
+  or restarting the server creates a fresh plant; there is no implicit
+  `localStorage` reclaim and no ghost plant after disconnect.
+- Persistence and the reconnect window are behind an explicit dev switch.
+- Build a **dev settings console** (`?dev=1`) that lists every config system and
+  lets the operator toggle and edit the game's aspects (persistence,
+  auto-growth, germination gate, plant size class, camera, resources,
+  rendering). Reset returns to the checked-in defaults.
+- When persistence is enabled, show a **once-per-day** recommendation to create
+  an account. It is dismissible and never blocks play.
+
+**Camera, avatar, and scale.**
+
+- Remove the cube avatar and all direct avatar movement.
+- **WASD / arrow keys pan the camera** (RULE_1, §17.4). Reroot steering reuses
+  WASD only while uprooted/tumbling.
+- Frame the camera **close** to the player plant on spawn and recenter (about
+  6 world units). The current small model is the **normal** size class; large
+  and giant classes scale that model. Do not scale the world to make plants
+  visible.
+
+**Priority order.** P0 blockers → finish C02b → T05 Communication → visual and
+onboarding polish. `pnpm verify` must be green before any task is marked done.
 
 ## 17.7 Example `controls.json`
 
@@ -2386,6 +3094,7 @@ All screens use the same tokens, scale with text size, and are keyboard operable
 
 - MVP uses one biome: temperate meadow/soil. Smooth-shaded terrain with painterly ground textures (downsampled CC0), soil tint driven by moisture and minerals, simple grass cards at the L0 range.
 - Deep-time transformations (T20) re-style terrain through the same shaders; scars may appear as darker or lighter ground patches that fossilize.
+- **V5.4 (approved 2026-11-09):** volumetric terrain keeps the same painterly surface language. Caves, arches and overhangs use the existing soil/rock palette with damp darkening; water, lava and fire effects are driven by material state, not bespoke set pieces. Root Sight cuts through the volume, not just the surface plane.
 
 ## 19.8 UI Visual Language
 
@@ -2731,7 +3440,7 @@ Every v5.3 system spec is retained in v5.3.1, including: T00A consumption trigge
 
 **Gate 1 / Phase 1 (end W24):** C01, T00A, T01, C02, T03, T08C, T02, T07, C03, T05, T04, T06, T08A, C04
 
-**Gate 2 / Phase 2–3 (end W52):** T08, T08B, T16, T17, T15, T13, T51, T06A, T13A, T14, T12, T10, T20 partial, C05, C02b, O02
+**Gate 2 / Phase 2–3 (end W52):** T08, T08B, T16, T17, T15, T13, T51, T06A, T13A, T14, T12, T10, T20 partial, C05, O02
 
 **Gate 3 / Phase 4–6 (end W80):** T43, T44, T45, T50, T46, T23, T24, T25, T26, T40, T41, T42, C06, C09, C07, H01, real-money switch
 

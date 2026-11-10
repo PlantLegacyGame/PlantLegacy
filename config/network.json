@@ -40,19 +40,13 @@
         "min_z": -1000,
         "max_z": 1000
       },
-      "description": "World bounds for movement validation"
+      "description": "World bounds for plant growth"
     },
     "max_velocity_units_per_tick": {
       "type": "number",
       "value": 2.0,
       "range": [0.1, 10.0],
-      "description": "Max velocity per tick for movement validation"
-    },
-    "move_speed": {
-      "type": "number",
-      "value": 5.0,
-      "range": [0.1, 50.0],
-      "description": "Base move speed for cubes"
+      "description": "Max velocity per tick (unused, kept for protocol compatibility)"
     },
     "binary_protocol_enabled": {
       "type": "boolean",

@@ -39,6 +39,13 @@ export interface PlantRendererConfig {
   maxRaymarchSteps: number;
   raymarchHitEpsilon: number;
   boundingBoxPadding: number;
+  l0RaymarchSteps: number;
+  l1RaymarchSteps: number;
+  l2RaymarchSteps: number;
+  l0RaymarchEpsilon: number;
+  l1RaymarchEpsilon: number;
+  l2RaymarchEpsilon: number;
+  rootSides: number;
 }
 
 let plantRendererConfig: PlantRendererConfig = {
@@ -74,9 +81,16 @@ let plantRendererConfig: PlantRendererConfig = {
   mutation1Param: 1.5,
   mutation2Param: 0.3,
   sminBlendRadius: 0.25,
-  maxRaymarchSteps: 32,
-  raymarchHitEpsilon: 0.005,
+  maxRaymarchSteps: 16,
+  raymarchHitEpsilon: 0.01,
   boundingBoxPadding: 1.2,
+  l0RaymarchSteps: 16,
+  l1RaymarchSteps: 10,
+  l2RaymarchSteps: 6,
+  l0RaymarchEpsilon: 0.005,
+  l1RaymarchEpsilon: 0.012,
+  l2RaymarchEpsilon: 0.025,
+  rootSides: 4,
 };
 
 type ConfigPayload = Record<string, unknown> & {
@@ -156,6 +170,13 @@ export async function loadPlantRendererConfig(serverOrigin: string): Promise<Pla
         maxRaymarchSteps: readValue(payload, 'max_raymarch_steps', current.maxRaymarchSteps),
         raymarchHitEpsilon: readValue(payload, 'raymarch_hit_epsilon', current.raymarchHitEpsilon),
         boundingBoxPadding: readValue(payload, 'bounding_box_padding', current.boundingBoxPadding),
+        l0RaymarchSteps: readValue(payload, 'l0_raymarch_steps', current.l0RaymarchSteps),
+        l1RaymarchSteps: readValue(payload, 'l1_raymarch_steps', current.l1RaymarchSteps),
+        l2RaymarchSteps: readValue(payload, 'l2_raymarch_steps', current.l2RaymarchSteps),
+        l0RaymarchEpsilon: readValue(payload, 'l0_raymarch_epsilon', current.l0RaymarchEpsilon),
+        l1RaymarchEpsilon: readValue(payload, 'l1_raymarch_epsilon', current.l1RaymarchEpsilon),
+        l2RaymarchEpsilon: readValue(payload, 'l2_raymarch_epsilon', current.l2RaymarchEpsilon),
+        rootSides: readValue(payload, 'root_sides', current.rootSides),
       };
     }
   } catch {

@@ -16,7 +16,7 @@ gaps.
 - [x] `pnpm config:validate`
   - Expected: 75 files, OK.
 - [x] `pnpm test`
-  - Expected: 12 shared tests + 8 server tests pass, 0 fail.
+  - Expected: 51 shared tests + 51 server tests pass, 0 fail (102 total).
 - [x] `pnpm build`
   - Expected: `apps/client/dist/index.html` plus hashed `assets/*.js` and
     `assets/*.css` from Vite.

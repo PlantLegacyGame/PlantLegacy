@@ -12,7 +12,7 @@
       "type": "array",
       "item_type": "string",
       "value": [
-        "Mouse: Orbit camera  |  Scroll: Zoom  |  G: Grow stem",
+        "WASD / Arrows: Pan camera  |  Right-drag: Orbit  |  Scroll: Zoom  |  Click plant: Grow",
         "You are a plant. Grow roots down, canopy up. Read light, water, minerals.",
         "Other players are other plants. Compete, ally, or parasitize. The world simulates offline."
       ],

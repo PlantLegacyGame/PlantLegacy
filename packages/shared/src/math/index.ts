@@ -55,3 +55,38 @@ export function quantizeAngle(radians: number): number {
 export function dequantizeAngle(value: number): number {
   return (value / 0xffff) * Math.PI * 2;
 }
+
+/**
+ * FNV-1a 32-bit hash for deterministic string hashing.
+ * Used to derive appearance randomness from stable node IDs.
+ */
+export function hash32(str: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
+}
+
+/**
+ * Returns a deterministic [0, 1) float from a string ID and salt.
+ * Same ID + same salt always produces the same value.
+ */
+export function hash01(id: string, salt: string): number {
+  return hash32(`${id}:${salt}`) / 4294967296;
+}
+
+/**
+ * Mulberry32 PRNG: fast, good quality, seedable.
+ * Returns a function that produces deterministic [0, 1) floats.
+ */
+export function mulberry32(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = Math.imul(a ^ (a >>> 15), a | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}

@@ -2,10 +2,10 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "noEmit": false,
-    "allowImportingTsExtensions": false,
-    "rewriteRelativeImportExtensions": false,
+    "allowImportingTsExtensions": true,
+    "rewriteRelativeImportExtensions": true,
     "lib": ["ES2023", "DOM", "DOM.Iterable"],
-    "types": [],
+    "types": ["@webgpu/types"],
     "module": "esnext",
     "moduleResolution": "bundler",
     "rootDir": "src",

@@ -34,9 +34,17 @@ const MOUSE_BUTTONS: Record<number, string> = {
   4: 'forward',
 };
 
+import {
+  createInputActionStateMachines,
+  type InputActionStateMachine,
+  inputActionStateMachineGetState,
+  inputActionStateMachineIsActive,
+  inputActionStateMachineProcess,
+} from './InputActionStateMachine';
+
 export class InputBus {
   private readonly bindings = new Map<string, Binding>();
-  private readonly state = new Map<string, ActionState>();
+  private machines = new Map<string, InputActionStateMachine>();
   private readonly subscribers = new Set<ActionSubscriber>();
   private activeContext = '';
   private modalOpen = false;
@@ -45,18 +53,32 @@ export class InputBus {
   constructor(config: { bindings: Record<string, Binding> }) {
     for (const [action, binding] of Object.entries(config.bindings)) {
       this.bindings.set(action, binding);
-      this.state.set(action, { active: false, pressed: false, toggled: false });
     }
+    this.machines = createInputActionStateMachines(
+      Object.fromEntries(
+        Array.from(this.bindings.entries()).map(([action, binding]) => [
+          action,
+          { mode: binding.mode, context: binding.context },
+        ]),
+      ),
+    );
   }
 
   /** Replace the binding table at runtime (rebinding screen). */
   setBindings(bindings: Record<string, Binding>): void {
     this.bindings.clear();
-    this.state.clear();
+    this.machines.clear();
     for (const [action, binding] of Object.entries(bindings)) {
       this.bindings.set(action, binding);
-      this.state.set(action, { active: false, pressed: false, toggled: false });
     }
+    this.machines = createInputActionStateMachines(
+      Object.fromEntries(
+        Array.from(this.bindings.entries()).map(([action, binding]) => [
+          action,
+          { mode: binding.mode, context: binding.context },
+        ]),
+      ),
+    );
   }
 
   /** All action ids currently bound. */
@@ -66,12 +88,21 @@ export class InputBus {
 
   /** Current state of one action. */
   getAction(actionId: string): ActionState | undefined {
-    return this.state.get(actionId);
+    const machine = this.machines.get(actionId);
+    if (!machine) return undefined;
+    const state = inputActionStateMachineGetState(machine);
+    return {
+      active: inputActionStateMachineIsActive(machine),
+      pressed: state === 'pressed',
+      toggled: state === 'toggled',
+    };
   }
 
   /** Is this action active right now? */
   isActive(actionId: string): boolean {
-    return this.state.get(actionId)?.active ?? false;
+    const machine = this.machines.get(actionId);
+    if (!machine) return false;
+    return inputActionStateMachineIsActive(machine);
   }
 
   /** Subscribe to action-state changes. Returns an unsubscribe fn. */
@@ -147,32 +178,18 @@ export class InputBus {
 
       if (!matched) continue;
 
-      const state = this.state.get(action);
-      if (!state) continue;
+      const machine = this.machines.get(action);
+      if (!machine) continue;
 
-      if (binding.mode === 'press') {
-        if (down && !state.active) {
-          state.active = true;
-          state.pressed = true;
-          this.emit(action, state);
-        } else if (!down && state.active) {
-          state.active = false;
-          state.pressed = false;
-          this.emit(action, state);
-        }
-      } else if (binding.mode === 'toggle') {
-        if (down && !state.pressed) {
-          state.toggled = !state.toggled;
-          state.active = state.toggled;
-          state.pressed = true;
-          this.emit(action, state);
-        } else if (!down) {
-          state.pressed = false;
-        }
-      } else if (binding.mode === 'hold') {
-        state.active = down;
-        state.pressed = down;
-        this.emit(action, state);
+      const result = inputActionStateMachineProcess(machine, { kind, down });
+
+      if (result.edge !== 'none') {
+        const state = inputActionStateMachineGetState(machine);
+        this.emit(action, {
+          active: inputActionStateMachineIsActive(machine),
+          pressed: state === 'pressed',
+          toggled: state === 'toggled',
+        });
       }
     }
   }

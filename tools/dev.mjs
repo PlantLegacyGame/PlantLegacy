@@ -4,10 +4,7 @@
  * `pnpm dev` from a fresh clone:
  *   1. installs workspace dependencies if `node_modules` is missing;
  *   2. starts the server (watch mode) and the Vite dev server together.
- *
- * No extra dependency and no orchestration framework: two child processes and
- * Ctrl+C. Vite dev server proxies `/health`, `/ready`, `/config` and `/ws` to
- * the server.
+ *   3. auto-restarts any process that crashes.
  */
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
@@ -29,21 +26,44 @@ if (!existsSync(join(root, 'node_modules'))) {
   run('pnpm install', 'install');
 }
 
-const children = [
-  spawn('pnpm --filter @plant-legacy/server dev', {
+let serverProcess = null;
+let clientProcess = null;
+let restarting = false;
+
+function startServer() {
+  console.log('dev: starting server...');
+  serverProcess = spawn('pnpm --filter @plant-legacy/server dev', {
     cwd: root,
     stdio: 'inherit',
     shell: true,
-  }),
-  spawn('pnpm --filter @plant-legacy/client dev', {
+  });
+  serverProcess.on('exit', (code, signal) => {
+    if (restarting) return;
+    console.error(
+      `dev: server exited (code ${code ?? 'null'}, signal ${signal ?? 'none'}), restarting in 2s...`,
+    );
+    setTimeout(startServer, 2000);
+  });
+}
+
+function startClient() {
+  console.log('dev: starting client...');
+  clientProcess = spawn('pnpm --filter @plant-legacy/client dev', {
     cwd: root,
     stdio: 'inherit',
     shell: true,
-  }),
-];
+  });
+  clientProcess.on('exit', (code, signal) => {
+    if (restarting) return;
+    console.error(
+      `dev: client exited (code ${code ?? 'null'}, signal ${signal ?? 'none'}), restarting in 2s...`,
+    );
+    setTimeout(startClient, 2000);
+  });
+}
 
 function killTree(child) {
-  if (child.pid === undefined) return;
+  if (child?.pid === undefined) return;
   if (process.platform === 'win32') {
     spawnSync('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore' });
   } else {
@@ -55,21 +75,18 @@ let stopping = false;
 function stop(signal) {
   if (stopping) return;
   stopping = true;
+  restarting = true;
   console.log(`dev: ${signal}, stopping`);
-  for (const child of children) killTree(child);
+  killTree(serverProcess);
+  killTree(clientProcess);
   process.exit(0);
 }
 
 process.on('SIGINT', () => stop('SIGINT'));
 process.on('SIGTERM', () => stop('SIGTERM'));
 
-for (const child of children) {
-  child.on('exit', (code, signal) => {
-    if (stopping) return;
-    console.error(`dev: a child exited (code ${code ?? 'null'}, signal ${signal ?? 'none'})`);
-    stop('child exit');
-  });
-}
+startServer();
+startClient();
 
 console.log(
   `dev: server on http://127.0.0.1:${process.env.PORT ?? '8080'}, client on http://localhost:4173`,

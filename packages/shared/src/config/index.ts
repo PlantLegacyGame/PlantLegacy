@@ -32,4 +32,4 @@ export type {
 } from './types.ts';
 export { CONFIG_SCHEMA, CONFIG_VALUE_TYPES } from './types.ts';
 
-export { auditTree, formatIssue, validateConfig } from './validate.ts';
+export { auditTree, formatIssue, validateConfig, validateCrossFieldRules } from './validate.ts';

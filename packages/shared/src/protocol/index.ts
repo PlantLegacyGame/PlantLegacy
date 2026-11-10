@@ -6,6 +6,8 @@
  * nothing else invents one.
  */
 
+import type { PlantNode } from '../growth/index.ts';
+
 /** Bumped on any breaking wire change. Mismatch shows an "update required" screen. */
 export const PROTOCOL_VERSION = 1;
 
@@ -16,3 +18,18 @@ export interface FrameHeader {
   version: number;
   type: number;
 }
+
+export interface GrowthEventPayload {
+  plantId: string;
+  /** Single-node growth (normal growth). Absent for multi-node germination. */
+  newNode?: PlantNode;
+  /** Multi-node growth (germination: radicle + cotyledons). */
+  newNodes?: PlantNode[];
+  /** Replaced node (germination: the seed becomes the root). */
+  updatedParentNode?: PlantNode;
+  damageDealt?: number;
+  totalBiomass?: number;
+  totalEnergy?: number;
+}
+
+export * from './messageSchemas.ts';

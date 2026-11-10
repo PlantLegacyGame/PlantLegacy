@@ -2,13 +2,16 @@
 
 A multiplayer plant-organism simulation. One server, one world, one Postgres.
 Phase 0 foundation is in place, together with the Gate 0 networking gate and a
-first procedural-rendering prototype. There is still no growth simulation,
-economy or persistence.
+first procedural-rendering prototype. Growth simulation, persistence, accounts,
+weather and day/night are implemented. Economy and chat are not built yet.
 
 **Source of truth:** [`DESIGN.md`](./DESIGN.md) (Master Build Plan v5.3.1). Every
 task, rule and tunable comes from there. This repository implements **T00, O01,
-T03P, C01, T00A** and the procedural plant renderer / Root Sight prototype
-committed as **T01**. Full growth simulation (DESIGN.md §T01) is not built yet.
+T03P, C01, T00A** (resource model + onboarding), **T01** (growth simulation),
+**T03** (persistence, offline tiers, interest management, event bus),
+**T08C** (accounts + sessions), **T07** (weather & day/night), **C02** (SDF
+plant renderer), **T02** (Root Sight), **C03** (environment rendering), and
+**C02b slice** (WebGPU compute-driven plant LOD with WebGL2 fallback).
 
 ## Quick start
 
@@ -23,7 +26,7 @@ That single command installs dependencies if needed, then starts:
 - client (Vite dev server): <http://localhost:4173>
 - server: <http://127.0.0.1:8080> (`/health`, `/ready`, `/config/*`, `/ws`)
 
-Open the client URL in **two tabs** to see the server-authoritative cubes. Use
+Open the client URL in **two tabs** to see the server-authoritative plants. Use
 `localhost`, not `127.0.0.1`: Vite binds the IPv6 loopback on Windows. Press
 `Ctrl+C` to stop both processes.
 
@@ -32,6 +35,12 @@ To run the checks CI runs:
 ```sh
 pnpm verify
 ```
+
+## Recent improvements (2026-11-09)
+
+- **Versioned plant saves with CRC32:** Binary snapshot format now includes magic bytes (`PLNT`), version, payload length, and CRC32 checksum. Growable buffer handles arbitrary node counts. Event log column is now persisted per save.
+- **Seeded deterministic RNG:** Added `hash32`, `hash01`, `mulberry32` to shared math package. Plant mesh builder uses node IDs as seeds for deterministic leaf normals and branch curvature — no more `Math.random()`.
+- **Auth hardening:** Refresh token rotation inserts new session before revoking old (no window for reuse). Rate limiting uses atomic upsert with unique constraint (migration `004`). JWT secret now required in production. Lockout extends on failed attempts during lockout. Pool errors are logged, not swallowed.
 
 ## Scripts
 
@@ -84,9 +93,11 @@ Every tunable lives in `config/<system>.json` in the **extended-1** format:
   the build if one appears.
 - `account_bound: true` forces `tradeable`, `mailable` and `listable` to false
   (RULE_23).
-- Stubs carry `values: {}` until their owning task fills them. Five files are
-  populated today: `ops`, `compliance`, `net_proto`, `onboarding` and
-  `plant_renderer`; the other 70 are stubs. See
+- Stubs carry `values: {}` until their owning task fills them. Sixteen files are
+  populated today: `ops`, `compliance`, `net_proto`, `onboarding`,
+  `plant_renderer`, `resources`, `world`, `network`, `accounts`,
+  `root_sight`, `weather`, `daynight`, `render`, `plant_world`,
+  `persistence`, `interest`; the other 59 are stubs. See
   [`docs/tunables.md`](./docs/tunables.md) for the file-to-task map and current
   values.
 
@@ -144,7 +155,20 @@ together.
 | [`docs/hosting.md`](./docs/hosting.md) | Deploy and environment separation |
 | [`docs/deploy-walkthrough.md`](./docs/deploy-walkthrough.md) | First push → live staging URL, command by command |
 | [`docs/decisions.md`](./docs/decisions.md) | Decision log |
+| [`docs/v5.4-extension-plan.md`](./docs/v5.4-extension-plan.md) | Approved (not built) reactive fauna, material simulation, volumetric terrain, world objects, succession and orchestration |
 | [`ATTRIBUTION.md`](./ATTRIBUTION.md) | Asset licenses (empty for now) |
+
+## Approved extensions (not built)
+
+The v5.4 extension program is **approved 2026-11-09, not built**. It covers reactive
+non-sapient fauna, material simulation (water/sand/lava/fire), sparse volumetric
+terrain, parametric terrain features, streamed world objects, ecological
+succession, and cloud-native World orchestration. The index is
+[`docs/v5.4-extension-plan.md`](./docs/v5.4-extension-plan.md); the task specs
+and rule amendments are in [`DESIGN.md`](./DESIGN.md) Parts 2, 11 and 16.
+
+Nothing in that program changes the current 75-file config count or the
+single-process World until the individual task is started.
 
 ## Non-negotiables
 

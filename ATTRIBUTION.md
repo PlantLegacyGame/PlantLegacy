@@ -1,7 +1,6 @@
 # Attribution
 
-**Status:** stub created by T00. No third-party **asset files** are in the
-repository; bundled npm dependencies are listed in the notes below.
+**Status:** current. No third-party **asset files** are in the repository; bundled npm dependencies are listed in the notes below.
 
 Every asset added to the project must be recorded here **before** it is used.
 C01's asset loader will fail the build when a file has no entry in this manifest
@@ -42,9 +41,35 @@ packages in `node_modules`, and none are committed as asset files. The UI still
 uses system fonts and hand-written CSS. No image, model, texture, sound or font
 file is committed, so the asset manifest stays empty.
 
-### Server runtime dependencies added in T08C
+### Server runtime dependencies
 
 | Package | Version | License | Purpose |
 |---|---|---|---|
 | `argon2` | 0.41.1 | Apache-2.0 / BSD-3-Clause | Argon2id password hashing |
 | `jsonwebtoken` | 9.0.2 | MIT | JWT access/refresh tokens |
+| `pg` | 8.13.0 | MIT | PostgreSQL client |
+| `ws` | 8.22.1 | MIT | WebSocket server |
+
+### Client runtime dependencies
+
+| Package | Version | License | Purpose |
+|---|---|---|---|
+| `three` | 0.187.0 | MIT | 3D rendering |
+| `ws` | 8.22.1 | MIT | WebSocket client |
+
+### Dev dependencies (not bundled)
+
+| Package | Version | License | Purpose |
+|---|---|---|---|
+| `@biomejs/biome` | 2.6.4 | MIT | Lint + format |
+| `@types/node` | 24.19.2 | MIT | Node types |
+| `@types/pg` | 8.11.0 | MIT | pg types |
+| `@types/ws` | 8.18.2 | MIT | ws types |
+| `@types/three` | 0.187.0 | MIT | three types |
+| `@types/jsonwebtoken` | 9.0.7 | MIT | jwt types |
+| `@vitejs/plugin-legacy` | 8.2.3 | MIT | Legacy browser support |
+| `@webgpu/types` | 0.1.74 | Apache-2.0 | WebGPU types |
+| `tsx` | 4.23.15 | MIT | TypeScript execution |
+| `typescript` | 5.9.3 | Apache-2.0 | TypeScript compiler |
+| `vite` | 8.3.5 | MIT | Build tool |
+| `vite-plugin-string` | 1.2.3 | MIT | String import plugin |

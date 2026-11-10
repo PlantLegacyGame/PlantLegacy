@@ -26,6 +26,11 @@
       "range": [1, 60],
       "description": "Reconnect window in minutes"
     },
+    "persistence_enabled": {
+      "type": "boolean",
+      "value": false,
+      "description": "Keep a disconnected plant for the reconnect window and restore it on reclaim. Off by default in local/dev: a reload or restart creates a fresh plant (ADR-029)."
+    },
     "offline_damage_multiplier": {
       "type": "number",
       "value": 1.0,
@@ -97,6 +102,21 @@
       "value": 40,
       "range": [10, 100],
       "description": "Warn when Active tier exceeds this ms per tick"
+    },
+    "interest_detail_distances": {
+      "type": "object",
+      "value": {
+        "L0": 50,
+        "L1": 150,
+        "L2": 500
+      },
+      "description": "InterestManager detail level distances in world units"
+    },
+    "max_frame_time_ms": {
+      "type": "integer",
+      "value": 200,
+      "range": [50, 500],
+      "description": "Maximum frame time in ms for tick clock (prevents spiral of death)"
     }
   }
 }

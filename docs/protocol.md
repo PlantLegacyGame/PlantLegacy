@@ -1,9 +1,6 @@
 # Protocol
 
-**Status:** decided and partially implemented by T03P (Gate 0, week 2). The
-transport, messages and 20 Hz loop work; server-side rejection is incomplete
-(see the known gaps below). T03 adds binary framing, persistence and delta
-compression.
+**Status:** implemented by T03P (Gate 0) and T03 (full protocol with persistence, offline tiers, interest management, event bus). Transport is WebSocket + JSON at 20 Hz. Server-authoritative state with client-side camera.
 **Source of truth:** DESIGN.md Part 13.8.
 
 ---
@@ -26,7 +23,7 @@ Message format:
 ## Protocol Version
 
 `PROTOCOL_VERSION = 1` — bumped on any breaking wire change.
-Client sends `HELLO { clientVersion: 1 }` on connect.
+Client sends `HELLO { clientVersion: 1, accessToken?: string, plantId?: string }` on connect.
 Server rejects with `ERROR { code: "VERSION_MISMATCH", ... }` if mismatch.
 
 ## Message Types
@@ -35,20 +32,29 @@ Server rejects with `ERROR { code: "VERSION_MISMATCH", ... }` if mismatch.
 
 | Type | Name | Payload | Description |
 |------|------|---------|-------------|
-| 1 | `HELLO` | `{ clientVersion: number }` | First message after connect; version handshake |
-| 2 | `INPUT` | `{ input: PlayerInput }` | Player movement input for a tick |
+| 1 | `HELLO` | `{ clientVersion: number, accessToken?: string, plantId?: string }` | First message after connect; version handshake + optional auth for reclaim |
+| 2 | `INPUT` | `{ input: PlayerInput }` | Player camera/input for a tick |
 | 3 | `PING` | `{}` | Keepalive / latency measurement |
+| 4 | `GROWTH_INTENT` | `{ plantId: string, nodeId: string, direction: {x,y,z}, nodeType: string, isAttack: boolean, tick: number }` | Request to grow a node |
+| 5 | `RESOURCE_QUERY` | `{ worldX?: number, worldZ?: number, tileX?: number, tileZ?: number }` | Query local resource tile |
+| 6 | `PLANT_SYNC_REQUEST` | `{ plantId: string }` | Request full plant sync |
 
 ### Server → Client
 
 | Type | Name | Payload | Description |
 |------|------|---------|-------------|
-| 10 | `WELCOME` | `WelcomePayload` | Sent once on connect; assigns playerId, cubeId, initial world state |
-| 11 | `STATE` | `StatePayload` | Per-tick delta state (cubes changed this tick) |
+| 10 | `WELCOME` | `WelcomePayload` | Sent once on connect; assigns playerId, plantId, initial world state, full node set |
+| 11 | `STATE` | `StatePayload` | Per-tick delta state (plants changed this tick) |
 | 12 | `KEYFRAME` | `KeyframePayload` | Full state snapshot (every `keyframeIntervalTicks`) |
 | 13 | `REJECT` | `RejectPayload` | Input rejected; reason + original type |
 | 14 | `PONG` | `{}` | Response to `PING` |
 | 15 | `ERROR` | `ErrorPayload` | Fatal error (version mismatch, etc.); connection closes |
+| 16 | `GROWTH_EVENT` | `GrowthEventPayload` | Broadcast when a growth intent succeeds |
+| 17 | `RESOURCE_UPDATE` | `ResourceUpdatePayload` | Local resource tile update (player's tile only) |
+| 18 | `PLANT_SYNC` | `PlantSyncPayload` | Full plant state for reclaim/desync recovery |
+| 19 | `PLANT_CREATED` | `{ plantId: string, ownerId: string, rootNode: ... }` | New plant in world |
+| 20 | `PLANT_REMOVED` | `{ plantId: string }` | Plant removed (death or reconnect expiry) |
+| 21 | `WEATHER_UPDATE` | `WeatherUpdatePayload` | Weather/day-night state |
 
 ## Quantization
 
@@ -65,29 +71,9 @@ Applied server-side before broadcast. Client receives already-quantized values.
 - **Client send rate:** 20 Hz — client sends `INPUT` at most once per tick
 - **Keyframe interval:** 10 ticks (0.5 s) — full state sync
 
-## Movement Validation (Server-Authoritative)
+## Camera Pan (Client-Side)
 
-All movement validated on server before state update:
-
-1. **Velocity limit:** `maxVelocityUnitsPerTick` (default 0.5 units/tick)
-2. **World bounds:** `worldBounds` (default ±1000 on X/Z)
-3. **Diagonal normalization:** √2 correction applied
-4. **Rotation smoothing:** Max π rad/s turn rate
-
-Invalid input → `REJECT` with reason (`velocity_exceeded`, `out_of_bounds`) + current authoritative state.
-
-**Known gaps (2026-11-02).** The rejection path is now effective:
-
-- `move_speed` is config-driven via `net_proto.move_speed` (RULE_3 compliant).
-  With `dt = 1/20` and `move_speed = 5.0`, every input moves 0.25 units/tick,
-  below the 0.5 `max_velocity_units_per_tick` limit, so normal play is valid.
-  The velocity branch fires as a safety net if inputs exceed the limit.
-- `world_bounds` is stored as snake_case (`min_x/max_x/min_z/max_z`) in
-  `config/net_proto.json` and mapped to camelCase for comparison. Bounds are
-  enforced; unit tests prove rejection fires at boundary.
-- Inputs are booleans, so there is no position/teleport field to exercise a
-  speed hack through the normal protocol. The velocity check protects against
-  clients that bypass the per-tick input rate limit.
+The client handles camera panning locally using WASD/Arrow keys. The server does not validate camera movement - it only receives `INPUT` messages for potential future use but processes growth intents instead.
 
 ## Payload Schemas
 
@@ -100,40 +86,123 @@ interface PlayerInput {
   tick: number;        // client's local tick counter
 }
 
-interface CubeState {
-  id: string;          // e.g., "cube_player_123"
-  x: number;           // quantized position
-  z: number;
-  rotation: number;    // quantized radians
-  color: number;       // 0xRRGGBB
-  lastInputTick: number;
-}
-
 interface WelcomePayload {
   playerId: string;    // "player_<timestamp>_<random>"
-  cubeId: string;      // "cube_<playerId>"
+  plantId: string;     // "plant_<playerId>" (or reclaimed plantId)
   tick: number;        // server tick at join
-  cubes: CubeState[];  // all current cubes
+  nodes: Array<{
+    id: string;
+    plantId: string;
+    type: string;
+    layer: string;
+    x: number;
+    y: number;
+    z: number;
+    biomass: number;
+    age: number;
+    parentId: string | null;
+    children: string[];
+    statModifiers: Record<string, number>;
+    resourceDrawWater: number;
+    resourceDrawNutrients: number;
+    upkeepBiomassPerSecond: number;
+    growthDirectionBias: string;
+    lastGrowthTick: number;
+    growthProgress: number;
+    isSeed: boolean;
+  }>;
+  totalBiomass: number;
+  totalEnergy: number;
+  storedWater: number;
+  storedMinerals: number;
+  rootNodeId: string | null;
+  growthCooldownUntil: number;
+  tier: 'active' | 'near' | 'dormant';
 }
 
 interface StatePayload {
   tick: number;
-  cubes: CubeState[];  // only cubes with changes this tick
+  plants: Array<{
+    id: string;
+    totalBiomass: number;
+    totalUpkeep: number;
+    tier: 'active' | 'near' | 'dormant';
+  }>;
 }
 
 interface KeyframePayload {
   tick: number;
-  cubes: CubeState[];  // ALL cubes
+  plants: Array<{
+    id: string;
+    totalBiomass: number;
+    totalUpkeep: number;
+    tier: 'active' | 'near' | 'dormant';
+  }>;
 }
 
 interface RejectPayload {
-  reason: string;      // "velocity_exceeded: 0.612 > 0.500" or "out_of_bounds"
+  reason: string;
   originalType: number;
 }
 
 interface ErrorPayload {
-  code: string;        // "VERSION_MISMATCH"
+  code: string;
   message: string;
+}
+
+interface GrowthEventPayload {
+  plantId: string;
+  newNode?: { ... };          // single node (regular growth)
+  newNodes?: Array<{ ... }>;  // multiple nodes (germination)
+  updatedParentNode?: { ... }; // parent with updated children/biomass
+  totalBiomass: number;
+  totalEnergy: number;
+  reason?: string;
+  plantDied?: boolean;
+}
+
+interface ResourceUpdatePayload {
+  tick: number;
+  tiles: Array<{
+    tileX: number;
+    tileZ: number;
+    light: number;
+    moisture: number;
+    minerals: number;
+  }>;
+  width: number;
+  height: number;
+  tileSize: number;
+  totalEnergy: number;
+  totalBiomass: number;
+  storedWater: number;
+  storedMinerals: number;
+  rootTileCount: number;
+}
+
+interface PlantSyncPayload {
+  plantId: string;
+  ownerId: string;
+  nodes: Array<{ ... }>;
+  totalBiomass: number;
+  totalEnergy: number;
+  totalUpkeep: number;
+  storedWater: number;
+  storedMinerals: number;
+  rootNodeId: string | null;
+  growthCooldownUntil: number;
+  tier: 'active' | 'near' | 'dormant';
+}
+
+interface WeatherUpdatePayload {
+  tick: number;
+  weatherState: 'clear' | 'rain' | 'thunderstorm_telegraph' | 'thunderstorm_active' | 'thunderstorm_aftermath';
+  timeOfDay: number;        // 0–1
+  sunElevation: number;     // radians
+  sunIntensity: number;     // directional light intensity
+  ambientIntensity: number;
+  lightMultiplier: number;
+  moistureDepositRate: number;
 }
 ```
 
@@ -144,28 +213,36 @@ Client                          Server
   |                               |
   |--- WebSocket connect ------->|
   |                               |
-  |<-- WELCOME ------------------|
+  |--- HELLO {version:1, accessToken?, plantId?} -->|
+  |                               | verify token, reclaim or create plant
+  |<-- WELCOME ------------------| (full node set for own plant)
   |                               |
-  |--- HELLO {version:1} ------->|
+  |--- INPUT {tick:1} ---------->| (camera pan, client-side)
   |                               |
-  |--- INPUT {tick:1} ---------->|
-  |                               | validate movement
-  |<-- STATE {tick:1} -----------|
+  |<-- STATE {tick:1} -----------| (plant updates)
   |                               |
-  |--- INPUT {tick:2} ---------->|
-  |                               | invalid (too fast)
-  |<-- REJECT {reason:"..."} ----|
-  |<-- STATE {tick:2} -----------| (authoritative correction)
+  |--- GROWTH_INTENT {tick:2} -->|
+  |                               | validate: energy, genes, bounds, direction
+  |<-- GROWTH_EVENT -------------| (new node(s), updated parent, totals)
+  |                               |
+  |--- RESOURCE_QUERY ---------->|
+  |<-- RESOURCE_UPDATE ----------| (local tile with tileX/tileZ)
   |                               |
   |--- PING --------------------->|
   |<-- PONG ----------------------|
+  |                               |
+  |<-- WEATHER_UPDATE -----------| (every tick)
+  |                               |
+  |--- PLANT_SYNC_REQUEST ------>| (on desync / tab visible)
+  |<-- PLANT_SYNC ---------------| (full plant state)
 ```
 
-## Reconnection
+## Reconnection & Reclaim
 
-- Client auto-reconnects on close (3 s delay)
-- Full `WELCOME` on reconnect — no delta sync
-- Player gets new `playerId` / `cubeId` (ephemeral prototype)
+- **Authenticated:** Client sends `HELLO { accessToken }`. Server verifies JWT, finds `accountId`, reclaims plant by `accountId` if within reconnect window (5 min, config `reconnect_window_min`). Reconnect key: `accountId`.
+- **Anonymous:** Client sends `HELLO { plantId }` (stored locally). Server reclaims by `anon_<plantId>`. Reconnect key: `anon_<plantId>`.
+- Plant is **not removed** until reconnect window expires. `PLANT_REMOVED` only fires on window expiry or actual death.
+- On reclaim: `WELCOME` includes full node set. Client applies it as its own plant.
 
 ## Config (`config/net_proto.json`)
 
@@ -183,20 +260,21 @@ All tunables in extended-1 format:
 | `world_bounds` | object | ±1000 | — |
 | `client_send_rate_hz` | integer | 20 | [5, 60] |
 
-## Acceptance (T03P)
+## Acceptance (T03P + T03)
 
 - [x] Two browser tabs connect to same server
-- [x] Each tab gets unique cube with unique color
-- [x] WASD/Arrow keys move cube
-- [x] Server rejects movement exceeding `max_velocity_units_per_tick` — unit
-  tests prove rejection fires; normal play stays below the limit
-- [x] Server rejects movement outside `world_bounds` — unit tests prove
-  rejection fires at boundary; snake_case config keys mapped to camelCase
-- [x] Rejected input → `REJECT` + authoritative state correction — unit tests
-  prove `REJECT` + `STATE` correction is sent on invalid input
-- [x] `KEYFRAME` every 10 ticks, `STATE` otherwise
+- [x] Each tab gets unique plant with unique plantId
+- [x] WASD/Arrow keys pan camera (client-side)
+- [x] Click on plant nodes to select for growth
+- [x] Server validates growth intents (energy, biomass, gene gates, bounds)
+- [x] Server broadcasts `GROWTH_EVENT` on successful growth
+- [x] `KEYFRAME` every 10 ticks, `STATE` otherwise (plant updates)
+- [x] `RESOURCE_QUERY` / `RESOURCE_UPDATE` with coordinate addressing (ADR-024)
+- [x] Authenticated + anonymous reclaim via HELLO (ADR-021)
+- [x] `PLANT_SYNC` / `PLANT_SYNC_REQUEST` for desync recovery
+- [x] Reconnect window (5 min) with delayed `PLANT_REMOVED` (ADR-021)
 - [x] Protocol documented here
 
 ---
 
-**Next:** T03 implements the full protocol with binary framing, delta compression, and client prediction (C01).
+**Next:** T03 implements binary framing, delta compression, and client prediction (C01).

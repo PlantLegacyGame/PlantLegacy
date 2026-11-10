@@ -6,20 +6,21 @@
   "description": "Plant Legacy world server. One process, one World, one Postgres.",
   "scripts": {
     "start": "node src/main.ts",
-    "dev": "node --watch src/main.ts",
+    "dev": "node --watch-path=src/main.ts --watch-path=src/core --watch-path=src/ops --watch-path=../../packages/shared/src src/main.ts",
     "typecheck": "tsc -p tsconfig.json",
     "test": "node --test \"src/**/*.test.ts\""
   },
   "dependencies": {
     "@plant-legacy/shared": "workspace:*",
-    "pg": "^8.13.0",
-    "ws": "^8.22.1",
     "argon2": "^0.41.1",
-    "jsonwebtoken": "^9.0.2"
+    "jsonwebtoken": "^9.0.2",
+    "pg": "^8.13.0",
+    "ws": "^8.22.1"
   },
   "devDependencies": {
+    "@types/jsonwebtoken": "^9.0.7",
     "@types/pg": "^8.11.0",
     "@types/ws": "^8.18.2",
-    "@types/jsonwebtoken": "^9.0.7"
+    "tsx": "^4.23.15"
   }
 }

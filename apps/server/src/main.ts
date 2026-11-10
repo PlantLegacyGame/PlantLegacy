@@ -1,46 +1,62 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { createServer } from 'node:http';
 import process from 'node:process';
-import type { GrowthIntent } from '@plant-legacy/shared/growth';
 import { WebSocket, WebSocketServer } from 'ws';
 import { loadRuntimeConfig } from './core/config.ts';
 import { SERVICE_VERSION } from './core/version.ts';
 import { loadAccountsConfig } from './ops/accounts/config.ts';
 import { createAccountsHandlers, createAuthMiddleware } from './ops/accounts/http.ts';
 import { AccountsService } from './ops/accounts/service.ts';
+import {
+  type ConnectionRegistry,
+  connectionRegistryClearHelloTimer,
+  connectionRegistryInstallHandler,
+  connectionRegistryRegister,
+  connectionRegistryRemove,
+  connectionRegistrySetPlant,
+  connectionRegistryTransferPlant,
+  createConnectionRegistry,
+} from './ops/connectionRegistry.ts';
 import { DatabaseProbe } from './ops/db.ts';
 import { loadGrowthConfig } from './ops/growth.ts';
+import {
+  createGrowthIntentStateMachine,
+  type GrowthIntentStateMachine,
+  growthIntentStateMachineClear,
+  growthIntentStateMachineDrain,
+  growthIntentStateMachineEnqueue,
+} from './ops/growthIntentStateMachine.ts';
 import { buildHealthReport, isReady } from './ops/health.ts';
 import { InterestManager } from './ops/interestManager.ts';
 import { createLogger } from './ops/log.ts';
 import {
-  type CubeState,
-  createCube,
   type ErrorPayload,
   type HelloPayload,
-  type InputPayload,
   type KeyframePayload,
   loadNetProtoConfig,
   MESSAGE_TYPE,
-  type PlantCreatedPayload,
   type PlantSyncPayload,
   type PlayerInput,
   type RejectPayload,
   type ResourceQueryPayload,
   type StatePayload,
-  validateMovement,
   type WelcomePayload,
 } from './ops/net.ts';
 import { PlantPersistence } from './ops/persistence/plantPersistence.ts';
 import { PlantWorld } from './ops/plantWorld.ts';
-import { loadResourcesConfig, type PlantForResource, ResourceWorld } from './ops/resourceWorld.ts';
+import {
+  createReconnectStateMachine,
+  type ReconnectStateMachine,
+  reconnectStateMachineCancelPending,
+  reconnectStateMachineReclaimByAccount,
+  reconnectStateMachineReclaimByPlantId,
+} from './ops/reconnectStateMachine.ts';
+import { loadResourcesConfig, ResourceWorld } from './ops/resourceWorld.ts';
+import { createTickClock, type TickClock, tickClockStart, tickClockStop } from './ops/tickClock.ts';
 import { loadDayNightConfig, loadWeatherConfig, WeatherSystem } from './ops/weather.ts';
 import { loadWorldConfig } from './ops/world.ts';
 
 const STARTED_AT = Date.now();
-const CUBE_COLORS = [
-  0xff0000, 0x00ff00, 0x0000ff, 0xffff00, 0xff00ff, 0x00ffff, 0xff8800, 0x8800ff,
-];
 
 function sendJson(response: ServerResponse, status: number, body: unknown): void {
   const payload = JSON.stringify(body);
@@ -67,30 +83,24 @@ function applyCors(
 interface ConnectedPlayer {
   ws: WebSocket;
   playerId: string;
-  cubeId: string;
   plantId: string | null;
   accountId: string | undefined;
   lastInputTick: number;
   pendingInputs: Map<number, PlayerInput>;
-  pendingGrowthIntents: Map<number, import('@plant-legacy/shared/growth').GrowthIntent>;
 }
 
-class CubeWorld {
-  private cubes = new Map<string, CubeState>();
+class World {
   private players = new Map<string, ConnectedPlayer>();
-  private tick = 0;
   private config: ReturnType<typeof loadNetProtoConfig>;
   private log: ReturnType<typeof createLogger>;
-  private tickInterval: NodeJS.Timeout | null = null;
   private plantWorld: PlantWorld;
   private resourceWorld: ResourceWorld;
   private weatherSystem: WeatherSystem;
   private interestManager: InterestManager;
-  private reconnectWindowMs: number;
-  private pendingRemovals = new Map<
-    string,
-    { plantId: string; accountId: string | undefined; timeout: NodeJS.Timeout }
-  >();
+  private reconnectMachine: ReconnectStateMachine;
+  private growthIntentMachine: GrowthIntentStateMachine;
+  private connectionRegistry: ConnectionRegistry;
+  private tickClock: TickClock;
 
   getPlayers(): Map<string, ConnectedPlayer> {
     return this.players;
@@ -100,8 +110,77 @@ class CubeWorld {
     return this.plantWorld;
   }
 
-  sendTo(ws: WebSocket, type: number, payload: unknown): void {
-    this.send(ws, type, payload);
+  getResourceWorld(): ResourceWorld {
+    return this.resourceWorld;
+  }
+
+  getPlayer(playerId: string): ConnectedPlayer | undefined {
+    return this.players.get(playerId);
+  }
+
+  getInterestManager(): InterestManager {
+    return this.interestManager;
+  }
+
+  broadcast(type: number, payload: unknown): void {
+    const message = JSON.stringify({ type, payload });
+    for (const player of this.players.values()) {
+      if (player.ws.readyState === WebSocket.OPEN) {
+        player.ws.send(message);
+      }
+    }
+  }
+
+  send(ws: WebSocket, type: number, payload: unknown): void {
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type, payload }));
+    }
+  }
+
+  /**
+   * Drain deaths queued by PlantWorld so each one is broadcast and deposited
+   * exactly once. This covers simulation deaths (starvation, damage,
+   * germination failure) as well as explicit removals.
+   */
+  processPlantDeaths(): void {
+    const deaths = this.plantWorld.drainDeaths();
+    for (const death of deaths) {
+      reconnectStateMachineCancelPending(this.reconnectMachine, death.id, death.ownerId);
+      try {
+        this.resourceWorld.onPlantDeath({ ...death, rootNodeId: death.rootNodeId ?? '' });
+      } catch (e) {
+        this.log.error('resourceWorld.onPlantDeath failed', {
+          plantId: death.id,
+          error: String(e),
+        });
+      }
+      for (const player of this.players.values()) {
+        if (player.plantId === death.id) player.plantId = null;
+      }
+      try {
+        this.broadcast(MESSAGE_TYPE.PLANT_REMOVED, { plantId: death.id });
+      } catch (e) {
+        this.log.error('PLANT_REMOVED broadcast failed', { plantId: death.id, error: String(e) });
+      }
+      // Remove plant entities from InterestManager
+      if (death.rootNodeId) {
+        const rootNode = death.nodes.get(death.rootNodeId);
+        if (rootNode) {
+          this.interestManager.removeEntityFromCell(death.id, rootNode.x, rootNode.z);
+        }
+      }
+      // Also remove any other nodes that were tracked
+      for (const node of death.nodes.values()) {
+        if (node.id !== death.rootNodeId) {
+          this.interestManager.removeEntityFromCell(node.id, node.x, node.z);
+        }
+      }
+      this.log.info('plant died', {
+        plantId: death.id,
+        ownerId: death.ownerId,
+        cause: death.cause,
+      });
+    }
   }
 
   constructor(
@@ -112,6 +191,8 @@ class CubeWorld {
     weatherSystem: WeatherSystem,
     interestManager: InterestManager,
     reconnectWindowMs: number,
+    persistenceEnabled: boolean,
+    maxFrameTimeMs = 100,
   ) {
     this.config = config;
     this.log = log;
@@ -119,57 +200,53 @@ class CubeWorld {
     this.resourceWorld = resourceWorld;
     this.weatherSystem = weatherSystem;
     this.interestManager = interestManager;
-    this.reconnectWindowMs = reconnectWindowMs;
+    this.reconnectMachine = createReconnectStateMachine(reconnectWindowMs, persistenceEnabled);
+    this.growthIntentMachine = createGrowthIntentStateMachine(100);
+    this.connectionRegistry = createConnectionRegistry(config.helloTimeoutMs);
+    this.tickClock = createTickClock({
+      tickRateHz: config.tickRateHz,
+      maxFrameTimeMs,
+      onTick: (tick: number, dt: number) => this.onTick(tick, dt),
+      onError: (error: Error) => this.log.error('tick error', { error: String(error) }),
+    });
   }
 
   addPlayer(
     ws: WebSocket,
     playerId: string,
     accountId?: string,
-  ): { cubeId: string; plantId: string; welcome: WelcomePayload } {
-    const cubeId = `cube_${playerId}`;
-    const colorIndex = this.cubes.size % CUBE_COLORS.length;
-    const cube = createCube(cubeId, CUBE_COLORS[colorIndex]);
-
-    // Position cubes in a circle - use player count for stable positioning
-    const playerCount = this.players.size;
-    const angle = (playerCount / Math.max(1, playerCount + 1)) * 2 * Math.PI;
-    cube.x = Math.sin(angle) * 5;
-    cube.z = Math.cos(angle) * 5;
-
-    this.cubes.set(cubeId, cube);
-
-    // Use accountId as ownerId if available, otherwise fall back to playerId
+  ): { plantId: string; welcome: WelcomePayload } {
     const ownerId = accountId ?? playerId;
-
-    // Create a plant for this player
-    const plant = this.plantWorld.createPlant(ownerId, 'world_0', cube.x, cube.z);
+    const spawn = this.findSpawnPosition();
+    const plant = this.plantWorld.createPlant(ownerId, 'world_0', spawn.x, spawn.z);
     const plantId = plant.id;
 
-    // Register with interest manager
-    this.interestManager.registerClient(playerId, cube.x, cube.z);
+    this.registerClientAtPlant(playerId, plant);
+
+    connectionRegistryRegister(this.connectionRegistry, ws, playerId, accountId, (pid) => {
+      this.log.warn('HELLO timeout, closing connection', { playerId: pid });
+      ws.close(4008, 'HELLO timeout');
+    });
 
     const player: ConnectedPlayer = {
       ws,
       playerId,
-      cubeId,
       plantId,
-      accountId: ownerId,
+      accountId,
       lastInputTick: 0,
       pendingInputs: new Map(),
-      pendingGrowthIntents: new Map(),
     };
     this.players.set(playerId, player);
+
+    connectionRegistrySetPlant(this.connectionRegistry, playerId, plantId);
 
     const rootNodeId = plant.rootNodeId;
     const rootNode = rootNodeId != null ? plant.nodes.get(rootNodeId) : undefined;
 
     const welcome: WelcomePayload = {
       playerId,
-      cubeId,
       plantId,
-      tick: this.tick,
-      cubes: Array.from(this.cubes.values()),
+      tick: this.getTick(),
       rootNode: rootNode
         ? {
             id: rootNode.id,
@@ -181,148 +258,62 @@ class CubeWorld {
           }
         : { id: rootNodeId ?? '', x: 0, y: 0, z: 0, type: 'root', biomass: 0 },
       totalBiomass: plant.totalBiomass,
+      totalEnergy: plant.totalEnergy,
+      nodes: Array.from(plant.nodes.values()).map((n) => ({
+        id: n.id,
+        plantId: n.plantId,
+        type: n.type,
+        layer: n.layer,
+        x: n.x,
+        y: n.y,
+        z: n.z,
+        biomass: n.biomass,
+        age: n.age,
+        parentId: n.parentId,
+        children: n.children,
+        statModifiers: n.statModifiers,
+        resourceDrawWater: n.resourceDrawWater,
+        resourceDrawNutrients: n.resourceDrawNutrients,
+        upkeepBiomassPerSecond: n.upkeepBiomassPerSecond,
+        growthDirectionBias: n.growthDirectionBias,
+        lastGrowthTick: n.lastGrowthTick,
+        growthProgress: n.growthProgress ?? 1.0,
+        isSeed: n.isSeed ?? false,
+      })),
     };
 
     this.log.info('player joined', {
       playerId,
-      cubeId,
       plantId,
-      accountId: ownerId,
+      accountId: accountId ?? 'anonymous',
       totalPlayers: this.players.size,
     });
 
-    // Send PLANT_SYNC with only active players' plants to the new player
-    const activePlantIds = new Set<string>();
-    for (const player of this.players.values()) {
-      if (player.plantId) activePlantIds.add(player.plantId);
+    // Register plant root node as entity in InterestManager
+    if (rootNode) {
+      this.interestManager.addEntityToCell(plantId, rootNode.x, rootNode.z);
     }
-    // Also include the new player's plant
-    activePlantIds.add(plantId);
 
-    const allPlants = this.plantWorld.getAllPlants();
-    const activePlants = allPlants.filter((p) => activePlantIds.has(p.id));
-    const syncPayload: PlantSyncPayload = {
-      plants: activePlants.map((p) => ({
-        id: p.id,
-        ownerId: p.ownerId,
-        rootNodeId: p.rootNodeId,
-        totalBiomass: p.totalBiomass,
-        totalUpkeep: p.totalUpkeep,
-        nodes: Array.from(p.nodes.values()).map((n) => ({
-          id: n.id,
-          plantId: n.plantId,
-          type: n.type,
-          layer: n.layer,
-          x: n.x,
-          y: n.y,
-          z: n.z,
-          biomass: n.biomass,
-          age: n.age,
-          parentId: n.parentId,
-          children: n.children,
-          statModifiers: n.statModifiers,
-          resourceDrawWater: n.resourceDrawWater,
-          resourceDrawNutrients: n.resourceDrawNutrients,
-          upkeepBiomassPerSecond: n.upkeepBiomassPerSecond,
-          growthDirectionBias: n.growthDirectionBias,
-          lastGrowthTick: n.lastGrowthTick,
-        })),
-      })),
-    };
-    this.send(ws, MESSAGE_TYPE.PLANT_SYNC, syncPayload);
-
-    // Broadcast PLANT_CREATED to all other players
-    const createdPayload: PlantCreatedPayload = {
-      plant: {
-        id: plant.id,
-        ownerId: plant.ownerId,
-        rootNodeId: plant.rootNodeId,
-        totalBiomass: plant.totalBiomass,
-        totalUpkeep: plant.totalUpkeep,
-        nodes: Array.from(plant.nodes.values()).map((n) => ({
-          id: n.id,
-          plantId: n.plantId,
-          type: n.type,
-          layer: n.layer,
-          x: n.x,
-          y: n.y,
-          z: n.z,
-          biomass: n.biomass,
-          age: n.age,
-          parentId: n.parentId,
-          children: n.children,
-          statModifiers: n.statModifiers,
-          resourceDrawWater: n.resourceDrawWater,
-          resourceDrawNutrients: n.resourceDrawNutrients,
-          upkeepBiomassPerSecond: n.upkeepBiomassPerSecond,
-          growthDirectionBias: n.growthDirectionBias,
-          lastGrowthTick: n.lastGrowthTick,
-        })),
-      },
-    };
-    this.broadcast(MESSAGE_TYPE.PLANT_CREATED, createdPayload);
-
-    return { cubeId, plantId, welcome };
+    return { plantId, welcome };
   }
 
   removePlayer(playerId: string): void {
-    const player = this.players.get(playerId);
-    if (!player) return;
-
-    this.cubes.delete(player.cubeId);
-    this.interestManager.unregisterClient(playerId);
-
-    // Broadcast PLANT_REMOVED to all other players immediately
-    if (player.plantId) {
-      this.broadcast(MESSAGE_TYPE.PLANT_REMOVED, { plantId: player.plantId });
-    }
-
-    // If player has a plant, schedule removal for reconnect window
-    if (player.plantId) {
-      const plantId = player.plantId;
-      const accountId = player.accountId;
-      const key = accountId ?? `anon_${plantId}`;
-
-      const timeout = setTimeout(() => {
-        this.pendingRemovals.delete(key);
-        const plant = this.plantWorld.getPlant(plantId);
-        if (plant?.rootNodeId) {
-          this.resourceWorld.onPlantDeath({
-            id: plant.id,
-            ownerId: plant.ownerId,
-            worldId: plant.worldId,
-            nodes: plant.nodes,
-            totalBiomass: plant.totalBiomass,
-            totalUpkeep: plant.totalUpkeep,
-            rootNodeId: plant.rootNodeId,
-          });
-        }
+    connectionRegistryRemove(
+      this.connectionRegistry,
+      playerId,
+      this.reconnectMachine,
+      (plantId) => {
         this.plantWorld.removePlant(plantId);
-        this.log.info('plant removed after reconnect window expired', {
-          plantId,
-          accountId: accountId ?? 'anonymous',
-        });
-      }, this.reconnectWindowMs);
+        this.processPlantDeaths();
+      },
+      (msg, meta) => this.log.info(msg, meta),
+    );
 
-      this.pendingRemovals.set(key, {
-        plantId,
-        accountId: accountId ?? undefined,
-        timeout,
-      });
-
-      this.log.info('player disconnected, plant kept for reconnect window', {
-        playerId,
-        plantId,
-        accountId: accountId ?? 'anonymous',
-        windowMs: this.reconnectWindowMs,
-      });
-    }
-
+    this.interestManager.unregisterClient(playerId);
     this.players.delete(playerId);
+    growthIntentStateMachineClear(this.growthIntentMachine, playerId);
     this.log.info('player left', {
       playerId,
-      cubeId: player.cubeId,
-      plantId: player.plantId,
       totalPlayers: this.players.size,
     });
   }
@@ -331,55 +322,49 @@ class CubeWorld {
     accountId: string,
     newPlayerId: string,
     ws: WebSocket,
-  ): { cubeId: string; plantId: string; welcome: WelcomePayload } | null {
-    const pending = this.pendingRemovals.get(accountId);
-    if (!pending) return null;
+  ): { plantId: string; welcome: WelcomePayload } | null {
+    const reclaimed = reconnectStateMachineReclaimByAccount(
+      this.reconnectMachine,
+      accountId,
+      (msg, meta) => this.log.info(msg, meta),
+    );
+    if (!reclaimed) return null;
 
-    // Cancel the removal timeout
-    clearTimeout(pending.timeout);
-    this.pendingRemovals.delete(accountId);
-
-    // Remove old player with same accountId (transfer plant to new connection)
-    for (const [oldPlayerId, oldPlayer] of this.players.entries()) {
-      if (oldPlayer.accountId === accountId) {
-        this.cubes.delete(oldPlayer.cubeId);
-        this.interestManager.unregisterClient(oldPlayerId);
-        this.players.delete(oldPlayerId);
-        this.log.info('removed old player connection on reclaim', {
-          oldPlayerId,
-          newPlayerId,
-          accountId,
-        });
-        break;
-      }
+    const oldPlayerId = this.findPlayerByAccountId(accountId);
+    if (oldPlayerId) {
+      connectionRegistryTransferPlant(this.connectionRegistry, oldPlayerId, newPlayerId);
+      this.interestManager.unregisterClient(oldPlayerId);
+      this.players.delete(oldPlayerId);
+      growthIntentStateMachineClear(this.growthIntentMachine, oldPlayerId);
+      this.log.info('removed old player connection on reclaim', {
+        oldPlayerId,
+        newPlayerId,
+        accountId,
+      });
     }
 
-    const plant = this.plantWorld.getPlant(pending.plantId);
+    connectionRegistryRegister(this.connectionRegistry, ws, newPlayerId, accountId, (pid) => {
+      this.log.warn('HELLO timeout on reclaimed connection', { playerId: pid });
+      ws.close(4008, 'HELLO timeout');
+    });
+    connectionRegistrySetPlant(this.connectionRegistry, newPlayerId, reclaimed.plantId);
+    connectionRegistryClearHelloTimer(this.connectionRegistry, newPlayerId);
+    connectionRegistryInstallHandler(this.connectionRegistry, newPlayerId, (data: Buffer) => {
+      this.handlePostHelloMessage(newPlayerId, data);
+    });
+
+    const plant = this.plantWorld.getPlant(reclaimed.plantId);
     if (!plant) return null;
 
-    // Create new cube for the player
-    const cubeId = `cube_${newPlayerId}`;
-    const colorIndex = this.cubes.size % CUBE_COLORS.length;
-    const cube = createCube(cubeId, CUBE_COLORS[colorIndex]);
-
-    const playerCount = this.players.size + 1; // +1 for the new player
-    const angle = ((playerCount - 1) / Math.max(1, playerCount)) * 2 * Math.PI;
-    cube.x = Math.sin(angle) * 5;
-    cube.z = Math.cos(angle) * 5;
-    this.cubes.set(cubeId, cube);
-
-    // Register with interest manager
-    this.interestManager.registerClient(newPlayerId, cube.x, cube.z);
+    this.registerClientAtPlant(newPlayerId, plant);
 
     const player: ConnectedPlayer = {
       ws,
       playerId: newPlayerId,
-      cubeId,
       plantId: plant.id,
-      accountId: accountId,
+      accountId,
       lastInputTick: 0,
       pendingInputs: new Map(),
-      pendingGrowthIntents: new Map(),
     };
     this.players.set(newPlayerId, player);
 
@@ -388,10 +373,8 @@ class CubeWorld {
 
     const welcome: WelcomePayload = {
       playerId: newPlayerId,
-      cubeId,
       plantId: plant.id,
-      tick: this.tick,
-      cubes: Array.from(this.cubes.values()),
+      tick: this.getTick(),
       rootNode: rootNode
         ? {
             id: rootNode.id,
@@ -403,57 +386,81 @@ class CubeWorld {
           }
         : { id: rootNodeId ?? '', x: 0, y: 0, z: 0, type: 'root', biomass: 0 },
       totalBiomass: plant.totalBiomass,
+      totalEnergy: plant.totalEnergy,
+      nodes: Array.from(plant.nodes.values()).map((n) => ({
+        id: n.id,
+        plantId: n.plantId,
+        type: n.type,
+        layer: n.layer,
+        x: n.x,
+        y: n.y,
+        z: n.z,
+        biomass: n.biomass,
+        age: n.age,
+        parentId: n.parentId,
+        children: n.children,
+        statModifiers: n.statModifiers,
+        resourceDrawWater: n.resourceDrawWater,
+        resourceDrawNutrients: n.resourceDrawNutrients,
+        upkeepBiomassPerSecond: n.upkeepBiomassPerSecond,
+        growthDirectionBias: n.growthDirectionBias,
+        lastGrowthTick: n.lastGrowthTick,
+        growthProgress: n.growthProgress ?? 1.0,
+        isSeed: n.isSeed ?? false,
+      })),
     };
 
     this.log.info('player reconnected, plant reclaimed', {
       newPlayerId,
-      oldPlantId: pending.plantId,
+      oldPlantId: reclaimed.plantId,
       accountId,
       totalPlayers: this.players.size,
     });
 
-    return { cubeId, plantId: plant.id, welcome };
+    return { plantId: plant.id, welcome };
+  }
+
+  private findPlayerByAccountId(accountId: string): string | null {
+    for (const [playerId, player] of this.players.entries()) {
+      if (player.accountId === accountId) return playerId;
+    }
+    return null;
   }
 
   reclaimPlantById(
     plantId: string,
     newPlayerId: string,
     ws: WebSocket,
-  ): { cubeId: string; plantId: string; welcome: WelcomePayload } | null {
-    const key = `anon_${plantId}`;
-    const pending = this.pendingRemovals.get(key);
-    if (!pending) return null;
+  ): { plantId: string; welcome: WelcomePayload } | null {
+    const reclaimed = reconnectStateMachineReclaimByPlantId(
+      this.reconnectMachine,
+      plantId,
+      (msg, meta) => this.log.info(msg, meta),
+    );
+    if (!reclaimed) return null;
 
-    // Cancel the removal timeout
-    clearTimeout(pending.timeout);
-    this.pendingRemovals.delete(key);
+    connectionRegistryRegister(this.connectionRegistry, ws, newPlayerId, undefined, (pid) => {
+      this.log.warn('HELLO timeout on reclaimed connection', { playerId: pid });
+      ws.close(4008, 'HELLO timeout');
+    });
+    connectionRegistrySetPlant(this.connectionRegistry, newPlayerId, reclaimed.plantId);
+    connectionRegistryClearHelloTimer(this.connectionRegistry, newPlayerId);
+    connectionRegistryInstallHandler(this.connectionRegistry, newPlayerId, (data: Buffer) => {
+      this.handlePostHelloMessage(newPlayerId, data);
+    });
 
     const plant = this.plantWorld.getPlant(plantId);
     if (!plant) return null;
 
-    // Create new cube for the player
-    const cubeId = `cube_${newPlayerId}`;
-    const colorIndex = this.cubes.size % CUBE_COLORS.length;
-    const cube = createCube(cubeId, CUBE_COLORS[colorIndex]);
-
-    const playerCount = this.players.size + 1; // +1 for the new player
-    const angle = ((playerCount - 1) / Math.max(1, playerCount)) * 2 * Math.PI;
-    cube.x = Math.sin(angle) * 5;
-    cube.z = Math.cos(angle) * 5;
-    this.cubes.set(cubeId, cube);
-
-    // Register with interest manager
-    this.interestManager.registerClient(newPlayerId, cube.x, cube.z);
+    this.registerClientAtPlant(newPlayerId, plant);
 
     const player: ConnectedPlayer = {
       ws,
       playerId: newPlayerId,
-      cubeId,
       plantId: plant.id,
       accountId: undefined,
       lastInputTick: 0,
       pendingInputs: new Map(),
-      pendingGrowthIntents: new Map(),
     };
     this.players.set(newPlayerId, player);
 
@@ -462,10 +469,8 @@ class CubeWorld {
 
     const welcome: WelcomePayload = {
       playerId: newPlayerId,
-      cubeId,
       plantId: plant.id,
-      tick: this.tick,
-      cubes: Array.from(this.cubes.values()),
+      tick: this.getTick(),
       rootNode: rootNode
         ? {
             id: rootNode.id,
@@ -477,6 +482,28 @@ class CubeWorld {
           }
         : { id: rootNodeId ?? '', x: 0, y: 0, z: 0, type: 'root', biomass: 0 },
       totalBiomass: plant.totalBiomass,
+      totalEnergy: plant.totalEnergy,
+      nodes: Array.from(plant.nodes.values()).map((n) => ({
+        id: n.id,
+        plantId: n.plantId,
+        type: n.type,
+        layer: n.layer,
+        x: n.x,
+        y: n.y,
+        z: n.z,
+        biomass: n.biomass,
+        age: n.age,
+        parentId: n.parentId,
+        children: n.children,
+        statModifiers: n.statModifiers,
+        resourceDrawWater: n.resourceDrawWater,
+        resourceDrawNutrients: n.resourceDrawNutrients,
+        upkeepBiomassPerSecond: n.upkeepBiomassPerSecond,
+        growthDirectionBias: n.growthDirectionBias,
+        lastGrowthTick: n.lastGrowthTick,
+        growthProgress: n.growthProgress ?? 1.0,
+        isSeed: n.isSeed ?? false,
+      })),
     };
 
     this.log.info('anonymous player reconnected, plant reclaimed', {
@@ -485,14 +512,12 @@ class CubeWorld {
       totalPlayers: this.players.size,
     });
 
-    return { cubeId, plantId: plant.id, welcome };
+    return { plantId: plant.id, welcome };
   }
 
   handleInput(playerId: string, input: PlayerInput): void {
     const player = this.players.get(playerId);
     if (!player) return;
-
-    // Store input for processing on next tick
     player.pendingInputs.set(input.tick, input);
   }
 
@@ -502,91 +527,163 @@ class CubeWorld {
   ): void {
     const player = this.players.get(playerId);
     if (!player) return;
-    player.pendingGrowthIntents.set(intent.tick, intent);
+
+    const enqueueResult = growthIntentStateMachineEnqueue(
+      this.growthIntentMachine,
+      playerId,
+      intent,
+      this.getTick(),
+    );
+
+    if (!enqueueResult.success) {
+      this.log.warn('growth intent queue full', { playerId, reason: enqueueResult.reason });
+      const reject: RejectPayload = {
+        reason: enqueueResult.reason || 'intent_queue_full',
+        originalType: MESSAGE_TYPE.GROWTH_INTENT,
+      };
+      this.send(player.ws, MESSAGE_TYPE.REJECT, reject);
+    }
   }
 
   handlePing(ws: WebSocket): void {
     this.send(ws, MESSAGE_TYPE.PONG, {});
   }
 
-  private send(ws: WebSocket, type: number, payload: unknown): void {
-    if (ws.readyState === WebSocket.OPEN) {
-      const message = JSON.stringify({ type, payload });
-      ws.send(message);
-    }
-  }
+  handlePostHelloMessage(playerId: string, data: Buffer): void {
+    try {
+      const message = JSON.parse(data.toString());
+      const { type, payload } = message;
 
-  private broadcast(type: number, payload: unknown): void {
-    const message = JSON.stringify({ type, payload });
-    for (const player of this.players.values()) {
-      if (player.ws.readyState === WebSocket.OPEN) {
-        player.ws.send(message);
-      }
-    }
-  }
-
-  private processInputs(): void {
-    for (const [_playerId, player] of this.players.entries()) {
-      const cube = this.cubes.get(player.cubeId);
-      if (!cube) continue;
-
-      // Process pending inputs in order
-      const sortedTicks = Array.from(player.pendingInputs.keys()).sort((a, b) => a - b);
-
-      for (const inputTick of sortedTicks) {
-        if (inputTick <= player.lastInputTick) {
-          player.pendingInputs.delete(inputTick);
-          continue;
+      switch (type) {
+        case MESSAGE_TYPE.INPUT: {
+          const inputPayload = payload as { input: PlayerInput };
+          if (inputPayload.input && typeof inputPayload.input.tick === 'number') {
+            this.handleInput(playerId, inputPayload.input);
+          }
+          break;
         }
-
-        const input = player.pendingInputs.get(inputTick);
-        if (!input) {
-          player.pendingInputs.delete(inputTick);
-          continue;
-        }
-        player.pendingInputs.delete(inputTick);
-
-        const result = validateMovement(cube, input, this.config, this.tick);
-
-        if (result.valid) {
-          cube.x = result.newX;
-          cube.z = result.newZ;
-          cube.rotation = result.newRotation;
-          cube.lastInputTick = inputTick;
-          player.lastInputTick = inputTick;
-        } else {
-          // Send rejection for invalid movement
-          const reject: RejectPayload = {
-            reason: result.reason || 'invalid_movement',
-            originalType: MESSAGE_TYPE.INPUT,
+        case MESSAGE_TYPE.GROWTH_INTENT: {
+          const growthIntent = payload as {
+            intent: import('@plant-legacy/shared/growth').GrowthIntent;
           };
-          this.send(player.ws, MESSAGE_TYPE.REJECT, reject);
+          if (growthIntent?.intent && typeof growthIntent.intent.tick === 'number') {
+            this.handleGrowthIntent(playerId, growthIntent.intent);
+          }
+          break;
+        }
+        case MESSAGE_TYPE.PING: {
+          const player = this.players.get(playerId);
+          if (player) this.handlePing(player.ws);
+          break;
+        }
+        case MESSAGE_TYPE.RESOURCE_QUERY: {
+          const query = payload as ResourceQueryPayload;
+          let resources: { light: number; moisture: number; minerals: number } | null = null;
+          let tileX: number | undefined;
+          let tileZ: number | undefined;
 
-          // Resend current state to correct client
-          const state: StatePayload = {
-            tick: this.tick,
-            cubes: Array.from(this.cubes.values()),
+          if (typeof query.tileX === 'number' && typeof query.tileZ === 'number') {
+            tileX = query.tileX;
+            tileZ = query.tileZ;
+            resources = this.getTileResources(query.tileX, query.tileZ);
+          } else if (typeof query.worldX === 'number' && typeof query.worldZ === 'number') {
+            const coords = this.resourceWorld.getTileCoordinates(query.worldX, query.worldZ);
+            tileX = coords.tileX;
+            tileZ = coords.tileZ;
+            resources = this.resourceWorld.getTileResourcesAt(tileX, tileZ);
+          }
+
+          if (resources && tileX !== undefined && tileZ !== undefined) {
+            const player = this.players.get(playerId);
+            if (player?.plantId) {
+              const plant = this.plantWorld.getPlant(player.plantId);
+              if (plant) {
+                this.send(player.ws, MESSAGE_TYPE.RESOURCE_UPDATE, {
+                  tick: this.getTick(),
+                  tiles: [{ tileX, tileZ, ...resources }],
+                  width: this.resourceWorld.getWidth(),
+                  height: this.resourceWorld.getHeight(),
+                  tileSize: this.resourceWorld.getTileSize(),
+                  totalEnergy: plant.totalEnergy,
+                  totalBiomass: plant.totalBiomass,
+                  storedWater: plant.storedWater,
+                  storedMinerals: plant.storedMinerals,
+                  rootTileCount: this.resourceWorld.getRootTileCount(
+                    plant as unknown as import('./ops/resourceWorld.ts').PlantForResource,
+                  ),
+                });
+              }
+            }
+          }
+          break;
+        }
+        case MESSAGE_TYPE.PLANT_SYNC_REQUEST: {
+          const activePlantIds = new Set<string>();
+          for (const p of this.players.values()) {
+            if (p.plantId) activePlantIds.add(p.plantId);
+          }
+          const allPlants = this.plantWorld.getAllPlants();
+          const syncPlants = allPlants.filter((p) => activePlantIds.has(p.id));
+          const syncPayload: PlantSyncPayload = {
+            plants: syncPlants.map((p) => ({
+              id: p.id,
+              ownerId: p.ownerId,
+              rootNodeId: p.rootNodeId,
+              totalBiomass: p.totalBiomass,
+              totalEnergy: p.totalEnergy,
+              totalUpkeep: p.totalUpkeep,
+              nodes: Array.from(p.nodes.values()).map((n) => ({
+                id: n.id,
+                plantId: n.plantId,
+                type: n.type,
+                layer: n.layer,
+                x: n.x,
+                y: n.y,
+                z: n.z,
+                biomass: n.biomass,
+                age: n.age,
+                parentId: n.parentId,
+                children: n.children,
+                statModifiers: n.statModifiers,
+                resourceDrawWater: n.resourceDrawWater,
+                resourceDrawNutrients: n.resourceDrawNutrients,
+                upkeepBiomassPerSecond: n.upkeepBiomassPerSecond,
+                growthDirectionBias: n.growthDirectionBias,
+                lastGrowthTick: n.lastGrowthTick,
+                growthProgress: n.growthProgress ?? 1.0,
+                isSeed: n.isSeed ?? false,
+              })),
+            })),
           };
-          this.send(player.ws, MESSAGE_TYPE.STATE, state);
+          const player = this.players.get(playerId);
+          if (player) this.send(player.ws, MESSAGE_TYPE.PLANT_SYNC, syncPayload);
+          break;
+        }
+        default: {
+          this.log.warn('Unknown message type after HELLO', { type, playerId });
         }
       }
+    } catch (e) {
+      this.log.error('Error processing post-HELLO message', { playerId, error: String(e) });
     }
   }
 
-  step(): void {
-    this.tick++;
+  private onTick(tick: number, dt: number): void {
     this.processInputs();
-    this.processGrowthIntents();
+    this.processGrowthIntents(tick);
 
-    // Update interest manager with player positions
     for (const player of this.players.values()) {
-      const cube = this.cubes.get(player.cubeId);
-      if (cube) {
-        this.interestManager.updateClientPosition(player.playerId, cube.x, cube.z);
+      if (player.plantId) {
+        const plant = this.plantWorld.getPlant(player.plantId);
+        if (plant?.rootNodeId) {
+          const rootNode = plant.nodes.get(plant.rootNodeId);
+          if (rootNode) {
+            this.interestManager.updateClientPosition(player.playerId, rootNode.x, rootNode.z);
+          }
+        }
       }
     }
 
-    // Collect online plant IDs for tier management
     const onlinePlantIds = new Set<string>();
     for (const player of this.players.values()) {
       if (player.plantId) {
@@ -594,12 +691,11 @@ class CubeWorld {
       }
     }
 
-    // Step plant world with tier support (T03)
-    const dt = 1 / this.config.tickRateHz;
-    const tierTiming = this.plantWorld.step(dt, onlinePlantIds);
+    this.plantWorld.step(dt, onlinePlantIds, tick);
 
-    // Step resource world (T00A)
-    const plantsForResource = new Map<string, PlantForResource>();
+    this.processPlantDeaths();
+
+    const plantsForResource = new Map<string, import('./ops/resourceWorld.ts').PlantForResource>();
     for (const player of this.players.values()) {
       if (player.plantId) {
         const plant = this.plantWorld.getPlant(player.plantId);
@@ -616,7 +712,6 @@ class CubeWorld {
         }
       }
     }
-    // Update weather & day/night simulation (T07)
     this.weatherSystem.update(dt);
     const weatherBroadcast = this.weatherSystem.getBroadcast();
 
@@ -628,99 +723,179 @@ class CubeWorld {
       this.weatherSystem.getTimeOfDay(),
     );
 
-    // Apply photosynthesis biomass gain
     for (const plant of plantsForResource.values()) {
-      const biomassGain = this.resourceWorld.calculatePhotosynthesis(plant);
-      if (biomassGain > 0) {
+      const result = this.resourceWorld.calculatePhotosynthesis(plant);
+      if (result.biomassGain > 0) {
         const realPlant = this.plantWorld.getPlant(plant.id);
         if (realPlant) {
-          realPlant.totalBiomass += biomassGain * dt;
+          realPlant.totalBiomass += result.biomassGain * dt;
         }
+      }
+      if (result.energyGain > 0) {
+        this.plantWorld.addPhotosynthesisEnergy(plant.id, result.energyGain * dt);
       }
     }
 
-    // Send state updates
-    const isKeyframe = this.tick % this.config.keyframeIntervalTicks === 0;
+    const isKeyframe = tick % this.config.keyframeIntervalTicks === 0;
 
-    if (isKeyframe) {
-      const keyframe: KeyframePayload = {
-        tick: this.tick,
-        cubes: Array.from(this.cubes.values()),
-      };
-      this.broadcast(MESSAGE_TYPE.KEYFRAME, keyframe);
-    } else {
-      const state: StatePayload = {
-        tick: this.tick,
-        cubes: Array.from(this.cubes.values()),
-      };
-      this.broadcast(MESSAGE_TYPE.STATE, state);
+    const plantStates: Array<{
+      id: string;
+      totalBiomass: number;
+      totalEnergy: number;
+      totalUpkeep: number;
+    }> = [];
+    for (const player of this.players.values()) {
+      if (!player.plantId) continue;
+      const plant = this.plantWorld.getPlant(player.plantId);
+      if (plant) {
+        plantStates.push({
+          id: plant.id,
+          totalBiomass: plant.totalBiomass,
+          totalEnergy: plant.totalEnergy,
+          totalUpkeep: plant.totalUpkeep,
+        });
+      }
     }
 
-    // Broadcast resource updates every tick (T00A)
-    const resourceState = this.resourceWorld.getState();
-    this.broadcast(MESSAGE_TYPE.RESOURCE_UPDATE, {
-      tick: this.tick,
-      tiles: resourceState.tiles,
-      width: resourceState.width,
-      height: resourceState.height,
-      tileSize: resourceState.tileSize,
-    });
+    if (isKeyframe) {
+      const keyframePayload: KeyframePayload = {
+        tick,
+        plants: plantStates,
+        worldBounds: this.config.worldBounds,
+        tileSize: this.resourceWorld.getTileSize(),
+      };
+      this.broadcast(MESSAGE_TYPE.KEYFRAME, keyframePayload);
+    } else {
+      const statePayload: StatePayload = {
+        tick,
+        plants: plantStates,
+        worldBounds: this.config.worldBounds,
+        tileSize: this.resourceWorld.getTileSize(),
+      };
+      this.broadcast(MESSAGE_TYPE.STATE, statePayload);
+    }
 
-    // Broadcast weather & day/night updates every tick (T07)
+    for (const player of this.players.values()) {
+      if (!player.plantId) continue;
+      const plant = this.plantWorld.getPlant(player.plantId);
+      if (!plant) continue;
+
+      const rootTiles = this.resourceWorld.getRootTilesForPlant(
+        plant as unknown as import('./ops/resourceWorld.ts').PlantForResource,
+      );
+      if (rootTiles.length === 0) continue;
+
+      this.send(player.ws, MESSAGE_TYPE.RESOURCE_UPDATE, {
+        tick,
+        tiles: rootTiles,
+        width: this.resourceWorld.getWidth(),
+        height: this.resourceWorld.getHeight(),
+        tileSize: this.resourceWorld.getTileSize(),
+        totalEnergy: plant.totalEnergy,
+        totalBiomass: plant.totalBiomass,
+        storedWater: plant.storedWater,
+        storedMinerals: plant.storedMinerals,
+        rootTileCount: rootTiles.length,
+      });
+    }
+
     this.broadcast(MESSAGE_TYPE.WEATHER_UPDATE, {
-      tick: this.tick,
+      tick,
       ...weatherBroadcast,
     });
+  }
 
-    // Log tick budget periodically
-    if (this.tick % 100 === 0) {
-      const total = tierTiming.activeMs + tierTiming.nearMs + tierTiming.dormantMs;
-      this.log.debug('tick budget', {
-        tick: this.tick,
-        activeMs: tierTiming.activeMs.toFixed(2),
-        nearMs: tierTiming.nearMs.toFixed(2),
-        dormantMs: tierTiming.dormantMs.toFixed(2),
-        totalMs: total.toFixed(2),
-        tierStats: this.plantWorld.getTierStats(),
-      });
+  private processInputs(): void {
+    for (const [_playerId, player] of this.players.entries()) {
+      const sortedTicks = Array.from(player.pendingInputs.keys()).sort((a, b) => a - b);
+
+      for (const inputTick of sortedTicks) {
+        if (inputTick <= player.lastInputTick) {
+          player.pendingInputs.delete(inputTick);
+          continue;
+        }
+
+        const input = player.pendingInputs.get(inputTick);
+        if (!input) {
+          player.pendingInputs.delete(inputTick);
+          continue;
+        }
+        player.pendingInputs.delete(inputTick);
+
+        const maxVelocity = this.config.maxVelocityUnitsPerTick;
+        let moveX = 0;
+        let moveZ = 0;
+        if (input.moveForward) moveZ -= 1;
+        if (input.moveBackward) moveZ += 1;
+        if (input.moveLeft) moveX -= 1;
+        if (input.moveRight) moveX += 1;
+        const velocity = Math.sqrt(moveX * moveX + moveZ * moveZ);
+
+        if (velocity > maxVelocity) {
+          const reject: RejectPayload = {
+            reason: 'exceeds_max_velocity',
+            originalType: MESSAGE_TYPE.INPUT,
+          };
+          this.send(player.ws, MESSAGE_TYPE.REJECT, reject);
+        } else {
+          player.lastInputTick = inputTick;
+        }
+      }
     }
   }
 
-  private processGrowthIntents(): void {
-    for (const [_playerId, player] of this.players.entries()) {
+  private processGrowthIntents(currentTick: number): void {
+    for (const [playerId, player] of this.players.entries()) {
       if (!player.plantId) continue;
-      const sortedTicks = Array.from(player.pendingGrowthIntents.keys()).sort((a, b) => a - b);
 
-      for (const intentTick of sortedTicks) {
-        const intent = player.pendingGrowthIntents.get(intentTick);
-        if (!intent) {
-          player.pendingGrowthIntents.delete(intentTick);
-          continue;
-        }
-        player.pendingGrowthIntents.delete(intentTick);
+      const readyIntents = growthIntentStateMachineDrain(
+        this.growthIntentMachine,
+        playerId,
+        currentTick,
+      );
 
-        // Verify this is the player's plant
+      for (const queued of readyIntents) {
+        const intent = queued.intent;
+
         if (intent.plantId !== player.plantId) continue;
 
-        const result = this.plantWorld.tryGrow(intent);
+        const result = this.plantWorld.tryGrow(intent, currentTick);
 
-        if (result.success && result.newNode) {
-          // Broadcast growth event to all players
+        if (result.success && (result.newNode || result.newNodes || result.updatedParentNode)) {
           const plant = this.plantWorld.getPlant(intent.plantId);
           const growthPayload = {
             plantId: intent.plantId,
             newNode: result.newNode,
+            newNodes: result.newNodes,
+            updatedParentNode: result.updatedParentNode,
             damageDealt: result.damageDealt,
             totalBiomass: plant?.totalBiomass ?? 0,
+            totalEnergy: plant?.totalEnergy ?? 0,
+            growthSeq: plant?.growthSeq ?? 0,
           };
           this.broadcast(MESSAGE_TYPE.GROWTH_EVENT, growthPayload);
-        } else {
+
+          // Register new nodes as entities in InterestManager
+          if (result.newNode) {
+            this.interestManager.addEntityToCell(
+              result.newNode.id,
+              result.newNode.x,
+              result.newNode.z,
+            );
+          }
+          if (result.newNodes) {
+            for (const node of result.newNodes) {
+              this.interestManager.addEntityToCell(node.id, node.x, node.z);
+            }
+          }
+          // Note: updatedParentNode (seed crown in germination) already tracked as plantId
+        } else if (!result.success) {
           this.log.info('growth intent rejected', {
             playerId: player.playerId,
             plantId: intent.plantId,
             nodeId: intent.nodeId,
             reason: result.reason,
-            tick: this.tick,
+            tick: currentTick,
           });
           const reject: RejectPayload = {
             reason: result.reason || 'growth_failed',
@@ -732,25 +907,67 @@ class CubeWorld {
     }
   }
 
+  private findSpawnPosition(): { x: number; z: number } {
+    const existing = this.plantWorld.getAllPlants();
+    if (existing.length === 0) {
+      const angle = Math.random() * Math.PI * 2;
+      const radius = 2 + Math.random() * 3;
+      return { x: Math.cos(angle) * radius, z: Math.sin(angle) * radius };
+    }
+    for (let i = 0; i < 256; i++) {
+      const angle = i * 2.399963229728653;
+      const radius = i === 0 ? 0 : Math.min(64, 3 * Math.sqrt(i));
+      const x = Math.cos(angle) * radius;
+      const z = Math.sin(angle) * radius;
+      const clear = existing.every((plant) => {
+        const root = plant.rootNodeId ? plant.nodes.get(plant.rootNodeId) : undefined;
+        if (!root) return true;
+        return Math.hypot(root.x - x, root.z - z) >= 5.0;
+      });
+      if (clear) return { x, z };
+    }
+    let best = { x: 0, z: 0, minDist: 0 };
+    for (let i = 0; i < 360; i += 15) {
+      const angle = (i * Math.PI) / 180;
+      const radius = 10;
+      const x = Math.cos(angle) * radius;
+      const z = Math.sin(angle) * radius;
+      const minDist = Math.min(
+        ...existing.map((plant) => {
+          const root = plant.rootNodeId ? plant.nodes.get(plant.rootNodeId) : undefined;
+          return root ? Math.hypot(root.x - x, root.z - z) : Infinity;
+        }),
+      );
+      if (minDist > best.minDist) {
+        best = { x, z, minDist };
+      }
+    }
+    return { x: best.x, z: best.z };
+  }
+
+  private registerClientAtPlant(
+    playerId: string,
+    plant: import('@plant-legacy/shared/growth').Plant,
+  ): void {
+    if (plant.rootNodeId) {
+      const rootNode = plant.nodes.get(plant.rootNodeId);
+      if (rootNode) {
+        this.interestManager.registerClient(playerId, rootNode.x, rootNode.z);
+      }
+    }
+  }
+
   start(): void {
-    const intervalMs = 1000 / this.config.tickRateHz;
-    this.tickInterval = setInterval(() => this.step(), intervalMs);
+    tickClockStart(this.tickClock);
     this.log.info('world simulation started', { tickRateHz: this.config.tickRateHz });
   }
 
   stop(): void {
-    if (this.tickInterval) {
-      clearInterval(this.tickInterval);
-      this.tickInterval = null;
-    }
+    tickClockStop(this.tickClock);
   }
 
   getTick(): number {
-    return this.tick;
-  }
-
-  getCubes(): CubeState[] {
-    return Array.from(this.cubes.values());
+    return this.tickClock.tick;
   }
 
   getPlayerCount(): number {
@@ -827,11 +1044,15 @@ async function main(): Promise<void> {
         nodes: loaded.nodes,
         rootNodeId: loaded.rootNodeId,
         totalBiomass: loaded.totalBiomass,
+        totalEnergy: loaded.totalEnergy ?? 0,
         totalUpkeep: loaded.totalUpkeep,
+        storedWater: loaded.storedWater ?? 0,
+        storedMinerals: loaded.storedMinerals ?? 0,
         lastGrowthTick: loaded.lastGrowthTick,
         growthCooldownUntil: loaded.growthCooldownUntil,
         tier: loaded.tier,
         lastTick: loaded.lastTick,
+        growthSeq: loaded.growthSeq ?? 0,
       };
       plantWorld.loadPlant(plant);
     }
@@ -881,7 +1102,7 @@ async function main(): Promise<void> {
   const dayNightConfig = loadDayNightConfig(configs);
   const weatherSystem = new WeatherSystem(weatherConfig, dayNightConfig);
 
-  const world = new CubeWorld(
+  const world = new World(
     netProtoConfig,
     log,
     plantWorld,
@@ -889,6 +1110,8 @@ async function main(): Promise<void> {
     weatherSystem,
     interestManager,
     worldConfig.reconnectWindowMin * 60 * 1000, // convert minutes to ms
+    worldConfig.persistenceEnabled,
+    worldConfig.maxFrameTimeMs,
   );
 
   // Periodic plant persistence (T03)
@@ -1003,8 +1226,8 @@ async function main(): Promise<void> {
       sendJson(response, 200, {
         name: 'plant-legacy-server',
         version: SERVICE_VERSION,
-        world: 'cube-prototype',
-        note: 'T03P Networking Gate - Two-tab server-authoritative cubes',
+        world: 'plant-organism',
+        note: 'Plant Legacy - Multiplayer plant organism simulation',
       });
       return;
     }
@@ -1515,100 +1738,8 @@ async function main(): Promise<void> {
       });
       ws.send(welcomeMsg);
 
-      // Set up message handlers for this authenticated connection
-      ws.on('message', (data: Buffer) => {
-        try {
-          const message = JSON.parse(data.toString());
-          const { type, payload } = message;
-
-          switch (type) {
-            case MESSAGE_TYPE.INPUT: {
-              const inputPayload = payload as InputPayload;
-              if (inputPayload.input && typeof inputPayload.input.tick === 'number') {
-                world.handleInput(playerId, inputPayload.input);
-              }
-              break;
-            }
-            case MESSAGE_TYPE.GROWTH_INTENT: {
-              const growthIntent = payload as { intent: GrowthIntent };
-              if (growthIntent?.intent && typeof growthIntent.intent.tick === 'number') {
-                world.handleGrowthIntent(playerId, growthIntent.intent);
-              }
-              break;
-            }
-            case MESSAGE_TYPE.PING: {
-              world.handlePing(ws);
-              break;
-            }
-            case MESSAGE_TYPE.RESOURCE_QUERY: {
-              const query = payload as ResourceQueryPayload;
-              if (typeof query.tileX === 'number' && typeof query.tileZ === 'number') {
-                const resources = world.getTileResources(query.tileX, query.tileZ);
-                if (resources) {
-                  const responseMsg = JSON.stringify({
-                    type: MESSAGE_TYPE.RESOURCE_UPDATE,
-                    payload: {
-                      tick: world.getTick(),
-                      tiles: [resources],
-                      width: 1,
-                      height: 1,
-                      tileSize: 1,
-                    },
-                  });
-                  ws.send(responseMsg);
-                }
-              }
-              break;
-            }
-            case MESSAGE_TYPE.PLANT_SYNC_REQUEST: {
-              // Send PLANT_SYNC with only active players' plants
-              const activePlantIds = new Set<string>();
-              for (const p of world.getPlayers().values()) {
-                if (p.plantId) activePlantIds.add(p.plantId);
-              }
-              const allPlants = world.getPlantWorld().getAllPlants();
-              const activePlants = allPlants.filter((p) => activePlantIds.has(p.id));
-              const syncPayload: PlantSyncPayload = {
-                plants: activePlants.map((p) => ({
-                  id: p.id,
-                  ownerId: p.ownerId,
-                  rootNodeId: p.rootNodeId,
-                  totalBiomass: p.totalBiomass,
-                  totalUpkeep: p.totalUpkeep,
-                  nodes: Array.from(p.nodes.values()).map((n) => ({
-                    id: n.id,
-                    plantId: n.plantId,
-                    type: n.type,
-                    layer: n.layer,
-                    x: n.x,
-                    y: n.y,
-                    z: n.z,
-                    biomass: n.biomass,
-                    age: n.age,
-                    parentId: n.parentId,
-                    children: n.children,
-                    statModifiers: n.statModifiers,
-                    resourceDrawWater: n.resourceDrawWater,
-                    resourceDrawNutrients: n.resourceDrawNutrients,
-                    upkeepBiomassPerSecond: n.upkeepBiomassPerSecond,
-                    growthDirectionBias: n.growthDirectionBias,
-                    lastGrowthTick: n.lastGrowthTick,
-                  })),
-                })),
-              };
-              world.sendTo(ws, MESSAGE_TYPE.PLANT_SYNC, syncPayload);
-              break;
-            }
-            default:
-              log.warn('unknown message type', { type, playerId });
-          }
-        } catch (error) {
-          log.error('websocket message parse error', {
-            error: error instanceof Error ? error.message : String(error),
-            playerId,
-          });
-        }
-      });
+      // ConnectionRegistry in World.addPlayer already installed the message handler
+      // that routes to world.handlePostHelloMessage
 
       ws.on('close', () => {
         world.removePlayer(playerId);

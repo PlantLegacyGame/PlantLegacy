@@ -4,15 +4,24 @@ import { Pool } from 'pg';
 import type { DatabaseState } from './health.ts';
 import { runMigrations } from './persistence/migrate.ts';
 
+export interface Logger {
+  error: (msg: string, meta?: Record<string, unknown>) => void;
+  warn: (msg: string, meta?: Record<string, unknown>) => void;
+  info: (msg: string, meta?: Record<string, unknown>) => void;
+  debug: (msg: string, meta?: Record<string, unknown>) => void;
+}
+
 export interface DatabaseProbeOptions {
   max: number;
   connectTimeoutMs: number;
   idleTimeoutMs: number;
+  logger?: Logger;
 }
 
 export class DatabaseProbe {
   readonly #pool: Pool | null;
   readonly #migrationsDir: string;
+  readonly #logger: Logger | undefined;
 
   constructor(url: string | null, options: DatabaseProbeOptions) {
     this.#pool = url
@@ -25,9 +34,12 @@ export class DatabaseProbe {
       : null;
 
     this.#migrationsDir = join(dirname(fileURLToPath(import.meta.url)), 'persistence');
+    this.#logger = options.logger;
 
-    // An idle client error must never take the process down.
-    this.#pool?.on('error', () => undefined);
+    // Pool errors must not crash the process, but should be logged
+    this.#pool?.on('error', (err) => {
+      this.#logger?.error('unexpected pool error', { error: err.message });
+    });
   }
 
   get configured(): boolean {

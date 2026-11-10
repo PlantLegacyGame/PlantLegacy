@@ -10,7 +10,7 @@
  */
 import { resolve } from 'node:path';
 import process from 'node:process';
-import { formatIssue, loadConfigDir } from '@plant-legacy/shared/config';
+import { formatIssue, loadConfigDir, validateCrossFieldRules } from '@plant-legacy/shared/config';
 
 interface Options {
   dir: string;
@@ -45,6 +45,12 @@ async function main(): Promise<number> {
   const options = parseArgs(process.argv.slice(2));
   const result = await loadConfigDir(options.dir);
 
+  // Phase 2: cross-field config validation. These rules span multiple files
+  // (weather durations, resource maxima, tier rates) and cannot be checked
+  // per-file, so they run after the per-file schema/rarity checks.
+  const crossFieldIssues = validateCrossFieldRules(result.configs);
+  result.issues.push(...crossFieldIssues);
+  result.ok = result.issues.length === 0;
   if (options.json) {
     console.log(
       JSON.stringify(

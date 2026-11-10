@@ -22,13 +22,13 @@
     },
     "resolution_floor": {
       "type": "number",
-      "value": 0.85,
+      "value": 0.75,
       "range": [0.1, 1.0],
       "notes": "Minimum renderer pixel ratio relative to devicePixelRatio."
     },
     "max_pixel_ratio": {
       "type": "number",
-      "value": 2.0,
+      "value": 1.25,
       "range": [1.0, 4.0],
       "notes": "Maximum renderer pixel ratio."
     },
@@ -40,21 +40,33 @@
     },
     "camera_min_distance": {
       "type": "number",
-      "value": 10.0,
-      "range": [1.0, 100.0],
+      "value": 1.0,
+      "range": [0.1, 100.0],
       "notes": "Minimum orbit distance."
     },
     "camera_max_distance": {
       "type": "number",
-      "value": 200.0,
-      "range": [50.0, 1000.0],
+      "value": 500.0,
+      "range": [50.0, 5000.0],
       "notes": "Maximum orbit distance."
     },
     "camera_max_polar_angle": {
       "type": "number",
-      "value": 1.52,
+      "value": 3.1,
       "range": [0.0, 3.14],
-      "notes": "Max polar angle in radians (keeps camera above ground)."
+      "notes": "Max polar angle in radians (~177 degrees, allows looking straight down)."
+    },
+    "camera_start_distance": {
+      "type": "number",
+      "value": 6.0,
+      "range": [1.0, 100.0],
+      "notes": "Initial and recenter orbit distance from the player plant. Close enough to read a seedling."
+    },
+    "camera_pan_speed": {
+      "type": "number",
+      "value": 8.0,
+      "range": [0.5, 100.0],
+      "notes": "WASD/arrow camera pan speed in world units per second."
     },
     "idle_drop_timeout_ms": {
       "type": "integer",
@@ -78,9 +90,9 @@
         "antialiasing": "boolean"
       },
       "value": [
-        { "name": "low", "pixel_ratio": 1.0, "shadow_map_size": 1024, "max_triangles": 50000, "antialiasing": false },
-        { "name": "medium", "pixel_ratio": 1.5, "shadow_map_size": 2048, "max_triangles": 200000, "antialiasing": true },
-        { "name": "high", "pixel_ratio": 2.0, "shadow_map_size": 2048, "max_triangles": 500000, "antialiasing": true }
+        { "name": "low", "pixel_ratio": 0.85, "shadow_map_size": 1024, "max_triangles": 50000, "antialiasing": false },
+        { "name": "medium", "pixel_ratio": 1.0, "shadow_map_size": 1024, "max_triangles": 200000, "antialiasing": true },
+        { "name": "high", "pixel_ratio": 1.25, "shadow_map_size": 2048, "max_triangles": 500000, "antialiasing": true }
       ]
     },
     "debug_overlay_enabled": {
@@ -314,6 +326,71 @@
       "value": 300.0,
       "range": [50.0, 800.0],
       "notes": "World radius of the ground terrain mesh."
+    },
+    "root_aura_radius": {
+      "type": "number",
+      "value": 6.0,
+      "range": [0.5, 20.0],
+      "notes": "3D proximity aura radius around root nodes for subterranean sight cutaway."
+    },
+    "webgpu_enabled": {
+      "type": "boolean",
+      "value": true,
+      "notes": "Enable WebGPU renderer with compute-driven architecture. Falls back to WebGL2 if unavailable."
+    },
+    "webgpu_max_plants": {
+      "type": "integer",
+      "value": 10000,
+      "range": [1000, 20000],
+      "notes": "Maximum plants supported by WebGPU compute-driven renderer."
+    },
+    "webgpu_tier0_threshold": {
+      "type": "integer",
+      "value": 300,
+      "range": [100, 500],
+      "notes": "Projected pixel size threshold for Tier 0 (full mesh)."
+    },
+    "webgpu_tier1_threshold": {
+      "type": "integer",
+      "value": 80,
+      "range": [40, 150],
+      "notes": "Projected pixel size threshold for Tier 1 (mid mesh)."
+    },
+    "webgpu_tier2_threshold": {
+      "type": "integer",
+      "value": 50,
+      "range": [6, 100],
+      "notes": "Projected pixel size threshold for Tier 2 (multi-view impostor)."
+    },
+    "webgpu_tier3_threshold": {
+      "type": "integer",
+      "value": 2,
+      "range": [1, 8],
+      "notes": "Projected pixel size threshold for Tier 3 (single-view billboard)."
+    },
+    "webgpu_hysteresis_promote": {
+      "type": "number",
+      "value": 1.15,
+      "range": [1.0, 1.5],
+      "notes": "Hysteresis multiplier for tier promotion."
+    },
+    "webgpu_hysteresis_demote": {
+      "type": "number",
+      "value": 0.85,
+      "range": [0.5, 1.0],
+      "notes": "Hysteresis multiplier for tier demotion."
+    },
+    "webgpu_min_dwell_time": {
+      "type": "number",
+      "value": 0.5,
+      "range": [0.1, 2.0],
+      "notes": "Minimum dwell time in seconds before tier change."
+    },
+    "node_pick_radius": {
+      "type": "number",
+      "value": 0.35,
+      "range": [0.1, 2.0],
+      "notes": "Minimum world-space pick radius for node selection during growth."
     }
   }
 }

@@ -14,7 +14,7 @@ describe('runtime config', () => {
       CORS_ORIGINS: 'https://a.example, https://b.example',
     });
 
-    assert.equal(configFileCount, 75);
+    assert.equal(configFileCount, 76);
     assert.equal(runtime.nodeEnv, 'staging');
     assert.equal(runtime.port, 9001);
     assert.deepEqual(runtime.corsOrigins, ['https://a.example', 'https://b.example']);

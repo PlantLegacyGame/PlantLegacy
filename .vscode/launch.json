@@ -7,9 +7,33 @@
     {
       "type": "chrome",
       "request": "launch",
-      "name": "Launch Chrome against localhost",
+      "name": "Launch Client (Vite)",
+      "url": "http://localhost:4173",
+      "webRoot": "${workspaceFolder}/apps/client",
+      "preLaunchTask": "dev"
+    },
+    {
+      "type": "chrome",
+      "request": "launch",
+      "name": "Launch Client with Base Path",
+      "url": "http://localhost:4173/PlantLegacy/",
+      "webRoot": "${workspaceFolder}/apps/client",
+      "preLaunchTask": "dev"
+    },
+    {
+      "type": "chrome",
+      "request": "launch",
+      "name": "Launch Server Only",
       "url": "http://localhost:8080",
-      "webRoot": "${workspaceFolder}"
+      "webRoot": "${workspaceFolder}/apps/server",
+      "preLaunchTask": "dev:server"
+    }
+  ],
+  "compounds": [
+    {
+      "name": "Start Dev Stack (Server + Client)",
+      "configurations": ["Launch Client (Vite)"],
+      "preLaunchTask": "dev"
     }
   ]
 }

@@ -1,5 +1,5 @@
 import { violatesAccountBoundInvariant } from '../schemas/item.ts';
-import type { ValidationIssue } from './types.ts';
+import type { ConfigFile, ValidationIssue } from './types.ts';
 import { CONFIG_SCHEMA, CONFIG_VALUE_TYPES } from './types.ts';
 
 type Push = (path: string, code: string, message: string) => void;
@@ -430,4 +430,138 @@ export function validateConfig(systemName: string, raw: unknown): ValidationIssu
 export function formatIssue(issue: ValidationIssue): string {
   const location = issue.path ? `${issue.file}:${issue.path}` : issue.file;
   return `${location}  [${issue.code}] ${issue.message}`;
+}
+
+/**
+ * Cross-field validation over the set of loaded configs. These rules span
+ * multiple config files (e.g. weather durations must be internally consistent,
+ * resource maxima bound tile values, tier rates stay inside their config),
+ * so they cannot be checked by the per-file `validateConfig`.
+ *
+ * @param configs All successfully loaded config documents, keyed by system name.
+ * @returns Issues for any cross-file or inter-field violation (empty = ok).
+ */
+export function validateCrossFieldRules(configs: Map<string, ConfigFile>): ValidationIssue[] {
+  const issues: ValidationIssue[] = [];
+  const push = (system: string, path: string, code: string, message: string) => {
+    issues.push({ file: `${system}.json`, path, code, message, severity: 'error' });
+  };
+
+  // --- Weather durations (weather.json) -----------------------------------
+  // Each weather state has a min and a max duration; min must not exceed max.
+  const weather = configs.get('weather');
+  if (weather) {
+    const v = weather.values as Record<string, unknown> | undefined;
+    const duration = (key: string): number | undefined => {
+      const entry = v?.[key];
+      if (typeof entry !== 'object' || entry === null) return undefined;
+      const raw = (entry as Record<string, unknown>).value;
+      return typeof raw === 'number' ? raw : undefined;
+    };
+    const min = (k: string) => duration(`${k}_duration_min_s`);
+    const max = (k: string) => duration(`${k}_duration_max_s`);
+    const states = ['clear', 'rain', 'storm_telegraph', 'storm_active'] as const;
+    for (const state of states) {
+      const lo = min(state);
+      const hi = max(state);
+      if (typeof lo === 'number' && typeof hi === 'number' && lo > hi) {
+        push(
+          'weather',
+          `${state}_duration_min_s`,
+          'weather.durations_min_exceeds_max',
+          `weather.${state}_duration_min_s (${lo}) must not exceed _max_s (${hi}).`,
+        );
+      }
+    }
+    // Telegraph must be shorter than the active storm phase.
+    const telegraph = duration('storm_telegraph_duration_s');
+    const active = duration('storm_active_duration_s');
+    if (typeof telegraph === 'number' && typeof active === 'number' && telegraph >= active) {
+      push(
+        'weather',
+        'storm_telegraph_duration_s',
+        'weather.telegraph_exceeds_active',
+        `storm_telegraph_duration_s (${telegraph}) must be shorter than storm_active_duration_s (${active}).`,
+      );
+    }
+  }
+
+  // --- Resource maxima: tile values are clamped to maxLight/maxMoisture/   ---
+  // --- maxMinerals (resources.json) ----------------------------------------
+  const resources = configs.get('resources');
+  if (resources) {
+    const v = resources.values as Record<string, unknown> | undefined;
+    const num = (key: string): number | undefined => {
+      const entry = v?.[key];
+      if (typeof entry !== 'object' || entry === null) return undefined;
+      const raw = (entry as Record<string, unknown>).value;
+      return typeof raw === 'number' ? raw : undefined;
+    };
+    const maxKey = (k: string): number | undefined => num(`max_${k}`);
+    const baseKey = (k: string): number | undefined => num(`tile_${k}_base`);
+    const lightMax = maxKey('light');
+    const moistureMax = maxKey('moisture');
+    const mineralsMax = maxKey('minerals');
+    const light = baseKey('light');
+    const moisture = baseKey('moisture');
+    const minerals = baseKey('minerals');
+    if (light !== undefined && typeof lightMax === 'number' && lightMax < light) {
+      push(
+        'resources',
+        'max_light',
+        'resources.max_light_below_base',
+        `max_light (${lightMax}) must not be below tile_light_base (${light}).`,
+      );
+    }
+    if (moisture !== undefined && typeof moistureMax === 'number' && moistureMax < moisture) {
+      push(
+        'resources',
+        'max_moisture',
+        'resources.max_moisture_below_base',
+        `max_moisture (${moistureMax}) must not be below tile_moisture_base (${moisture}).`,
+      );
+    }
+    if (minerals !== undefined && typeof mineralsMax === 'number' && mineralsMax < minerals) {
+      push(
+        'resources',
+        'max_minerals',
+        'resources.max_minerals_below_base',
+        `max_minerals (${mineralsMax}) must not be below tile_minerals_base (${minerals}).`,
+      );
+    }
+  }
+
+  // --- Tier rates consistency (growth.json <-> net_proto.json / plant_renderer.json)
+  // Tier rates in growth.json (germination, etc.) must be within net_proto's
+  // allowed velocity/time bounds and non-negative.
+  const growth = configs.get('growth');
+  const netProto = configs.get('net_proto');
+  if (growth && netProto) {
+    const g = growth.values as Record<string, unknown> | undefined;
+    const n = netProto.values as Record<string, unknown> | undefined;
+    const numG = (key: string): number | undefined => {
+      const entry = g?.[key];
+      if (typeof entry !== 'object' || entry === null) return undefined;
+      const raw = (entry as Record<string, unknown>).value;
+      return typeof raw === 'number' ? raw : undefined;
+    };
+    const numN = (key: string): number | undefined => {
+      const entry = n?.[key];
+      if (typeof entry !== 'object' || entry === null) return undefined;
+      const raw = (entry as Record<string, unknown>).value;
+      return typeof raw === 'number' ? raw : undefined;
+    };
+    const rate = numG('root_growth_speed');
+    const maxVel = numN('max_velocity_units_per_tick');
+    if (typeof rate === 'number' && typeof maxVel === 'number' && maxVel > 0 && rate > maxVel) {
+      push(
+        'growth',
+        'root_growth_speed',
+        'growth.root_speed_exceeds_max_velocity',
+        `root_growth_speed (${rate}) exceeds net_proto.max_velocity_units_per_tick (${maxVel}).`,
+      );
+    }
+  }
+
+  return issues;
 }

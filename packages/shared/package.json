@@ -11,7 +11,10 @@
     "./events": "./src/events/index.ts",
     "./growth": "./src/growth/index.ts",
     "./ids": "./src/ids/index.ts",
-    "./math": "./src/math/index.ts"
+    "./math": "./src/math/index.ts",
+    "./plantGraphValidator": "./src/plantGraphValidator.ts",
+    "./protocol": "./src/protocol/index.ts",
+    "./protocol/messageSchemas": "./src/protocol/messageSchemas.ts"
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json",

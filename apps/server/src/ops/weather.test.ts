@@ -1,8 +1,19 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { type DayNightConfig, type WeatherConfig, WeatherSystem } from './weather.ts';
+import type { DayNightConfig, WeatherConfig } from './weather.ts';
+import {
+  createWeatherStateMachine,
+  weatherStateMachineGetBroadcast,
+  weatherStateMachineGetLightMultiplier,
+  weatherStateMachineGetMoistureGainPerS,
+  weatherStateMachineGetNextState,
+  weatherStateMachineGetTimeOfDay,
+  weatherStateMachineGetWeatherState,
+  weatherStateMachineIsDay,
+  weatherStateMachineUpdate,
+} from './weatherStateMachine.ts';
 
-describe('T07 WeatherSystem', () => {
+describe('T07 WeatherStateMachine', () => {
   const weatherConfig: WeatherConfig = {
     clearDurationMinS: 100,
     clearDurationMaxS: 200,
@@ -39,40 +50,97 @@ describe('T07 WeatherSystem', () => {
   };
 
   it('initializes with clear weather and progresses time of day', () => {
-    const weather = new WeatherSystem(weatherConfig, dayNightConfig);
-    assert.equal(weather.getWeatherState(), 'clear');
-    const initialTime = weather.getTimeOfDay();
+    const machine = createWeatherStateMachine(weatherConfig, dayNightConfig);
+    assert.equal(weatherStateMachineGetWeatherState(machine), 'clear');
+    const initialTime = weatherStateMachineGetTimeOfDay(machine);
 
     // Advance 100 seconds (0.1 of 1000s cycle)
-    weather.update(100);
-    const updatedTime = weather.getTimeOfDay();
+    weatherStateMachineUpdate(machine, 100);
+    const updatedTime = weatherStateMachineGetTimeOfDay(machine);
     assert.ok(updatedTime > initialTime);
   });
 
   it('correctly reports day and night according to dayFraction', () => {
-    const weather = new WeatherSystem(weatherConfig, dayNightConfig);
+    const machine = createWeatherStateMachine(weatherConfig, dayNightConfig);
     // At 0.25 (morning), it should be day
-    assert.equal(weather.isDay(), true);
+    assert.equal(weatherStateMachineIsDay(machine), true);
 
     // Fast forward to night (e.g. 500s = +0.5 time of day -> 0.75 > 0.66)
-    weather.update(500);
-    assert.equal(weather.isDay(), false);
+    weatherStateMachineUpdate(machine, 500);
+    assert.equal(weatherStateMachineIsDay(machine), false);
   });
 
   it('adjusts light multiplier and moisture deposit by weather state', () => {
-    const weather = new WeatherSystem(weatherConfig, dayNightConfig);
-    assert.equal(weather.getWeatherLightMultiplier(), 1.0);
-    assert.equal(weather.getMoistureDepositPerSecond(), 0.0);
+    const machine = createWeatherStateMachine(weatherConfig, dayNightConfig);
+    assert.equal(weatherStateMachineGetLightMultiplier(machine), 1.0);
+    assert.equal(weatherStateMachineGetMoistureGainPerS(machine), 0.0);
 
     // Force updates to advance state
     for (let i = 0; i < 50; i++) {
-      weather.update(100);
+      weatherStateMachineUpdate(machine, 100);
     }
     // Broadcast must provide full forecast payload
-    const broadcast = weather.getBroadcast();
+    const broadcast = weatherStateMachineGetBroadcast(machine);
     assert.ok(typeof broadcast.timeOfDay === 'number');
     assert.ok(typeof broadcast.sunIntensity === 'number');
     assert.ok(broadcast.conditionToken.length > 0);
     assert.ok(broadcast.forecast.nextWeatherState.length > 0);
+  });
+
+  it('keeps clear weather for its configured minimum duration', () => {
+    const machine = createWeatherStateMachine(weatherConfig, dayNightConfig);
+
+    // The clear minimum is 100s; a shorter step must not transition.
+    weatherStateMachineUpdate(machine, 99);
+    assert.equal(weatherStateMachineGetWeatherState(machine), 'clear');
+  });
+
+  it('uses the configured clear duration instead of a zero default', () => {
+    const pinnedConfig: WeatherConfig = {
+      ...weatherConfig,
+      clearDurationMinS: 10,
+      clearDurationMaxS: 10,
+      rainDurationMinS: 10,
+      rainDurationMaxS: 10,
+    };
+    const machine = createWeatherStateMachine(pinnedConfig, dayNightConfig);
+
+    weatherStateMachineUpdate(machine, 9);
+    assert.equal(weatherStateMachineGetWeatherState(machine), 'clear');
+
+    weatherStateMachineUpdate(machine, 1);
+    assert.notEqual(weatherStateMachineGetWeatherState(machine), 'clear');
+  });
+
+  it('broadcasts the state that the next transition actually enters', () => {
+    const machine = createWeatherStateMachine(weatherConfig, dayNightConfig);
+    const forecast = weatherStateMachineGetNextState(machine);
+
+    // Advance past any possible clear duration.
+    weatherStateMachineUpdate(machine, 201);
+
+    assert.equal(weatherStateMachineGetWeatherState(machine), forecast);
+  });
+
+  it('reads light and moisture magnitudes from config', () => {
+    const pinnedConfig: WeatherConfig = {
+      ...weatherConfig,
+      clearLightMultiplier: 1.2,
+      rainLightMultiplier: 0.4,
+      rainMoistureGainPerS: 0.9,
+      stormMoistureGainPerS: 2.0,
+      biomeWeatherModifier: 1.0,
+    };
+    const machine = createWeatherStateMachine(pinnedConfig, dayNightConfig);
+
+    assert.equal(weatherStateMachineGetLightMultiplier(machine), 1.2);
+    assert.equal(weatherStateMachineGetMoistureGainPerS(machine), 0.0);
+
+    machine.currentState = 'rain';
+    assert.equal(weatherStateMachineGetLightMultiplier(machine), 0.4);
+    assert.equal(weatherStateMachineGetMoistureGainPerS(machine), 0.9);
+
+    machine.currentState = 'thunderstorm_active';
+    assert.equal(weatherStateMachineGetMoistureGainPerS(machine), 2.0);
   });
 });

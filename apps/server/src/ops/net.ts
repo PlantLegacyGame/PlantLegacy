@@ -13,11 +13,12 @@ export interface NetProtoConfig {
     maxZ: number;
   };
   clientSendRateHz: number;
-  moveSpeed: number;
+  helloTimeoutMs: number;
 }
 
 import type { ConfigFile } from '@plant-legacy/shared/config';
 import { readInteger, readNumber, readObject } from '@plant-legacy/shared/config';
+import type { Layer, NodeStatModifiers, NodeType } from '@plant-legacy/shared/growth';
 
 export function loadNetProtoConfig(configs: Map<string, ConfigFile>): NetProtoConfig {
   const rawWorldBounds = readObject<{
@@ -42,7 +43,7 @@ export function loadNetProtoConfig(configs: Map<string, ConfigFile>): NetProtoCo
       maxZ: rawWorldBounds.max_z,
     },
     clientSendRateHz: readInteger(configs, 'net_proto', 'client_send_rate_hz'),
-    moveSpeed: readNumber(configs, 'net_proto', 'move_speed'),
+    helloTimeoutMs: readInteger(configs, 'net_proto', 'hello_timeout_ms'),
   };
 }
 
@@ -54,6 +55,7 @@ export const MESSAGE_TYPE = {
   GROWTH_INTENT: 4,
   RESOURCE_QUERY: 5,
   PLANT_SYNC_REQUEST: 6,
+  GROWTH_OPTIONS_REQUEST: 7,
 
   // Server -> Client
   WELCOME: 10,
@@ -68,18 +70,13 @@ export const MESSAGE_TYPE = {
   PLANT_CREATED: 19,
   PLANT_REMOVED: 20,
   WEATHER_UPDATE: 21,
+  GROWTH_OPTIONS_RESULT: 22,
+
+  // Dev commands (client -> server, server -> client)
+  DEV_RESPONSE: 99,
 } as const;
 
 export type MessageType = (typeof MESSAGE_TYPE)[keyof typeof MESSAGE_TYPE];
-
-export interface CubeState {
-  id: string;
-  x: number;
-  z: number;
-  rotation: number;
-  color: number;
-  lastInputTick: number;
-}
 
 export interface PlayerInput {
   moveForward: boolean;
@@ -97,12 +94,33 @@ export interface HelloPayload {
 
 export interface WelcomePayload {
   playerId: string;
-  cubeId: string;
   plantId: string;
   tick: number;
-  cubes: CubeState[];
   rootNode: { id: string; x: number; y: number; z: number; type: string; biomass: number };
   totalBiomass: number;
+  totalEnergy: number;
+  // Full node set for immediate client render (ADR-021)
+  nodes?: Array<{
+    id: string;
+    plantId: string;
+    type: NodeType;
+    layer: Layer;
+    x: number;
+    y: number;
+    z: number;
+    biomass: number;
+    age: number;
+    parentId: string | null;
+    children: string[];
+    statModifiers: NodeStatModifiers;
+    resourceDrawWater: number;
+    resourceDrawNutrients: number;
+    upkeepBiomassPerSecond: number;
+    growthDirectionBias: string;
+    lastGrowthTick: number;
+    growthProgress: number;
+    isSeed: boolean;
+  }>;
 }
 
 export interface InputPayload {
@@ -111,12 +129,16 @@ export interface InputPayload {
 
 export interface StatePayload {
   tick: number;
-  cubes: CubeState[];
+  plants: Array<{ id: string; totalBiomass: number; totalEnergy: number; totalUpkeep: number }>;
+  worldBounds: { minX: number; maxX: number; minZ: number; maxZ: number };
+  tileSize: number;
 }
 
 export interface KeyframePayload {
   tick: number;
-  cubes: CubeState[];
+  plants: Array<{ id: string; totalBiomass: number; totalUpkeep: number }>;
+  worldBounds: { minX: number; maxX: number; minZ: number; maxZ: number };
+  tileSize: number;
 }
 
 export interface RejectPayload {
@@ -131,40 +153,72 @@ export interface ErrorPayload {
 
 export interface ResourceUpdatePayload {
   tick: number;
-  tiles: Array<{ light: number; moisture: number; minerals: number }>;
+  tiles: Array<{
+    tileX?: number;
+    tileZ?: number;
+    light: number;
+    moisture: number;
+    minerals: number;
+  }>;
   width: number;
   height: number;
   tileSize: number;
+  // ADR-019: Include plant energy/biomass for photosynthesis feedback
+  totalEnergy?: number;
+  totalBiomass?: number;
 }
 
 export interface ResourceQueryPayload {
-  tileX: number;
-  tileZ: number;
+  tileX?: number;
+  tileZ?: number;
+  worldX?: number;
+  worldZ?: number;
+}
+
+export interface GrowthOptionsRequestPayload {
+  plantId?: string;
+  nodeId?: string;
+}
+
+export interface GrowthOptionsResponsePayload {
+  nodeId: string;
+  result?: unknown;
+  error?: string;
+}
+
+export interface GrowthEventNode {
+  id: string;
+  plantId: string;
+  type: NodeType;
+  layer: Layer;
+  x: number;
+  y: number;
+  z: number;
+  biomass: number;
+  age: number;
+  parentId: string | null;
+  children: string[];
+  statModifiers: NodeStatModifiers;
+  resourceDrawWater: number;
+  resourceDrawNutrients: number;
+  upkeepBiomassPerSecond: number;
+  growthDirectionBias: string;
+  lastGrowthTick: number;
+  growthProgress?: number;
+  isSeed?: boolean;
 }
 
 export interface GrowthEventPayload {
   plantId: string;
-  newNode: {
-    id: string;
-    plantId: string;
-    type: string;
-    layer: string;
-    x: number;
-    y: number;
-    z: number;
-    biomass: number;
-    age: number;
-    parentId: string | null;
-    children: string[];
-    statModifiers: Record<string, number>;
-    resourceDrawWater: number;
-    resourceDrawNutrients: number;
-    upkeepBiomassPerSecond: number;
-    growthDirectionBias: string;
-    lastGrowthTick: number;
-  };
+  /** Normal single-node growth. */
+  newNode?: GrowthEventNode;
+  /** Multi-node germination (radicle + cotyledons). */
+  newNodes?: GrowthEventNode[];
+  /** Replaced node (germination: the seed becomes the root). */
+  updatedParentNode?: GrowthEventNode;
   damageDealt?: number;
   totalBiomass?: number;
+  totalEnergy?: number;
 }
 
 export interface PlantSyncPayload {
@@ -173,12 +227,13 @@ export interface PlantSyncPayload {
     ownerId: string;
     rootNodeId: string | null;
     totalBiomass: number;
+    totalEnergy: number;
     totalUpkeep: number;
     nodes: Array<{
       id: string;
       plantId: string;
-      type: string;
-      layer: string;
+      type: NodeType;
+      layer: Layer;
       x: number;
       y: number;
       z: number;
@@ -186,12 +241,14 @@ export interface PlantSyncPayload {
       age: number;
       parentId: string | null;
       children: string[];
-      statModifiers: Record<string, number | undefined>;
+      statModifiers: NodeStatModifiers;
       resourceDrawWater: number;
       resourceDrawNutrients: number;
       upkeepBiomassPerSecond: number;
       growthDirectionBias: string;
       lastGrowthTick: number;
+      growthProgress?: number;
+      isSeed?: boolean;
     }>;
   }>;
 }
@@ -202,12 +259,13 @@ export interface PlantCreatedPayload {
     ownerId: string;
     rootNodeId: string | null;
     totalBiomass: number;
+    totalEnergy: number;
     totalUpkeep: number;
     nodes: Array<{
       id: string;
       plantId: string;
-      type: string;
-      layer: string;
+      type: NodeType;
+      layer: Layer;
       x: number;
       y: number;
       z: number;
@@ -215,12 +273,14 @@ export interface PlantCreatedPayload {
       age: number;
       parentId: string | null;
       children: string[];
-      statModifiers: Record<string, number | undefined>;
+      statModifiers: NodeStatModifiers;
       resourceDrawWater: number;
       resourceDrawNutrients: number;
       upkeepBiomassPerSecond: number;
       growthDirectionBias: string;
       lastGrowthTick: number;
+      growthProgress: number;
+      isSeed: boolean;
     }>;
   };
 }
@@ -242,105 +302,33 @@ export function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
 
-export function validateMovement(
-  cube: CubeState,
-  input: PlayerInput,
-  config: NetProtoConfig,
-  _tick: number,
-): { valid: boolean; newX: number; newZ: number; newRotation: number; reason?: string } {
-  const dt = 1 / config.tickRateHz;
-  const speed = config.moveSpeed;
-  const maxVelocity = config.maxVelocityUnitsPerTick;
-  const rotationSpeed = Math.PI; // radians per second
-
-  let newX = cube.x;
-  let newZ = cube.z;
-  let newRotation = cube.rotation;
-
-  // Calculate movement vector in local space
-  let dx = 0;
-  let dz = 0;
-
-  if (input.moveForward) dz -= 1;
-  if (input.moveBackward) dz += 1;
-  if (input.moveLeft) dx -= 1;
-  if (input.moveRight) dx += 1;
-
-  // Normalize diagonal movement
-  if (dx !== 0 && dz !== 0) {
-    const len = Math.sqrt(dx * dx + dz * dz);
-    dx /= len;
-    dz /= len;
-  }
-
-  // Apply rotation if moving
-  if (dx !== 0 || dz !== 0) {
-    const targetRotation = Math.atan2(dx, dz);
-    const rotationDiff = targetRotation - newRotation;
-    // Normalize to [-PI, PI]
-    const normalizedDiff = ((rotationDiff + Math.PI) % (2 * Math.PI)) - Math.PI;
-    const maxRotationChange = rotationSpeed * dt;
-    newRotation += clamp(normalizedDiff, -maxRotationChange, maxRotationChange);
-  }
-
-  // Move: forward/backward along facing, left/right strafe perpendicular
-  const facingX = Math.sin(newRotation);
-  const facingZ = Math.cos(newRotation);
-  const strafeX = facingZ; // 90 deg right: (cos, -sin)
-  const strafeZ = -facingX;
-
-  const forwardDist = -dz * speed * dt; // dz = -1 for forward
-  const strafeDist = dx * speed * dt; // dx = 1 for right
-
-  newX += facingX * forwardDist + strafeX * strafeDist;
-  newZ += facingZ * forwardDist + strafeZ * strafeDist;
-
-  // Check velocity limit
-  const actualDx = newX - cube.x;
-  const actualDz = newZ - cube.z;
-  const actualVelocity = Math.sqrt(actualDx * actualDx + actualDz * actualDz);
-
-  if (actualVelocity > maxVelocity) {
-    return {
-      valid: false,
-      newX: cube.x,
-      newZ: cube.z,
-      newRotation: cube.rotation,
-      reason: `velocity_exceeded: ${actualVelocity.toFixed(3)} > ${maxVelocity}`,
-    };
-  }
-
-  // Check world bounds
-  if (
-    newX < config.worldBounds.minX ||
-    newX > config.worldBounds.maxX ||
-    newZ < config.worldBounds.minZ ||
-    newZ > config.worldBounds.maxZ
-  ) {
-    return {
-      valid: false,
-      newX: cube.x,
-      newZ: cube.z,
-      newRotation: cube.rotation,
-      reason: 'out_of_bounds',
-    };
-  }
-
-  // Quantize
-  newX = quantizePosition(newX, config.positionQuantization);
-  newZ = quantizePosition(newZ, config.positionQuantization);
-  newRotation = quantizeAngle(newRotation, config.angleQuantizationBits);
-
-  return { valid: true, newX, newZ, newRotation };
+export interface MovementValidationResult {
+  valid: boolean;
+  newX?: number;
+  newZ?: number;
+  newRotation?: number;
+  reason?: string;
 }
 
-export function createCube(id: string, color: number): CubeState {
-  return {
-    id,
-    x: 0,
-    z: 0,
-    rotation: 0,
-    color,
-    lastInputTick: 0,
-  };
+export function validateMovement(
+  input: PlayerInput,
+  config: NetProtoConfig,
+  _currentTick: number,
+): MovementValidationResult {
+  // Camera pan validation - camera is independent entity (DESIGN.md Rule 1)
+  // Check velocity bounds
+  const maxVelocity = config.maxVelocityUnitsPerTick;
+  let moveX = 0;
+  let moveZ = 0;
+  if (input.moveForward) moveZ -= 1;
+  if (input.moveBackward) moveZ += 1;
+  if (input.moveLeft) moveX -= 1;
+  if (input.moveRight) moveX += 1;
+  const velocity = Math.sqrt(moveX * moveX + moveZ * moveZ);
+  if (velocity > maxVelocity) {
+    return { valid: false, reason: 'exceeds_max_velocity' };
+  }
+  // World bounds check - camera can move freely within world bounds
+  // The actual position is managed client-side; server just validates velocity
+  return { valid: true };
 }

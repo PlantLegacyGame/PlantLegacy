@@ -4,8 +4,8 @@
     "version": "0.1.0",
     "schema": "extended-1",
     "owner_task": "T01",
-    "status": "draft",
-    "notes": "Growth simulation configuration. All values from DESIGN.md Part 4 T01."
+    "status": "active",
+    "notes": "Growth simulation configuration. All values from DESIGN.md Part 4 T01 and Part 5 specs."
   },
   "values": {
     "root_growth_speed": {
@@ -50,17 +50,61 @@
       "range": [1, 25],
       "notes": "Light reduction per canopy node on tiles below"
     },
+    "seed_node": {
+      "type": "object",
+      "value": {
+        "biomass_cost": 1,
+        "resource_draw_water": 0.0,
+        "resource_draw_nutrients": 0.0,
+        "resource_draw_minerals": 0.0,
+        "upkeep_biomass_per_second": 0.0,
+        "stat_modifiers": {},
+        "growth_direction_bias": "downward",
+        "growth_time_seconds": 0
+      },
+      "notes": "Seed node type definition (dormant, 0 upkeep, germinates into radicle + cotyledons). The seed's biomass IS the plant's starting biomass — it is redistributed during germination."
+    },
+    "radicle_node": {
+      "type": "object",
+      "value": {
+        "biomass_cost": 8,
+        "resource_draw_water": 0.8,
+        "resource_draw_nutrients": 0.5,
+        "resource_draw_minerals": 0.1,
+        "upkeep_biomass_per_second": 0.001,
+        "stat_modifiers": {},
+        "growth_direction_bias": "downward",
+        "growth_time_seconds": 3
+      },
+      "notes": "Radicle (primary root tip) - first root to emerge, grows downward rapidly using seed reserves."
+    },
     "root_node": {
       "type": "object",
       "value": {
-        "biomass_cost": 30,
+        "biomass_cost": 15,
         "resource_draw_water": 0.5,
         "resource_draw_nutrients": 0.3,
-        "upkeep_biomass_per_second": 0.01,
+        "resource_draw_minerals": 0.4,
+        "upkeep_biomass_per_second": 0.001,
         "stat_modifiers": {},
-        "growth_direction_bias": "upward"
+        "growth_direction_bias": "downward",
+        "growth_time_seconds": 5
       },
-      "notes": "Root node type definition"
+      "notes": "Root node type definition. Thick taproot — high structural investment for anchoring and water/nutrient absorption. Minerals used for lignin/cellulose cell walls."
+    },
+    "lateral_root_node": {
+      "type": "object",
+      "value": {
+        "biomass_cost": 6,
+        "resource_draw_water": 0.6,
+        "resource_draw_nutrients": 0.4,
+        "resource_draw_minerals": 0.2,
+        "upkeep_biomass_per_second": 0.0008,
+        "stat_modifiers": {},
+        "growth_direction_bias": "downward",
+        "growth_time_seconds": 3
+      },
+      "notes": "Lateral root node definition. Branches from primary root pericycle — finer, higher absorption surface."
     },
     "stem_node": {
       "type": "object",
@@ -68,23 +112,55 @@
         "biomass_cost": 12,
         "resource_draw_water": 0.2,
         "resource_draw_nutrients": 0.2,
+        "resource_draw_minerals": 0.6,
         "upkeep_biomass_per_second": 0.02,
         "stat_modifiers": { "structural_integrity": 1.0 },
-        "growth_direction_bias": "upward"
+        "growth_direction_bias": "upward",
+        "growth_time_seconds": 8
       },
-      "notes": "Stem node type definition"
+      "notes": "Stem node type definition. Woody structural element — moderate investment, high integrity. High minerals for lignin."
+    },
+    "branch_node": {
+      "type": "object",
+      "value": {
+        "biomass_cost": 10,
+        "resource_draw_water": 0.2,
+        "resource_draw_nutrients": 0.2,
+        "resource_draw_minerals": 0.5,
+        "upkeep_biomass_per_second": 0.015,
+        "stat_modifiers": { "structural_integrity": 0.8 },
+        "growth_direction_bias": "outward",
+        "growth_time_seconds": 6
+      },
+      "notes": "Branch node type definition. Lateral branch from axillary bud — slightly cheaper than main stem."
     },
     "leaf_node": {
       "type": "object",
       "value": {
-        "biomass_cost": 15,
+        "biomass_cost": 6,
         "resource_draw_water": 0.1,
         "resource_draw_nutrients": 0.1,
-        "upkeep_biomass_per_second": 0.03,
+        "resource_draw_minerals": 0.05,
+        "upkeep_biomass_per_second": 0.003,
         "stat_modifiers": { "photosynthesis": 1.5, "light_blocking": 1.0 },
-        "growth_direction_bias": "outward"
+        "growth_direction_bias": "outward",
+        "growth_time_seconds": 4
       },
-      "notes": "Leaf node type definition"
+      "notes": "Leaf node type definition. Thin photosynthetic organ — cheap to produce, high ROI. Only leaf nodes photosynthesize. Low minerals for leaf structure."
+    },
+    "cotyledon_node": {
+      "type": "object",
+      "value": {
+        "biomass_cost": 6,
+        "resource_draw_water": 0.1,
+        "resource_draw_nutrients": 0.1,
+        "resource_draw_minerals": 0.05,
+        "upkeep_biomass_per_second": 0.003,
+        "stat_modifiers": { "photosynthesis": 1.2, "light_blocking": 0.8 },
+        "growth_direction_bias": "outward",
+        "growth_time_seconds": 2
+      },
+      "notes": "Cotyledon (seed leaf) node definition. First photosynthetic organs — slightly less efficient than true leaves, temporary. Shed when plant has 4+ true leaves."
     },
     "flower_node": {
       "type": "object",
@@ -92,35 +168,41 @@
         "biomass_cost": 25,
         "resource_draw_water": 0.3,
         "resource_draw_nutrients": 0.4,
+        "resource_draw_minerals": 0.3,
         "upkeep_biomass_per_second": 0.05,
         "stat_modifiers": { "reproduction": 1.0, "pollinator_attraction": 1.0 },
-        "growth_direction_bias": "upward"
+        "growth_direction_bias": "upward",
+        "growth_time_seconds": 15
       },
-      "notes": "Flower node type definition"
+      "notes": "Flower node type definition. Complex reproductive structure — most expensive non-root node, high upkeep. Produces heirloom seeds."
     },
     "spore_sac_node": {
       "type": "object",
       "value": {
-        "biomass_cost": 30,
+        "biomass_cost": 18,
         "resource_draw_water": 0.2,
         "resource_draw_nutrients": 0.3,
+        "resource_draw_minerals": 0.2,
         "upkeep_biomass_per_second": 0.04,
         "stat_modifiers": { "spore_production": 1.0 },
-        "growth_direction_bias": "outward"
+        "growth_direction_bias": "outward",
+        "growth_time_seconds": 10
       },
-      "notes": "Spore sac node type definition"
+      "notes": "Spore sac node type definition. Reproductive structure — moderate investment, produces spores for dispersal."
     },
     "vine_node": {
       "type": "object",
       "value": {
-        "biomass_cost": 10,
+        "biomass_cost": 8,
         "resource_draw_water": 0.2,
         "resource_draw_nutrients": 0.1,
+        "resource_draw_minerals": 0.15,
         "upkeep_biomass_per_second": 0.02,
         "stat_modifiers": { "climbing": 1.0, "horizontal_spread": 1.5 },
-        "growth_direction_bias": "horizontal"
+        "growth_direction_bias": "horizontal",
+        "growth_time_seconds": 5
       },
-      "notes": "Vine node type definition"
+      "notes": "Vine node type definition. Thin climbing stem — cheaper than woody stem, high horizontal spread."
     },
     "growth_intent_cooldown": {
       "type": "number",
@@ -133,6 +215,77 @@
       "value": 2.0,
       "range": [0.5, 10.0],
       "notes": "Multiplier for root attack damage vs passive overlap pressure"
+    },
+    "germination_min_moisture": {
+      "type": "number",
+      "value": 30,
+      "range": [0, 100],
+      "notes": "Hard success threshold: local tile moisture (0-100) must be at least this value for the seed to sprout. A player may still attempt below it; the seed dies instead (ADR-026)."
+    },
+    "germination_min_light": {
+      "type": "number",
+      "value": 10,
+      "range": [0, 100],
+      "notes": "Hard success threshold: local light (0-100) must be at least this value for the seed to sprout. A player may still attempt below it; the seed dies instead (ADR-026)."
+    },
+    "germination_failure_kills_seed": {
+      "type": "boolean",
+      "value": true,
+      "notes": "When true, a germination attempt below the moisture/light thresholds destroys the seed/plant. Lets a player deliberately kill a seed (ADR-026)."
+    },
+    "photosynthesis_energy_per_second": {
+      "type": "number",
+      "value": 10.0,
+      "range": [0.1, 100.0],
+      "notes": "Base energy production per leaf per second at max light/moisture/minerals"
+    },
+    "energy_upkeep_per_biomass": {
+      "type": "number",
+      "value": 0.01,
+      "range": [0.001, 0.1],
+      "notes": "Energy upkeep cost per unit biomass per second"
+    },
+    "max_energy_per_plant": {
+      "type": "integer",
+      "value": 10000,
+      "range": [100, 1000000],
+      "notes": "Maximum energy storage per plant"
+    },
+    "growth_water_consumption_rate": {
+      "type": "number",
+      "value": 2.0,
+      "range": [0.1, 50.0],
+      "notes": "Water consumed per second of growth time per unit biomass cost"
+    },
+    "growth_nutrient_consumption_rate": {
+      "type": "number",
+      "value": 1.5,
+      "range": [0.1, 50.0],
+      "notes": "Nutrients (N/P/K) consumed per second of growth time per unit biomass cost"
+    },
+    "growth_mineral_consumption_rate": {
+      "type": "number",
+      "value": 1.0,
+      "range": [0.1, 50.0],
+      "notes": "Minerals consumed per second of growth time per unit biomass cost. Minerals = structural building blocks (calcium for cell walls, magnesium for chlorophyll, silica for rigidity, trace elements for enzymes)."
+    },
+    "growth_min_water": {
+      "type": "number",
+      "value": 20,
+      "range": [0, 100],
+      "notes": "Minimum tile water level (0-100) for growth to proceed. Below this, growth pauses."
+    },
+    "growth_min_nutrients": {
+      "type": "number",
+      "value": 15,
+      "range": [0, 100],
+      "notes": "Minimum tile nutrient level (0-100) for growth to proceed. Below this, growth pauses."
+    },
+    "growth_min_minerals": {
+      "type": "number",
+      "value": 10,
+      "range": [0, 100],
+      "notes": "Minimum tile mineral level (0-100) for growth to proceed. Below this, growth pauses."
     }
   }
 }

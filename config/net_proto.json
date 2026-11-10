@@ -46,7 +46,7 @@
     },
     "max_velocity_units_per_tick": {
       "type": "number",
-      "value": 0.5,
+      "value": 5.0,
       "range": [0.1, 10.0],
       "notes": "Maximum allowed velocity for movement validation"
     },
@@ -71,6 +71,12 @@
       "value": 5.0,
       "range": [0.1, 20.0],
       "notes": "Movement speed in units per second"
+    },
+    "hello_timeout_ms": {
+      "type": "integer",
+      "value": 5000,
+      "range": [1000, 30000],
+      "notes": "HELLO message timeout in milliseconds"
     }
   }
 }

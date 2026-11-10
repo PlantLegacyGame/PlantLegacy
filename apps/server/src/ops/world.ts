@@ -1,9 +1,10 @@
-import { type ConfigFile, readNumber } from '@plant-legacy/shared/config';
+import { type ConfigFile, readBoolean, readNumber } from '@plant-legacy/shared/config';
 
 export interface WorldConfig {
   tickRateHz: number;
   maxPlayersPerWorld: number;
   reconnectWindowMin: number;
+  persistenceEnabled: boolean;
   offlineDamageMultiplier: number;
   detailedPlantBudget: number;
   cellSize: number;
@@ -16,13 +17,19 @@ export interface WorldConfig {
   dormantStepIntervalSec: number;
   tickBudgetActiveShare: number;
   tickBudgetWarnThresholdMs: number;
+  interestDetailDistances: { L0: number; L1: number; L2: number };
+  maxFrameTimeMs: number;
 }
 
 export function loadWorldConfig(configs: Map<string, ConfigFile>): WorldConfig {
+  const interestDetailDistances = configs.get('world')?.values?.interest_detail_distances?.value as
+    | { L0: number; L1: number; L2: number }
+    | undefined;
   return {
     tickRateHz: readNumber(configs, 'world', 'tick_rate_hz'),
     maxPlayersPerWorld: readNumber(configs, 'world', 'max_players_per_world'),
     reconnectWindowMin: readNumber(configs, 'world', 'reconnect_window_min'),
+    persistenceEnabled: readBoolean(configs, 'world', 'persistence_enabled'),
     offlineDamageMultiplier: readNumber(configs, 'world', 'offline_damage_multiplier'),
     detailedPlantBudget: readNumber(configs, 'world', 'detailed_plant_budget'),
     cellSize: readNumber(configs, 'world', 'cell_size'),
@@ -35,5 +42,7 @@ export function loadWorldConfig(configs: Map<string, ConfigFile>): WorldConfig {
     dormantStepIntervalSec: readNumber(configs, 'world', 'dormant_step_interval_sec'),
     tickBudgetActiveShare: readNumber(configs, 'world', 'tick_budget_active_share'),
     tickBudgetWarnThresholdMs: readNumber(configs, 'world', 'tick_budget_warn_threshold_ms'),
+    interestDetailDistances: interestDetailDistances ?? { L0: 50, L1: 150, L2: 500 },
+    maxFrameTimeMs: readNumber(configs, 'world', 'max_frame_time_ms'),
   };
 }

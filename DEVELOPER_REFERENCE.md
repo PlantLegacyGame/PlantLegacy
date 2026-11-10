@@ -1,10 +1,11 @@
 # Plant Legacy — Complete Developer Reference
 
-**Last Updated:** 2026-11-03  
+**Last Updated:** 2026-11-09  
 **Current Phase:** Gate 0 complete; Gate 1 run-up (Week 3-24)  
-**Completed Tasks:** T00, O01, **T03P**, **C01**, **T00A**, **T01**, **C02**, **T03**, **T08C**, **T02**  
-**Partial Tasks:** None (Phase 1 tasks in sequence)  
-**Next Task:** **T07 Weather and Day/Night** (DESIGN.md Part 5)
+**Completed Tasks:** T00, O01, **T03P**, **C01**, **T00A**, **T01**, **C02**, **T03**, **T08C**, **T02**, **T07**, **C03**  
+**Partial Tasks:** C02b (v1 slice), D01 (foundation)  
+**Next Task:** P0 blockers, then T05 (see `docs/what-works-now.md`)  
+**Approved 2026-11-09 (not built):** V5.4 extension program — reactive fauna, material simulation, volumetric terrain, parametric features, world objects, succession, cloud orchestration. See `docs/v5.4-extension-plan.md`.
 
 ---
 
@@ -14,7 +15,7 @@
 |------|--------|-------------|
 | T00 | ✅ Complete | Foundation: monorepo, 75 config files, config validator, rarity ban (RULE_20), account-bound invariant (RULE_23) |
 | O01 | ✅ Complete | Repo + deploy pipeline: pnpm, Biome, CI, Docker, GitHub Pages, `/health` + `/ready` |
-| T03P | ✅ Complete | WebSocket + JSON protocol, 20 Hz authoritative cubes; velocity/bounds rejection effective and tested |
+| T03P | ✅ Complete | WebSocket + JSON protocol, 20 Hz authoritative plant sync; velocity/bounds rejection effective and tested |
 | C01 | ✅ Complete | Input abstraction, UI shell, quality tiers, debug overlay, pause-on-hidden, config routes |
 | C02 | ✅ Complete | Procedural plant renderer v1: Raymarched SDF with polynomial smooth minimum (smin) organic fusion inside local bounding volumes; seamless living organism |
 | T00A | ✅ Complete | Tile grid resource model (light/moisture/minerals), simulation, photosynthesis, absorption, onboarding overlays |
@@ -26,7 +27,7 @@
 ### What Works Now (Live)
 - **Local dev:** `pnpm dev` → server (8080) + Vite client (4173) with hot reload
 - **Staging:** GitHub Pages at `https://plantlegacygame.github.io/PlantLegacy/`, API via Cloudflare quick tunnel
-- **Protocol:** WebSocket v1 documented in `docs/protocol.md`; two tabs, server-authoritative cubes
+- **Protocol:** WebSocket v1 documented in `docs/protocol.md`; two tabs, server-authoritative plant sync
 - **Client:** Three.js scene, OrbitControls, C02 procedural plant renderer (Raymarched SDF with polynomial smooth minimum primitive fusion into one seamless organism, shared material, 3D triplanar noise, vertex wind sway, health tint, mutation signatures, L0/L1), T02 Root Sight cutaway, onboarding overlays
 - **Config:** 75 files in `config/` (extended-1 format), validated at startup + CI
 
@@ -222,7 +223,7 @@ PlantLegacy/
 │   │   └── package.json    # deps: three, vite, @vitejs/plugin-legacy
 │   └── server/             # Node HTTP + WebSocket server
 │       ├── src/
-│       │   ├── main.ts     # HTTP + WebSocket server, CubeWorld, /config routes
+│       │   ├── main.ts     # HTTP + WebSocket server, World, /config routes
 │       │   ├── core/       # config.ts, version.ts
 │       │   └── ops/        # net.ts (protocol), health.ts, db.ts, log.ts
 │       ├── Dockerfile      # Node 24 alpine, runs TS directly
@@ -254,6 +255,7 @@ PlantLegacy/
 ├── docs/
 │   ├── protocol.md         # Wire protocol spec (T03P)
 │   ├── tunables.md         # Config file → task mapping
+│   ├── v5.4-extension-plan.md # Approved (not built) reactive fauna / materials / terrain / objects
 │   ├── what-works-now.md   # Honest status
 │   ├── tasks/              # Task records (T00.md, O01.md, etc.)
 │   └── checklists/         # Manual test checklists
@@ -371,7 +373,7 @@ ordering follows Gate 0. The full ordered list is DESIGN.md Part 4.
 
 ### Client-Server Boundary
 - **Client is NEVER authoritative** — it renders received state and sends input intents
-- **Server owns the tick** — `CubeWorld` steps at `net_proto.tick_rate_hz` and broadcasts `STATE` / `KEYFRAME`
+- **Server owns the tick** — `World` steps at `net_proto.tick_rate_hz` and broadcasts `STATE` / `KEYFRAME` with plant updates
 - **Rejection is currently broken** — `validateMovement` compares camelCase `worldBounds` keys against the snake_case config and moves at a hardcoded speed below the velocity limit, so no input produces `REJECT`. See `docs/protocol.md` known gaps.
 - **Protocol v1** — WebSocket + JSON; T03 will replace with binary framing + delta compression
 

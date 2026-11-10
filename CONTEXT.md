@@ -4,7 +4,7 @@ Current context for any human or AI session working in this repository. Keep it
 current at the end of every task (DESIGN.md, Session Protocol). `DESIGN.md` wins
 over this file whenever they disagree.
 
-**Phase:** 1 — The Living Sprout (in progress). **Implemented:** T00, O01, T03P, C01, **T00A** (resource model + onboarding), T01 (growth simulation), **T03** (persistence, offline tiers, interest management, event bus), **T08C** (accounts + sessions), **C02** (Raymarched SDF procedural organism renderer with `smin` organic fusion, Murray's law allometric tapering, thin-lamina foliage, and 0.9s real-time emergence animation), **T02** (Root Sight unified organism integration), **T07** (Weather state machine, day/night cycle, forecast broadcast, ResourceWorld integration), **C03** (Environment rendering: sky dome gradient, sun/moon arcs, atmospheric fog, rain particle system, storm lightning flashes, soil moisture tinting, Root Sight cutaway refinement). **Added:** config/resources.json, config/world.json, config/network.json, config/accounts.json, config/plant_renderer.json, config/root_sight.json, config/weather.json, config/daynight.json, config/render.json (expanded), server resource model, PlantPersistence, PlantWorld tiers, InterestManager, EventBus, AccountsService, WeatherSystem, EnvironmentRenderer. **Last updated:** 2026-11-04.
+**Phase:** 1 — The Living Sprout (in progress). **Implemented:** T00, O01, T03P, C01, **T00A** (resource model + onboarding), T01 (growth simulation), **T03** (persistence, offline tiers, interest management, event bus), **T08C** (accounts + sessions), **C02** (Raymarched SDF procedural organism renderer with `smin` organic fusion, Murray's law allometric tapering, thin-lamina foliage, and 0.9s real-time emergence animation), **T02** (Root Sight unified organism integration), **T07** (Weather state machine, day/night cycle, forecast broadcast, ResourceWorld integration), **C03** (Environment rendering: sky dome gradient, sun/moon arcs, atmospheric fog, rain particle system, storm lightning flashes, soil moisture tinting, Root Sight cutaway refinement), **C02b slice** (WebGPU v1 compute-driven plant renderer: transparent overlay canvas, merged mesh tiers 0/1, billboard tiers 2–4, per-plant culling/LOD with hysteresis, Root Sight highlight, WebGL2 fallback; impostor baking/GPU skinning not yet built). **Added:** config/resources.json, config/world.json, config/network.json, config/accounts.json, config/plant_renderer.json, config/root_sight.json, config/weather.json, config/daynight.json, config/render.json (expanded), server resource model, PlantPersistence (versioned binary snapshot + event log with CRC32), PlantWorld tiers, InterestManager, EventBus, AccountsService (argon2id, JWT rotation, atomic rate limits, lockout), WeatherSystem, EnvironmentRenderer, WebGPU renderer (`apps/client/src/renderers/webgpu/`), seeded RNG (`hash32`, `hash01`, `mulberry32`). **Approved 2026-11-09 (not built): v5.4 extension program** — T54 reactive non-sapient fauna, T55 material simulation, T56 volumetric terrain, C10 terrain/material rendering, T57 parametric terrain features, T58 world-object streaming and behaviour, T59 ecological succession, C11 fauna rendering, O04 cloud-native World orchestration. Rule amendments (RULE_2, RULE_8, RULE_19, RULE_22) and task specs are in `DESIGN.md` Part 11 and Part 16; the index is [`docs/v5.4-extension-plan.md`](./docs/v5.4-extension-plan.md). **Last updated:** 2026-11-09.
 
 ## 1. Stack
 
@@ -25,7 +25,7 @@ over this file whenever they disagree.
 The **client** is bundled by Vite. The **server, shared package and tools** run
 TypeScript directly on Node with no bundler. There is still **no ORM, no game
 engine**; the growth simulation is server-authoritative (T01) and the renderer
-draws server plant data and server cube positions. Do not add a new framework without a task that
+draws server plant data. Do not add a new framework without a task that
 requires it.
 
 ## 2. Commands
@@ -63,7 +63,13 @@ committed; CI installs with `--frozen-lockfile`.
 │   │   ├── src/config/plantRendererConfig.ts
 │   │   ├── src/input/InputBus.ts         # C01 named actions + producers
 │   │   ├── src/render/QualityController.ts  # C01 dynamic resolution
-│   │   ├── src/renderers/PlantRenderer.ts  # Root Sight shaders, ground, points
+│   │   ├── src/renderers/PlantRenderer.ts  # C02 Raymarched SDF plant renderer
+│   │   ├── src/renderers/EnvironmentRenderer.ts  # C03 sky, fog, rain, lightning, terrain
+│   │   ├── src/renderers/webgpu/         # C02b WebGPU compute LOD + mesh/billboard passes
+│   │   │   ├── WebGPURenderer.ts
+│   │   │   ├── WebGPUDevice.ts
+│   │   │   ├── PlantMeshBuilder.ts
+│   │   │   └── shaders/*.wgsl
 │   │   ├── src/ui/UIShell.ts             # C01 DOM overlay layers, toasts
 │   │   ├── src/ui/DebugOverlay.ts        # C01 live metrics overlay
 │   │   ├── src/styles.css
@@ -72,7 +78,7 @@ committed; CI installs with `--frozen-lockfile`.
 │       ├── Dockerfile
 │       ├── src/core/config.ts # config load + env merge
 │       ├── src/core/version.ts
-│       ├── src/main.ts        # HTTP + WebSocket server, CubeWorld, /config routes
+│       ├── src/main.ts        # HTTP + WebSocket server, World, /config routes
 │       ├── src/ops/db.ts      # Postgres reachability probe + migrations
 │       ├── src/ops/health.ts  # pure report + readiness
 │       ├── src/ops/net.ts     # protocol types, net_proto config, movement validation
@@ -81,6 +87,12 @@ committed; CI installs with `--frozen-lockfile`.
 │       ├── src/ops/interestManager.ts  # T03 spatial interest management
 │       ├── src/ops/world.ts         # T03 world config loader
 │       ├── src/ops/persistence/     # T03 binary snapshot + event log
+│       │   ├── 001_create_plants_table.sql
+│       │   ├── 002_create_accounts_table.sql
+│       │   ├── 003_add_refresh_token_lookup_hash.sql
+│       │   ├── 004_rate_limits_unique_constraint.sql
+│       │   ├── migrate.ts
+│       │   └── plantPersistence.ts
 │       ├── src/ops/plantWorld.ts    # T01 growth + T03 offline tiers
 │       ├── src/ops/accounts/        # T08C accounts + sessions
 │       │   ├── config.ts            # config loader
@@ -93,7 +105,7 @@ committed; CI installs with `--frozen-lockfile`.
 │       ├── config/validate.test.ts
 │       ├── events/index.ts    # GAME_EVENTS vocabulary (Appendix E)
 │       ├── ids/index.ts       # prefixed opaque ids
-│       ├── math/index.ts      # clamp, lerp
+│       ├── math/index.ts      # clamp, lerp, hash32, hash01, mulberry32
 │       ├── protocol/index.ts  # PROTOCOL_VERSION, frame header
 │       ├── schemas/{item,death-record}.ts
 │       └── index.ts
@@ -135,13 +147,14 @@ Browser (Vite + Three.js) ──HTTP /health,/ready,/config/*──▶ Server (n
         └──────────── WebSocket /ws (JSON, 20 Hz) ─────────────────┘
 ```
 
-- **Client:** renders only. It sends input intents and draws server cube state;
+- **Client:** renders only. It sends input intents and draws server plant state;
   it holds no authority (RULE_4, RULE_27). Three.js scene, OrbitControls,
-  `PlantRenderer` (Root Sight shaders), **C01 input abstraction, UI shell,
-  quality controller, debug overlay**, and the T00A onboarding overlay.
-- **Server:** one process, one world, one Postgres (RULE_31). `CubeWorld` runs a
-  20 Hz tick, quantizes movement and broadcasts `STATE` / `KEYFRAME`. Velocity
-  and world-bounds rejection are effective (unit tests prove rejection fires).
+  `PlantRenderer` (C02 Raymarched SDF), `EnvironmentRenderer` (C03 sky/weather),
+  optional `WebGPURenderer` overlay (C02b compute-driven plant LOD with WebGL2
+  fallback), **C01 input abstraction, UI shell, quality controller, debug
+  overlay**, and the T00A onboarding overlay.
+- **Server:** one process, one world, one Postgres (RULE_31). `World` runs a
+  20 Hz tick, steps plant growth and resource simulation, and broadcasts `STATE` / `KEYFRAME`.
   Config is loaded and validated before listening. **Serves `/config/render`, `/config/controls`,
   `/config/ui` for C01 client foundation.**
 - **Database:** optional locally (`DATABASE_URL` unset → `skipped`), required in
@@ -296,7 +309,7 @@ Server → client: `WELCOME`, `STATE`, `KEYFRAME`, `REJECT`, `PONG`, `ERROR`, `G
 The server validates movement (velocity, world bounds, quantization) and sends
 `REJECT` plus authoritative state. Unit tests confirm both velocity and bounds
 rejection fire. Full table, payload schemas:
-[`docs/protocol.md`](./protocol.md).
+[`docs/protocol.md`](./docs/protocol.md).
 
 ### 5.7 Events and ids
 
@@ -332,10 +345,43 @@ These are not open for reinterpretation without a new decision record.
 9. **Secrets only via environment.** No secrets file, no committed `.env`.
 10. **`/health` is liveness, `/ready` is readiness.** A degraded database does
     not kill the process.
+11. **Growth is two-step and gene-gated; no quick-grow.** Select a node/tip,
+    choose an available node type, read energy cost and biomass gain, commit.
+    The server validates parent, direction, type, genes, energy and bounds.
+12. **Biomass is mass; energy is the spendable currency.** Photosynthesis fills
+    energy; growth and upkeep spend it; growth adds biomass. Autonomous growth
+    can be paused to bank energy.
+13. **Germination is player-triggered and resource-gated.** No auto-germination.
+    The attempt is always allowed; success requires configured moisture and
+    light thresholds plus energy. Committing below a threshold destroys the
+    seed/plant, which lets a player deliberately kill it. Delaying for rain is
+    valid.
+14. **No implicit persistence in local/dev.** Reloading or restarting creates a
+    fresh plant; there is no `localStorage` reclaim and no ghost plant after
+    disconnect. Persistence and the reconnect window are explicit dev switches.
+    When persistence is on, recommend account creation at most once per day,
+    never as a gate.
+15. **WASD pans the camera.** No cube avatar and no direct avatar movement;
+    reroot steering is the only movement context that reuses WASD. The camera
+    frames the plant close, and plant size classes scale the small model rather
+    than the world.
+16. **Growth options are server-authoritative.** The server returns allowed node
+    types, energy cost, biomass gain, expected time, and plain reasons. The
+    client never hardcodes or overrides them.
+17. **A dev settings engine owns implicit behaviour.** Every toggle and tunable
+    lives behind `?dev=1` and a dev-only server endpoint so nothing is inferred
+    from hidden client state.
 
 The full rationale log is in [`docs/decisions.md`](./docs/decisions.md).
 
 ## 7. Invariants enforced today
+
+This table lists invariants with a single guard. The full audit — every implicit
+state machine, every invariant the app relies on but does not enforce, and the
+remediation plan — lives in
+[`docs/state-machines-and-invariants.md`](./docs/state-machines-and-invariants.md).
+Update that document, not this table, when an invariant is added or its
+enforcement changes.
 
 | Rule | Where |
 |---|---|
@@ -343,12 +389,14 @@ The full rationale log is in [`docs/decisions.md`](./docs/decisions.md).
 | RULE_20 (no rarity) | `auditTree` + validator tests + CI |
 | RULE_23 (account-bound flags) | `auditTree` + `violatesAccountBoundInvariant` + tests |
 | Startup fails on invalid config | `loadRuntimeConfig` throws before `listen` |
-| Server owns state | `CubeWorld` is the only writer; the client renders received cube state and sends intents |
+| Server owns state | `World` is the only writer; the client renders received plant state and sends intents |
 | Secrets not committed | `.gitignore` ignores `.env`; `.env.example` has placeholders |
 
 ## 8. Not built yet
 
-Chat, economy, damage pipeline, weather/daynight, inventory, admin/compliance tooling.
+Chat, economy, damage pipeline, inventory, admin/compliance tooling.
+
+**V5.4 extension program (approved 2026-11-09, not built):** T54 reactive fauna, T55 material simulation, T56 volumetric terrain, C10 terrain/material rendering, T57 parametric terrain features, T58 world-object streaming, T59 ecological succession, C11 fauna rendering, O04 cloud-native orchestration. Nothing in this list exists in code. See [`docs/v5.4-extension-plan.md`](./docs/v5.4-extension-plan.md).
 
 
 **C02 procedural plant renderer** is completed using **Raymarched Signed Distance Fields (SDF) with smooth minimum (`smin`) organic fusion** inspired by the procedural creature architecture of *Hatched* by SublimeOrange (`https://www.reddit.com/r/IndieDev/comments/1x9mmly/im_a_solo_dev_building_hatched_a/`). Instead of floating primitive cylinders clipping with flat caps, the organism's tapered capsule segments, joint spheres, root crown, and parametric foliage melt into a continuous living membrane with smooth branch collars and seamless root-to-canopy transition at $y = 0$.

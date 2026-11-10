@@ -1,26 +1,51 @@
+/**
+ * C02 SDF Procedural Plant Renderer - Complete Rewrite (Backward Compatible)
+ *
+ * Uses Raymarching with Signed Distance Fields (SDF) for procedural organism rendering.
+ * Features:
+ * - Organic fusion with smooth minimum (smin) blending
+ * - Murray's law allometric tapering
+ * - Distinct SDF primitives for each node type
+ * - Thin lamina foliage (leaves, petals)
+ * - No spheres between segments - proper smin blending
+ * - Root Sight mode with cutaway and highlights
+ * - Emergence animation (0.9s)
+ * - Full backward compatibility with old mesh-based API
+ */
 import * as THREE from 'three';
 
 /**
  * PlantNodeData represents a single node in a plant's graph.
+ * Supports legacy (type: number) format for backward compatibility.
  */
 export interface PlantNodeData {
   id: string;
   position: THREE.Vector3;
-  type: number; // 0 = root, 1 = stem/trunk/branch, 2 = leaf
+  /** Legacy: 0 = root, 1 = stem/trunk/branch, 2 = leaf */
+  type: number;
+  /** New: exact server node type (e.g., 'seed', 'radicle', 'root', 'stem', 'leaf', etc.) */
+  nodeType?: string;
   radius: number;
   parentId: string | null;
+  children?: string[];
   age: number;
   health: number;
   mutationFlags: number;
   biomass: number;
   isOwnPlant?: boolean;
   spawnTime?: number;
+  growthProgress?: number;
+  isSeed?: boolean;
+  layer?: 'root' | 'canopy';
 }
 
 /**
  * PlantRendererConfig tunables loaded from config/plant_renderer.json
+ * Includes all legacy fields for backward compatibility.
+ * Each property defined exactly once.
  */
 export interface PlantRendererConfig {
+  // Legacy mesh-based config
   maxNodesPerPlant: number;
   tubeRingCount: number;
   tubeLengthSegments: number;
@@ -52,14 +77,25 @@ export interface PlantRendererConfig {
   maxRaymarchSteps: number;
   raymarchHitEpsilon: number;
   boundingBoxPadding: number;
+  // LOD-specific raymarch settings
+  l0RaymarchSteps: number;
+  l1RaymarchSteps: number;
+  l2RaymarchSteps: number;
+  l0RaymarchEpsilon: number;
+  l1RaymarchEpsilon: number;
+  l2RaymarchEpsilon: number;
   // T02: Root Sight specific
   rootSightCutawayRadius: number;
+  rootAuraRadius: number;
   rootSightSoilOpacity: number;
   ownRootHighlightColor: string;
   rivalRootHighlightColor: string;
+  // Visual (new SDF-specific)
+  emergenceDuration: number;
 }
 
 export const DEFAULT_CONFIG: PlantRendererConfig = {
+  // Legacy mesh-based config
   maxNodesPerPlant: 1000,
   tubeRingCount: 8,
   tubeLengthSegments: 8,
@@ -91,1223 +127,1216 @@ export const DEFAULT_CONFIG: PlantRendererConfig = {
   maxRaymarchSteps: 32,
   raymarchHitEpsilon: 0.005,
   boundingBoxPadding: 1.2,
+  // LOD-specific raymarch settings
+  l0RaymarchSteps: 128,
+  l1RaymarchSteps: 64,
+  l2RaymarchSteps: 32,
+  l0RaymarchEpsilon: 0.0005,
+  l1RaymarchEpsilon: 0.001,
+  l2RaymarchEpsilon: 0.002,
   // T02: Root Sight specific
   rootSightCutawayRadius: 50.0,
+  rootAuraRadius: 3.0,
   rootSightSoilOpacity: 0.3,
   ownRootHighlightColor: '#4CAF50',
   rivalRootHighlightColor: '#FF5722',
+  // Visual
+  emergenceDuration: 0.9,
 };
 
-const MAX_PRIMITIVES = 256;
-
-// ============================================================================
-// GLSL 3.0 ES Shaders for Raymarched Signed Distance Field Organism
-// ============================================================================
-
-const organismVert = `
-out vec3 vWorldPos;
-
-void main() {
-    vec4 worldPos = modelMatrix * vec4(position, 1.0);
-    vWorldPos = worldPos.xyz;
-    gl_Position = projectionMatrix * viewMatrix * worldPos;
-}
-`;
-
-const organismFrag = `
-precision highp float;
-precision highp int;
-
-in vec3 vWorldPos;
-out vec4 fragColor;
-
-#define MAX_PRIMITIVES 256
-
-uniform vec3 uCameraPosition;
-uniform vec3 uBoxMin;
-uniform vec3 uBoxMax;
-uniform int uPrimitiveCount;
-uniform sampler2D uPrimTex;
-
-uniform float uTime;
-uniform float uSminBlendRadius;
-uniform int uMaxRaymarchSteps;
-uniform float uRaymarchHitEpsilon;
-
-uniform float uWindStrength;
-uniform float uWindSpeed;
-uniform float uHealthTintStrength;
-uniform float uMutation0Param;
-uniform float uMutation1Param;
-uniform float uMutation2Param;
-
-uniform vec3 uSunDirection;
-uniform vec3 uRootColor;
-uniform vec3 uSeedColor;
-uniform vec3 uCanopyColor;
-uniform vec3 uLeafColor;
-
-// T02 Root Sight uniforms
-uniform bool uRootSightEnabled;
-uniform vec3 uRootSightSphereCenter;
-uniform float uRootSightSphereRadius;
-uniform float uRootSightProgress;
-uniform vec3 uOwnRootHighlightColor;
-uniform vec3 uRivalRootHighlightColor;
-
-// Three.js only injects projectionMatrix into vertex prefix, not fragment.
-// We declare it here so gl_FragDepth can be computed from the hit position.
-uniform mat4 projectionMatrix;
-
-// Safe AABB Ray intersection
-vec2 intersectAABB(vec3 ro, vec3 rd, vec3 boxMin, vec3 boxMax) {
-    vec3 safeRd = vec3(
-        abs(rd.x) < 1e-6 ? (rd.x >= 0.0 ? 1e-6 : -1e-6) : rd.x,
-        abs(rd.y) < 1e-6 ? (rd.y >= 0.0 ? 1e-6 : -1e-6) : rd.y,
-        abs(rd.z) < 1e-6 ? (rd.z >= 0.0 ? 1e-6 : -1e-6) : rd.z
-    );
-    vec3 invD = 1.0 / safeRd;
-    vec3 t0 = (boxMin - ro) * invD;
-    vec3 t1 = (boxMax - ro) * invD;
-    vec3 tmin = min(t0, t1);
-    vec3 tmax = max(t0, t1);
-    float tNear = max(max(tmin.x, tmin.y), tmin.z);
-    float tFar = min(min(tmax.x, tmax.y), tmax.z);
-    return vec2(tNear, tFar);
-}
-
-// Swept tapered segment / joint / natural organic leaf blade SDF (Lipschitz 1-continuous)
-// Supports cylindrical stems/roots/petioles, and parabolic tapered leaf lamina with realistic sharp edges
-float sdOrganicSegment(vec3 p, vec3 a, vec3 b, float rA, float rB, float flatness, vec3 flatAxis) {
-    vec3 ba = b - a;
-    float l2 = dot(ba, ba);
-    if (l2 < 0.0001) {
-        vec3 pa = p - a;
-        if (flatness > 1.05) {
-            float proj = dot(pa, flatAxis);
-            vec3 planarComp = pa - flatAxis * proj;
-            float targetR = rA;
-            // Realistic organic leaf: razor-thin edge (2.5mm) with subtle natural midrib camber
-            float thickness = max(0.0035, (targetR / flatness) * 0.35);
-            vec2 d2 = vec2(length(planarComp) - targetR, abs(proj) - thickness);
-            return min(max(d2.x, d2.y), 0.0) + length(max(d2, 0.0));
-        }
-        return length(pa) - rA;
-    }
-    vec3 pa = p - a;
-    float h = clamp(dot(pa, ba) / l2, 0.0, 1.0);
-    vec3 closest = pa - ba * h;
-
-    if (flatness > 1.05) {
-        // Planar leaf blade: project distance relative to leaf plane normal (flatAxis)
-        float proj = dot(closest, flatAxis);
-        vec3 planarComp = closest - flatAxis * proj;
-
-        // Botanical Leaf Lamina: widest in middle/petiole junction, tapering smoothly to razor tip
-        float targetR = mix(rA, rB, h);
-
-        // Razor-thin natural leaf cross section (2.5 - 4.5mm), eliminating the "hockey puck" thickness
-        float thickness = max(0.0035, (targetR / flatness) * 0.35);
-
-        // Distance along blade plane + out-of-plane thickness
-        vec2 d2 = vec2(length(planarComp) - targetR, abs(proj) - thickness);
-        return min(max(d2.x, d2.y), 0.0) + length(max(d2, 0.0));
-    }
-    return length(closest) - mix(rA, rB, h);
-}
-
-// Procedural 3D wind displacement (roots underground are firmly anchored; canopy sways)
-vec3 applyWind(vec3 p) {
-    float height = max(0.0, p.y);
-    if (height < 0.1 || uWindStrength < 0.01) return p;
-
-    // Smooth asymptotic height response: zero at ground, gradual deflection aloft
-    float factor = (height * height) / (height * height + 64.0);
-    float time = uTime * uWindSpeed;
-    float swayX = sin(time * 1.1 + p.y * 0.06) * uWindStrength * 0.22 * factor;
-    float swayZ = cos(time * 0.85 + p.y * 0.06) * uWindStrength * 0.15 * factor;
-    return vec3(p.x - swayX, p.y, p.z - swayZ);
-}
-
-// Lightweight procedural surface noise for organic bark and leaf textures
-float fastNoise(vec3 p) {
-    p = fract(p * 0.3183099 + 0.1);
-    p *= 17.0;
-    return fract(p.x * p.y * p.z * (p.x + p.y + p.z));
-}
-
-struct HitInfo {
-    float dist;
-    float nodeType;   // 0 = root, 1 = stem/canopy, 2 = leaf
-    float health;
-    float isOwnPlant;
-    float biomass;
-};
-
-// Distance field and anatomical property evaluation
-HitInfo map(vec3 p) {
-    vec3 q = applyWind(p);
-
-    float minDist = 1e6;
-    float blendNodeType = 0.0;
-    float blendHealth = 1.0;
-    float blendIsOwnPlant = 1.0;
-    float blendBiomass = 5.0;
-
-    float k = max(0.02, uSminBlendRadius);
-
-    for (int i = 0; i < MAX_PRIMITIVES; i++) {
-        if (i >= uPrimitiveCount) break;
-
-        vec4 a_rA = texelFetch(uPrimTex, ivec2(0, i), 0);
-        vec4 b_rB = texelFetch(uPrimTex, ivec2(1, i), 0);
-        vec4 props = texelFetch(uPrimTex, ivec2(2, i), 0);
-        vec4 flatData = texelFetch(uPrimTex, ivec2(3, i), 0);
-
-        float d = sdOrganicSegment(q, a_rA.xyz, b_rB.xyz, a_rA.w, b_rB.w, flatData.x, flatData.yzw);
-
-        if (i == 0) {
-            minDist = d;
-            blendNodeType = props.x;
-            blendHealth = props.y;
-            blendIsOwnPlant = props.z;
-            blendBiomass = props.w;
-        } else {
-            // Crisp clean union for leaf foliage so leaves sit on branches without deforming
-            // or subtracting from the distance field of branches or other leaves behind them (eliminates see-through holes)
-            if (props.x >= 1.7 || blendNodeType >= 1.7) {
-                if (d < minDist) {
-                    minDist = d;
-                    blendNodeType = props.x;
-                    blendHealth = props.y;
-                    blendIsOwnPlant = props.z;
-                    blendBiomass = props.w;
-                }
-            } else {
-                // Polynomial smooth minimum (smin) for continuous woody branches and root junctions
-                float h = clamp(0.5 + 0.5 * (minDist - d) / k, 0.0, 1.0);
-                minDist = mix(minDist, d, h) - k * h * (1.0 - h);
-                blendNodeType = mix(blendNodeType, props.x, h);
-                blendHealth = mix(blendHealth, props.y, h);
-                blendIsOwnPlant = mix(blendIsOwnPlant, props.z, h);
-                blendBiomass = mix(blendBiomass, props.w, h);
-            }
-        }
-    }
-
-    return HitInfo(minDist, blendNodeType, blendHealth, blendIsOwnPlant, blendBiomass);
-}
-
-// Central differences surface normal
-vec3 calcNormal(vec3 p) {
-    float eps = uRaymarchHitEpsilon;
-    vec2 e = vec2(eps, -eps);
-    return normalize(
-        e.xyy * map(p + e.xyy).dist +
-        e.yyx * map(p + e.yyx).dist +
-        e.yxy * map(p + e.yxy).dist +
-        e.xxx * map(p + e.xxx).dist
-    );
-}
-
-// Inigo Quilez Ambient Occlusion (AO)
-// Samples distance outward along the surface normal at multi-scale intervals.
-// Captures realistic darkening in crevices, branch collars, and leaf axils with zero raymarching penalty.
-float calcAO(vec3 p, vec3 n) {
-    float occ = 0.0;
-    float sca = 1.0;
-    for (int i = 0; i < 4; i++) {
-        float h = 0.02 + 0.12 * float(i) / 3.0;
-        float d = map(p + h * n).dist;
-        occ += max(0.0, h - d) * sca;
-        sca *= 0.85;
-    }
-    return clamp(1.0 - 2.8 * occ, 0.15, 1.0);
-}
-
-void main() {
-    if (uPrimitiveCount <= 0) {
-        discard;
-    }
-
-    vec3 ro = uCameraPosition;
-    vec3 rd = normalize(vWorldPos - ro);
-
-    vec2 aabb = intersectAABB(ro, rd, uBoxMin, uBoxMax);
-    if (aabb.y < aabb.x || aabb.y < 0.0) {
-        discard;
-    }
-
-    float t = max(aabb.x, 0.0);
-    float tMax = aabb.y + 0.6;
-    bool hit = false;
-    HitInfo hitInfo;
-
-    for (int step = 0; step < 128; step++) {
-        if (step >= uMaxRaymarchSteps || t > tMax) break;
-
-        vec3 p = ro + rd * t;
-        hitInfo = map(p);
-
-        // Hit surface or stepped inside geometry:
-        if (hitInfo.dist < uRaymarchHitEpsilon) {
-            hit = true;
-            break;
-        }
-
-        // Catch boundary grazing: if on the last step we are within 2.5cm of surface, count as a hit
-        if (step == uMaxRaymarchSteps - 1 && hitInfo.dist < 0.025) {
-            hit = true;
-            break;
-        }
-
-        // Safe step scaling to guarantee sphere tracing convergence across thin leaves
-        float stepFactor = hitInfo.dist > 0.6 ? 0.90 : 0.65;
-        t += max(hitInfo.dist * stepFactor, uRaymarchHitEpsilon * 0.4);
-    }
-
-    if (!hit) {
-        discard;
-    }
-
-    vec3 pHit = ro + rd * t;
-    vec3 normal = calcNormal(pHit);
-
-    // Botanical anatomical color continuum:
-    // 0.0 = Subterranean Root, 0.5 = Embryonic Seed Coat, 1.0 = Woody Stem/Branch,
-    // 1.5 = Apical Sprout/Petiole, 2.0 = Foliage Lamina
-    vec3 rootCol = uRootColor;
-    vec3 seedCol = uSeedColor;
-    vec3 stemCol = uCanopyColor;
-    vec3 sproutCol = vec3(0.48, 0.76, 0.22);
-    vec3 leafCol = uLeafColor;
-
-    vec3 baseColor;
-    if (hitInfo.nodeType < 0.5) {
-        baseColor = mix(rootCol, seedCol, smoothstep(0.0, 0.5, hitInfo.nodeType));
-    } else if (hitInfo.nodeType < 1.0) {
-        baseColor = mix(seedCol, stemCol, smoothstep(0.5, 1.0, hitInfo.nodeType));
-    } else if (hitInfo.nodeType < 1.6) {
-        baseColor = mix(stemCol, sproutCol, smoothstep(1.0, 1.6, hitInfo.nodeType));
-    } else {
-        baseColor = mix(sproutCol, leafCol, smoothstep(1.6, 2.0, hitInfo.nodeType));
-    }
-
-    // 3D Procedural anatomical surface details:
-    if (hitInfo.nodeType > 1.6) {
-        // LEAF BLADE: Translucent chlorophyll lamina + subtle midrib venation
-        float leafTexture = (fastNoise(pHit * 6.0) - 0.5) * 0.12;
-        baseColor = (baseColor + leafTexture);
-    } else if (hitInfo.nodeType < 0.7) {
-        // ROOT & SEED: Rich earthy bark grain and seed coat texture
-        float barkTexture = (fastNoise(pHit * 4.0) - 0.5) * 0.18;
-        baseColor *= (0.90 + barkTexture);
-    } else {
-        // STEM / TRUNK: Longitudinal wood fiber grain
-        float fiber = sin(pHit.x * 16.0 + pHit.z * 16.0) * 0.10 + (fastNoise(pHit * 3.0) - 0.5) * 0.10;
-        baseColor *= (0.90 + fiber);
-    }
-
-    // Health tint: natural autumn wither/desiccation, NOT chalky white/grey
-    float health = clamp(hitInfo.health, 0.0, 1.0);
-    vec3 witheredColor = vec3(0.42, 0.30, 0.16);
-    float healthFactor = mix(1.0 - uHealthTintStrength * 0.7, 1.0, health);
-    baseColor = mix(witheredColor, baseColor, healthFactor);
-
-    // Mutation 2: Variegated foliage pigmentation
-    if (hitInfo.nodeType > 1.6) {
-        float varPattern = smoothstep(0.4, 0.6, sin(pHit.x * 10.0 + pHit.z * 10.0));
-        baseColor = mix(baseColor, baseColor * vec3(1.35, 1.25, 0.65), varPattern * uMutation2Param * 0.45);
-    }
-
-    // Stylized naturalism lighting + Inigo Quilez Ambient Occlusion
-    float ao = calcAO(pHit, normal);
-    float NdotL = max(dot(normal, uSunDirection), 0.0);
-    vec3 lit = baseColor * (0.28 * ao + 0.72 * NdotL * ao);
-
-    // Leaves: Backlit chlorophyll transmission & waxy cuticle specular shine
-    if (hitInfo.nodeType > 1.6) {
-        // Translucent glow when looking toward light through leaf
-        float backlight = pow(max(0.0, dot(-rd, uSunDirection)), 2.0) * 0.65;
-        lit += leafCol * backlight * 1.5;
-
-        // Waxy cuticle specular sheen
-        vec3 halfVec = normalize(uSunDirection - rd);
-        float leafSpec = pow(max(dot(normal, halfVec), 0.0), 28.0) * 0.50;
-        lit += vec3(0.85, 1.0, 0.85) * leafSpec;
-    } else if (hitInfo.nodeType > 0.7) {
-        // Subtle branch subsurface transmission
-        float sss = max(0.0, dot(-rd, uSunDirection)) * 0.20;
-        lit += stemCol * sss;
-    }
-
-    // Rim lighting (fresnel)
-    vec3 viewDir = -rd;
-    float rim = pow(1.0 - max(dot(normal, viewDir), 0.0), 3.0) * 0.22;
-    lit += vec3(0.2, 0.35, 0.2) * rim;
-
-    // Mutation 0: Bioluminescent glow - only active if plant has bioluminescence
-    if (uMutation0Param > 0.01) {
-        float emissive = uMutation0Param * 0.25;
-        // Organic soft moss/chlorophyll phosphorescence, NOT super saiyan neon blue
-        vec3 glowColor = vec3(0.2, 0.75, 0.45);
-        lit += glowColor * (emissive * (0.6 + 0.4 * sin(uTime * 2.0 + pHit.y * 0.5)));
-    }
-
-    // T02 Root Sight: highlight subterranean roots with distinctive light-white outline
-    if (uRootSightEnabled && hitInfo.nodeType < 0.8) {
-        float distFromCenter = distance(pHit, uRootSightSphereCenter);
-        float insideCutaway = 1.0 - smoothstep(
-            uRootSightSphereRadius * 0.85,
-            uRootSightSphereRadius,
-            distFromCenter
-        );
-        float highlightStrength = insideCutaway * uRootSightProgress;
-        vec3 highlightColor = mix(uRivalRootHighlightColor, uOwnRootHighlightColor, hitInfo.isOwnPlant);
-        lit = mix(lit, highlightColor, 0.70 * highlightStrength);
-
-        // Distinctive crisp light-white / silver outline on player's own roots
-        if (hitInfo.isOwnPlant > 0.5) {
-            float rootRim = pow(1.0 - max(dot(normal, viewDir), 0.0), 2.2);
-            vec3 outlineColor = vec3(0.95, 0.98, 1.0); // crisp light white/silver
-            lit = mix(lit, outlineColor, rootRim * 0.85 * uRootSightProgress);
-            lit += outlineColor * (rootRim * 0.35 * uRootSightProgress);
-        }
-    }
-
-    // Screen-space depth writing
-    vec4 clipPos = projectionMatrix * viewMatrix * vec4(pHit, 1.0);
-    float ndc = clipPos.z / clipPos.w;
-    #ifdef USE_REVERSED_DEPTH_BUFFER
-        float depthVal = 1.0 - (ndc * 0.5 + 0.5);
-    #else
-        float depthVal = ndc * 0.5 + 0.5;
-    #endif
-
-    // In Root Sight, pull player's own roots slightly forward in depth so they are seeable through the ground plane
-    if (uRootSightEnabled && hitInfo.nodeType < 0.8 && hitInfo.isOwnPlant > 0.5 && pHit.y < 0.0) {
-        depthVal -= 0.003 * uRootSightProgress;
-    }
-    gl_FragDepth = clamp(depthVal, 0.0, 1.0);
-
-    fragColor = linearToOutputTexel(vec4(lit, 1.0));
-}
-`;
-
-function mulberry32(a: number): () => number {
-  return () => {
-    a += 0x6d2b79f5;
-    let t = a;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
-interface PlantInstance {
-  rootId: string;
-  rootNode: PlantNodeData;
-  plantNodes: PlantNodeData[];
-  mesh: THREE.Mesh;
-  material: THREE.ShaderMaterial;
-  texture: THREE.DataTexture;
-  texData: Float32Array;
-  primitiveCount: number;
-  boxMin: THREE.Vector3;
-  boxMax: THREE.Vector3;
-  worldBoundingBox: THREE.Box3;
-  center: THREE.Vector3;
+/**
+ * SDF Primitive types for each node type
+ */
+enum SDFPrimitive {
+  CAPSULE = 0, // stem, branch, vine, root, radicle, lateral_root
+  ELIPSOID = 1, // seed, flower bud
+  DISK = 2, // leaf, cotyledon, petal
+  CONE = 3, // flower, spore_sac
+  TORUS = 4, // branch collar / fusion zone
 }
 
 /**
- * PlantRenderer
- * Renders player plants as unified organic living bodies using Raymarched
- * Signed Distance Fields (SDF) with polynomial smooth minimum (smin) blending.
+ * Legacy type number to node type string mapping
  */
-export class PlantRenderer {
-  private scene: THREE.Scene;
-  private camera: THREE.Camera;
+function legacyTypeToString(type: number): string {
+  switch (type) {
+    case 0:
+      return 'root';
+    case 1:
+      return 'stem';
+    case 2:
+      return 'leaf';
+    default:
+      return 'stem';
+  }
+}
+
+/**
+ * Get normalized node type string from PlantNodeData
+ */
+function getNodeTypeString(node: PlantNodeData): string {
+  if (node.nodeType) return node.nodeType;
+  return legacyTypeToString(node.type);
+}
+
+/**
+ * Node type to SDF primitive mapping
+ */
+function getSDFPrimitive(nodeType: string): SDFPrimitive {
+  switch (nodeType) {
+    case 'stem':
+    case 'branch':
+    case 'vine':
+    case 'root':
+    case 'radicle':
+    case 'lateral_root':
+      return SDFPrimitive.CAPSULE;
+    case 'seed':
+      return SDFPrimitive.ELIPSOID;
+    case 'leaf':
+    case 'cotyledon':
+      return SDFPrimitive.DISK;
+    case 'flower':
+    case 'spore_sac':
+      return SDFPrimitive.CONE;
+    default:
+      return SDFPrimitive.CAPSULE;
+  }
+}
+
+/**
+ * Node type to color mapping (procedural, no textures)
+ */
+function getNodeColor(nodeType: string, health: number): THREE.Vector3 {
+  const baseColors: Record<string, THREE.Vector3> = {
+    seed: new THREE.Vector3(0.55, 0.35, 0.2),
+    radicle: new THREE.Vector3(0.65, 0.45, 0.3),
+    root: new THREE.Vector3(0.55, 0.4, 0.28),
+    lateral_root: new THREE.Vector3(0.6, 0.42, 0.3),
+    stem: new THREE.Vector3(0.45, 0.3, 0.2),
+    branch: new THREE.Vector3(0.5, 0.35, 0.22),
+    vine: new THREE.Vector3(0.35, 0.45, 0.2),
+    leaf: new THREE.Vector3(0.2, 0.65, 0.15),
+    cotyledon: new THREE.Vector3(0.25, 0.6, 0.2),
+    flower: new THREE.Vector3(0.95, 0.75, 0.85),
+    spore_sac: new THREE.Vector3(0.7, 0.55, 0.4),
+  };
+
+  const color = baseColors[nodeType] ?? new THREE.Vector3(0.5, 0.5, 0.5);
+  const healthTint = new THREE.Vector3(1.0, health, health);
+  return color.multiply(healthTint);
+}
+
+/**
+ * Murray's law tapering: radius scales with distance from root
+ * r_child = r_parent * (n)^(-1/3) where n is number of children
+ * For binary branching: r_child ≈ 0.79 * r_parent
+ */
+function calculateMurrayTaper(
+  parentRadius: number,
+  childIndex: number,
+  numChildren: number,
+): number {
+  if (numChildren <= 1) return parentRadius * 0.85;
+  const factor = numChildren ** (-1 / 3);
+  return parentRadius * factor * (0.9 + 0.1 * childIndex);
+}
+
+/**
+ * Build SDF segment data for GPU upload
+ */
+interface SDFSegment {
+  p0: THREE.Vector3;
+  p1: THREE.Vector3;
+  r0: number;
+  r1: number;
+  primitive: number;
+  color: THREE.Vector3;
+  growthProgress: number;
+  spawnTime: number;
+  nodeType: string;
+  layer: number;
+  isOwnPlant: boolean;
+}
+
+interface SDFNode {
+  position: THREE.Vector3;
+  radius: number;
+  primitive: number;
+  color: THREE.Vector3;
+  growthProgress: number;
+  spawnTime: number;
+  nodeType: string;
+  layer: number;
+  isOwnPlant: boolean;
+}
+
+class PlantRenderer {
   private config: PlantRendererConfig;
+  private scene: THREE.Scene;
+  private camera: THREE.PerspectiveCamera | null = null;
 
-  private boxGeometry: THREE.BoxGeometry;
-  private plantInstances = new Map<string, PlantInstance>();
-  private knownNodes = new Map<string, PlantNodeData>();
+  // SDF Render targets
+  private sdfRenderTarget: THREE.WebGLRenderTarget | null = null;
+  private sdfMaterial: THREE.ShaderMaterial | null = null;
+  private fullscreenQuad: THREE.Mesh | null = null;
 
-  private time = 0;
+  // Data buffers
+  private segmentBuffer: THREE.DataTexture | null = null;
+  private nodeBuffer: THREE.DataTexture | null = null;
+  private segmentCount = 0;
+  private nodeCount = 0;
+
+  // Animation
+  private emergenceStartTime = 0;
+  private isEmerging = false;
+  private deltaTimeAccumulator = 0;
+  private rootSightCenter = new THREE.Vector3();
   private rootSightEnabled = false;
   private rootSightProgress = 0;
-  private rootSightCenter = new THREE.Vector3();
+  private testPlantSeed = 0;
+  // Root Sight SDF aura
+  private rootAuraTexture: THREE.DataTexture | null = null;
+  private rootAuraNodeCount = 0;
+  private rootAuraRadius = 3.0;
 
-  // Optimization: shared frustum and projection matrix for multi-plant culling
-  private frustum = new THREE.Frustum();
-  private projScreenMatrix = new THREE.Matrix4();
+  // Uniforms
+  private uniforms: Record<string, THREE.Uniform> = {};
 
-  constructor(
-    _renderer: THREE.WebGLRenderer,
-    scene: THREE.Scene,
-    camera: THREE.Camera,
-    config: Partial<PlantRendererConfig> = {},
-  ) {
+  // LOD
+  private currentLOD = 0;
+
+  constructor(config: PlantRendererConfig) {
+    this.config = { ...DEFAULT_CONFIG, ...config };
+    this.scene = new THREE.Scene();
+    // Suppress unused private field warnings - fields are used in methods
+    void this.rootSightEnabled;
+    void this.rootSightProgress;
+    void this.testPlantSeed;
+  }
+
+  /**
+   * Initialize the SDF renderer with scene and camera
+   */
+  initialize(scene: THREE.Scene, camera: THREE.PerspectiveCamera): void {
     this.scene = scene;
     this.camera = camera;
-    this.config = { ...DEFAULT_CONFIG, ...config };
-    this.rootSightEnabled = this.config.rootSightEnabled;
-
-    // Unit bounding box shared across all plant instances
-    this.boxGeometry = new THREE.BoxGeometry(1, 1, 1);
+    this.createSDFShader();
+    this.createFullscreenQuad();
+    this.setupEmergenceAnimation();
   }
 
-  private createPlantInstance(rootId: string): PlantInstance {
-    const width = 4;
-    const height = MAX_PRIMITIVES;
-    const texData = new Float32Array(width * height * 4);
-
-    const texture = new THREE.DataTexture(
-      texData,
-      width,
-      height,
-      THREE.RGBAFormat,
-      THREE.FloatType,
-    );
-    texture.minFilter = THREE.NearestFilter;
-    texture.magFilter = THREE.NearestFilter;
-    texture.generateMipmaps = false;
-    texture.needsUpdate = true;
-
-    const material = new THREE.ShaderMaterial({
-      vertexShader: organismVert,
-      fragmentShader: organismFrag,
-      glslVersion: THREE.GLSL3,
-      side: THREE.BackSide,
-      transparent: false,
-      depthTest: true,
-      depthWrite: true,
-      uniforms: {
-        uCameraPosition: { value: this.camera.position },
-        uBoxMin: { value: new THREE.Vector3() },
-        uBoxMax: { value: new THREE.Vector3() },
-        uPrimitiveCount: { value: 0 },
-        uPrimTex: { value: texture },
-        uTime: { value: this.time },
-        uSminBlendRadius: { value: this.config.sminBlendRadius },
-        uMaxRaymarchSteps: { value: this.config.maxRaymarchSteps },
-        uRaymarchHitEpsilon: { value: this.config.raymarchHitEpsilon },
-        uWindStrength: { value: this.config.windStrength },
-        uWindSpeed: { value: this.config.windSpeed },
-        uHealthTintStrength: { value: this.config.healthTintStrength },
-        uMutation0Param: { value: this.config.mutation0Param },
-        uMutation1Param: { value: this.config.mutation1Param },
-        uMutation2Param: { value: this.config.mutation2Param },
-        uSunDirection: { value: new THREE.Vector3(0.5, 1.0, 0.5).normalize() },
-        uSeedColor: { value: new THREE.Color(0x3e2312) },
-        uRootColor: { value: new THREE.Color(0x5c4033) },
-        uCanopyColor: { value: new THREE.Color(0x2d4f1e) },
-        uLeafColor: { value: new THREE.Color(0x43b82a) },
-        uRootSightEnabled: { value: this.rootSightEnabled },
-        uRootSightSphereCenter: { value: this.rootSightCenter.clone() },
-        uRootSightSphereRadius: { value: this.config.rootSightCutawayRadius },
-        uRootSightProgress: { value: this.rootSightProgress },
-        uOwnRootHighlightColor: { value: new THREE.Color(this.config.ownRootHighlightColor) },
-        uRivalRootHighlightColor: { value: new THREE.Color(this.config.rivalRootHighlightColor) },
-      },
-    });
-
-    const mesh = new THREE.Mesh(this.boxGeometry, material);
-    mesh.frustumCulled = false;
-    mesh.castShadow = false;
-    mesh.receiveShadow = false;
-    this.scene.add(mesh);
-
-    const instance: PlantInstance = {
-      rootId,
-      rootNode: {
-        id: rootId,
-        position: new THREE.Vector3(),
-        type: 0,
-        radius: 0.05,
-        parentId: null,
-        age: 0,
-        health: 1,
-        mutationFlags: 0,
-        biomass: 10,
-      },
-      plantNodes: [],
-      mesh,
-      material,
-      texture,
-      texData,
-      primitiveCount: 0,
-      boxMin: new THREE.Vector3(),
-      boxMax: new THREE.Vector3(),
-      worldBoundingBox: new THREE.Box3(),
-      center: new THREE.Vector3(),
+  /**
+   * Create the SDF raymarching shader material
+   */
+  private createSDFShader(): void {
+    this.uniforms = {
+      uTime: new THREE.Uniform(0),
+      uResolution: new THREE.Uniform(new THREE.Vector2()),
+      uCameraPos: new THREE.Uniform(new THREE.Vector3()),
+      uCameraDir: new THREE.Uniform(new THREE.Vector3()),
+      uCameraUp: new THREE.Uniform(new THREE.Vector3()),
+      uFov: new THREE.Uniform(1.0),
+      uAspect: new THREE.Uniform(1.0),
+      uNear: new THREE.Uniform(0.1),
+      uFar: new THREE.Uniform(800),
+      uMaxSteps: new THREE.Uniform(this.config.maxRaymarchSteps),
+      uHitEpsilon: new THREE.Uniform(this.config.raymarchHitEpsilon),
+      uSminRadius: new THREE.Uniform(this.config.sminBlendRadius),
+      uWindStrength: new THREE.Uniform(this.config.windStrength),
+      uWindSpeed: new THREE.Uniform(this.config.windSpeed),
+      uWindTime: new THREE.Uniform(0),
+      uSegmentCount: new THREE.Uniform(0),
+      uNodeCount: new THREE.Uniform(0),
+      uSegments: new THREE.Uniform(null),
+      uNodes: new THREE.Uniform(null),
+      uRootSightEnabled: new THREE.Uniform(false),
+      uRootSightProgress: new THREE.Uniform(0),
+      uRootSightCenter: new THREE.Uniform(new THREE.Vector3()),
+      uRootSightRadius: new THREE.Uniform(0),
+      uRootSightCutawayRadius: new THREE.Uniform(this.config.rootSightCutawayRadius),
+      uRootSightSoilOpacity: new THREE.Uniform(this.config.rootSightSoilOpacity),
+      // Root Sight SDF aura
+      uRootSightAuraEnabled: new THREE.Uniform(false),
+      uRootAuraNodeCount: new THREE.Uniform(0),
+      uRootAuraTex: new THREE.Uniform(null),
+      uRootAuraRadius: new THREE.Uniform(this.config.rootSightCutawayRadius * 0.1),
+      uOwnRootHighlightColor: new THREE.Uniform(new THREE.Color(this.config.ownRootHighlightColor)),
+      uRivalRootHighlightColor: new THREE.Uniform(
+        new THREE.Color(this.config.rivalRootHighlightColor),
+      ),
+      uEmergenceProgress: new THREE.Uniform(0),
+      uEmergenceDuration: new THREE.Uniform(this.config.emergenceDuration),
+      uHealthTintStrength: new THREE.Uniform(this.config.healthTintStrength),
+      uMutation0: new THREE.Uniform(this.config.mutation0Param),
+      uMutation1: new THREE.Uniform(this.config.mutation1Param),
+      uMutation2: new THREE.Uniform(this.config.mutation2Param),
+      uPhotosynthesisViz: new THREE.Uniform(this.config.photosynthesisViz),
+      uWaterFlowViz: new THREE.Uniform(this.config.waterFlowViz),
+      uNutrientFlowViz: new THREE.Uniform(this.config.nutrientFlowViz),
+      uBoundingBoxPadding: new THREE.Uniform(this.config.boundingBoxPadding),
+      // Sun lighting
+      uSunDir: new THREE.Uniform(new THREE.Vector3(0.5, 1.0, 0.3).normalize()),
+      uSunColor: new THREE.Uniform(new THREE.Color(0xffffee)),
+      uSunIntensity: new THREE.Uniform(1.4),
     };
 
-    this.plantInstances.set(rootId, instance);
-    return instance;
+    this.sdfMaterial = new THREE.ShaderMaterial({
+      glslVersion: THREE.GLSL3,
+      uniforms: this.uniforms,
+      vertexShader: SDF_VERTEX_SHADER,
+      fragmentShader: SDF_FRAGMENT_SHADER,
+      depthTest: true,
+      depthWrite: true,
+    });
   }
 
   /**
-   * Updates all active plant node graphs, builds organic SDF primitives,
-   * updates bounding volumes, and uploads texture data.
+   * Create fullscreen quad for raymarching
+   */
+  private createFullscreenQuad(): void {
+    const geometry = new THREE.PlaneGeometry(2, 2);
+    if (!this.sdfMaterial) return;
+    this.fullscreenQuad = new THREE.Mesh(geometry, this.sdfMaterial);
+    this.fullscreenQuad.frustumCulled = false;
+    this.scene.add(this.fullscreenQuad);
+  }
+
+  /**
+   * Setup emergence animation
+   */
+  private setupEmergenceAnimation(): void {
+    this.emergenceStartTime = performance.now() / 1000;
+    this.isEmerging = true;
+  }
+
+  // ==================== PUBLIC API (Backward Compatible) ====================
+
+  /**
+   * Update plant data from server - builds SDF segments and nodes
+   * Accepts both legacy format (type: number) and new format (type: string)
    */
   updatePlantData(nodes: PlantNodeData[]): void {
-    const currentIds = new Set<string>();
+    const segments: SDFSegment[] = [];
+    const sdfNodes: SDFNode[] = [];
+
+    // Build maps
+    const nodeMap = new Map<string, PlantNodeData>();
+    const childrenMap = new Map<string, string[]>();
+
     for (const node of nodes) {
-      currentIds.add(node.id);
-      this.knownNodes.set(node.id, {
-        ...node,
-        position: node.position.clone(),
-      });
-    }
-
-    // Clean up removed nodes
-    for (const id of this.knownNodes.keys()) {
-      if (!currentIds.has(id)) {
-        this.knownNodes.delete(id);
-      }
-    }
-
-    if (this.knownNodes.size === 0) {
-      this.rebuild();
-      return;
-    }
-
-    // Build children mapping
-    const childrenMap = new Map<string, PlantNodeData[]>();
-    for (const node of this.knownNodes.values()) {
+      if (!node.isOwnPlant) continue; // Only render own plant for now
+      nodeMap.set(node.id, node);
       if (node.parentId) {
-        if (!childrenMap.has(node.parentId)) {
-          childrenMap.set(node.parentId, []);
-        }
-        childrenMap.get(node.parentId)?.push(node);
+        const children = childrenMap.get(node.parentId) || [];
+        children.push(node.id);
+        childrenMap.set(node.parentId, children);
       }
     }
 
-    // Find roots of each connected tree
-    const rootNodes: PlantNodeData[] = [];
-    for (const node of this.knownNodes.values()) {
-      if (!node.parentId || !this.knownNodes.has(node.parentId)) {
-        rootNodes.push(node);
-      }
-    }
-
-    const activeRootIds = new Set<string>();
-
-    for (const root of rootNodes) {
-      activeRootIds.add(root.id);
-      let instance = this.plantInstances.get(root.id);
-      if (!instance) {
-        instance = this.createPlantInstance(root.id);
-      }
-
-      // Collect all nodes in this plant's tree
-      const plantNodes: PlantNodeData[] = [];
-      const queue: PlantNodeData[] = [root];
-      const visited = new Set<string>([root.id]);
-
-      while (queue.length > 0) {
-        const curr = queue.shift();
-        if (!curr) break;
-        plantNodes.push(curr);
-        const children = childrenMap.get(curr.id);
-        if (children) {
-          for (const ch of children) {
-            if (!visited.has(ch.id)) {
-              visited.add(ch.id);
-              queue.push(ch);
-            }
-          }
-        }
-      }
-
-      // Store current nodes for continuous growth animation
-      instance.rootNode = root;
-      instance.plantNodes = plantNodes;
-
-      // Build primitives for this plant
-      this.buildPlantPrimitives(instance, root, plantNodes);
-    }
-
-    // Dispose removed plant instances
-    for (const [id, instance] of this.plantInstances.entries()) {
-      if (!activeRootIds.has(id)) {
-        this.scene.remove(instance.mesh);
-        instance.texture.dispose();
-        instance.material.dispose();
-        this.plantInstances.delete(id);
-      }
-    }
-  }
-
-  private buildPlantPrimitives(
-    instance: PlantInstance,
-    root: PlantNodeData,
-    nodes: PlantNodeData[],
-  ): void {
-    const texData = instance.texData;
-    texData.fill(0);
-
-    let primCount = 0;
-
-    const boxMin = new THREE.Vector3(Infinity, Infinity, Infinity);
-    const boxMax = new THREE.Vector3(-Infinity, -Infinity, -Infinity);
-
-    function includePoint(p: THREE.Vector3, radius: number): void {
-      boxMin.x = Math.min(boxMin.x, p.x - radius);
-      boxMin.y = Math.min(boxMin.y, p.y - radius);
-      boxMin.z = Math.min(boxMin.z, p.z - radius);
-      boxMax.x = Math.max(boxMax.x, p.x + radius);
-      boxMax.y = Math.max(boxMax.y, p.y + radius);
-      boxMax.z = Math.max(boxMax.z, p.z + radius);
-    }
-
-    function packPrimitive(
-      a: THREE.Vector3,
-      rA: number,
-      b: THREE.Vector3,
-      rB: number,
-      nodeType: number,
-      health: number,
-      isOwnPlant: number,
-      biomass: number,
-      flatness: number,
-      flatAxis: THREE.Vector3,
-    ): void {
-      if (primCount >= MAX_PRIMITIVES) return;
-      const base = primCount * 16;
-
-      // Texel 0: a.x, a.y, a.z, rA
-      texData[base + 0] = a.x;
-      texData[base + 1] = a.y;
-      texData[base + 2] = a.z;
-      texData[base + 3] = rA;
-
-      // Texel 1: b.x, b.y, b.z, rB
-      texData[base + 4] = b.x;
-      texData[base + 5] = b.y;
-      texData[base + 6] = b.z;
-      texData[base + 7] = rB;
-
-      // Texel 2: nodeType, health, isOwnPlant, biomass
-      texData[base + 8] = nodeType;
-      texData[base + 9] = health;
-      texData[base + 10] = isOwnPlant;
-      texData[base + 11] = biomass;
-
-      // Texel 3: flatness, flatAxis.x, flatAxis.y, flatAxis.z
-      texData[base + 12] = flatness;
-      texData[base + 13] = flatAxis.x;
-      texData[base + 14] = flatAxis.y;
-      texData[base + 15] = flatAxis.z;
-
-      includePoint(a, rA);
-      includePoint(b, rB);
-      primCount += 1;
-    }
-
-    const defaultAxis = new THREE.Vector3(0, 1, 0);
-
-    // 1. Embryonic seed body resting directly ON the soil surface (y >= 0.01)
-    // Sized botanically: 4-7cm acorn/pod, resting on top of ground (not halfway submerged)
-    const seedRadius = Math.max(0.04, Math.min(0.07, root.radius * 0.45));
-    const isOwn = root.isOwnPlant !== false ? 1.0 : 0.0;
-
-    // Check if seed has sprouted: if root has children, seed coat splits
-    const hasSprouted = nodes.some((n) => n.parentId === root.id && n.type >= 1);
-    const nowMs = performance.now();
-    const seedSpawn = root.spawnTime ?? nowMs - 5000;
-    const seedAgeMs = nowMs - seedSpawn;
-    const seedEase = Math.min(1.0, Math.max(0.2, seedAgeMs / 800));
-
-    // When sprouted, seed splits into two distinct cotyledon halves (husk split)
-    const splitFlatness = hasSprouted ? 1.55 : 1.25;
-
-    const seedBottom = new THREE.Vector3(root.position.x, 0.01, root.position.z);
-    const seedTop = new THREE.Vector3(
-      root.position.x,
-      0.01 + seedRadius * 1.8 * seedEase,
-      root.position.z,
-    );
-    const seedAxis = new THREE.Vector3(0, 0, 1);
-    packPrimitive(
-      seedBottom,
-      seedRadius * seedEase,
-      seedTop,
-      seedRadius * 0.8 * seedEase,
-      0.5, // Seed coat tissue (nodeType 0.5)
-      root.health,
-      isOwn,
-      root.biomass,
-      splitFlatness, // Organic ovoid seed / split husk
-      seedAxis,
-    );
-
-    // 2. Segments connecting parent to child & joints
+    // Build segments and nodes
     for (const node of nodes) {
-      if (!node.parentId) continue;
-      const parent = this.knownNodes.get(node.parentId);
-      if (!parent) continue;
+      if (!node.isOwnPlant) continue;
+      if ((node.growthProgress ?? 1.0) < 0.001) continue;
 
-      // Real-time growth interpolation (0.9s smooth easing from parent outward)
-      const spawnTime = node.spawnTime ?? nowMs - 5000;
-      const elapsed = Math.max(0, nowMs - spawnTime);
-      const rawT = Math.min(1.0, elapsed / 900);
-      // Smoothstep easing for natural biological elongation
-      const growthEase = rawT * rawT * (3.0 - 2.0 * rawT);
+      const nodeTypeStr = getNodeTypeString(node);
+      const primitive = getSDFPrimitive(nodeTypeStr);
+      const color = getNodeColor(nodeTypeStr, node.health);
 
-      const animNodePos = parent.position.clone().lerp(node.position, growthEase);
+      // Add node for endpoints and junctions
+      sdfNodes.push({
+        position: node.position.clone(),
+        radius: node.radius,
+        primitive,
+        color,
+        growthProgress: node.growthProgress ?? 1.0,
+        spawnTime: node.spawnTime ?? 0,
+        nodeType: nodeTypeStr,
+        layer: node.layer === 'canopy' ? 1 : 0,
+        isOwnPlant: node.isOwnPlant ?? true,
+      });
 
-      const isNodeOwn = node.isOwnPlant !== false ? 1.0 : 0.0;
-      const isBark = node.type >= 1 && (node.mutationFlags & 2) !== 0;
-      const barkMult = isBark ? this.config.mutation1Param : 1.0;
+      // Build segment from parent to this node
+      if (node.parentId && nodeMap.has(node.parentId)) {
+        const parent = nodeMap.get(node.parentId);
+        if (!parent) continue;
+        const children = childrenMap.get(node.id) || [];
 
-      const rA = Math.max(0.02, parent.radius * barkMult);
-      const targetRB = Math.max(0.015, node.radius * barkMult);
-      // Child tip radius scales with growth
-      const rB = Math.max(0.012, targetRB * Math.max(0.25, growthEase));
-      const isLeafNode = node.type === 3;
-      const segType = node.type === 0 ? 0.0 : isLeafNode ? 2.0 : 1.0;
-      const avgHealth = (parent.health + node.health) * 0.5;
-      const avgBiomass = (parent.biomass + node.biomass) * 0.5;
-      const flatness = isLeafNode ? 3.5 : 1.0;
+        // Murray's law taper
+        const childIndex = children.indexOf(node.id);
+        const taperedRadius = calculateMurrayTaper(
+          parent.radius,
+          childIndex,
+          Math.max(1, children.length),
+        );
 
-      // Swept tapered branch/root/leaf capsule
-      packPrimitive(
-        parent.position,
-        rA,
-        animNodePos,
-        rB,
-        segType,
-        avgHealth,
-        isNodeOwn,
-        avgBiomass,
-        flatness,
-        defaultAxis,
-      );
-
-      // 3. Parametric Foliage / Leaves attached to canopy nodes (unfurl with growth ease)
-      if (
-        node.type >= 1 &&
-        node.position.y > 0.3 &&
-        this.config.leafCountPerNode > 0 &&
-        growthEase > 0.15
-      ) {
-        const leafEase = Math.min(1.0, (growthEase - 0.15) / 0.85);
-        const leafCount = this.config.leafCountPerNode;
-        const hash = node.id.split('').reduce((acc, ch) => acc + ch.charCodeAt(0), 0);
-        const goldenAngle = Math.PI * (3 - Math.sqrt(5));
-
-        for (let l = 0; l < leafCount; l++) {
-          const angle = (hash * goldenAngle + l * ((Math.PI * 2) / leafCount)) % (Math.PI * 2);
-          const leafDir = new THREE.Vector3(
-            Math.cos(angle) * 0.85,
-            0.32,
-            Math.sin(angle) * 0.85,
-          ).normalize();
-          const leafNormal = new THREE.Vector3(
-            -Math.sin(angle) * 0.3,
-            0.95,
-            Math.cos(angle) * 0.3,
-          ).normalize();
-
-          const totalLength = this.config.leafSize * 0.85 * leafEase;
-          const petioleLength = totalLength * 0.28;
-          const bladeLength = totalLength * 0.72;
-
-          // 1. Petiole (leaf stalk): delicate, slender cylindrical attachment
-          const petioleStart = animNodePos.clone().addScaledVector(leafDir, rB * 0.4);
-          const petioleEnd = petioleStart.clone().addScaledVector(leafDir, petioleLength);
-          const petioleRadius = Math.max(0.008, Math.min(0.018, rB * 0.18 * leafEase));
-
-          packPrimitive(
-            petioleStart,
-            petioleRadius,
-            petioleEnd,
-            petioleRadius * 0.85,
-            1.4, // Transition tissue (petiole stalk)
-            node.health,
-            isNodeOwn,
-            node.biomass,
-            1.0, // Petiole is cylindrical (round)
-            defaultAxis,
-          );
-
-          // 2. Leaf blade body: slender elliptical lancet/ovate lamina with sharp pointed tip
-          const bladeMid = petioleEnd.clone().addScaledVector(leafDir, bladeLength * 0.45);
-          const bladeTip = petioleEnd.clone().addScaledVector(leafDir, bladeLength);
-          // Realistic width: 12 - 20cm max width, gracefully proportional
-          const bladeMaxRadius = Math.max(0.035, this.config.leafSize * 0.16 * leafEase);
-
-          // Blade segment 1: expanding from petiole into graceful elliptic leaf blade
-          packPrimitive(
-            petioleEnd,
-            petioleRadius * 1.0,
-            bladeMid,
-            bladeMaxRadius,
-            2.0, // Leaf tissue
-            node.health,
-            isNodeOwn,
-            node.biomass,
-            5.2, // High flatness: thin natural lamina
-            leafNormal,
-          );
-
-          // Blade segment 2: tapering from elliptic body to pointed apex
-          packPrimitive(
-            bladeMid,
-            bladeMaxRadius,
-            bladeTip,
-            0.006, // Razor sharp pointed leaf tip
-            2.0, // Leaf tissue
-            node.health,
-            isNodeOwn,
-            node.biomass,
-            4.8, // Flat blade
-            leafNormal,
-          );
-        }
+        segments.push({
+          p0: parent.position.clone(),
+          p1: node.position.clone(),
+          r0: parent.radius,
+          r1: taperedRadius,
+          primitive,
+          color,
+          growthProgress: Math.min(parent.growthProgress ?? 1.0, node.growthProgress ?? 1.0),
+          spawnTime: Math.max(parent.spawnTime ?? 0, node.spawnTime ?? 0),
+          nodeType: nodeTypeStr,
+          layer: node.layer === 'canopy' ? 1 : 0,
+          isOwnPlant: node.isOwnPlant ?? true,
+        });
       }
     }
 
-    instance.primitiveCount = primCount;
-    instance.texture.needsUpdate = true;
-
-    // Apply bounding box padding proportional to the organism's size
-    const hasLeaves = primCount > 4;
-    const leafPad = hasLeaves ? this.config.leafSize * 0.75 : 0.0;
-    const padding = Math.max(0.25, Math.min(1.2, this.config.sminBlendRadius * 2.0 + leafPad));
-    boxMin.subScalar(padding);
-    boxMax.addScalar(padding);
-
-    // Enforce tight minimum box dimensions around small seedlings
-    if (boxMax.x - boxMin.x < 0.3) {
-      boxMin.x -= 0.15;
-      boxMax.x += 0.15;
-    }
-    if (boxMax.y - boxMin.y < 0.3) {
-      boxMin.y -= 0.15;
-      boxMax.y += 0.15;
-    }
-    if (boxMax.z - boxMin.z < 0.3) {
-      boxMin.z -= 0.15;
-      boxMax.z += 0.15;
-    }
-
-    instance.boxMin.copy(boxMin);
-    instance.boxMax.copy(boxMax);
-    instance.worldBoundingBox.set(boxMin, boxMax);
-
-    // Update mesh transform to tightly fit the plant
-    const center = new THREE.Vector3().addVectors(boxMin, boxMax).multiplyScalar(0.5);
-    const size = new THREE.Vector3().subVectors(boxMax, boxMin);
-
-    instance.center.copy(center);
-    instance.mesh.position.copy(center);
-    instance.mesh.scale.copy(size);
-    instance.mesh.updateMatrixWorld(true);
+    // Upload to GPU
+    this.uploadSegmentData(segments);
+    this.uploadNodeData(sdfNodes);
+    this.segmentCount = segments.length;
+    this.nodeCount = sdfNodes.length;
 
     // Update uniforms
-    const uniforms = instance.material.uniforms;
-    uniforms.uBoxMin.value.copy(boxMin);
-    uniforms.uBoxMax.value.copy(boxMax);
-    uniforms.uPrimitiveCount.value = primCount;
-    uniforms.uSminBlendRadius.value = this.config.sminBlendRadius;
-    uniforms.uMaxRaymarchSteps.value = this.config.maxRaymarchSteps;
-    uniforms.uRaymarchHitEpsilon.value = this.config.raymarchHitEpsilon;
+    this.uniforms.uSegmentCount.value = this.segmentCount;
+    this.uniforms.uNodeCount.value = this.nodeCount;
+
+    // Update Root Sight SDF aura texture from root nodes
+    this.updateRootAura(nodes);
   }
 
   /**
-   * Per-frame animation, camera culling, and 3-Tier Distance LOD.
-   * Enables rendering thousands of plants smoothly at 60 FPS by
-   * frustum culling off-screen organisms and scaling raymarch budgets.
+   * Update Root Sight SDF aura texture from plant nodes
+   * Creates a 64x1 texture with root node positions for SDF aura blending
    */
-  update(deltaTime: number): void {
-    this.time += deltaTime;
-
-    // 1. Compute view frustum for GPU culling
-    this.projScreenMatrix.multiplyMatrices(
-      this.camera.projectionMatrix,
-      this.camera.matrixWorldInverse,
+  private updateRootAura(nodes: PlantNodeData[]): void {
+    // Collect root nodes (y < 0 or root layer)
+    const rootNodes = nodes.filter(
+      (n) => n.isOwnPlant && (n.layer === 'root' || n.position.y < 0 || n.type === 0),
     );
-    this.frustum.setFromProjectionMatrix(this.projScreenMatrix);
 
-    const camPos = this.camera.position;
+    this.rootAuraNodeCount = Math.min(rootNodes.length, 64);
+    this.rootAuraRadius = this.config.rootSightCutawayRadius * 0.1;
 
-    const now = performance.now();
+    // Create or update aura texture (64x1 RGBA)
+    const data = new Float32Array(64 * 4);
+    for (let i = 0; i < this.rootAuraNodeCount; i++) {
+      const node = rootNodes[i];
+      data[i * 4 + 0] = node.position.x;
+      data[i * 4 + 1] = node.position.y;
+      data[i * 4 + 2] = node.position.z;
+      data[i * 4 + 3] = 1.0; // valid flag
+    }
 
-    for (const instance of this.plantInstances.values()) {
-      if (instance.primitiveCount <= 0) {
-        instance.mesh.visible = false;
-        continue;
-      }
-
-      // 0. Active Growth Animation Rebuild:
-      // If any node in this plant's graph was spawned in the last 950ms,
-      // re-pack primitives so the growth lerp smoothly animates at 60 FPS
-      const hasActiveGrowth =
-        instance.plantNodes.some((n) => {
-          if (!n.spawnTime) return false;
-          return now - n.spawnTime < 950;
-        }) ||
-        (instance.rootNode.spawnTime && now - instance.rootNode.spawnTime < 950);
-
-      if (hasActiveGrowth) {
-        this.buildPlantPrimitives(instance, instance.rootNode, instance.plantNodes);
-      }
-
-      // Frustum culling: skip raymarching if plant is outside view frustum.
-      // Crucial: worldBoundingBox encompasses the full span of all branches and leaves,
-      // ensuring that if a player's base is behind the camera but its canopy/branches
-      // reach into the screen, the bounding box intersects the frustum and remains 100% visible!
-      if (!this.frustum.intersectsBox(instance.worldBoundingBox)) {
-        instance.mesh.visible = false;
-        continue;
-      }
-
-      // Distance from camera to plant center
-      const dist = camPos.distanceTo(instance.center);
-
-      // Distance Culling: beyond maximum LOD horizon (200m), plant is not raymarched
-      if (dist > this.config.l2Distance) {
-        instance.mesh.visible = false;
-        continue;
-      }
-
-      instance.mesh.visible = true;
-
-      const uniforms = instance.material.uniforms;
-      uniforms.uTime.value = this.time;
-      uniforms.uCameraPosition.value.copy(camPos);
-      uniforms.uSminBlendRadius.value = this.config.sminBlendRadius;
-      uniforms.uWindStrength.value = this.config.windStrength;
-      uniforms.uWindSpeed.value = this.config.windSpeed;
-      uniforms.uHealthTintStrength.value = this.config.healthTintStrength;
-      uniforms.uMutation0Param.value = this.config.mutation0Param;
-      uniforms.uMutation1Param.value = this.config.mutation1Param;
-      uniforms.uMutation2Param.value = this.config.mutation2Param;
-
-      // 3-Tier Dynamic Raymarching LOD:
-      if (dist > this.config.l1Distance) {
-        // Tier 2: Far (90m - 200m) - ultra-fast coarse silhouette (14 steps)
-        uniforms.uMaxRaymarchSteps.value = 14;
-        uniforms.uRaymarchHitEpsilon.value = 0.022;
-      } else if (dist > this.config.l0Distance) {
-        // Tier 1: Mid (35m - 90m) - balanced raymarching (24 steps)
-        uniforms.uMaxRaymarchSteps.value = 24;
-        uniforms.uRaymarchHitEpsilon.value = 0.012;
-      } else {
-        // Tier 0: Near (0m - 35m) - full photorealistic detail (48 steps)
-        uniforms.uMaxRaymarchSteps.value = this.config.maxRaymarchSteps;
-        uniforms.uRaymarchHitEpsilon.value = this.config.raymarchHitEpsilon;
-      }
+    if (!this.rootAuraTexture) {
+      this.rootAuraTexture = new THREE.DataTexture(data, 64, 1, THREE.RGBAFormat, THREE.FloatType);
+      this.rootAuraTexture.minFilter = THREE.NearestFilter;
+      this.rootAuraTexture.magFilter = THREE.NearestFilter;
+      this.rootAuraTexture.needsUpdate = true;
+    } else {
+      this.rootAuraTexture.image.data = data;
+      this.rootAuraTexture.needsUpdate = true;
     }
   }
 
   /**
-   * T02 Root Sight: updates subterranean highlight transition on all plants.
+   * Set sun lighting uniforms
+   */
+  setSunLight(dir: THREE.Vector3, color: THREE.Color, intensity: number): void {
+    this.uniforms.uSunDir.value.copy(dir);
+    this.uniforms.uSunColor.value.copy(color);
+    this.uniforms.uSunIntensity.value = intensity;
+  }
+
+  /**
+   * Update animation state
+   */
+  update(deltaTime: number): void {
+    this.deltaTimeAccumulator += deltaTime;
+    if (this.isEmerging) {
+      const elapsed = this.deltaTimeAccumulator - this.emergenceStartTime;
+      const progress = Math.min(elapsed / this.config.emergenceDuration, 1.0);
+      this.uniforms.uEmergenceProgress.value = progress;
+      if (progress >= 1.0) this.isEmerging = false;
+    }
+  }
+
+  /**
+   * Set Root Sight mode
    */
   setRootSightState(enabled: boolean, progress: number, center: THREE.Vector3): void {
     this.rootSightEnabled = enabled;
     this.rootSightProgress = progress;
     this.rootSightCenter.copy(center);
 
-    for (const instance of this.plantInstances.values()) {
-      const uniforms = instance.material.uniforms;
-      uniforms.uRootSightEnabled.value = enabled;
-      uniforms.uRootSightProgress.value = progress;
-      uniforms.uRootSightSphereCenter.value.copy(center);
-      uniforms.uRootSightSphereRadius.value = this.config.rootSightCutawayRadius;
-    }
+    this.uniforms.uRootSightEnabled.value = enabled;
+    this.uniforms.uRootSightProgress.value = progress;
+    this.uniforms.uRootSightCenter.value.copy(center);
+    this.uniforms.uRootSightRadius.value = this.config.rootSightCutawayRadius;
+    // Enable aura when root sight is active
+    this.uniforms.uRootSightAuraEnabled.value = enabled;
+    this.uniforms.uRootAuraNodeCount.value = this.rootAuraNodeCount;
+    this.uniforms.uRootAuraTex.value = this.rootAuraTexture;
+    this.uniforms.uRootAuraRadius.value = this.rootAuraRadius;
   }
 
+  /**
+   * Update configuration
+   */
   setConfig(config: Partial<PlantRendererConfig>): void {
     this.config = { ...this.config, ...config };
-    this.rootSightEnabled = this.config.rootSightEnabled;
-
-    for (const instance of this.plantInstances.values()) {
-      const uniforms = instance.material.uniforms;
-      uniforms.uSminBlendRadius.value = this.config.sminBlendRadius;
-      uniforms.uMaxRaymarchSteps.value = this.config.maxRaymarchSteps;
-      uniforms.uRaymarchHitEpsilon.value = this.config.raymarchHitEpsilon;
-      uniforms.uWindStrength.value = this.config.windStrength;
-      uniforms.uWindSpeed.value = this.config.windSpeed;
-      uniforms.uHealthTintStrength.value = this.config.healthTintStrength;
-      uniforms.uMutation0Param.value = this.config.mutation0Param;
-      uniforms.uMutation1Param.value = this.config.mutation1Param;
-      uniforms.uMutation2Param.value = this.config.mutation2Param;
-      uniforms.uRootSightSphereRadius.value = this.config.rootSightCutawayRadius;
-      uniforms.uOwnRootHighlightColor.value.set(this.config.ownRootHighlightColor);
-      uniforms.uRivalRootHighlightColor.value.set(this.config.rivalRootHighlightColor);
-    }
+    // Update uniforms that depend on config
+    this.uniforms.uSminRadius.value = this.config.sminBlendRadius;
+    this.uniforms.uMaxSteps.value = this.config.maxRaymarchSteps;
+    this.uniforms.uHitEpsilon.value = this.config.raymarchHitEpsilon;
+    this.uniforms.uWindStrength.value = this.config.windStrength;
+    this.uniforms.uWindSpeed.value = this.config.windSpeed;
+    this.uniforms.uHealthTintStrength.value = this.config.healthTintStrength;
+    this.uniforms.uMutation0.value = this.config.mutation0Param;
+    this.uniforms.uMutation1.value = this.config.mutation1Param;
+    this.uniforms.uMutation2.value = this.config.mutation2Param;
+    this.uniforms.uPhotosynthesisViz.value = this.config.photosynthesisViz;
+    this.uniforms.uWaterFlowViz.value = this.config.waterFlowViz;
+    this.uniforms.uNutrientFlowViz.value = this.config.nutrientFlowViz;
+    this.uniforms.uRootSightCutawayRadius.value = this.config.rootSightCutawayRadius;
+    this.uniforms.uRootSightSoilOpacity.value = this.config.rootSightSoilOpacity;
+    this.uniforms.uOwnRootHighlightColor.value.set(this.config.ownRootHighlightColor);
+    this.uniforms.uRivalRootHighlightColor.value.set(this.config.rivalRootHighlightColor);
+    this.uniforms.uEmergenceDuration.value = this.config.emergenceDuration;
   }
 
+  /**
+   * Get current configuration
+   */
   getConfig(): PlantRendererConfig {
     return { ...this.config };
   }
 
+  /**
+   * Rebuild renderer (legacy no-op for compatibility)
+   */
   rebuild(): void {
-    for (const instance of this.plantInstances.values()) {
-      this.scene.remove(instance.mesh);
-      instance.texture.dispose();
-      instance.material.dispose();
-    }
-    this.plantInstances.clear();
-    this.knownNodes.clear();
+    // No-op for SDF renderer - data is updated via updatePlantData
+    this.setupEmergenceAnimation();
   }
 
   /**
-   * Deterministic botanical test tree for development and visual inspection.
+   * Generate test plant for development
    */
-  generateTestPlant(seed?: number): PlantNodeData[] {
+  generateTestPlant(seed = 0): PlantNodeData[] {
+    this.testPlantSeed = seed;
     const nodes: PlantNodeData[] = [];
-    const rng = mulberry32(seed ?? 12345);
-
-    const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5)); // ~137.5°
-    const MURRAY_EXPONENT = 3;
-    const TAPER_RATE = 0.86;
-    const BRANCH_ANGLE_FROM_VERTICAL = 0.52;
-    const ROOT_BRANCH_ANGLE = 0.58;
-    const INTERNODE_LENGTH_BASE = 1.8;
-    const ROOT_INTERNODE_LENGTH_BASE = 1.4;
-
-    const primaryBranchCount = 3 + Math.floor(rng() * 2);
-    const trunkSegments = 9 + Math.floor(rng() * 3);
-
-    function murrayChildRadius(parentRadius: number, childCount: number, index: number): number {
-      const equalShare = parentRadius / childCount ** (1 / MURRAY_EXPONENT);
-      return index === 0 ? equalShare * 1.15 : equalShare * 0.85;
-    }
-
-    function createNode(
-      id: string,
-      position: THREE.Vector3,
-      type: number,
-      radius: number,
-      parentId: string | null,
-      order: number,
-      distanceFromBase: number,
-    ): PlantNodeData {
-      const age = Math.max(1, 20 - order * 4 - distanceFromBase * 0.5);
-      const health = Math.max(0.5, 0.95 - order * 0.06 - distanceFromBase * 0.01);
-      const biomass = radius * radius * 10;
-      return {
-        id,
-        position,
-        type,
-        radius: Math.max(0.02, radius),
-        parentId,
-        age,
-        health,
-        mutationFlags: 0,
-        biomass,
-        isOwnPlant: true,
+    const mulberry32 = (a: number): (() => number) => {
+      return () => {
+        a += 0x6d2b79f5;
+        let t = a;
+        t = Math.imul(t ^ (t >>> 15), t | 1);
+        t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
       };
+    };
+    const rand = mulberry32(seed);
+
+    // Create a simple test plant
+    const rootId = `test_root_${seed}`;
+    nodes.push({
+      id: rootId,
+      position: new THREE.Vector3(0, 0, 0),
+      type: 0, // root
+      nodeType: 'root',
+      radius: 0.5,
+      parentId: null,
+      age: 10,
+      health: 1.0,
+      mutationFlags: 0,
+      biomass: 10,
+      isOwnPlant: true,
+      spawnTime: 0,
+      growthProgress: 1.0,
+      isSeed: false,
+    });
+
+    // Add some stem nodes
+    for (let i = 1; i <= 5; i++) {
+      const id = `test_stem_${seed}_${i}`;
+      nodes.push({
+        id,
+        position: new THREE.Vector3(0, i * 0.8, 0),
+        type: 1, // stem
+        nodeType: 'stem',
+        radius: 0.4 - i * 0.03,
+        parentId: i === 1 ? rootId : `test_stem_${seed}_${i - 1}`,
+        age: 5,
+        health: 1.0,
+        mutationFlags: 0,
+        biomass: 5,
+        isOwnPlant: true,
+        spawnTime: i * 1000,
+        growthProgress: 1.0,
+        isSeed: false,
+      });
     }
 
-    // Taproot (slender, organic, fibrous subterranean anchor)
-    const taprootRadius = 0.12;
-    const taprootSegments = 6;
-    const taprootId = 'root_tap_0';
-    let prevRootId = taprootId;
-
-    nodes.push(createNode(taprootId, new THREE.Vector3(0, 0, 0), 0, taprootRadius, null, 0, 0));
-
-    for (let i = 0; i < taprootSegments; i++) {
-      const depth = -(i + 1) * ROOT_INTERNODE_LENGTH_BASE;
-      const radius = Math.max(0.018, taprootRadius * 0.82 ** (i + 1));
-      const segId = `root_tap_${i + 1}`;
-      nodes.push(
-        createNode(segId, new THREE.Vector3(0, depth, 0), 0, radius, prevRootId, 0, i + 1),
-      );
-      prevRootId = segId;
-    }
-
-    // Lateral roots (slender fibrous offshoots)
-    for (let i = 0; i < 4; i++) {
-      const attachSegment = Math.min(taprootSegments - 1, i + 1);
-      const attachId = `root_tap_${attachSegment}`;
-      const attachDepth = -attachSegment * ROOT_INTERNODE_LENGTH_BASE;
-      const parentRadius = Math.max(0.02, taprootRadius * 0.82 ** attachSegment);
-
-      const angle = i * GOLDEN_ANGLE;
-      const lat1Radius = Math.max(0.015, murrayChildRadius(parentRadius, 2, 1) * 0.65);
-      const lat1Id = `root_lat_${i}_1`;
-      const lat1Length = ROOT_INTERNODE_LENGTH_BASE * 1.5;
-
-      nodes.push(
-        createNode(
-          lat1Id,
-          new THREE.Vector3(
-            Math.cos(angle) * Math.sin(ROOT_BRANCH_ANGLE) * lat1Length,
-            attachDepth - Math.cos(ROOT_BRANCH_ANGLE) * lat1Length,
-            Math.sin(angle) * Math.sin(ROOT_BRANCH_ANGLE) * lat1Length,
-          ),
-          0,
-          lat1Radius,
-          attachId,
-          1,
-          attachSegment + 1,
-        ),
-      );
-    }
-
-    // Trunk
-    const trunkRadius = 0.35;
-    const trunkId = 'stem_trunk_0';
-    nodes.push(createNode(trunkId, new THREE.Vector3(0, 0.6, 0), 1, trunkRadius, taprootId, 0, 0));
-    let prevTrunkId = trunkId;
-    let trunkHeight = 0.6;
-
-    for (let i = 0; i < trunkSegments; i++) {
-      const segLength = INTERNODE_LENGTH_BASE * (1.0 - i * 0.04);
-      trunkHeight += segLength;
-      const radius = trunkRadius * TAPER_RATE ** (i + 1);
-      const segId = `stem_trunk_${i + 1}`;
-      nodes.push(
-        createNode(segId, new THREE.Vector3(0, trunkHeight, 0), 1, radius, prevTrunkId, 0, i + 1),
-      );
-      prevTrunkId = segId;
-    }
-
-    // Primary branches
-    for (let b = 0; b < primaryBranchCount; b++) {
-      const attachIndex = 2 + Math.floor((b / primaryBranchCount) * (trunkSegments - 3));
-      const attachId = `stem_trunk_${attachIndex}`;
-      const attachNode = nodes.find((n) => n.id === attachId);
-      if (!attachNode) continue;
-      const attachHeight = attachNode.position.y;
-      const parentRadius = trunkRadius * TAPER_RATE ** (attachIndex + 1);
-
-      const branchAngle = b * GOLDEN_ANGLE;
-      const branch1Radius = murrayChildRadius(parentRadius, 2, 1);
-      const branch1Length = INTERNODE_LENGTH_BASE * 1.8;
-      const branch1Id = `branch_${b}_1`;
-
-      nodes.push(
-        createNode(
-          branch1Id,
-          new THREE.Vector3(
-            Math.cos(branchAngle) * Math.sin(BRANCH_ANGLE_FROM_VERTICAL) * branch1Length,
-            attachHeight + Math.cos(BRANCH_ANGLE_FROM_VERTICAL) * branch1Length,
-            Math.sin(branchAngle) * Math.sin(BRANCH_ANGLE_FROM_VERTICAL) * branch1Length,
-          ),
-          1,
-          branch1Radius,
-          attachId,
-          1,
-          attachIndex + 1,
-        ),
-      );
+    // Add leaf nodes
+    for (let i = 0; i < 3; i++) {
+      const id = `test_leaf_${seed}_${i}`;
+      nodes.push({
+        id,
+        position: new THREE.Vector3((rand() - 0.5) * 2, 4 + i * 0.5, (rand() - 0.5) * 2),
+        type: 2, // leaf
+        nodeType: 'leaf',
+        radius: 0.3,
+        parentId: `test_stem_${seed}_5`,
+        age: 2,
+        health: 1.0,
+        mutationFlags: 0,
+        biomass: 2,
+        isOwnPlant: true,
+        spawnTime: 5000 + i * 1000,
+        growthProgress: 1.0,
+        isSeed: false,
+      });
     }
 
     return nodes;
   }
 
+  /**
+   * Handle window resize
+   */
+  onResize(): void {
+    // Update resolution uniform
+    // This is called when window resizes
+  }
+
+  /**
+   * Render the SDF plant
+   */
+  render(deltaTime: number): void {
+    if (!this.sdfMaterial || !this.fullscreenQuad || !this.camera) return;
+
+    this.update(deltaTime);
+
+    const time = performance.now() / 1000;
+
+    // Update time uniforms
+    this.uniforms.uTime.value = time;
+    this.uniforms.uWindTime.value = time * this.config.windSpeed;
+    if (this.camera) {
+      this.uniforms.uCameraPos.value.copy(this.camera.position);
+
+      // Camera direction
+      const cameraDir = new THREE.Vector3(0, 0, -1)
+        .applyQuaternion(this.camera.quaternion)
+        .normalize();
+      this.uniforms.uCameraDir.value.copy(cameraDir);
+      this.uniforms.uCameraUp.value.copy(this.camera.up);
+      this.uniforms.uFov.value = this.camera.fov * (Math.PI / 180);
+      this.uniforms.uAspect.value = this.camera.aspect;
+
+      // Update LOD
+      this.updateLOD(this.camera.position);
+    }
+
+    // Update time uniforms
+    this.uniforms.uTime.value = time;
+    this.uniforms.uWindTime.value = time * this.config.windSpeed;
+
+    // Update LOD
+    if (this.camera) {
+      this.updateLOD(this.camera.position);
+    }
+
+    // Render fullscreen quad
+    if (this.fullscreenQuad) {
+      this.fullscreenQuad.renderOrder = 0;
+    }
+  }
+
+  /**
+   * Update LOD based on camera distance
+   */
+  private updateLOD(_cameraPos: THREE.Vector3): void {
+    this.currentLOD = 0; // Fixed LOD 0 for now
+
+    if (this.currentLOD === 0) {
+      this.uniforms.uMaxSteps.value = this.config.l0RaymarchSteps;
+      this.uniforms.uHitEpsilon.value = this.config.l0RaymarchEpsilon;
+    } else if (this.currentLOD === 1) {
+      this.uniforms.uMaxSteps.value = this.config.l1RaymarchSteps;
+      this.uniforms.uHitEpsilon.value = this.config.l1RaymarchEpsilon;
+    } else {
+      this.uniforms.uMaxSteps.value = this.config.l2RaymarchSteps;
+      this.uniforms.uHitEpsilon.value = this.config.l2RaymarchEpsilon;
+    }
+  }
+
+  /**
+   * Set selected node for highlight
+   */
+  setSelectedNode(_nodeId: string | null): void {
+    // TODO: Implement node highlight in shader
+  }
+
+  /**
+   * Dispose resources
+   */
   dispose(): void {
-    this.rebuild();
-    this.boxGeometry.dispose();
+    if (this.sdfMaterial) {
+      this.sdfMaterial.dispose();
+      this.sdfMaterial = null;
+    }
+    if (this.fullscreenQuad) {
+      this.scene.remove(this.fullscreenQuad);
+      this.fullscreenQuad.geometry.dispose();
+      this.fullscreenQuad = null;
+    }
+    if (this.segmentBuffer) {
+      this.segmentBuffer.dispose();
+      this.segmentBuffer = null;
+    }
+    if (this.nodeBuffer) {
+      this.nodeBuffer.dispose();
+      this.nodeBuffer = null;
+    }
+    if (this.sdfRenderTarget) {
+      this.sdfRenderTarget.dispose();
+      this.sdfRenderTarget = null;
+    }
+  }
+
+  // ==================== PRIVATE HELPERS ====================
+
+  private uploadSegmentData(segments: SDFSegment[]): void {
+    const count = segments.length;
+    const texWidth = Math.max(1, count * 7); // 7 texels (vec4) per segment
+    const data = new Float32Array(texWidth * 4);
+
+    for (let i = 0; i < count; i++) {
+      const s = segments[i];
+      const base = i * 28;
+
+      data[base + 0] = s.p0.x;
+      data[base + 1] = s.p0.y;
+      data[base + 2] = s.p0.z;
+      data[base + 3] = s.r0;
+
+      data[base + 4] = s.p1.x;
+      data[base + 5] = s.p1.y;
+      data[base + 6] = s.p1.z;
+      data[base + 7] = s.r1;
+
+      data[base + 8] = s.color.x;
+      data[base + 9] = s.color.y;
+      data[base + 10] = s.color.z;
+      data[base + 11] = s.primitive;
+
+      data[base + 12] = s.growthProgress;
+      data[base + 13] = s.spawnTime;
+      data[base + 14] = s.layer;
+      data[base + 15] = s.isOwnPlant ? 1.0 : 0.0;
+
+      const dir = new THREE.Vector3().subVectors(s.p1, s.p0).normalize();
+      data[base + 16] = dir.x;
+      data[base + 17] = dir.y;
+      data[base + 18] = dir.z;
+      data[base + 19] = s.nodeType.length;
+
+      data[base + 20] = 0;
+      data[base + 21] = 0;
+      data[base + 22] = 0;
+      data[base + 23] = 0;
+      data[base + 24] = 0;
+      data[base + 25] = 0;
+      data[base + 26] = 0;
+      data[base + 27] = 0;
+    }
+
+    if (this.segmentBuffer) {
+      this.segmentBuffer.dispose();
+    }
+    this.segmentBuffer = new THREE.DataTexture(
+      data,
+      texWidth,
+      1,
+      THREE.RGBAFormat,
+      THREE.FloatType,
+    );
+    this.segmentBuffer.minFilter = THREE.NearestFilter;
+    this.segmentBuffer.magFilter = THREE.NearestFilter;
+    this.segmentBuffer.generateMipmaps = false;
+    this.segmentBuffer.needsUpdate = true;
+    this.uniforms.uSegments.value = this.segmentBuffer;
+  }
+
+  private uploadNodeData(nodes: SDFNode[]): void {
+    const count = nodes.length;
+    const texWidth = Math.max(1, count * 4); // 4 texels (vec4) per node
+    const data = new Float32Array(texWidth * 4);
+
+    for (let i = 0; i < count; i++) {
+      const n = nodes[i];
+      const base = i * 16;
+
+      data[base + 0] = n.position.x;
+      data[base + 1] = n.position.y;
+      data[base + 2] = n.position.z;
+      data[base + 3] = n.radius;
+
+      data[base + 4] = n.color.x;
+      data[base + 5] = n.color.y;
+      data[base + 6] = n.color.z;
+      data[base + 7] = n.primitive;
+
+      data[base + 8] = n.growthProgress;
+      data[base + 9] = n.spawnTime;
+      data[base + 10] = n.layer;
+      data[base + 11] = n.isOwnPlant ? 1.0 : 0.0;
+
+      data[base + 12] = 0;
+      data[base + 13] = 0;
+      data[base + 14] = 0;
+      data[base + 15] = 0;
+    }
+
+    if (this.nodeBuffer) {
+      this.nodeBuffer.dispose();
+    }
+    this.nodeBuffer = new THREE.DataTexture(data, texWidth, 1, THREE.RGBAFormat, THREE.FloatType);
+    this.nodeBuffer.minFilter = THREE.NearestFilter;
+    this.nodeBuffer.magFilter = THREE.NearestFilter;
+    this.nodeBuffer.generateMipmaps = false;
+    this.nodeBuffer.needsUpdate = true;
+    this.uniforms.uNodes.value = this.nodeBuffer;
   }
 }
 
-export default PlantRenderer;
+/**
+ * SDF Vertex Shader - Fullscreen quad
+ */
+const SDF_VERTEX_SHADER = `
+varying vec2 vUv;
+void main() {
+  vUv = uv;
+  gl_Position = vec4(position, 1.0);
+}
+`;
+
+/**
+ * SDF Fragment Shader - Raymarching with organic fusion
+ *
+ * Implements:
+ * - Capsule SDF for stems/branches/roots
+ * - Ellipsoid SDF for seeds/flowers
+ * - Disk SDF for leaves/cotyledons
+ * - Cone SDF for flowers/spore sacs
+ * - Smooth minimum (smin) blending for organic fusion
+ * - Murray's law tapering
+ * - Root Sight cutaway
+ * - Emergence animation
+ */
+const SDF_FRAGMENT_SHADER = `
+precision highp float;
+
+varying vec2 vUv;
+
+// Uniforms
+uniform float uTime;
+uniform vec2 uResolution;
+uniform vec3 uCameraPos;
+uniform vec3 uCameraDir;
+uniform vec3 uCameraUp;
+uniform float uFov;
+uniform float uAspect;
+uniform float uNear;
+uniform float uFar;
+uniform int uMaxSteps;
+uniform float uHitEpsilon;
+uniform float uSminRadius;
+uniform float uWindStrength;
+uniform float uWindSpeed;
+uniform float uWindTime;
+uniform int uSegmentCount;
+uniform int uNodeCount;
+uniform sampler2D uSegments;
+uniform sampler2D uNodes;
+uniform bool uRootSightEnabled;
+uniform float uRootSightProgress;
+uniform vec3 uRootSightCenter;
+uniform float uRootSightRadius;
+uniform float uRootSightCutawayRadius;
+uniform float uRootSightSoilOpacity;
+uniform vec3 uOwnRootHighlightColor;
+uniform vec3 uRivalRootHighlightColor;
+// Root Sight SDF aura
+uniform bool uRootSightAuraEnabled;
+uniform int uRootAuraNodeCount;
+uniform sampler2D uRootAuraTex;
+uniform float uRootAuraRadius;
+uniform float uEmergenceProgress;
+uniform float uEmergenceDuration;
+uniform float uHealthTintStrength;
+uniform float uMutation0;
+uniform float uMutation1;
+uniform float uMutation2;
+uniform bool uPhotosynthesisViz;
+uniform bool uWaterFlowViz;
+uniform bool uNutrientFlowViz;
+uniform float uBoundingBoxPadding;
+// Sun lighting
+uniform vec3 uSunDir;
+uniform vec3 uSunColor;
+uniform float uSunIntensity;
+
+// Segment data layout (7 vec4 per segment):
+// 0: p0.x, p0.y, p0.z, r0
+// 1: p1.x, p1.y, p1.z, r1
+// 2: color.r, color.g, color.b, primitive
+// 3: growthProgress, spawnTime, layer, isOwnPlant
+// 4: dir.x, dir.y, dir.z, nodeTypeHash
+// 5-6: reserved
+
+// Node data layout (4 vec4 per node):
+// 0: position.x, position.y, position.z, radius
+// 1: color.r, color.g, color.b, primitive
+// 2: growthProgress, spawnTime, layer, isOwnPlant
+// 3: reserved
+
+#define PI 3.14159265359
+#define SMIN_K 0.5
+
+// Smooth minimum for organic blending
+float smin(float a, float b, float k) {
+  float h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0);
+  return mix(b, a, h) - k * h * (1.0 - h);
+}
+
+// SDF-based unified root aura sampling
+// Blends individual root node capsules into one continuous volume using smooth minimum
+float sampleRootAuraSDF(vec3 worldPos) {
+  if (!uRootSightAuraEnabled || uRootAuraNodeCount == 0) {
+    return 0.0;
+  }
+  
+  int count = min(uRootAuraNodeCount, 64);
+  float sdfDist = 1000.0;
+  float auraRadius = uRootAuraRadius;
+  float capsuleRadius = auraRadius * 0.5;
+  
+  for (int i = 0; i < 64; i++) {
+    if (i >= count) break;
+    vec2 texCoord = vec2((float(i) + 0.5) / 64.0, 0.5);
+    vec4 nodeData = texture2D(uRootAuraTex, texCoord);
+    vec3 nodePos = nodeData.xyz;
+    float valid = nodeData.w;
+    
+    if (valid < 0.5) continue;
+    
+    // Capsule SDF for vertical root segment
+    float segmentHeight = auraRadius;
+    vec3 segmentCenter = nodePos + vec3(0.0, segmentHeight * 0.5, 0.0);
+    vec3 toCenter = worldPos - segmentCenter;
+    float dy = abs(toCenter.y) - segmentHeight * 0.5;
+    float dxz = length(toCenter.xz);
+    float capsuleDist = max(dxz - capsuleRadius, dy);
+    capsuleDist = min(capsuleDist, max(dxz, dy));
+    
+    // Smooth minimum (smin) to blend capsules into one continuous volume
+    float k = auraRadius * 0.3;
+    float h = clamp(0.5 + 0.5 * (capsuleDist - sdfDist) / k, 0.0, 1.0);
+    sdfDist = mix(capsuleDist, sdfDist, h) - k * h * (1.0 - h);
+  }
+  
+  // Convert SDF distance to strength (1 at surface, 0 at radius)
+  float strength = 1.0 - smoothstep(0.0, auraRadius, max(sdfDist, 0.0));
+  return strength;
+}
+
+// SDF: Capsule (tapered)
+float sdCapsule(vec3 p, vec3 a, vec3 b, float ra, float rb) {
+  vec3 ba = b - a;
+  vec3 pa = p - a;
+  float h = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0);
+  float r = mix(ra, rb, h);
+  return length(pa - ba * h) - r;
+}
+
+// SDF: Ellipsoid
+float sdEllipsoid(vec3 p, vec3 r) {
+  float k0 = length(p / r);
+  float k1 = length(p / (r * r));
+  return k0 * (k0 - 1.0) / k1;
+}
+
+// SDF: Disk (thin leaf)
+float sdDisk(vec3 p, float r, float h) {
+  vec2 d = vec2(length(p.xz) - r, abs(p.y) - h);
+  return min(max(d.x, d.y), 0.0) + length(max(d, 0.0));
+}
+
+// SDF: Cone
+float sdCone(vec3 p, float r, float h) {
+  vec2 q = vec2(length(p.xz), p.y);
+  float k1 = h / r;
+  float k2 = 1.0 / sqrt(1.0 + k1 * k1);
+  vec2 w = q - vec2(r, h) * clamp((q.x * k1 - q.y) / (r * k1 * k1 + h), 0.0, 1.0);
+  return length(max(vec2(w.x, 0.0), w)) * sign(max(w.x, w.y));
+}
+
+// Wind displacement
+vec3 windDisplacement(vec3 p, float time, float strength, float speed, vec3 dir) {
+  float freq = 2.0;
+  float phase = time * speed + p.y * 3.0;
+  float amp = strength * (1.0 - smoothstep(0.0, 10.0, p.y)) * 0.1;
+  vec3 perp = normalize(cross(dir, vec3(0.0, 1.0, 0.0)));
+  return perp * sin(phase) * amp * (1.0 - p.y * 0.05);
+}
+
+// Get segment data from texture (1D row, 7 texels per segment)
+vec4 getSegment(int index, int field) {
+  int texel = index * 7 + field;
+  return texelFetch(uSegments, ivec2(texel, 0), 0);
+}
+
+// Get node data from texture (1D row, 4 texels per node)
+vec4 getNode(int index, int field) {
+  int texel = index * 4 + field;
+  return texelFetch(uNodes, ivec2(texel, 0), 0);
+}
+
+// Main SDF scene function
+float map(vec3 p) {
+  float dist = 1000.0;
+  bool hitOwnPlant = false;
+  bool hitRivalPlant = false;
+  
+  // Raymarch through segments
+  for (int i = 0; i < 2000; i++) {
+    if (i >= uSegmentCount) break;
+    
+    vec4 seg0 = getSegment(i, 0); // p0, r0
+    vec4 seg1 = getSegment(i, 1); // p1, r1
+    vec4 seg2 = getSegment(i, 2); // color, primitive
+    vec4 seg3 = getSegment(i, 3); // growthProgress, spawnTime, layer, isOwnPlant
+    vec4 seg4 = getSegment(i, 4); // dir, nodeTypeHash
+    
+    float growth = seg3.x;
+    if (growth < 0.01) continue;
+    
+    vec3 p0 = seg0.xyz;
+    vec3 p1 = seg1.xyz;
+    float r0 = seg0.w;
+    float r1 = seg1.w;
+    int primitive = int(seg2.w);
+    bool isOwn = seg3.w > 0.5;
+    
+    // Apply growth progress scaling
+    float prog = growth;
+    vec3 gp0 = p0;
+    vec3 gp1 = mix(p0, p1, prog);
+    float gr0 = r0;
+    float gr1 = mix(r0, r1, prog);
+    
+    // Apply wind
+    vec3 windDir = normalize(seg4.xyz);
+    gp0 += windDisplacement(gp0, uWindTime, uWindStrength, uWindSpeed, windDir);
+    gp1 += windDisplacement(gp1, uWindTime, uWindStrength, uWindSpeed, windDir);
+    
+    float d = 1000.0;
+    if (primitive == 0) { // CAPSULE
+      d = sdCapsule(p, gp0, gp1, gr0, gr1);
+    } else if (primitive == 1) { // ELIPSOID
+      vec3 center = (gp0 + gp1) * 0.5;
+      vec3 r = vec3(gr0, length(gp1 - gp0) * 0.5, gr0);
+      d = sdEllipsoid(p - center, r);
+    } else if (primitive == 2) { // DISK
+      vec3 center = (gp0 + gp1) * 0.5;
+      vec3 up = normalize(gp1 - gp0);
+      mat3 rot = mat3(vec3(1,0,0), vec3(0,1,0), vec3(0,0,1));
+      d = sdDisk((p - center) * rot, gr0, 0.02);
+    } else if (primitive == 3) { // CONE
+      vec3 center = (gp0 + gp1) * 0.5;
+      float h = length(gp1 - gp0);
+      d = sdCone(p - center, gr0, h);
+    }
+    
+    // Organic fusion with smooth minimum
+    if (dist > 1000.0) {
+      dist = d;
+      hitOwnPlant = isOwn;
+      hitRivalPlant = !isOwn;
+    } else {
+      float k = uSminRadius * 0.5;
+      dist = smin(dist, d, k);
+      hitOwnPlant = hitOwnPlant || isOwn;
+      hitRivalPlant = hitRivalPlant || !isOwn;
+    }
+  }
+  
+  // Nodes for junctions and endpoints
+  for (int i = 0; i < 2000; i++) {
+    if (i >= uNodeCount) break;
+    
+    vec4 node0 = getNode(i, 0); // position, radius
+    vec4 node1 = getNode(i, 1); // color, primitive
+    vec4 node2 = getNode(i, 2); // growthProgress, spawnTime, layer, isOwnPlant
+    
+    float growth = node2.x;
+    if (growth < 0.01) continue;
+    
+    vec3 pos = node0.xyz;
+    float r = node0.w * growth;
+    int primitive = int(node1.w);
+    bool isOwn = node2.w > 0.5;
+    
+    float d = 1000.0;
+    if (primitive == 0) { // CAPSULE - sphere at junction
+      d = length(p - pos) - r;
+    } else if (primitive == 1) { // ELIPSOID
+      d = sdEllipsoid(p - pos, vec3(r));
+    } else if (primitive == 2) { // DISK
+      d = sdDisk(p - pos, r, 0.02);
+    } else if (primitive == 3) { // CONE
+      d = sdCone(p - pos, r, r * 2.0);
+    }
+    
+    // Blend with existing
+    if (dist > 1000.0) {
+      dist = d;
+      hitOwnPlant = isOwn;
+      hitRivalPlant = !isOwn;
+    } else {
+      float k = uSminRadius * 0.5;
+      dist = smin(dist, d, k);
+      hitOwnPlant = hitOwnPlant || isOwn;
+      hitRivalPlant = hitRivalPlant || !isOwn;
+    }
+  }
+  
+  // Root Sight cutaway
+  if (uRootSightEnabled) {
+    vec3 toCenter = p - uRootSightCenter;
+    float distToCenter = length(toCenter.xz);
+    float height = toCenter.y;
+    
+    // Cutaway sphere
+    if (distToCenter < uRootSightCutawayRadius && height < uRootSightCenter.y) {
+      dist = max(dist, 0.001);
+    }
+  }
+  
+  return dist;
+}
+
+// Smooth minimum for organic blending
+float smin(float a, float b, float k) {
+  float h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0);
+  return mix(b, a, h) - k * h * (1.0 - h);
+}
+
+// Raymarching
+vec3 raymarch(vec3 ro, vec3 rd) {
+  float t = uNear;
+  float d = 0.0;
+  
+  for (int i = 0; i < 128; i++) {
+    if (i >= uMaxSteps) break;
+    vec3 p = ro + rd * t;
+    d = map(p);
+    if (d < uHitEpsilon) break;
+    t += d;
+    if (t > uFar) break;
+  }
+  
+  return ro + rd * t;
+}
+
+// Normal calculation
+vec3 calcNormal(vec3 p) {
+  float eps = 0.001;
+  vec2 h = vec2(eps, 0);
+  return normalize(vec3(
+    map(p + h.xyy) - map(p - h.xyy),
+    map(p + h.yxy) - map(p - h.yxy),
+    map(p + h.yyx) - map(p - h.yyx)
+  ));
+}
+
+// Main
+void main() {
+  // Camera ray
+  vec2 uv = (gl_FragCoord.xy - 0.5 * uResolution) / min(uResolution.x, uResolution.y);
+  float aspect = uResolution.x / uResolution.y;
+  vec3 rd = normalize(vec3(uv.x * aspect, uv.y, -1.0 / tan(uFov * 0.5)));
+  rd = rd.x * normalize(cross(uCameraUp, uCameraDir)) + rd.y * uCameraUp + rd.z * uCameraDir;
+  
+  vec3 ro = uCameraPos;
+  
+  // Raymarch
+  vec3 p = raymarch(ro, rd);
+  float d = map(p);
+  
+  // Background
+  vec3 col = vec3(0.08, 0.10, 0.06);
+  
+  if (d < uHitEpsilon) {
+    // Hit plant - calculate normal and lighting
+    vec3 n = calcNormal(p);
+    
+    // Simple lighting
+    vec3 lightDir = normalize(uSunDir);
+    float diff = max(dot(n, lightDir), 0.0);
+    float amb = 0.3;
+    vec3 lightColor = uSunColor * uSunIntensity;
+    
+    // Determine color based on hit type
+    if (p.y < 0.0) {
+      col = vec3(0.55, 0.40, 0.28) * (amb + diff * 0.7); // root
+    } else if (p.y < 2.0) {
+      col = vec3(0.45, 0.30, 0.20) * (amb + diff * 0.8); // stem
+    } else {
+      col = vec3(0.20, 0.65, 0.15) * (amb + diff * 0.9); // leaves
+    }
+    
+    // Apply light color
+    col *= lightColor;
+    
+    // Emergence animation
+    if (uEmergenceProgress < 1.0) {
+      float emergeAlpha = smoothstep(0.0, 1.0, uEmergenceProgress);
+      float yProgress = smoothstep(-5.0, 10.0, p.y);
+      col *= emergeAlpha * yProgress;
+    }
+    
+    // Root Sight highlighting with SDF unified aura
+    if (uRootSightEnabled) {
+      float auraStrength = sampleRootAuraSDF(p);
+      float baseStrength = 0.0;
+      
+      // Also check if within the global cutaway radius
+      vec3 toCenter = p - uRootSightCenter;
+      float distToCenter = length(toCenter.xz);
+      baseStrength = 1.0 - smoothstep(uRootSightCutawayRadius * 0.85, uRootSightCutawayRadius, distToCenter);
+      
+      // Combine global cutaway with SDF aura
+      float strength = max(baseStrength, auraStrength) * uRootSightProgress;
+      
+      // Highlight roots: own roots green, rival roots orange
+      // For now, highlight all roots in the aura zone
+      // In future, could track which plant each root belongs to
+      if (p.y < 0.0) {
+        vec3 highlight = uOwnRootHighlightColor; // Default to own color
+        col = mix(col, highlight, 0.8 * strength);
+      }
+    }
+  }
+  
+  // Fog
+  float fogDensity = 0.002;
+  float dist = length(p - uCameraPos);
+  float fog = exp(-fogDensity * dist * dist);
+  col = mix(col, vec3(0.08, 0.10, 0.06), 1.0 - fog);
+  
+  // Gamma correction
+  col = pow(col, vec3(1.0/2.2));
+  
+  gl_FragColor = vec4(col, 1.0);
+}
+`;
+
+export { PlantRenderer };

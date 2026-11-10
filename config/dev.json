@@ -1,0 +1,146 @@
+{
+  "_meta": {
+    "system": "dev",
+    "version": "1.0",
+    "schema": "extended-1",
+    "owner_task": "T00",
+    "status": "draft",
+    "notes": "Dev-only settings engine (D01). Only loaded when NODE_ENV !== 'production' or ?dev=1 query param."
+  },
+  "values": {
+    "dev_panel_enabled": {
+      "type": "boolean",
+      "value": true,
+      "description": "Enable the dev panel (requires ?dev=1 on client)"
+    },
+    "persistence_enabled": {
+      "type": "boolean",
+      "value": false,
+      "description": "Enable plant persistence across disconnects. Default false per ADR-029 (use world.json for server default)."
+    },
+    "reconnect_window_min": {
+      "type": "integer",
+      "value": 5,
+      "range": [
+        1,
+        60
+      ],
+      "description": "Reconnect window in minutes"
+    },
+    "auto_growth": {
+      "type": "boolean",
+      "value": false,
+      "description": "Enable automatic growth without player commits"
+    },
+    "germination_gate": {
+      "type": "boolean",
+      "value": true,
+      "description": "Enforce germination moisture/light thresholds"
+    },
+    "germination_failure_kills_seed": {
+      "type": "boolean",
+      "value": true,
+      "description": "Failed germination destroys the seed/plant"
+    },
+    "plant_size_class": {
+      "type": "enum",
+      "value": "normal",
+      "enum": [
+        "normal",
+        "large",
+        "giant"
+      ],
+      "description": "Plant size scaling class"
+    },
+    "camera_start_distance": {
+      "type": "number",
+      "value": 6,
+      "range": [
+        1,
+        100
+      ],
+      "description": "Initial camera distance from plant"
+    },
+    "camera_pan_speed": {
+      "type": "number",
+      "value": 2,
+      "range": [
+        0.1,
+        10
+      ],
+      "description": "Camera pan speed multiplier"
+    },
+    "resource_rates": {
+      "type": "object",
+      "value": {
+        "photosynthesis_biomass_rate": 1,
+        "photosynthesis_energy_rate": 1,
+        "absorption_per_s": 0.5,
+        "evaporation_rate": 0.02,
+        "diffusion_rate": 0.1
+      },
+      "description": "Resource simulation rates (multipliers)"
+    },
+    "webgpu_enabled": {
+      "type": "boolean",
+      "value": true,
+      "description": "Enable WebGPU renderer when available"
+    },
+    "webgpu_tier0_threshold": {
+      "type": "integer",
+      "value": 300,
+      "range": [
+        50,
+        1000
+      ],
+      "description": "Projected pixel size for tier 0 (full mesh)"
+    },
+    "webgpu_tier1_threshold": {
+      "type": "integer",
+      "value": 80,
+      "range": [
+        20,
+        500
+      ],
+      "description": "Projected pixel size for tier 1 (mesh, no leaves)"
+    },
+    "webgpu_tier2_threshold": {
+      "type": "integer",
+      "value": 12,
+      "range": [
+        5,
+        100
+      ],
+      "description": "Projected pixel size for tier 2 (billboard)"
+    },
+    "webgpu_tier3_threshold": {
+      "type": "integer",
+      "value": 2,
+      "range": [
+        1,
+        50
+      ],
+      "description": "Projected pixel size for tier 3 (billboard)"
+    },
+    "log_level": {
+      "type": "enum",
+      "value": "info",
+      "enum": [
+        "debug",
+        "info",
+        "warn",
+        "error"
+      ],
+      "description": "Server log level"
+    },
+    "tick_budget_warn_threshold_ms": {
+      "type": "number",
+      "value": 40,
+      "range": [
+        1,
+        100
+      ],
+      "description": "Active tier ms warning threshold"
+    }
+  }
+}

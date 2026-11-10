@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { newId } from '@plant-legacy/shared/ids';
 import argon2 from 'argon2';
 import jwt from 'jsonwebtoken';
@@ -21,6 +22,7 @@ export interface Session {
   id: string;
   accountId: string;
   refreshTokenHash: string;
+  refreshTokenLookupHash: string;
   userAgent: string | null;
   ipAddress: string | null;
   createdAt: Date;
@@ -48,6 +50,11 @@ export interface PasswordValidationResult {
 }
 
 export interface UsernameValidationResult {
+  valid: boolean;
+  errors: string[];
+}
+
+export interface DisplayNameValidationResult {
   valid: boolean;
   errors: string[];
 }
@@ -126,6 +133,27 @@ export class AccountsService {
     return { valid: errors.length === 0, errors };
   }
 
+  validateDisplayName(displayName: string): DisplayNameValidationResult {
+    const errors: string[] = [];
+
+    if (displayName.length < this.config.displayNameMinLength) {
+      errors.push(`Display name must be at least ${this.config.displayNameMinLength} character(s)`);
+    }
+    if (displayName.length > this.config.displayNameMaxLength) {
+      errors.push(`Display name must be at most ${this.config.displayNameMaxLength} characters`);
+    }
+    // Basic sanitization - no control characters
+    for (let i = 0; i < displayName.length; i++) {
+      const code = displayName.charCodeAt(i);
+      if (code <= 0x1f || code === 0x7f) {
+        errors.push('Display name contains invalid characters');
+        break;
+      }
+    }
+
+    return { valid: errors.length === 0, errors };
+  }
+
   async checkRateLimit(
     ipAddress: string,
     endpoint: string,
@@ -134,41 +162,31 @@ export class AccountsService {
   ): Promise<boolean> {
     const client = await this.pool.connect();
     try {
-      await client.query('BEGIN');
-
       const windowStart = new Date(Date.now() - windowMinutes * 60 * 1000);
 
-      await client.query(`DELETE FROM rate_limits WHERE window_start < $1`, [windowStart]);
-
+      // Atomic upsert: clean old entries, then upsert current window
+      // If existing row is in current window, increment. If old window, reset to 1.
       const result = await client.query(
-        `SELECT attempt_count FROM rate_limits WHERE ip_address = $1 AND endpoint = $2 AND window_start >= $3`,
-        [ipAddress, endpoint, windowStart],
+        `WITH cleaned AS (
+           DELETE FROM rate_limits WHERE window_start < $1
+         ),
+         upserted AS (
+           INSERT INTO rate_limits (ip_address, endpoint, attempt_count, window_start)
+           VALUES ($2, $3, 1, NOW())
+           ON CONFLICT (ip_address, endpoint) DO UPDATE
+           SET attempt_count = CASE
+               WHEN rate_limits.window_start >= $1 THEN rate_limits.attempt_count + 1
+               ELSE 1
+             END,
+             window_start = NOW()
+           RETURNING attempt_count
+         )
+         SELECT attempt_count FROM upserted`,
+        [windowStart, ipAddress, endpoint],
       );
 
-      const currentCount = result.rows[0]?.attempt_count ?? 0;
-
-      if (currentCount >= maxAttempts) {
-        await client.query('COMMIT');
-        return false;
-      }
-
-      if (currentCount === 0) {
-        await client.query(
-          `INSERT INTO rate_limits (ip_address, endpoint, attempt_count, window_start) VALUES ($1, $2, 1, NOW())`,
-          [ipAddress, endpoint],
-        );
-      } else {
-        await client.query(
-          `UPDATE rate_limits SET attempt_count = attempt_count + 1 WHERE ip_address = $1 AND endpoint = $2 AND window_start >= $3`,
-          [ipAddress, endpoint, windowStart],
-        );
-      }
-
-      await client.query('COMMIT');
-      return true;
-    } catch (error) {
-      await client.query('ROLLBACK');
-      throw error;
+      const attemptCount = result.rows[0]?.attempt_count ?? 1;
+      return attemptCount <= maxAttempts;
     } finally {
       client.release();
     }
@@ -183,6 +201,11 @@ export class AccountsService {
     const usernameValidation = this.validateUsername(username);
     if (!usernameValidation.valid) {
       return { error: usernameValidation.errors.join(', ') };
+    }
+
+    const displayNameValidation = this.validateDisplayName(displayName);
+    if (!displayNameValidation.valid) {
+      return { error: displayNameValidation.errors.join(', ') };
     }
 
     const passwordValidation = this.validatePassword(password);
@@ -226,14 +249,23 @@ export class AccountsService {
 
       const sessionId = newId('session');
       const refreshTokenHash = await this.hashPassword(tokens.refreshToken);
+      const refreshTokenLookupHash = this.refreshTokenLookupHash(tokens.refreshToken);
       const refreshExpiresAt = new Date(
         Date.now() + this.config.refreshTokenLifetimeDays * 24 * 60 * 60 * 1000,
       );
 
       await client.query(
-        `INSERT INTO sessions (id, account_id, refresh_token_hash, ip_address, created_at, expires_at)
-         VALUES ($1, $2, $3, $4, $5, $6)`,
-        [sessionId, accountId, refreshTokenHash, ipAddress, now, refreshExpiresAt],
+        `INSERT INTO sessions (id, account_id, refresh_token_hash, refresh_token_lookup_hash, ip_address, created_at, expires_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [
+          sessionId,
+          accountId,
+          refreshTokenHash,
+          refreshTokenLookupHash,
+          ipAddress,
+          now,
+          refreshExpiresAt,
+        ],
       );
 
       await client.query('COMMIT');
@@ -302,6 +334,15 @@ export class AccountsService {
       };
 
       if (account.lockedUntil && account.lockedUntil > new Date()) {
+        // Account is locked - increment failed attempts to extend lockout
+        const newFailedAttempts = account.failedLoginAttempts + 1;
+        const extendedLockUntil = new Date(Date.now() + this.config.lockoutDurationMin * 60 * 1000);
+
+        await client.query(
+          `UPDATE accounts SET failed_login_attempts = $1, locked_until = $2, updated_at = NOW() WHERE id = $3`,
+          [newFailedAttempts, extendedLockUntil, account.id],
+        );
+
         await client.query('COMMIT');
         return { error: 'Account temporarily locked due to too many failed attempts' };
       }
@@ -332,17 +373,19 @@ export class AccountsService {
 
       const sessionId = newId('session');
       const refreshTokenHash = await this.hashPassword(tokens.refreshToken);
+      const refreshTokenLookupHash = this.refreshTokenLookupHash(tokens.refreshToken);
       const refreshExpiresAt = new Date(
         Date.now() + this.config.refreshTokenLifetimeDays * 24 * 60 * 60 * 1000,
       );
 
       await client.query(
-        `INSERT INTO sessions (id, account_id, refresh_token_hash, user_agent, ip_address, created_at, expires_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        `INSERT INTO sessions (id, account_id, refresh_token_hash, refresh_token_lookup_hash, user_agent, ip_address, created_at, expires_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
         [
           sessionId,
           account.id,
           refreshTokenHash,
+          refreshTokenLookupHash,
           userAgent,
           ipAddress,
           new Date(),
@@ -376,17 +419,21 @@ export class AccountsService {
       return { error: 'Too many requests' };
     }
 
-    const refreshTokenHash = await this.hashPassword(refreshToken);
+    const refreshTokenLookupHash = this.refreshTokenLookupHash(refreshToken);
 
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
 
-      await client.query(`UPDATE sessions SET revoked_at = NOW() WHERE refresh_token_hash = $1`, [
-        refreshTokenHash,
-      ]);
+      const result = await client.query(
+        `UPDATE sessions SET revoked_at = NOW() WHERE refresh_token_lookup_hash = $1`,
+        [refreshTokenLookupHash],
+      );
 
       await client.query('COMMIT');
+      if (result.rowCount === 0) {
+        return { error: 'Invalid refresh token' };
+      }
       return { success: true };
     } catch (error) {
       await client.query('ROLLBACK');
@@ -410,7 +457,7 @@ export class AccountsService {
       return { error: 'Too many refresh attempts' };
     }
 
-    const refreshTokenHash = await this.hashPassword(refreshToken);
+    const refreshTokenLookupHash = this.refreshTokenLookupHash(refreshToken);
 
     const client = await this.pool.connect();
     try {
@@ -419,8 +466,8 @@ export class AccountsService {
       const result = await client.query(
         `SELECT s.*, a.role FROM sessions s
          JOIN accounts a ON s.account_id = a.id
-         WHERE s.refresh_token_hash = $1 AND s.revoked_at IS NULL AND s.expires_at > NOW()`,
-        [refreshTokenHash],
+         WHERE s.refresh_token_lookup_hash = $1 AND s.revoked_at IS NULL AND s.expires_at > NOW()`,
+        [refreshTokenLookupHash],
       );
 
       if (result.rows.length === 0) {
@@ -430,29 +477,31 @@ export class AccountsService {
 
       const session = result.rows[0];
 
-      await client.query(`UPDATE sessions SET revoked_at = NOW() WHERE id = $1`, [session.id]);
-
       const tokens = this.generateTokenPair(session.account_id, session.role);
 
       const newSessionId = newId('session');
       const newRefreshTokenHash = await this.hashPassword(tokens.refreshToken);
+      const newRefreshTokenLookupHash = this.refreshTokenLookupHash(tokens.refreshToken);
       const newRefreshExpiresAt = new Date(
         Date.now() + this.config.refreshTokenLifetimeDays * 24 * 60 * 60 * 1000,
       );
 
       await client.query(
-        `INSERT INTO sessions (id, account_id, refresh_token_hash, user_agent, ip_address, created_at, expires_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        `INSERT INTO sessions (id, account_id, refresh_token_hash, refresh_token_lookup_hash, user_agent, ip_address, created_at, expires_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
         [
           newSessionId,
           session.account_id,
           newRefreshTokenHash,
+          newRefreshTokenLookupHash,
           session.user_agent,
           ipAddress,
           new Date(),
           newRefreshExpiresAt,
         ],
       );
+
+      await client.query(`UPDATE sessions SET revoked_at = NOW() WHERE id = $1`, [session.id]);
 
       await this.enforceSessionLimit(session.account_id);
 
@@ -564,7 +613,22 @@ export class AccountsService {
   }
 
   private getJwtSecret(): string {
-    return process.env.JWT_SECRET ?? 'dev-secret-change-in-production';
+    const secret = process.env.JWT_SECRET;
+    if (!secret) {
+      if (process.env.NODE_ENV === 'production') {
+        throw new Error('JWT_SECRET environment variable is required in production');
+      }
+      // Local dev fallback - log a warning
+      console.warn(
+        '[WARN] JWT_SECRET not set, using insecure default. Set JWT_SECRET in production.',
+      );
+      return 'dev-secret-change-in-production';
+    }
+    return secret;
+  }
+
+  private refreshTokenLookupHash(token: string): string {
+    return createHash('sha256').update(token).digest('hex');
   }
 
   private async enforceSessionLimit(accountId: string): Promise<void> {
@@ -573,8 +637,8 @@ export class AccountsService {
       [accountId],
     );
 
-    if (result.rows.length >= this.config.sessionMaxPerAccount) {
-      const toRevoke = result.rows.length - this.config.sessionMaxPerAccount + 1;
+    if (result.rows.length > this.config.sessionMaxPerAccount) {
+      const toRevoke = result.rows.length - this.config.sessionMaxPerAccount;
       const idsToRevoke = result.rows.slice(0, toRevoke).map((r) => r.id);
       await this.pool.query(`UPDATE sessions SET revoked_at = NOW() WHERE id = ANY($1)`, [
         idsToRevoke,

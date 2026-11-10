@@ -14,7 +14,7 @@ export interface ClientInterest {
 
 export interface EntityUpdate {
   entityId: string;
-  entityType: 'plant' | 'cube';
+  entityType: 'plant';
   position: { x: number; y: number; z: number };
   detailLevel: 'L0' | 'L1' | 'L2';
   data: unknown;
@@ -33,11 +33,7 @@ export class InterestManager {
     this.cellSize = config.cellSize;
     this.interestRingRadius = config.interestRingRadius;
     this.entityCap = config.perClientEntityCap;
-    this.detailDistances = {
-      L0: 50, // Near: full detail
-      L1: 150, // Medium: simplified
-      L2: 500, // Far: impostor
-    };
+    this.detailDistances = config.interestDetailDistances;
   }
 
   private getCellKey(coord: CellCoord): string {
@@ -152,7 +148,7 @@ export class InterestManager {
         const detailLevel = this.getDetailLevel(entityId, viewerX, viewerZ);
         entities.set(entityId, {
           entityId,
-          entityType: 'plant', // or 'cube'
+          entityType: 'plant',
           position: { x: 0, y: 0, z: 0 }, // Placeholder
           detailLevel,
           data: null,
@@ -192,5 +188,22 @@ export class InterestManager {
       total += entities.size;
     }
     return total;
+  }
+
+  /** Get entity IDs in the player's subscribed cells. */
+  getEntityIdsInRange(playerId: string): Set<string> {
+    const interest = this.clientInterests.get(playerId);
+    if (!interest) return new Set();
+
+    const entityIds = new Set<string>();
+    for (const cellKey of interest.subscribedCells) {
+      const cellEntities = this.cellEntities.get(cellKey);
+      if (cellEntities) {
+        for (const entityId of cellEntities) {
+          entityIds.add(entityId);
+        }
+      }
+    }
+    return entityIds;
   }
 }

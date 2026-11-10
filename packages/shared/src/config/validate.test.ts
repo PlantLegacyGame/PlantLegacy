@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { validateConfig } from './validate.ts';
+import type { ConfigFile } from './types.ts';
+import { validateConfig, validateCrossFieldRules } from './validate.ts';
 
 function codes(system: string, raw: unknown): string[] {
   return validateConfig(system, raw).map((issue) => issue.code);
@@ -120,5 +121,120 @@ describe('extended-1 config validation', () => {
       },
     });
     assert.ok(codes('sample', raw).includes('entry.item_field_type'));
+  });
+
+  describe('validateCrossFieldRules', () => {
+    function wrapRecord(record: Record<string, unknown>): Record<string, unknown> {
+      const out: Record<string, unknown> = {};
+      for (const [key, value] of Object.entries(record)) {
+        out[key] = { type: 'number', value };
+      }
+      return out;
+    }
+
+    function configs(
+      weather: Record<string, unknown> = {},
+      resources: Record<string, unknown> = {},
+      growth: Record<string, unknown> = {},
+      netProto: Record<string, unknown> = {},
+    ): Map<string, ConfigFile> {
+      const map = new Map<string, ConfigFile>();
+      if (weather)
+        map.set('weather', {
+          _meta: { system: 'weather', version: '1.0', schema: 'extended-1' },
+          values: wrapRecord(weather),
+        } as ConfigFile);
+      if (resources)
+        map.set('resources', {
+          _meta: { system: 'resources', version: '1.0', schema: 'extended-1' },
+          values: wrapRecord(resources),
+        } as ConfigFile);
+      if (growth)
+        map.set('growth', {
+          _meta: { system: 'growth', version: '1.0', schema: 'extended-1' },
+          values: wrapRecord(growth),
+        } as ConfigFile);
+      if (netProto)
+        map.set('net_proto', {
+          _meta: { system: 'net_proto', version: '1.0', schema: 'extended-1' },
+          values: wrapRecord(netProto),
+        } as ConfigFile);
+      return map;
+    }
+
+    it('accepts well-formed weather durations', () => {
+      const issues = validateCrossFieldRules(
+        configs({
+          clear_duration_min_s: 180,
+          clear_duration_max_s: 420,
+          rain_duration_min_s: 120,
+          rain_duration_max_s: 300,
+          storm_telegraph_duration_s: 45,
+          storm_active_duration_s: 90,
+        }),
+      );
+      assert.deepEqual(issues, []);
+    });
+
+    it('rejects min > max for a weather state', () => {
+      const issues = validateCrossFieldRules(
+        configs({
+          clear_duration_min_s: 500,
+          clear_duration_max_s: 420,
+        }),
+      );
+      assert.ok(issues.some((i) => i.code === 'weather.durations_min_exceeds_max'));
+    });
+
+    it('rejects telegraph >= active storm duration', () => {
+      const issues = validateCrossFieldRules(
+        configs({
+          storm_telegraph_duration_s: 90,
+          storm_active_duration_s: 90,
+        }),
+      );
+      assert.ok(issues.some((i) => i.code === 'weather.telegraph_exceeds_active'));
+    });
+
+    it('accepts valid resource maxima (all maxima above base)', () => {
+      const issues = validateCrossFieldRules(
+        configs({
+          max_light: 500,
+          tile_light_base: 80,
+          max_moisture: 500,
+          tile_moisture_base: 50,
+          max_minerals: 500,
+          tile_minerals_base: 30,
+        }),
+      );
+      assert.deepEqual(issues, []);
+    });
+
+    it('rejects max_light below tile_light_base', () => {
+      const issues = validateCrossFieldRules(
+        configs(
+          {},
+          {
+            max_light: 500,
+            tile_light_base: 600,
+          },
+        ),
+      );
+      assert.ok(issues.some((i) => i.code === 'resources.max_light_below_base'));
+    });
+
+    it('accepts valid tier rate within max velocity', () => {
+      const issues = validateCrossFieldRules(
+        configs({}, {}, { root_growth_speed: 0.85 }, { max_velocity_units_per_tick: 5 }),
+      );
+      assert.deepEqual(issues, []);
+    });
+
+    it('rejects root growth speed exceeding max velocity', () => {
+      const issues = validateCrossFieldRules(
+        configs({}, {}, { root_growth_speed: 8 }, { max_velocity_units_per_tick: 5 }),
+      );
+      assert.ok(issues.some((i) => i.code === 'growth.root_speed_exceeds_max_velocity'));
+    });
   });
 });

@@ -1,5 +1,10 @@
 import * as THREE from 'three';
 import type { RenderConfig } from '../config/clientConfig.js';
+import {
+  type ClientWeatherState,
+  type ClientWeatherStateMachine,
+  createClientWeatherStateMachine,
+} from './ClientWeatherStateMachine.js';
 
 export interface WeatherPayload {
   timeOfDay: number;
@@ -37,13 +42,14 @@ export class EnvironmentRenderer {
   private camera: THREE.Camera;
   private config: RenderConfig;
 
+  // Weather state machine (Phase 1.6: explicit transitions)
+  private weatherMachine: ClientWeatherStateMachine;
+
   // Sky dome
   private skyMesh: THREE.Mesh;
   private skyMaterial: THREE.ShaderMaterial;
   private currentZenithColor: THREE.Color = new THREE.Color();
   private currentHorizonColor: THREE.Color = new THREE.Color();
-  private targetZenithColor: THREE.Color = new THREE.Color();
-  private targetHorizonColor: THREE.Color = new THREE.Color();
 
   // Celestial lighting
   private sunLight: THREE.DirectionalLight;
@@ -53,31 +59,21 @@ export class EnvironmentRenderer {
   private moonDir: THREE.Vector3 = new THREE.Vector3();
 
   // Terrain / Ground mesh
-  private groundMesh: THREE.Mesh;
+  private groundMesh: THREE.Mesh | null;
   private groundMaterial: THREE.MeshStandardMaterial;
   private soilMoisture = 0.2;
   private targetSoilMoisture = 0.2;
-
-  // Atmospheric fog
-  private targetFogNear: number;
-  private targetFogFar: number;
 
   // Rain particle system
   private rainPoints: THREE.Points;
   private rainGeometry: THREE.BufferGeometry;
   private rainPositions: Float32Array;
   private rainVelocities: Float32Array;
-  private isRaining = false;
 
   // Lightning system for thunderstorm
   private lightningTimer = 0;
-  private nextLightningDelay = 5.0;
-  private lightningActive = false;
-  private lightningTimeRemaining = 0;
-  private lightningFlashIntensity = 0;
 
-  // Weather state cache
-  private currentWeatherState = 'clear';
+  // Time of day and sun intensity (client-side interpolation)
   private timeOfDay = 0.3;
   private sunIntensity = 1.0;
 
@@ -89,6 +85,8 @@ export class EnvironmentRenderer {
     ambientLight: THREE.AmbientLight,
     hemisphereLight: THREE.HemisphereLight,
     soilUniforms: EnvironmentUniforms,
+    showGround: boolean = true,
+    showRain: boolean = true,
   ) {
     this.scene = scene;
     this.camera = camera;
@@ -97,8 +95,51 @@ export class EnvironmentRenderer {
     this.ambientLight = ambientLight;
     this.hemisphereLight = hemisphereLight;
 
-    this.targetFogNear = config.fogNearClear;
-    this.targetFogFar = config.fogFarClear;
+    // Initialize client weather state machine (Phase 1.6)
+    this.weatherMachine = createClientWeatherStateMachine({
+      clear: {
+        zenithColor: config.skyZenithDay,
+        horizonColor: config.skyHorizonDay,
+        fogNear: config.fogNearClear,
+        fogFar: config.fogFarClear,
+        soilMoisture: 0.25,
+      },
+      rain: {
+        zenithColor: config.skyZenithRain,
+        horizonColor: config.skyHorizonRain,
+        fogNear: config.fogNearRain,
+        fogFar: config.fogFarRain,
+        soilMoisture: 0.85,
+      },
+      thunderstorm_telegraph: {
+        zenithColor: config.skyZenithTelegraph,
+        horizonColor: config.skyHorizonTelegraph,
+        fogNear: (config.fogNearClear + config.fogNearRain) * 0.5,
+        fogFar: (config.fogFarClear + config.fogFarRain) * 0.5,
+        soilMoisture: 0.4,
+      },
+      thunderstorm_active: {
+        zenithColor: config.skyZenithStorm,
+        horizonColor: config.skyHorizonStorm,
+        fogNear: config.fogNearStorm,
+        fogFar: config.fogFarStorm,
+        soilMoisture: 1.0,
+      },
+      thunderstorm_aftermath: {
+        zenithColor: config.skyZenithRain,
+        horizonColor: config.skyHorizonDay,
+        fogNear: config.fogNearRain * 1.5,
+        fogFar: config.fogFarRain * 1.6,
+        soilMoisture: 0.7,
+      },
+      transitionDuration: 2000, // 2 second transitions
+      lightning: {
+        minDelay: 3.0,
+        maxDelay: 8.0,
+        flashDuration: 0.15,
+        maxIntensity: 1.0,
+      },
+    });
 
     // 1. Sky Dome Geometry & Shader
     const skyRadius = Math.max(300, config.terrainRadius * 1.5);
@@ -161,22 +202,37 @@ export class EnvironmentRenderer {
       `,
       side: THREE.BackSide,
       depthWrite: false,
+      depthTest: true,
     });
 
     this.skyMesh = new THREE.Mesh(skyGeo, this.skyMaterial);
     this.skyMesh.renderOrder = -100;
     this.scene.add(this.skyMesh);
 
+    // Sky dome follows camera but stays above ground to avoid intersection
+    this.skyMesh.position.set(
+      this.camera.position.x,
+      this.camera.position.y + 50,
+      this.camera.position.z,
+    );
+
     // 2. Terrain Ground Mesh & Soil Shader (Refines T02 Root Sight Cutaway)
-    const groundGeo = new THREE.CircleGeometry(
-      config.terrainRadius,
+    // Simple PlaneGeometry - flat, single-sided, opaque. Root Sight cutaway
+    // handled via alphaTest in shader (not transparency) to avoid depth issues.
+    const groundGeo = new THREE.PlaneGeometry(
+      config.terrainRadius * 2,
+      config.terrainRadius * 2,
+      config.terrainMeshSubdivisions,
       config.terrainMeshSubdivisions,
     );
     this.groundMaterial = new THREE.MeshStandardMaterial({
       color: new THREE.Color(config.soilDryColor),
       roughness: 0.95,
       metalness: 0.02,
-      transparent: true,
+      transparent: false,
+      alphaTest: 0.01,
+      depthWrite: true,
+      side: THREE.FrontSide,
     });
 
     const soilDry = new THREE.Color(config.soilDryColor);
@@ -193,6 +249,9 @@ export class EnvironmentRenderer {
       shader.uniforms.uSoilWetColor = { value: soilWet };
       shader.uniforms.uSoilMineralColor = { value: soilMineral };
       shader.uniforms.uSoilMoisture = { value: this.soilMoisture };
+      shader.uniforms.uSunDir = { value: new THREE.Vector3(0, 1, 0) };
+      shader.uniforms.uSunColor = { value: new THREE.Color(0xffffee) };
+      shader.uniforms.uSunIntensity = { value: 1.0 };
 
       shader.vertexShader = shader.vertexShader
         .replace('#include <common>', '#include <common>\nvarying vec3 vSoilWorldPos;')
@@ -213,30 +272,44 @@ uniform float uRootSightSoilOpacity;
 uniform vec3 uSoilDryColor;
 uniform vec3 uSoilWetColor;
 uniform vec3 uSoilMineralColor;
-uniform float uSoilMoisture;`,
+uniform float uSoilMoisture;
+// Sun uniforms for ground lighting
+uniform vec3 uSunDir;
+uniform vec3 uSunColor;
+uniform float uSunIntensity;`,
         )
         .replace(
           '#include <dithering_fragment>',
           `#include <dithering_fragment>
-// C03: Soil moisture darkening & subtle mineral accents
-vec3 dynamicSoil = mix(uSoilDryColor, uSoilWetColor, clamp(uSoilMoisture, 0.0, 1.0));
-float mineralNoise = fract(sin(dot(vSoilWorldPos.xz, vec2(12.9898, 78.233))) * 43758.5453);
-dynamicSoil = mix(dynamicSoil, uSoilMineralColor, mineralNoise * 0.08);
-gl_FragColor.rgb = mix(dynamicSoil, gl_FragColor.rgb, 0.35);
-
-// T02 Root Sight cutaway preservation & refinement
-float soilDist = distance(vSoilWorldPos, uRootSightCenter);
-float soilCut = 1.0 - smoothstep(uRootSightRadius * 0.85, uRootSightRadius, soilDist);
-gl_FragColor.a = mix(1.0, uRootSightSoilOpacity, soilCut * uRootSightProgress);`,
+  // C03: Soil moisture darkening & subtle mineral accents
+  vec3 dynamicSoil = mix(uSoilDryColor, uSoilWetColor, clamp(uSoilMoisture, 0.0, 1.0));
+  float mineralNoise = fract(sin(dot(vSoilWorldPos.xz, vec2(12.9898, 78.233))) * 43758.5453);
+  dynamicSoil = mix(dynamicSoil, uSoilMineralColor, mineralNoise * 0.08);
+  
+  // Apply lighting to ground (use existing normal from standard material)
+  // Flip normal for back faces when using DoubleSide
+  vec3 groundNormal = normalize(vNormal);
+  if (!gl_FrontFacing) groundNormal = -groundNormal;
+  float NdotL = max(dot(groundNormal, normalize(-uSunDir)), 0.0);
+  vec3 lightColor = uSunColor * uSunIntensity * NdotL;
+  gl_FragColor.rgb = dynamicSoil * (0.35 + 0.65 * lightColor);
+  
+  // Root Sight: Soil remains fully visible as terrain background
+  // No individual node cutaways - roots are highlighted via SDF aura in PlantRenderer
+  gl_FragColor.a = 1.0;`,
         );
     };
     this.groundMaterial.customProgramCacheKey = () => 'c03-environment-ground-v1';
 
-    this.groundMesh = new THREE.Mesh(groundGeo, this.groundMaterial);
-    this.groundMesh.rotation.x = -Math.PI / 2;
-    this.groundMesh.position.y = -0.03;
-    this.groundMesh.receiveShadow = true;
-    this.scene.add(this.groundMesh);
+    if (showGround) {
+      this.groundMesh = new THREE.Mesh(groundGeo, this.groundMaterial);
+      this.groundMesh.rotation.x = -Math.PI / 2;
+      this.groundMesh.position.y = 0;
+      this.groundMesh.receiveShadow = true;
+      this.scene.add(this.groundMesh);
+    } else {
+      this.groundMesh = null;
+    }
 
     // 3. Rain Particle System (Phone budget friendly: single Points draw call)
     const count = config.rainParticleCount;
@@ -264,152 +337,74 @@ gl_FragColor.a = mix(1.0, uRootSightSoilOpacity, soilCut * uRootSightProgress);`
 
     this.rainPoints = new THREE.Points(this.rainGeometry, rainMat);
     this.rainPoints.visible = false;
-    this.scene.add(this.rainPoints);
+    if (showRain) {
+      this.scene.add(this.rainPoints);
+    }
 
     // Initial weather state setup
-    this.applyWeatherState('clear', 0.3, 1.0);
+    this.weatherMachine.requestStateChange('clear');
+    // Initialize sun position and lighting before first render
+    this.updateSunPosition();
   }
 
   /**
    * Called whenever server broadcasts WEATHER_UPDATE (type 21)
    */
   public handleWeatherUpdate(payload: WeatherPayload): void {
-    this.currentWeatherState = payload.weatherState;
     this.timeOfDay = payload.timeOfDay;
     this.sunIntensity = payload.sunIntensity;
 
-    this.applyWeatherState(payload.weatherState, payload.timeOfDay, payload.sunIntensity);
-  }
-
-  /**
-   * Interpolates colors, fog targets, and lights based on diurnal cycle and weather
-   */
-  private applyWeatherState(state: string, timeOfDay: number, sunIntensity: number): void {
-    const cfg = this.config;
-
-    // 1. Calculate Day / Dusk / Night base colors
-    // Sun orbital elevation angle: 0 at sunrise, 1 at noon, 0 at sunset, negative at night
-    const sunAngle = timeOfDay * Math.PI * 2 - Math.PI / 2;
-    const sunElev = Math.sin(sunAngle);
-
-    // Calculate celestial directions
-    this.sunDir.set(Math.cos(sunAngle) * 0.8, sunElev, Math.sin(sunAngle) * 0.4).normalize();
-    this.moonDir.set(-this.sunDir.x, -this.sunDir.y, -this.sunDir.z).normalize();
-
-    // Diurnal factor: 1.0 = full midday, 0.0 = night, in-between = dawn/dusk
-    const dayFactor = THREE.MathUtils.smoothstep(sunElev, -0.05, 0.35);
-    const duskFactor = (1.0 - Math.abs(sunElev * 3.0)) * (1.0 - dayFactor);
-
-    const baseZenith = new THREE.Color(cfg.skyZenithNight).lerp(
-      new THREE.Color(cfg.skyZenithDay),
-      dayFactor,
-    );
-    if (duskFactor > 0.05) {
-      baseZenith.lerp(new THREE.Color(cfg.skyZenithDusk), duskFactor * 0.7);
-    }
-
-    const baseHorizon = new THREE.Color(cfg.skyHorizonNight).lerp(
-      new THREE.Color(cfg.skyHorizonDay),
-      dayFactor,
-    );
-    if (duskFactor > 0.05) {
-      baseHorizon.lerp(new THREE.Color(cfg.skyHorizonDusk), duskFactor * 0.85);
-    }
-
-    // 2. Weather Overrides
-    if (state === 'rain') {
-      this.targetZenithColor.copy(baseZenith).lerp(new THREE.Color(cfg.skyZenithRain), 0.75);
-      this.targetHorizonColor.copy(baseHorizon).lerp(new THREE.Color(cfg.skyHorizonRain), 0.8);
-      this.targetFogNear = cfg.fogNearRain;
-      this.targetFogFar = cfg.fogFarRain;
-      this.isRaining = true;
-      this.targetSoilMoisture = 0.85;
-    } else if (state === 'thunderstorm_telegraph') {
-      this.targetZenithColor.copy(baseZenith).lerp(new THREE.Color(cfg.skyZenithTelegraph), 0.85);
-      this.targetHorizonColor
-        .copy(baseHorizon)
-        .lerp(new THREE.Color(cfg.skyHorizonTelegraph), 0.85);
-      this.targetFogNear = (cfg.fogNearClear + cfg.fogNearRain) * 0.5;
-      this.targetFogFar = (cfg.fogFarClear + cfg.fogFarRain) * 0.5;
-      this.isRaining = false;
-      this.targetSoilMoisture = 0.4;
-    } else if (state === 'thunderstorm_active') {
-      this.targetZenithColor.copy(baseZenith).lerp(new THREE.Color(cfg.skyZenithStorm), 0.9);
-      this.targetHorizonColor.copy(baseHorizon).lerp(new THREE.Color(cfg.skyHorizonStorm), 0.9);
-      this.targetFogNear = cfg.fogNearStorm;
-      this.targetFogFar = cfg.fogFarStorm;
-      this.isRaining = true;
-      this.targetSoilMoisture = 1.0;
-    } else if (state === 'thunderstorm_aftermath') {
-      this.targetZenithColor.copy(baseZenith).lerp(new THREE.Color(cfg.skyZenithRain), 0.3);
-      this.targetHorizonColor.copy(baseHorizon).lerp(new THREE.Color(cfg.skyHorizonDay), 0.6);
-      this.targetFogNear = cfg.fogNearRain * 1.5;
-      this.targetFogFar = cfg.fogFarRain * 1.6;
-      this.isRaining = false;
-      this.targetSoilMoisture = 0.7;
-    } else {
-      // Clear
-      this.targetZenithColor.copy(baseZenith);
-      this.targetHorizonColor.copy(baseHorizon);
-      this.targetFogNear = cfg.fogNearClear;
-      this.targetFogFar = cfg.fogFarClear;
-      this.isRaining = false;
-      this.targetSoilMoisture = 0.25;
-    }
-
-    // 3. Directional sun/moon position & intensity
-    const sunOrbitalDist = 120;
-    if (sunElev >= -0.1) {
-      // Sun active
-      this.sunLight.position.set(
-        this.sunDir.x * sunOrbitalDist,
-        Math.max(8, this.sunDir.y * sunOrbitalDist),
-        this.sunDir.z * sunOrbitalDist,
-      );
-      const sunBaseColor =
-        duskFactor > 0.2 ? new THREE.Color(cfg.sunColorDusk) : new THREE.Color(cfg.sunColorDay);
-      this.sunLight.color.copy(sunBaseColor);
-      this.sunLight.intensity = Math.max(
-        0.05,
-        cfg.sunIntensityDay * sunIntensity * Math.max(0.2, sunElev),
-      );
-    } else {
-      // Moon active
-      this.sunLight.position.set(
-        this.moonDir.x * sunOrbitalDist,
-        Math.max(12, this.moonDir.y * sunOrbitalDist),
-        this.moonDir.z * sunOrbitalDist,
-      );
-      this.sunLight.color.set(cfg.sunColorNight);
-      this.sunLight.intensity = cfg.sunIntensityNight;
-    }
-
-    // Ambient & Hemisphere lighting
-    const ambInt =
-      dayFactor > 0.1 ? cfg.ambientIntensityDay * sunIntensity : cfg.ambientIntensityNight;
-    this.ambientLight.intensity = THREE.MathUtils.lerp(
-      this.ambientLight.intensity,
-      Math.max(0.1, ambInt),
-      0.3,
-    );
+    // Request state change in weather machine (Phase 1.6)
+    this.weatherMachine.requestStateChange(payload.weatherState as ClientWeatherState);
   }
 
   /**
    * Per-frame render loop update
    */
-  public update(dt: number): void {
+  public update(dt: number, devOverrideUntil = 0): void {
     const lerpRate = Math.min(1.0, dt * 2.5);
 
-    // 1. Smoothly interpolate sky dome colors
-    this.currentZenithColor.lerp(this.targetZenithColor, lerpRate);
-    this.currentHorizonColor.lerp(this.targetHorizonColor, lerpRate);
+    // Advance client timeOfDay (server is authority, but client interpolates)
+    // Only advance if not in dev override mode
+    if (Date.now() >= devOverrideUntil) {
+      this.timeOfDay = (this.timeOfDay + dt / 1800) % 1.0; // 1800s cycle
+    }
+
+    // Update weather state machine (Phase 1.6)
+    const weatherTargets = this.weatherMachine.update(dt, this.timeOfDay, this.sunIntensity);
+
+    // Update sun/moon position based on current timeOfDay
+    this.updateSunPosition();
+
+    // Sky dome follows camera but stays above ground to avoid intersection
+    this.skyMesh.position.set(
+      this.camera.position.x,
+      this.camera.position.y + 50,
+      this.camera.position.z,
+    );
+
+    // 1. Smoothly interpolate sky dome colors using weather machine targets
+    this.currentZenithColor.lerp(weatherTargets.zenithColor, lerpRate);
+    this.currentHorizonColor.lerp(weatherTargets.horizonColor, lerpRate);
     this.hemisphereLight.color.copy(this.currentZenithColor);
     this.hemisphereLight.groundColor.copy(this.currentHorizonColor);
 
+    // Update sky shader uniforms
+    this.skyMaterial.uniforms.uZenithColor.value.copy(this.currentZenithColor);
+    this.skyMaterial.uniforms.uHorizonColor.value.copy(this.currentHorizonColor);
+
     // 2. Smoothly adjust atmospheric fog
     if (this.scene.fog instanceof THREE.Fog) {
-      this.scene.fog.near = THREE.MathUtils.lerp(this.scene.fog.near, this.targetFogNear, lerpRate);
-      this.scene.fog.far = THREE.MathUtils.lerp(this.scene.fog.far, this.targetFogFar, lerpRate);
+      this.scene.fog.near = THREE.MathUtils.lerp(
+        this.scene.fog.near,
+        weatherTargets.fogNear,
+        lerpRate,
+      );
+      this.scene.fog.far = THREE.MathUtils.lerp(
+        this.scene.fog.far,
+        weatherTargets.fogFar,
+        lerpRate,
+      );
       this.scene.fog.color.lerp(this.currentHorizonColor, lerpRate);
     }
     if (this.scene.background instanceof THREE.Color) {
@@ -417,16 +412,30 @@ gl_FragColor.a = mix(1.0, uRootSightSoilOpacity, soilCut * uRootSightProgress);`
     }
 
     // 3. Smoothly adjust soil moisture tint
+    this.targetSoilMoisture = weatherTargets.soilMoisture;
     this.soilMoisture = THREE.MathUtils.lerp(this.soilMoisture, this.targetSoilMoisture, dt * 0.5);
     const shader = this.groundMaterial.userData.shader as
-      | { uniforms?: Record<string, { value: unknown }> }
+      | { uniforms?: Record<string, { value: THREE.Vector3 | THREE.Color | number }> }
       | undefined;
     if (shader?.uniforms?.uSoilMoisture) {
       shader.uniforms.uSoilMoisture.value = this.soilMoisture;
+      (shader.uniforms.uSunDir.value as THREE.Vector3).copy(this.sunDir);
+      (shader.uniforms.uSunColor.value as THREE.Color).copy(this.sunLight.color);
+      shader.uniforms.uSunIntensity.value = this.sunLight.intensity;
     }
 
-    // 4. Update Rain Particles
-    if (this.isRaining) {
+    // Update ground material sun uniforms
+    const groundShader = this.groundMaterial.userData.shader as
+      | { uniforms?: Record<string, { value: THREE.Vector3 | THREE.Color | number }> }
+      | undefined;
+    if (groundShader?.uniforms?.uSunDir) {
+      (groundShader.uniforms.uSunDir.value as THREE.Vector3).copy(this.sunDir);
+      (groundShader.uniforms.uSunColor.value as THREE.Color).copy(this.sunLight.color);
+      groundShader.uniforms.uSunIntensity.value = this.sunLight.intensity;
+    }
+
+    // 4. Update Rain Particles (use weather machine's isRaining)
+    if (weatherTargets.isRaining) {
       this.rainPoints.visible = true;
       const count = this.config.rainParticleCount;
       const camPos = this.camera.position;
@@ -451,39 +460,96 @@ gl_FragColor.a = mix(1.0, uRootSightSoilOpacity, soilCut * uRootSightProgress);`
       this.rainPoints.visible = false;
     }
 
-    // 5. Thunderstorm Lightning System
-    if (this.currentWeatherState === 'thunderstorm_active') {
-      this.lightningTimer += dt;
-      if (!this.lightningActive && this.lightningTimer >= this.nextLightningDelay) {
-        // Trigger lightning flash
-        this.lightningActive = true;
-        this.lightningTimer = 0;
-        this.lightningTimeRemaining = this.config.lightningFlashDurationMs / 1000;
-        this.nextLightningDelay = THREE.MathUtils.randFloat(
-          this.config.lightningMinIntervalS,
-          this.config.lightningMaxIntervalS,
-        );
-      }
+    // 5. Thunderstorm Lightning System (use weather machine's lightning intensity)
+    const lightningIntensity = weatherTargets.lightningIntensity;
+    if (lightningIntensity > 0) {
+      this.ambientLight.intensity += lightningIntensity * 0.5;
+    }
 
-      if (this.lightningActive) {
-        this.lightningTimeRemaining -= dt;
-        if (this.lightningTimeRemaining <= 0) {
-          this.lightningActive = false;
-          this.lightningFlashIntensity = 0;
-        } else {
-          // Rapid flicker/strobe intensity
-          this.lightningFlashIntensity =
-            (0.6 + Math.random() * 0.4) * this.config.lightningIntensityBoost;
-          this.ambientLight.intensity += this.lightningFlashIntensity * 0.5;
-        }
-      }
+    // Update lightning timer for next flash scheduling (weather machine handles actual timing)
+    if (this.weatherMachine.getState() === 'thunderstorm_active') {
+      this.lightningTimer += dt;
     }
   }
 
   /**
-   * Get the ground mesh reference
+   * Update sun/moon position and sky colors based on current timeOfDay
    */
-  public getGroundMesh(): THREE.Mesh {
+  private updateSunPosition(): void {
+    const cfg = this.config;
+    const sunAngle = this.timeOfDay * Math.PI * 2 - Math.PI / 2;
+    const sunElev = Math.sin(sunAngle);
+
+    this.sunDir.set(Math.cos(sunAngle) * 0.8, sunElev, Math.sin(sunAngle) * 0.4).normalize();
+    this.moonDir.set(-this.sunDir.x, -this.sunDir.y, -this.sunDir.z).normalize();
+
+    // Update sun light position and intensity
+    // For directional light: position = direction FROM light TO origin
+    // Visual sun is at sunDir (origin TO sun), so light position = -sunDir * distance
+    const sunOrbitalDist = 120;
+    if (sunElev >= -0.1) {
+      this.sunLight.position.set(
+        -this.sunDir.x * sunOrbitalDist,
+        -Math.max(8, this.sunDir.y * sunOrbitalDist),
+        -this.sunDir.z * sunOrbitalDist,
+      );
+      const duskFactor = (1.0 - Math.abs(sunElev * 3.0)) * 0.5;
+      const sunBaseColor =
+        duskFactor > 0.2 ? new THREE.Color(cfg.sunColorDusk) : new THREE.Color(cfg.sunColorDay);
+      this.sunLight.color.copy(sunBaseColor);
+      this.sunLight.intensity = Math.max(0.05, cfg.sunIntensityDay * Math.max(0.2, sunElev));
+      this.skyMaterial.uniforms.uSunDir.value.copy(this.sunDir);
+      this.skyMaterial.uniforms.uSunColor.value.copy(sunBaseColor);
+      this.skyMaterial.uniforms.uSunIntensity.value = this.sunLight.intensity;
+      this.skyMaterial.uniforms.uMoonDir.value.set(0, -1, 0);
+    } else {
+      this.sunLight.position.set(
+        -this.moonDir.x * sunOrbitalDist,
+        -Math.max(12, this.moonDir.y * sunOrbitalDist),
+        -this.moonDir.z * sunOrbitalDist,
+      );
+      this.sunLight.color.set(cfg.sunColorNight);
+      this.sunLight.intensity = cfg.sunIntensityNight;
+      this.skyMaterial.uniforms.uSunDir.value.set(0, -1, 0);
+      this.skyMaterial.uniforms.uMoonDir.value.copy(this.moonDir);
+      this.skyMaterial.uniforms.uSunColor.value.set(cfg.sunColorNight);
+      this.skyMaterial.uniforms.uSunIntensity.value = this.sunLight.intensity;
+    }
+
+    // Update day/night factor for sky colors
+    const dayFactor = THREE.MathUtils.smoothstep(sunElev, -0.05, 0.35);
+    const duskFactor = (1.0 - Math.abs(sunElev * 3.0)) * (1.0 - dayFactor);
+
+    const baseZenith = new THREE.Color(cfg.skyZenithNight).lerp(
+      new THREE.Color(cfg.skyZenithDay),
+      dayFactor,
+    );
+    if (duskFactor > 0.05) {
+      baseZenith.lerp(new THREE.Color(cfg.skyZenithDusk), duskFactor * 0.7);
+    }
+
+    const baseHorizon = new THREE.Color(cfg.skyHorizonNight).lerp(
+      new THREE.Color(cfg.skyHorizonDay),
+      dayFactor,
+    );
+    if (duskFactor > 0.05) {
+      baseHorizon.lerp(new THREE.Color(cfg.skyHorizonDusk), duskFactor * 0.85);
+    }
+
+    // Update hemisphere light
+    const ambInt =
+      dayFactor > 0.1 ? cfg.ambientIntensityDay * this.sunIntensity : cfg.ambientIntensityNight;
+    this.ambientLight.intensity = THREE.MathUtils.lerp(
+      this.ambientLight.intensity,
+      Math.max(0.1, ambInt),
+      0.3,
+    );
+  }
+
+  /**
+   * Current normalized time of day [0, 1)
+   */
+  public getGroundMesh(): THREE.Mesh | null {
     return this.groundMesh;
   }
 
@@ -495,9 +561,38 @@ gl_FragColor.a = mix(1.0, uRootSightSoilOpacity, soilCut * uRootSightProgress);`
   }
 
   /**
+   * Set time of day (for dev controls)
+   */
+  public setTimeOfDay(t: number): void {
+    this.timeOfDay = t % 1.0;
+    if (this.timeOfDay < 0) this.timeOfDay += 1.0;
+  }
+
+  /**
    * Current solar/celestial light intensity multiplier
    */
   public getSunIntensity(): number {
     return this.sunIntensity;
+  }
+
+  /**
+   * Current sun direction (normalized, pointing FROM sun TO origin)
+   */
+  public getSunDirection(): THREE.Vector3 {
+    return this.sunDir.clone();
+  }
+
+  /**
+   * Current sun color
+   */
+  public getSunColor(): THREE.Color {
+    return this.sunLight.color.clone();
+  }
+
+  /**
+   * Current weather state (for dev controls)
+   */
+  public getWeatherState(): string {
+    return this.weatherMachine.getState();
   }
 }

@@ -18,6 +18,8 @@ export interface RenderConfig {
   cameraMinDistance: number;
   cameraMaxDistance: number;
   cameraMaxPolarAngle: number;
+  cameraStartDistance: number;
+  cameraPanSpeed: number;
   idleDropTimeoutMs: number;
   shadowMapSize: number;
   debugOverlayEnabled: boolean;
@@ -70,6 +72,19 @@ export interface RenderConfig {
   soilMineralTint: string;
   terrainMeshSubdivisions: number;
   terrainRadius: number;
+  rootAuraRadius: number;
+  // C02b: WebGPU plant renderer
+  webgpuEnabled: boolean;
+  webgpuMaxPlants: number;
+  webgpuTier0Threshold: number;
+  webgpuTier1Threshold: number;
+  webgpuTier2Threshold: number;
+  webgpuTier3Threshold: number;
+  webgpuHysteresisPromote: number;
+  webgpuHysteresisDemote: number;
+  webgpuMinDwellTime: number;
+  // C01: Node picking for growth selection
+  nodePickRadius: number;
 }
 
 export interface ControlsConfig {
@@ -140,6 +155,10 @@ interface RenderConfigResponse {
   cameraMaxDistance?: number;
   camera_max_polar_angle?: number;
   cameraMaxPolarAngle?: number;
+  camera_start_distance?: number;
+  cameraStartDistance?: number;
+  camera_pan_speed?: number;
+  cameraPanSpeed?: number;
   idle_drop_timeout_ms?: number;
   idleDropTimeoutMs?: number;
   shadow_map_size?: number;
@@ -230,6 +249,28 @@ interface RenderConfigResponse {
   terrainMeshSubdivisions?: number;
   terrain_radius?: number;
   terrainRadius?: number;
+  root_aura_radius?: number;
+  rootAuraRadius?: number;
+  webgpu_enabled?: boolean;
+  webgpuEnabled?: boolean;
+  webgpu_max_plants?: number;
+  webgpuMaxPlants?: number;
+  webgpu_tier0_threshold?: number;
+  webgpuTier0Threshold?: number;
+  webgpu_tier1_threshold?: number;
+  webgpuTier1Threshold?: number;
+  webgpu_tier2_threshold?: number;
+  webgpuTier2Threshold?: number;
+  webgpu_tier3_threshold?: number;
+  webgpuTier3Threshold?: number;
+  webgpu_hysteresis_promote?: number;
+  webgpuHysteresisPromote?: number;
+  webgpu_hysteresis_demote?: number;
+  webgpuHysteresisDemote?: number;
+  webgpu_min_dwell_time?: number;
+  webgpuMinDwellTime?: number;
+  node_pick_radius?: number;
+  nodePickRadius?: number;
 }
 
 interface ControlsConfigResponse {
@@ -303,6 +344,9 @@ function normalizeRenderConfig(data: RenderConfigResponse, fallback: RenderConfi
       data.camera_max_distance ?? data.cameraMaxDistance ?? fallback.cameraMaxDistance,
     cameraMaxPolarAngle:
       data.camera_max_polar_angle ?? data.cameraMaxPolarAngle ?? fallback.cameraMaxPolarAngle,
+    cameraStartDistance:
+      data.camera_start_distance ?? data.cameraStartDistance ?? fallback.cameraStartDistance,
+    cameraPanSpeed: data.camera_pan_speed ?? data.cameraPanSpeed ?? fallback.cameraPanSpeed,
     idleDropTimeoutMs:
       data.idle_drop_timeout_ms ?? data.idleDropTimeoutMs ?? fallback.idleDropTimeoutMs,
     shadowMapSize: data.shadow_map_size ?? data.shadowMapSize ?? fallback.shadowMapSize,
@@ -374,6 +418,28 @@ function normalizeRenderConfig(data: RenderConfigResponse, fallback: RenderConfi
       data.terrainMeshSubdivisions ??
       fallback.terrainMeshSubdivisions,
     terrainRadius: data.terrain_radius ?? data.terrainRadius ?? fallback.terrainRadius,
+    rootAuraRadius: data.root_aura_radius ?? data.rootAuraRadius ?? fallback.rootAuraRadius,
+    webgpuEnabled: data.webgpu_enabled ?? data.webgpuEnabled ?? fallback.webgpuEnabled,
+    webgpuMaxPlants: data.webgpu_max_plants ?? data.webgpuMaxPlants ?? fallback.webgpuMaxPlants,
+    webgpuTier0Threshold:
+      data.webgpu_tier0_threshold ?? data.webgpuTier0Threshold ?? fallback.webgpuTier0Threshold,
+    webgpuTier1Threshold:
+      data.webgpu_tier1_threshold ?? data.webgpuTier1Threshold ?? fallback.webgpuTier1Threshold,
+    webgpuTier2Threshold:
+      data.webgpu_tier2_threshold ?? data.webgpuTier2Threshold ?? fallback.webgpuTier2Threshold,
+    webgpuTier3Threshold:
+      data.webgpu_tier3_threshold ?? data.webgpuTier3Threshold ?? fallback.webgpuTier3Threshold,
+    webgpuHysteresisPromote:
+      data.webgpu_hysteresis_promote ??
+      data.webgpuHysteresisPromote ??
+      fallback.webgpuHysteresisPromote,
+    webgpuHysteresisDemote:
+      data.webgpu_hysteresis_demote ??
+      data.webgpuHysteresisDemote ??
+      fallback.webgpuHysteresisDemote,
+    webgpuMinDwellTime:
+      data.webgpu_min_dwell_time ?? data.webgpuMinDwellTime ?? fallback.webgpuMinDwellTime,
+    nodePickRadius: data.node_pick_radius ?? data.nodePickRadius ?? fallback.nodePickRadius,
   };
 }
 
@@ -475,6 +541,8 @@ export async function loadRenderConfig(serverOrigin: string): Promise<RenderConf
     cameraMinDistance: 10.0,
     cameraMaxDistance: 200.0,
     cameraMaxPolarAngle: 1.52,
+    cameraStartDistance: 6.0,
+    cameraPanSpeed: 8.0,
     idleDropTimeoutMs: 30000,
     shadowMapSize: 2048,
     debugOverlayEnabled: true,
@@ -542,6 +610,17 @@ export async function loadRenderConfig(serverOrigin: string): Promise<RenderConf
     soilMineralTint: '#5A8FA8',
     terrainMeshSubdivisions: 48,
     terrainRadius: 300.0,
+    rootAuraRadius: 3.0,
+    webgpuEnabled: true,
+    webgpuMaxPlants: 10000,
+    webgpuTier0Threshold: 300,
+    webgpuTier1Threshold: 80,
+    webgpuTier2Threshold: 12,
+    webgpuTier3Threshold: 2,
+    webgpuHysteresisPromote: 1.15,
+    webgpuHysteresisDemote: 0.85,
+    webgpuMinDwellTime: 0.5,
+    nodePickRadius: 0.35,
   });
 }
 

@@ -14,7 +14,7 @@ const PREFIXES = {
   account: 'acct',
   world: 'world',
   plant: 'p',
-  node: 'node',
+  node: 'n',
   item: 'item',
   gene: 'gene',
   seed: 'seed',
@@ -23,6 +23,8 @@ const PREFIXES = {
   session: 'sess',
 } as const;
 
+let nodeCounter = 0;
+
 export type IdKind = keyof typeof PREFIXES;
 
 /**
@@ -30,5 +32,9 @@ export type IdKind = keyof typeof PREFIXES;
  * so logs and ledger entries are greppable.
  */
 export function newId(kind: IdKind): string {
+  if (kind === 'node') {
+    nodeCounter++;
+    return `${PREFIXES[kind]}_${nodeCounter}`;
+  }
   return `${PREFIXES[kind]}_${crypto.randomUUID()}`;
 }
