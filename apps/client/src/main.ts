@@ -314,12 +314,17 @@ interface ReconnectData {
 }
 function loadReconnectData(): ReconnectData | null {
   try {
-    const raw = localStorage.getItem(RECONNECT_STORAGE_KEY);
+    // Purge legacy cross-tab key from localStorage to prevent tab collision (ADR-029)
+    try {
+      localStorage.removeItem(RECONNECT_STORAGE_KEY);
+    } catch {}
+
+    const raw = sessionStorage.getItem(RECONNECT_STORAGE_KEY);
     if (!raw) return null;
     const data = JSON.parse(raw) as ReconnectData;
     // Expire after 7 days
     if (data.timestamp && Date.now() - data.timestamp > 7 * 24 * 60 * 60 * 1000) {
-      localStorage.removeItem(RECONNECT_STORAGE_KEY);
+      sessionStorage.removeItem(RECONNECT_STORAGE_KEY);
       return null;
     }
     return data;
@@ -329,14 +334,17 @@ function loadReconnectData(): ReconnectData | null {
 }
 function saveReconnectData(data: ReconnectData): void {
   try {
-    localStorage.setItem(RECONNECT_STORAGE_KEY, JSON.stringify({ ...data, timestamp: Date.now() }));
+    sessionStorage.setItem(
+      RECONNECT_STORAGE_KEY,
+      JSON.stringify({ ...data, timestamp: Date.now() }),
+    );
   } catch {
     // Ignore quota/storage errors
   }
 }
 function clearReconnectData(): void {
   try {
-    localStorage.removeItem(RECONNECT_STORAGE_KEY);
+    sessionStorage.removeItem(RECONNECT_STORAGE_KEY);
   } catch {
     // Ignore
   }
@@ -2617,6 +2625,10 @@ function connect(): void {
 
           // Clear other players' plants to avoid stale data on reconnect
           otherPlayerPlants.clear();
+          // Request full plant sync to discover other existing players in the world
+          if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: MESSAGE_TYPE.PLANT_SYNC_REQUEST, payload: {} }));
+          }
           // Request initial resource tile for own plant
           // Use the local plant's root/seed node (parentId === null) for accurate position
           const ownRootNode = Array.from(plantNodes.values()).find((n) => n.parentId === null);
@@ -2949,6 +2961,23 @@ function connect(): void {
                   parentNode.children = updatedParent.children;
                 }
               }
+            }
+            // Update renderers with other player's newly grown nodes
+            if (plantRenderer) {
+              const otherNodes: PlantNodeData[] = [];
+              for (const nodes of otherPlayerPlants.values()) {
+                otherNodes.push(...nodes.values());
+              }
+              const allNodes = [...plantNodes.values(), ...otherNodes];
+              plantRenderer.updatePlantData(allNodes);
+            }
+            if (webgpuRenderer) {
+              const otherNodes: PlantNodeData[] = [];
+              for (const nodes of otherPlayerPlants.values()) {
+                otherNodes.push(...nodes.values());
+              }
+              const allNodes = [...plantNodes.values(), ...otherNodes];
+              webgpuRenderer.updatePlants(allNodes, performance.now());
             }
           }
           break;

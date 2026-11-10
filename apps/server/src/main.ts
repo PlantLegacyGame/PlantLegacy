@@ -248,6 +248,11 @@ class World {
       this.log.warn('HELLO timeout, closing connection', { playerId: pid });
       ws.close(4008, 'HELLO timeout');
     });
+    connectionRegistrySetPlant(this.connectionRegistry, playerId, plantId);
+    connectionRegistryClearHelloTimer(this.connectionRegistry, playerId);
+    connectionRegistryInstallHandler(this.connectionRegistry, playerId, (data: Buffer) => {
+      this.handlePostHelloMessage(playerId, data);
+    });
 
     const player: ConnectedPlayer = {
       ws,
@@ -258,8 +263,6 @@ class World {
       pendingInputs: new Map(),
     };
     this.players.set(playerId, player);
-
-    connectionRegistrySetPlant(this.connectionRegistry, playerId, plantId);
 
     const rootNodeId = plant.rootNodeId;
     const rootNode = rootNodeId != null ? plant.nodes.get(rootNodeId) : undefined;
@@ -309,6 +312,24 @@ class World {
       accountId: accountId ?? 'anonymous',
       totalPlayers: this.players.size,
     });
+
+    // Broadcast new plant to all other connected players (multiplayer visibility)
+    const plantCreatedPayload = {
+      plant: {
+        id: plant.id,
+        ownerId: plant.ownerId,
+        rootNodeId: plant.rootNodeId,
+        totalBiomass: plant.totalBiomass,
+        totalEnergy: plant.totalEnergy,
+        totalUpkeep: plant.totalUpkeep,
+        nodes: welcome.nodes ?? [],
+      },
+    };
+    for (const otherPlayer of this.players.values()) {
+      if (otherPlayer.playerId !== playerId) {
+        this.send(otherPlayer.ws, MESSAGE_TYPE.PLANT_CREATED, plantCreatedPayload);
+      }
+    }
 
     // Register plant root node as entity in InterestManager
     if (rootNode) {
@@ -678,6 +699,63 @@ class World {
           };
           const player = this.players.get(playerId);
           if (player) this.send(player.ws, MESSAGE_TYPE.PLANT_SYNC, syncPayload);
+          break;
+        }
+        case MESSAGE_TYPE.GROWTH_OPTIONS_REQUEST: {
+          const req = payload as { plantId?: string; nodeId?: string };
+          const player = this.players.get(playerId);
+          if (!player) break;
+
+          // INV-ID-02: Verify plant belongs to this player
+          if (!req.plantId || req.plantId !== player.plantId) {
+            this.send(player.ws, MESSAGE_TYPE.GROWTH_OPTIONS_RESULT, {
+              nodeId: req.nodeId ?? '',
+              nodeType: 'seed',
+              isSeed: true,
+              energy: 0,
+              biomass: 0,
+              options: [],
+              error: 'plant_mismatch',
+            });
+            break;
+          }
+
+          if (!req.nodeId) {
+            this.send(player.ws, MESSAGE_TYPE.GROWTH_OPTIONS_RESULT, {
+              nodeId: '',
+              nodeType: 'seed',
+              isSeed: true,
+              energy: 0,
+              biomass: 0,
+              options: [],
+              error: 'node_not_found',
+            });
+            break;
+          }
+
+          const optionsResult = this.plantWorld.getGrowthOptions(req.plantId, req.nodeId);
+          if (!optionsResult) {
+            this.send(player.ws, MESSAGE_TYPE.GROWTH_OPTIONS_RESULT, {
+              nodeId: req.nodeId,
+              nodeType: 'seed',
+              isSeed: true,
+              energy: 0,
+              biomass: 0,
+              options: [],
+              error: 'node_not_found',
+            });
+            break;
+          }
+
+          this.send(player.ws, MESSAGE_TYPE.GROWTH_OPTIONS_RESULT, {
+            nodeId: optionsResult.nodeId,
+            nodeType: optionsResult.nodeType,
+            isSeed: optionsResult.isSeed,
+            energy: optionsResult.energy,
+            biomass: optionsResult.biomass,
+            options: optionsResult.options,
+            conditions: optionsResult.conditions,
+          });
           break;
         }
         default: {
