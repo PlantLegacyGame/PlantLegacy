@@ -818,4 +818,41 @@ describe('PlantWorld', () => {
         finalResult.reason === 'max_nodes_reached',
     );
   });
+
+  it('INV-GR-13: quoted growth costs in getGrowthOptions exactly match energy deducted in tryGrow', () => {
+    const world = makeTestPlantWorld();
+    world.setResourceProvider(() => ({ light: 50, moisture: 50, minerals: 50 }));
+    const plant = world.createPlant('p1', 'w1', 0, 0);
+    const seedNodeId = plant.rootNodeId ?? '';
+
+    // Seed germination quote
+    const optionsResult = world.getGrowthOptions(plant.id, seedNodeId);
+    assert.ok(optionsResult);
+    const radicleOption = optionsResult.options.find((o) => o.type === 'radicle');
+    assert.ok(radicleOption);
+
+    const initialEnergy = plant.totalEnergy;
+    const growResult = world.tryGrow(
+      {
+        plantId: plant.id,
+        nodeId: seedNodeId,
+        direction: { x: 0, y: -1, z: 0 },
+        nodeType: 'radicle',
+        isAttack: false,
+        tick: 1,
+      },
+      1,
+    );
+    assert.equal(growResult.success, true, growResult.reason);
+    const energyDeducted = initialEnergy - plant.totalEnergy;
+    assert.equal(energyDeducted, radicleOption.energyCost);
+
+    // After germination, check quote for cotyledon matches definition
+    const postOptions = world.getGrowthOptions(plant.id, seedNodeId);
+    assert.ok(postOptions);
+    const cotyledonOption = postOptions.options.find((o) => o.type === 'cotyledon');
+    assert.ok(cotyledonOption);
+    assert.equal(cotyledonOption.energyCost, 6);
+    assert.equal(cotyledonOption.biomassGain, 6);
+  });
 });

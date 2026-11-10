@@ -440,3 +440,43 @@ describe('AccountsService - Refresh Token Lookup Hash', () => {
     assert.ok(!hash.includes(token));
   });
 });
+
+describe('AccountsService - Display Name Validation (INV-AU-06)', () => {
+  function validateDisplayName(displayName: string) {
+    const errors: string[] = [];
+    if (displayName.length < testConfig.displayNameMinLength) {
+      errors.push(`Display name must be at least ${testConfig.displayNameMinLength} character(s)`);
+    }
+    if (displayName.length > testConfig.displayNameMaxLength) {
+      errors.push(`Display name must be at most ${testConfig.displayNameMaxLength} characters`);
+    }
+    for (let i = 0; i < displayName.length; i++) {
+      const code = displayName.charCodeAt(i);
+      if (code <= 0x1f || code === 0x7f) {
+        errors.push('Display name contains invalid characters');
+        break;
+      }
+    }
+    return { valid: errors.length === 0, errors };
+  }
+
+  it('accepts valid display names', () => {
+    assert.equal(validateDisplayName('Flora').valid, true);
+    assert.equal(validateDisplayName('Botanist_42').valid, true);
+    assert.equal(validateDisplayName('Oak & Willow').valid, true);
+  });
+
+  it('rejects empty display name', () => {
+    assert.equal(validateDisplayName('').valid, false);
+  });
+
+  it('rejects display name exceeding maximum length', () => {
+    assert.equal(validateDisplayName('a'.repeat(33)).valid, false);
+  });
+
+  it('rejects display name containing control characters', () => {
+    assert.equal(validateDisplayName('Bad\x00Name').valid, false);
+    assert.equal(validateDisplayName('Bad\x1fName').valid, false);
+    assert.equal(validateDisplayName('Bad\x7fName').valid, false);
+  });
+});

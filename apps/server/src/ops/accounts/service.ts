@@ -554,12 +554,10 @@ export class AccountsService {
     accountId: string,
     newDisplayName: string,
   ): Promise<Account | { error: string }> {
-    if (
-      newDisplayName.length < this.config.displayNameMinLength ||
-      newDisplayName.length > this.config.displayNameMaxLength
-    ) {
+    const validation = this.validateDisplayName(newDisplayName);
+    if (!validation.valid) {
       return {
-        error: `Display name must be between ${this.config.displayNameMinLength} and ${this.config.displayNameMaxLength} characters`,
+        error: validation.errors.join(', '),
       };
     }
 

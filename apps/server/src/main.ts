@@ -238,8 +238,16 @@ class World {
     accountId?: string,
   ): { plantId: string; welcome: WelcomePayload } {
     const ownerId = accountId ?? playerId;
-    const spawn = this.findSpawnPosition();
-    const plant = this.plantWorld.createPlant(ownerId, 'world_0', spawn.x, spawn.z);
+    let plant: import('@plant-legacy/shared/growth').Plant;
+
+    // INV-ID-01: One active plant per owner/account. If this owner already has an active plant, reuse it.
+    const existingPlants = this.plantWorld.getPlantsByOwner(ownerId);
+    if (existingPlants.length > 0) {
+      plant = existingPlants[0];
+    } else {
+      const spawn = this.findSpawnPosition();
+      plant = this.plantWorld.createPlant(ownerId, 'world_0', spawn.x, spawn.z);
+    }
     const plantId = plant.id;
 
     this.registerClientAtPlant(playerId, plant);
@@ -569,6 +577,21 @@ class World {
   ): void {
     const player = this.players.get(playerId);
     if (!player) return;
+
+    // INV-ID-02: Verify plant belongs to this player before queueing intent
+    if (!intent.plantId || intent.plantId !== player.plantId) {
+      this.log.warn('growth intent rejected: plant ownership mismatch', {
+        playerId,
+        playerPlantId: player.plantId,
+        intentPlantId: intent.plantId,
+      });
+      const reject: RejectPayload = {
+        reason: 'plant_mismatch',
+        originalType: MESSAGE_TYPE.GROWTH_INTENT,
+      };
+      this.send(player.ws, MESSAGE_TYPE.REJECT, reject);
+      return;
+    }
 
     const enqueueResult = growthIntentStateMachineEnqueue(
       this.growthIntentMachine,

@@ -36,9 +36,39 @@ function getGrowthSpeed(config: GrowthConfig, layer: Layer): number {
   return layer === 'root' ? config.rootGrowthSpeed : config.canopyGrowthSpeed;
 }
 
-function getGrowthTimeSeconds(config: GrowthConfig, nodeType: string): number {
-  const def = getNodeTypeDefinition(config, nodeType as NodeType);
-  return def.growth_time_seconds ?? 5;
+export interface GrowthCostQuote {
+  energyCost: number;
+  biomassGain: number;
+  growthTimeSeconds: number;
+  waterCost: number;
+  mineralCost: number;
+  nutrientCost: number;
+}
+
+/**
+ * Single source of truth for growth energy and resource costs (INV-GR-13).
+ * Ensures getGrowthOptions quotes exactly what tryGrow and step charge.
+ */
+export function computeGrowthCostQuote(
+  config: GrowthConfig,
+  nodeDef: NodeTypeDefinition,
+): GrowthCostQuote {
+  const energyCost = Math.ceil(nodeDef.biomass_cost);
+  const biomassGain = nodeDef.biomass_cost;
+  const growthTimeSeconds = nodeDef.growth_time_seconds ?? 5;
+  const waterCost = growthTimeSeconds * config.growthWaterConsumptionRate * nodeDef.biomass_cost;
+  const mineralCost =
+    growthTimeSeconds * config.growthMineralConsumptionRate * nodeDef.biomass_cost;
+  const nutrientCost =
+    growthTimeSeconds * config.growthNutrientConsumptionRate * nodeDef.biomass_cost;
+  return {
+    energyCost,
+    biomassGain,
+    growthTimeSeconds,
+    waterCost,
+    mineralCost,
+    nutrientCost,
+  };
 }
 
 function normalizeDirection(dir: { x: number; y: number; z: number }): {
@@ -410,28 +440,23 @@ export class PlantWorld {
       const maxCotyledons = 2;
 
       if (!hasRadicle) {
-        const energyCost = radicleDef.biomass_cost;
-        const growthTime = radicleDef.growth_time_seconds ?? 3;
-        const waterCost =
-          growthTime * this.config.growthWaterConsumptionRate * radicleDef.biomass_cost;
-        const mineralCost =
-          growthTime * this.config.growthMineralConsumptionRate * radicleDef.biomass_cost;
+        const costs = computeGrowthCostQuote(this.config, radicleDef);
         addOption(
           'radicle',
           'Sprout Radicle (drag direction)',
-          energyCost,
-          radicleDef.biomass_cost,
-          growthTime,
-          germinationOk && plant.totalEnergy >= energyCost,
+          costs.energyCost,
+          costs.biomassGain,
+          costs.growthTimeSeconds,
+          germinationOk && plant.totalEnergy >= costs.energyCost,
           germinationOk
-            ? plant.totalEnergy < energyCost
+            ? plant.totalEnergy < costs.energyCost
               ? 'Insufficient energy'
               : undefined
             : 'Insufficient moisture or light for germination',
           germinationOk ? 'Failure can destroy the seed if conditions are not met' : undefined,
-          waterCost,
-          growthTime * this.config.growthNutrientConsumptionRate * radicleDef.biomass_cost,
-          mineralCost,
+          costs.waterCost,
+          costs.nutrientCost,
+          costs.mineralCost,
         );
         return {
           nodeId,
@@ -445,24 +470,19 @@ export class PlantWorld {
       }
 
       if (cotyledonCount < maxCotyledons) {
-        const energyCost = cotyledonDef.biomass_cost;
-        const growthTime = cotyledonDef.growth_time_seconds ?? 2;
-        const waterCost =
-          growthTime * this.config.growthWaterConsumptionRate * cotyledonDef.biomass_cost;
-        const mineralCost =
-          growthTime * this.config.growthMineralConsumptionRate * cotyledonDef.biomass_cost;
+        const costs = computeGrowthCostQuote(this.config, cotyledonDef);
         addOption(
           'cotyledon',
           `Add Cotyledon ${cotyledonCount + 1}/${maxCotyledons} (drag direction)`,
-          energyCost,
-          cotyledonDef.biomass_cost,
-          growthTime,
-          plant.totalEnergy >= energyCost,
-          plant.totalEnergy < energyCost ? 'Insufficient energy' : undefined,
+          costs.energyCost,
+          costs.biomassGain,
+          costs.growthTimeSeconds,
+          plant.totalEnergy >= costs.energyCost,
+          plant.totalEnergy < costs.energyCost ? 'Insufficient energy' : undefined,
           undefined,
-          waterCost,
-          growthTime * this.config.growthNutrientConsumptionRate * cotyledonDef.biomass_cost,
-          mineralCost,
+          costs.waterCost,
+          costs.nutrientCost,
+          costs.mineralCost,
         );
         return {
           nodeId,
@@ -477,31 +497,27 @@ export class PlantWorld {
       // Established crown (2 cotyledons): offer stem. isSeed may still be true; tryGrow allows stem from seed crown.
       {
         const stemDef = this.config.stemNode;
-        const growthTime = stemDef.growth_time_seconds ?? 5;
-        const waterCost =
-          growthTime * this.config.growthWaterConsumptionRate * stemDef.biomass_cost;
-        const mineralCost =
-          growthTime * this.config.growthMineralConsumptionRate * stemDef.biomass_cost;
+        const costs = computeGrowthCostQuote(this.config, stemDef);
         addOption(
           'stem',
           'Grow Stem',
-          stemDef.biomass_cost,
-          stemDef.biomass_cost,
-          growthTime,
-          plant.totalEnergy >= stemDef.biomass_cost &&
-            plant.storedWater >= waterCost &&
-            plant.storedMinerals >= mineralCost,
-          plant.totalEnergy < stemDef.biomass_cost
+          costs.energyCost,
+          costs.biomassGain,
+          costs.growthTimeSeconds,
+          plant.totalEnergy >= costs.energyCost &&
+            plant.storedWater >= costs.waterCost &&
+            plant.storedMinerals >= costs.mineralCost,
+          plant.totalEnergy < costs.energyCost
             ? 'Insufficient energy'
-            : plant.storedWater < waterCost
+            : plant.storedWater < costs.waterCost
               ? 'Insufficient stored water'
-              : plant.storedMinerals < mineralCost
+              : plant.storedMinerals < costs.mineralCost
                 ? 'Insufficient stored minerals'
                 : undefined,
           undefined,
-          waterCost,
+          costs.waterCost,
           0,
-          mineralCost,
+          costs.mineralCost,
         );
         return {
           nodeId,
@@ -518,30 +534,27 @@ export class PlantWorld {
     // Return stem option for established seed crown (stepwise germination complete).
     if (node.type === 'seed' && !node.isSeed) {
       const stemDef = this.config.stemNode;
-      const growthTime = stemDef.growth_time_seconds ?? 5;
-      const waterCost = growthTime * this.config.growthWaterConsumptionRate * stemDef.biomass_cost;
-      const mineralCost =
-        growthTime * this.config.growthMineralConsumptionRate * stemDef.biomass_cost;
+      const costs = computeGrowthCostQuote(this.config, stemDef);
       addOption(
         'stem',
         'Grow Stem',
-        stemDef.biomass_cost,
-        stemDef.biomass_cost,
-        growthTime,
-        plant.totalEnergy >= stemDef.biomass_cost &&
-          plant.storedWater >= waterCost &&
-          plant.storedMinerals >= mineralCost,
-        plant.totalEnergy < stemDef.biomass_cost
+        costs.energyCost,
+        costs.biomassGain,
+        costs.growthTimeSeconds,
+        plant.totalEnergy >= costs.energyCost &&
+          plant.storedWater >= costs.waterCost &&
+          plant.storedMinerals >= costs.mineralCost,
+        plant.totalEnergy < costs.energyCost
           ? 'Insufficient energy'
-          : plant.storedWater < waterCost
+          : plant.storedWater < costs.waterCost
             ? 'Insufficient stored water'
-            : plant.storedMinerals < mineralCost
+            : plant.storedMinerals < costs.mineralCost
               ? 'Insufficient stored minerals'
               : undefined,
         undefined,
-        waterCost,
+        costs.waterCost,
         0,
-        mineralCost,
+        costs.mineralCost,
       );
       return {
         nodeId,
@@ -558,17 +571,11 @@ export class PlantWorld {
 
     for (const targetType of availableTypes) {
       const nodeDef = getNodeTypeDefinition(this.config, targetType);
-      const energyCost = nodeDef.biomass_cost;
-      const growthTime = nodeDef.growth_time_seconds ?? 5;
-      const waterCost = growthTime * this.config.growthWaterConsumptionRate * nodeDef.biomass_cost;
-      const mineralCost =
-        growthTime * this.config.growthMineralConsumptionRate * nodeDef.biomass_cost;
-      const biomassGain = nodeDef.biomass_cost;
-      const expectedSeconds = growthTime;
+      const costs = computeGrowthCostQuote(this.config, nodeDef);
 
-      const hasEnergy = plant.totalEnergy >= energyCost;
-      const hasWater = plant.storedWater >= waterCost;
-      const hasMinerals = plant.storedMinerals >= mineralCost;
+      const hasEnergy = plant.totalEnergy >= costs.energyCost;
+      const hasWater = plant.storedWater >= costs.waterCost;
+      const hasMinerals = plant.storedMinerals >= costs.mineralCost;
       const available = hasEnergy && hasWater && hasMinerals;
 
       let reason: string | undefined;
@@ -579,15 +586,15 @@ export class PlantWorld {
       addOption(
         targetType,
         `Grow ${targetType.replace('_', ' ')}`,
-        energyCost,
-        biomassGain,
-        expectedSeconds,
+        costs.energyCost,
+        costs.biomassGain,
+        costs.growthTimeSeconds,
         available,
         reason,
         undefined,
-        waterCost,
+        costs.waterCost,
         0, // nutrientCost - using minerals for both
-        mineralCost,
+        costs.mineralCost,
       );
     }
 
@@ -1161,19 +1168,17 @@ export class PlantWorld {
       return { success: false, reason: directionValidation.reason ?? 'invalid_direction' };
     }
 
-    // Calculate energy cost - stepwise germination: radicle/cotyledon are separate actions.
-    let energyCost: number;
-    let nodeDef: NodeTypeDefinition | null = null;
+    // Calculate energy cost - stepwise germination: radicle/cotyledon are separate actions (INV-GR-13).
+    let nodeDef: NodeTypeDefinition;
     if (parentNode.type === 'seed' && parentNode.isSeed && targetType === 'radicle') {
       nodeDef = this.config.radicleNode;
-      energyCost = Math.ceil(nodeDef.biomass_cost);
     } else if (targetType === 'cotyledon') {
       nodeDef = this.config.cotyledonNode;
-      energyCost = Math.ceil(nodeDef.biomass_cost);
     } else {
       nodeDef = getNodeTypeDefinition(this.config, targetType);
-      energyCost = Math.ceil(nodeDef.biomass_cost);
     }
+    const costs = computeGrowthCostQuote(this.config, nodeDef);
+    const energyCost = costs.energyCost;
 
     if (plant.totalEnergy < energyCost) {
       return { success: false, reason: 'insufficient_energy' };
@@ -1201,11 +1206,7 @@ export class PlantWorld {
     }
 
     const newNodeId = newId('node');
-    const growthTimeSeconds = getGrowthTimeSeconds(this.config, targetType);
-    // nodeDef is guaranteed to be set here because germination returns early
-    if (!nodeDef) {
-      return { success: false, reason: 'invalid_node_type' };
-    }
+    const growthTimeSeconds = costs.growthTimeSeconds;
     const newNode: PlantNode = {
       id: newNodeId,
       plantId: plant.id,
