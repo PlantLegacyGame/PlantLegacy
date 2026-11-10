@@ -62,15 +62,18 @@ import './styles.css';
 const serverOrigin =
   document.querySelector('meta[name="server-origin"]')?.getAttribute('content') ?? '';
 
-const isLocalDev =
-  (location.hostname === '127.0.0.1' || location.hostname === 'localhost') &&
-  (location.port === '4173' ||
-    location.port === '4174' ||
-    location.port === '4175' ||
-    location.port === '4176');
-const httpOrigin = serverOrigin || (isLocalDev ? 'http://127.0.0.1:8080' : location.origin);
+const isLocalDev = location.hostname === '127.0.0.1' || location.hostname === 'localhost';
+const defaultServerPort = '8080';
+const httpOrigin =
+  serverOrigin ||
+  (isLocalDev
+    ? `${location.protocol}//${location.hostname}:${defaultServerPort}`
+    : location.origin);
 // In dev, connect directly to server WebSocket to avoid Vite proxy issues
-const wsOrigin = isLocalDev ? 'ws://127.0.0.1:8080' : httpOrigin.replace(/^http/, 'ws');
+const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+const wsOrigin = isLocalDev
+  ? `${wsProtocol}//${location.hostname}:${defaultServerPort}`
+  : httpOrigin.replace(/^http/, 'ws');
 
 // D01: Dev mode gate - only enable dev features with ?dev=1 query param
 const isDevMode = new URLSearchParams(location.search).has('dev');

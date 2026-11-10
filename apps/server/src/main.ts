@@ -68,13 +68,34 @@ function sendJson(response: ServerResponse, status: number, body: unknown): void
   response.end(payload);
 }
 
+function isAllowedOrigin(
+  origin: string | undefined,
+  allowedOrigins: readonly string[],
+  nodeEnv = 'local',
+): boolean {
+  if (!origin) return true;
+  if (allowedOrigins.includes(origin)) return true;
+  if (nodeEnv === 'local') {
+    try {
+      const u = new URL(origin);
+      if (u.hostname === 'localhost' || u.hostname === '127.0.0.1') {
+        return true;
+      }
+    } catch {
+      return false;
+    }
+  }
+  return false;
+}
+
 function applyCors(
   request: IncomingMessage,
   response: ServerResponse,
   allowedOrigins: readonly string[],
+  nodeEnv = 'local',
 ): void {
   const origin = request.headers.origin;
-  if (typeof origin === 'string' && allowedOrigins.includes(origin)) {
+  if (typeof origin === 'string' && isAllowedOrigin(origin, allowedOrigins, nodeEnv)) {
     response.setHeader('access-control-allow-origin', origin);
     response.setHeader('vary', 'origin');
   }
@@ -997,6 +1018,7 @@ async function main(): Promise<void> {
   const netProtoConfig = loadNetProtoConfig(configs);
   const growthConfig = loadGrowthConfig(configs);
   const worldConfig = loadWorldConfig(configs);
+  const resourcesConfig = loadResourcesConfig(configs);
 
   // Plant growth world (T01) with T03 tier support
   const plantWorld = new PlantWorld(
@@ -1017,10 +1039,10 @@ async function main(): Promise<void> {
       tickBudgetActiveShare: worldConfig.tickBudgetActiveShare,
       tickBudgetWarnThresholdMs: worldConfig.tickBudgetWarnThresholdMs,
     },
+    resourcesConfig,
   );
 
   // Resource world (T00A)
-  const resourcesConfig = loadResourcesConfig(configs);
   const resourceWorld = new ResourceWorld(resourcesConfig, {
     minX: netProtoConfig.worldBounds.minX,
     maxX: netProtoConfig.worldBounds.maxX,
@@ -1135,7 +1157,7 @@ async function main(): Promise<void> {
   }
 
   const handle = async (request: IncomingMessage, response: ServerResponse): Promise<void> => {
-    applyCors(request, response, runtime.corsOrigins);
+    applyCors(request, response, runtime.corsOrigins, runtime.nodeEnv);
     const method = request.method ?? 'GET';
 
     if (method === 'OPTIONS') {
@@ -1604,7 +1626,7 @@ async function main(): Promise<void> {
 
   wss.on('connection', (ws: WebSocket, request: IncomingMessage) => {
     const origin = request.headers.origin;
-    if (origin && !runtime.corsOrigins.includes(origin)) {
+    if (origin && !isAllowedOrigin(origin, runtime.corsOrigins, runtime.nodeEnv)) {
       log.warn('websocket connection rejected: origin not allowed', { origin });
       ws.close(4001, 'Origin not allowed');
       return;

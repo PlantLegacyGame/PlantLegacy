@@ -29,8 +29,7 @@ import {
   plantTierStateMachineGetTierStats,
   plantTierStateMachineUpdate,
 } from './plantTierStateMachine.ts';
-import type { TileResources } from './resourceWorld.ts';
-import { loadResourcesConfig, type ResourcesConfig } from './resourceWorld.ts';
+import type { ResourcesConfig, TileResources } from './resourceWorld.ts';
 
 function getGrowthSpeed(config: GrowthConfig, layer: Layer): number {
   return layer === 'root' ? config.rootGrowthSpeed : config.canopyGrowthSpeed;
@@ -238,7 +237,52 @@ export class PlantWorld {
     resourceConfig?: ResourcesConfig,
   ) {
     this.config = config;
-    this.resourceConfig = resourceConfig ?? loadResourcesConfig(new Map());
+    this.resourceConfig = resourceConfig ?? {
+      tileSize: 1,
+      gridWidth: 100,
+      gridHeight: 100,
+      tileLightBase: 100,
+      dayNightCurve: [0, 0.5, 1, 0.5, 0],
+      tileMoistureBase: 50,
+      rainGainPerS: 5,
+      evaporationPerS: 1,
+      temperatureBase: 20,
+      temperatureAmplitude: 10,
+      temperatureSunFactor: 5,
+      transpirationFactor: 1,
+      photosynthesisTempOptimum: 22,
+      photosynthesisTempRange: 10,
+      tileMineralsBase: 100,
+      absorptionPerS: 2,
+      absorptionRadius: 2,
+      deadRootDeposit: 10,
+      deadPlantDeposit: 25,
+      dungDeposit: 20,
+      fertilizerDeposit: 50,
+      photosynthesisRate: 1,
+      photosynthesisEnergyPerSecond: 1,
+      lightFactorCurve: [
+        [0, 0],
+        [1, 1],
+      ],
+      moistureFactorCurve: [
+        [0, 0],
+        [1, 1],
+      ],
+      mineralFactorCurve: [
+        [0, 0],
+        [1, 1],
+      ],
+      consumptionTriggerTileMineralThreshold: 10,
+      consumptionTriggerDungItem: false,
+      consumptionTriggerFertilizerItem: false,
+      diffusionRate: 0.1,
+      maxAbsorptionPerTick: 10,
+      canopyShadeReduction: 0.2,
+      maxLight: 100,
+      maxMoisture: 100,
+      maxMinerals: 100,
+    };
     this.worldBounds = worldBounds;
     this.activeTickRateHz = tierConfig?.activeTickRateHz ?? 20;
     this.nearTickRateHz = tierConfig?.nearTickRateHz ?? 5;
