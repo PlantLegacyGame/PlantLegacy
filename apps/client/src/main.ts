@@ -9,6 +9,11 @@
  * T01: Procedural Plant Renderer (Root Sight Shader).
  */
 
+import {
+  clampGrowthDirectionByGene,
+  NODE_GROWTH_CONSTRAINTS,
+  type NodeType,
+} from '@plant-legacy/shared/growth';
 import { PROTOCOL_VERSION } from '@plant-legacy/shared/protocol';
 import { validateMessage } from '@plant-legacy/shared/protocol/messageSchemas';
 import * as THREE from 'three';
@@ -1304,42 +1309,12 @@ async function initC01(): Promise<void> {
     if (clickedNodeId) requestGrowthOptions(clickedNodeId);
   });
 
-  // Client-side growth direction validation
-  // Checks: layer crossing rules, angle from parent, max distance, biome rules
+  // Client-side gene-based growth direction clamping & validation
   function clampGrowthDirectionForOption(
     optionType: string,
     dir: { x: number; y: number; z: number },
   ): { x: number; y: number; z: number } {
-    const d = { ...dir };
-    const isRootLike =
-      optionType === 'root' || optionType === 'radicle' || optionType === 'lateral_root';
-    if (isRootLike) {
-      // Reasonable default clamp (future: genes/mutations may relax/tighten). Roots should
-      // generally trend below the selected node, but can arc near/above the route midpoint
-      // as long as the final growth direction trends downward.
-      const lateral = optionType === 'lateral_root';
-      d.y = Math.min(d.y, lateral ? 0.05 : 0.12); // allow near-surface arc, not mostly upward
-      const h = Math.hypot(d.x, d.z);
-      const maxH = lateral ? 2.0 : 1.35;
-      if (h > maxH && h > 1e-6) {
-        const s = maxH / h;
-        d.x *= s;
-        d.z *= s;
-      } else if (h < 1e-6) {
-        d.x = 0.08;
-        d.z = 0.04;
-      }
-      // Keep a slight downward bias for primary roots so they don't stall horizontally.
-      if (!lateral && d.y > -0.08) d.y = -0.08;
-    } else if (optionType === 'cotyledon' || optionType === 'leaf') {
-      d.y = Math.max(d.y, 0.15);
-    } else if (optionType === 'vine') {
-      d.y = Math.max(-0.25, Math.min(d.y, 0.7));
-    } else {
-      d.y = Math.max(d.y, 0.08);
-    }
-    const len = Math.hypot(d.x, d.y, d.z) || 1;
-    return { x: d.x / len, y: d.y / len, z: d.z / len };
+    return clampGrowthDirectionByGene(optionType as NodeType, dir);
   }
 
   function validateGrowthDirection(
@@ -1362,6 +1337,9 @@ async function initC01(): Promise<void> {
     if (!node) return { isValid: false, reason: 'Node not found', distance };
 
     const nodeType = drawingData.selectedOptionType;
+    const constraints =
+      NODE_GROWTH_CONSTRAINTS[nodeType as NodeType] ?? NODE_GROWTH_CONSTRAINTS.stem;
+
     // Use end-tangent of traced path (matches intent direction) when available.
     const path = drawingData.path ?? [];
     let tdx = dx,
@@ -1387,26 +1365,26 @@ async function initC01(): Promise<void> {
     }
 
     if (tdist < 0.001) {
-      const fallback = clampGrowthDirectionForOption(
+      const fallback = clampGrowthDirectionByGene(
         nodeType,
-        nodeType === 'radicle' || nodeType === 'root' || nodeType === 'lateral_root'
-          ? { x: 0, y: -1, z: 0 }
-          : { x: 0, y: 1, z: 0 },
+        constraints.downwardPreferred ? { x: 0, y: -1, z: 0 } : { x: 0, y: 1, z: 0 },
       );
-      return { isValid: true, distance, clampedDirection: fallback };
+      return { isValid: true, distance: constraints.maxReach * 0.7, clampedDirection: fallback };
     }
 
     const rawDir = { x: tdx / tdist, y: tdy / tdist, z: tdz / tdist };
-    const clampedDirection = clampGrowthDirectionForOption(nodeType, rawDir);
+    const clampedDirection = clampGrowthDirectionByGene(nodeType, rawDir);
+    const clampedDistance = Math.max(0.3, Math.min(distance, constraints.maxReach));
+
     return {
       isValid: true,
-      distance,
+      distance: clampedDistance,
       clampedDirection,
       reason: distance < 0.02 ? 'Drag to trace a growth path' : undefined,
     };
   }
 
-  // Visual preview: draw the full 3D mouse-traced path (projected to screen) with arrowhead at tip.
+  // Visual preview: draw the gene-constrained 3D growth vector with arrowhead at tip.
   function updateGrowthDirectionLine(
     _start: { x: number; y: number; z: number },
     _end: { x: number; y: number; z: number },
@@ -1415,13 +1393,24 @@ async function initC01(): Promise<void> {
     ensureGrowthDirectionOverlay();
     if (!growthDirectionOverlay || !growthDirectionOverlayCtx) return;
     const drawingData = growthSelectionStateMachineGetDrawingData(growthSelectionMachine);
-    const path3 =
-      drawingData?.path && drawingData.path.length >= 2
-        ? drawingData.path
-        : [
-            { x: _start.x, y: _start.y, z: _start.z },
-            { x: _end.x, y: _end.y, z: _end.z },
-          ];
+    const nodeType = drawingData?.selectedOptionType ?? 'radicle';
+    const constraints =
+      NODE_GROWTH_CONSTRAINTS[nodeType as NodeType] ?? NODE_GROWTH_CONSTRAINTS.stem;
+
+    let endPos = _end;
+    if (drawingData?.direction) {
+      const reach = Math.max(
+        0.4,
+        Math.min(drawingData.distance || constraints.maxReach, constraints.maxReach),
+      );
+      endPos = {
+        x: _start.x + drawingData.direction.x * reach,
+        y: _start.y + drawingData.direction.y * reach,
+        z: _start.z + drawingData.direction.z * reach,
+      };
+    }
+
+    const path3 = [{ x: _start.x, y: _start.y, z: _start.z }, endPos];
 
     const w = window.innerWidth;
     const h = window.innerHeight;
@@ -1533,6 +1522,10 @@ async function initC01(): Promise<void> {
     const hit = getGrowthDrawHitPoint(e, drawingData);
     const validation = validateGrowthDirection(drawingData, hit);
     growthSelectionStateMachineUpdateDrawing(growthSelectionMachine, hit, validation);
+    if (validation.clampedDirection) {
+      drawingData.direction = validation.clampedDirection;
+      drawingData.distance = validation.distance;
+    }
     updateGrowthDirectionLine(drawingData.nodePosition, hit, validation.isValid);
     e.preventDefault();
     e.stopPropagation();
