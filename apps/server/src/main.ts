@@ -358,6 +358,12 @@ class World {
         lastGrowthTick: n.lastGrowthTick,
         growthProgress: n.growthProgress ?? 1.0,
         isSeed: n.isSeed ?? false,
+        targetX: n.targetX,
+        targetY: n.targetY,
+        targetZ: n.targetZ,
+        parentAttachX: n.parentAttachX,
+        parentAttachY: n.parentAttachY,
+        parentAttachZ: n.parentAttachZ,
       })),
     };
 
@@ -512,6 +518,12 @@ class World {
         lastGrowthTick: n.lastGrowthTick,
         growthProgress: n.growthProgress ?? 1.0,
         isSeed: n.isSeed ?? false,
+        targetX: n.targetX,
+        targetY: n.targetY,
+        targetZ: n.targetZ,
+        parentAttachX: n.parentAttachX,
+        parentAttachY: n.parentAttachY,
+        parentAttachZ: n.parentAttachZ,
       })),
     };
 
@@ -610,6 +622,12 @@ class World {
         lastGrowthTick: n.lastGrowthTick,
         growthProgress: n.growthProgress ?? 1.0,
         isSeed: n.isSeed ?? false,
+        targetX: n.targetX,
+        targetY: n.targetY,
+        targetZ: n.targetZ,
+        parentAttachX: n.parentAttachX,
+        parentAttachY: n.parentAttachY,
+        parentAttachZ: n.parentAttachZ,
       })),
     };
 
@@ -908,9 +926,16 @@ class World {
                 lastGrowthTick: n.lastGrowthTick,
                 growthProgress: n.growthProgress ?? 1.0,
                 isSeed: n.isSeed ?? false,
+                targetX: n.targetX,
+                targetY: n.targetY,
+                targetZ: n.targetZ,
+                parentAttachX: n.parentAttachX,
+                parentAttachY: n.parentAttachY,
+                parentAttachZ: n.parentAttachZ,
               })),
             })),
           };
+
           const player = this.players.get(playerId);
           if (player) this.send(player.ws, MESSAGE_TYPE.PLANT_SYNC, syncPayload);
           break;

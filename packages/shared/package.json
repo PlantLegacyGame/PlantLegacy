@@ -13,6 +13,7 @@
     "./ids": "./src/ids/index.ts",
     "./math": "./src/math/index.ts",
     "./plantGraphValidator": "./src/plantGraphValidator.ts",
+    "./physics": "./src/physics/index.ts",
     "./protocol": "./src/protocol/index.ts",
     "./protocol/messageSchemas": "./src/protocol/messageSchemas.ts"
   },

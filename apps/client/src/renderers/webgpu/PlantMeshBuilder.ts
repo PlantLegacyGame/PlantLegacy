@@ -793,13 +793,20 @@ export function buildPlantMesh(
             : parent.position;
       }
 
-      const animatedPosition = parentAttachPos.clone().lerp(node.position, growthEase);
+      // Use server-authoritative target position (where the node is growing to)
+      // for the connector tube end and curve control point. Falls back to the
+      // node's current position for fully-grown nodes that have no target.
+      // This ensures new growth is drawn as a tube extending from the parent
+      // toward the target, not as a zero-length blob at the parent.
+      const hasTarget =
+        node.targetX !== undefined && node.targetY !== undefined && node.targetZ !== undefined;
+      const targetPosition = hasTarget
+        ? new THREE.Vector3(node.targetX, node.targetY, node.targetZ)
+        : node.position;
+
+      const animatedPosition = parentAttachPos.clone().lerp(targetPosition, growthEase);
       box.expandByPoint(animatedPosition);
       const branch = new THREE.Vector3().subVectors(animatedPosition, parentAttachPos);
-
-      // Use server-authoritative target position (node.position) for control point
-      // so the curve shape is fixed and doesn't change during growth animation
-      const targetPosition = node.position;
 
       if (branch.lengthSq() > 1e-8) {
         branch.normalize();

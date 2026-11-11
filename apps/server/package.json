@@ -11,6 +11,7 @@
     "test": "node --test \"src/**/*.test.ts\""
   },
   "dependencies": {
+    "@dimforge/rapier3d-compat": "^0.21.0",
     "@plant-legacy/shared": "workspace:*",
     "@plant-legacy/weather": "workspace:*",
     "bcryptjs": "^2.4.3",

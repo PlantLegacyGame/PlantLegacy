@@ -130,6 +130,14 @@ export interface WelcomePayload {
     lastGrowthTick: number;
     growthProgress: number;
     isSeed: boolean;
+    // Server-authoritative target position for connected growth rendering
+    targetX?: number;
+    targetY?: number;
+    targetZ?: number;
+    // Server-authoritative parent attachment position for client sync
+    parentAttachX?: number;
+    parentAttachY?: number;
+    parentAttachZ?: number;
   }>;
 }
 

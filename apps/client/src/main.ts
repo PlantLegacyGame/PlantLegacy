@@ -9,12 +9,14 @@
  * T01: Procedural Plant Renderer (Root Sight Shader).
  */
 
+import RAPIER from '@dimforge/rapier3d-compat';
 import { createInputBus, type InputBus } from '@plant-legacy/input';
 import {
   clampGrowthDirectionByGene,
   NODE_GROWTH_CONSTRAINTS,
   type NodeType,
 } from '@plant-legacy/shared/growth';
+import { nodeTypeToPhysicsShape } from '@plant-legacy/shared/physics';
 import { PROTOCOL_VERSION } from '@plant-legacy/shared/protocol';
 import { validateMessage } from '@plant-legacy/shared/protocol/messageSchemas';
 import * as THREE from 'three';
@@ -29,6 +31,7 @@ import {
   type RootSightConfig,
 } from './config/clientConfig.js';
 import { loadPlantRendererConfig } from './config/plantRendererConfig.js';
+import { plantPhysicsSync, rapierWorld } from './physics/RapierPhysicsManager.js';
 import { createQualityController, type QualityController } from './render/QualityController.js';
 import { EnvironmentRenderer } from './renderers/EnvironmentRenderer.js';
 import { DEFAULT_CONFIG, type PlantNodeData, PlantRenderer } from './renderers/PlantRenderer.js';
@@ -167,6 +170,10 @@ interface WelcomePayload {
     parentAttachX?: number;
     parentAttachY?: number;
     parentAttachZ?: number;
+    // Server-authoritative target position for connected growth rendering
+    targetX?: number;
+    targetY?: number;
+    targetZ?: number;
   }>;
 }
 
@@ -236,13 +243,18 @@ interface GrowthEventNode {
   children: string[];
   isSeed?: boolean;
   growthProgress?: number;
-  // Server-authoritative fields for client sync
+  // Server-authoritative growth timing for client sync
   radius?: number;
   growthTimeSeconds?: number;
   growthStartTick?: number;
+  // Server-authoritative parent attachment position for client sync
   parentAttachX?: number;
   parentAttachY?: number;
   parentAttachZ?: number;
+  // Server-authoritative target position where a growing node ends up
+  targetX?: number;
+  targetY?: number;
+  targetZ?: number;
 }
 
 interface GrowthEventPayload {
@@ -725,7 +737,10 @@ function focusCameraOnNode(nodeData: PlantNodeData, immediate = false): void {
 // Growth animation tracking - nodes with growthProgress < 1.0
 const growingNodes = new Map<string, { startTime: number; duration: number }>();
 // Growth animation tracking for other players' plants (nodeId -> {plantId, startTime, duration})
-const otherGrowingNodes = new Map<string, { plantId: string; startTime: number; duration: number }>();
+const otherGrowingNodes = new Map<
+  string,
+  { plantId: string; startTime: number; duration: number }
+>();
 let lastGrowthUpdateTime = 0;
 const GROWTH_UPDATE_INTERVAL_MS = 100; // Update plant renderer every 100ms when growing
 
@@ -831,10 +846,10 @@ function applyCameraPan(deltaTime: number): void {
   const speed = renderConfig?.cameraPanSpeed ?? 0;
   if (speed <= 0) return;
 
-  let x = 0;    // left / right pan
-  let y = 0;    // up / down (W/S, ArrowUp/Down)
-  if (cameraPanState.forward) y += 1;   // W / ArrowUp   → camera UP
-  if (cameraPanState.backward) y -= 1;  // S / ArrowDown → camera DOWN
+  let x = 0; // left / right pan
+  let y = 0; // up / down (W/S, ArrowUp/Down)
+  if (cameraPanState.forward) y += 1; // W / ArrowUp   → camera UP
+  if (cameraPanState.backward) y -= 1; // S / ArrowDown → camera DOWN
   if (cameraPanState.left) x -= 1;
   if (cameraPanState.right) x += 1;
   if (x === 0 && y === 0) return;
@@ -1213,6 +1228,17 @@ async function initC01(): Promise<void> {
     hemisphereLight,
     soilCutawayUniforms,
   );
+
+  // Initialize Rapier physics world (client-side cosmetic simulation)
+  try {
+    await rapierWorld.init({ x: 0, y: -9.81, z: 0 });
+    physicsReady = true;
+    setDetail('Physics initialized');
+  } catch (err) {
+    console.error('[PlantLegacy] Failed to initialize Rapier physics:', err);
+    physicsReady = false;
+    setDetail('Physics unavailable');
+  }
 
   // Grow mode functions
   function updateGrowModeIndicator(): void {
@@ -3467,6 +3493,51 @@ controls.minDistance = 1;
 controls.maxDistance = 200;
 controls.maxPolarAngle = Math.PI / 2 - 0.05;
 
+// Physics (Rapier) - client-side cosmetic simulation, server-authoritative state
+let physicsReady = false;
+
+function registerNodePhysics(node: PlantNodeData): void {
+  if (!physicsReady || !rapierWorld.isReady) return;
+  const shape = nodeTypeToPhysicsShape(node.nodeType ?? 'stem', node.biomass ?? 0);
+  const scale = Math.min(1.0, Math.sqrt(node.biomass ?? 0 / 5.0));
+
+  let radius = 0.1;
+  let height = 0.5;
+  let halfHeight = 0.5;
+  if (shape.kind === 'sphere') radius = shape.radius * scale;
+  else if (shape.kind === 'capsule') {
+    height = shape.height * scale;
+    radius = shape.radius * scale;
+  } else if (shape.kind === 'cylinder') {
+    halfHeight = shape.halfHeight * scale;
+    radius = shape.radius * scale;
+  }
+
+  const bodyDesc = RAPIER.RigidBodyDesc.dynamic()
+    .setTranslation(node.position.x, node.position.y, node.position.z)
+    .setLinearDamping(0.5)
+    .setAngularDamping(0.5)
+    .setCanSleep(true);
+  const body = rapierWorld.getWorld().createRigidBody(bodyDesc);
+
+  let colliderDesc: RAPIER.ColliderDesc;
+  switch (shape.kind) {
+    case 'sphere':
+      colliderDesc = RAPIER.ColliderDesc.ball(radius);
+      break;
+    case 'capsule':
+      colliderDesc = RAPIER.ColliderDesc.capsule(height / 2, radius);
+      break;
+    case 'cylinder':
+      colliderDesc = RAPIER.ColliderDesc.cylinder(halfHeight, radius);
+      break;
+    default:
+      colliderDesc = RAPIER.ColliderDesc.ball(0.1);
+  }
+  colliderDesc.setFriction(0.6).setRestitution(0.2);
+  rapierWorld.getWorld().createCollider(colliderDesc, body);
+}
+
 // Lighting
 const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
 scene.add(ambientLight);
@@ -3655,7 +3726,7 @@ function connect(): void {
                 });
               }
 
-              plantNodes.set(node.id, {
+              const nodeData: PlantNodeData = {
                 id: node.id,
                 position: new THREE.Vector3(node.x, node.y, node.z),
                 type: nodeTypeNum,
@@ -3670,7 +3741,15 @@ function connect(): void {
                 nodeType: node.type,
                 spawnTime,
                 growthProgress,
-              });
+                parentAttachX: node.parentAttachX,
+                parentAttachY: node.parentAttachY,
+                parentAttachZ: node.parentAttachZ,
+                targetX: node.targetX,
+                targetY: node.targetY,
+                targetZ: node.targetZ,
+              };
+              plantNodes.set(node.id, nodeData);
+              registerNodePhysics(nodeData);
             }
             plantBiomass = welcome.totalBiomass;
             plantEnergy = welcome.totalEnergy;
@@ -3683,7 +3762,7 @@ function connect(): void {
             }
           } else if (welcome.rootNode) {
             // Fallback for older server without nodes in WELCOME
-            plantNodes.set(welcome.rootNode.id, {
+            const fallbackRoot: PlantNodeData = {
               id: welcome.rootNode.id,
               position: new THREE.Vector3(
                 welcome.rootNode.x,
@@ -3701,7 +3780,9 @@ function connect(): void {
               isSeed: welcome.rootNode.type === 'seed',
               nodeType: welcome.rootNode.type,
               spawnTime: performance.now(),
-            });
+            };
+            plantNodes.set(welcome.rootNode.id, fallbackRoot);
+            registerNodePhysics(fallbackRoot);
             plantBiomass = welcome.totalBiomass;
             plantEnergy = welcome.totalEnergy;
             // Don't call updateResourceReadout with zeros - wait for first RESOURCE_UPDATE
@@ -4067,6 +4148,10 @@ function connect(): void {
               parentAttachX: node.parentAttachX,
               parentAttachY: node.parentAttachY,
               parentAttachZ: node.parentAttachZ,
+              // Server-authoritative target position for connected growth rendering
+              targetX: node.targetX,
+              targetY: node.targetY,
+              targetZ: node.targetZ,
             };
           };
 
@@ -4077,6 +4162,7 @@ function connect(): void {
             for (const node of incomingNodes) {
               const nodeData = toNodeData(node, true);
               plantNodes.set(node.id, nodeData);
+              registerNodePhysics(nodeData);
               // Track growing nodes for client-side animation.
               // Use server-authoritative growthTimeSeconds for duration.
               // Staggered emergence per node type (roots first, leaves last).
@@ -4101,6 +4187,8 @@ function connect(): void {
             }
             if (updatedParent) {
               plantNodes.set(updatedParent.id, toNodeData(updatedParent, true));
+              const updatedNode = plantNodes.get(updatedParent.id);
+              if (updatedNode) registerNodePhysics(updatedNode);
               // For germination, the updated parent (seed->root) should have the new children
               if (updatedParent.children) {
                 const parentNode = plantNodes.get(updatedParent.id);
@@ -4164,6 +4252,7 @@ function connect(): void {
             for (const node of incomingNodes) {
               const nodeData = toNodeData(node, false);
               otherPlant.set(node.id, nodeData);
+              registerNodePhysics(nodeData);
               // Track growing animation for other players' newly grown nodes
               if ((nodeData.growthProgress ?? 1.0) < 1.0 && node.growthTimeSeconds) {
                 const durationMs = node.growthTimeSeconds * 1000;
@@ -4187,6 +4276,8 @@ function connect(): void {
             }
             if (updatedParent) {
               otherPlant.set(updatedParent.id, toNodeData(updatedParent, false));
+              const updatedNode = otherPlant.get(updatedParent.id);
+              if (updatedNode) registerNodePhysics(updatedNode as PlantNodeData);
               // For germination, the updated parent should have the new children
               if (updatedParent.children) {
                 const parentNode = otherPlant.get(updatedParent.id);
@@ -4386,6 +4477,10 @@ function connect(): void {
                 parentAttachX?: number;
                 parentAttachY?: number;
                 parentAttachZ?: number;
+                // Server-authoritative target position for connected growth rendering
+                targetX?: number;
+                targetY?: number;
+                targetZ?: number;
               }>;
             }>;
           };
@@ -4448,6 +4543,10 @@ function connect(): void {
                 parentAttachY?: number;
                 parentAttachZ?: number;
                 growthTimeSeconds?: number;
+                // Server-authoritative target position for connected growth rendering
+                targetX?: number;
+                targetY?: number;
+                targetZ?: number;
               }
             >();
             const SERVER_TICK_RATE_HZ = 20;
@@ -4496,11 +4595,19 @@ function connect(): void {
                 parentAttachX: node.parentAttachX,
                 parentAttachY: node.parentAttachY,
                 parentAttachZ: node.parentAttachZ,
+                // Server-authoritative target position for connected growth rendering
+                targetX: node.targetX,
+                targetY: node.targetY,
+                targetZ: node.targetZ,
+                growthTimeSeconds: node.growthTimeSeconds,
               });
             }
             if (isOwn) {
               plantNodes.clear();
-              for (const [id, node] of target) plantNodes.set(id, node);
+              for (const [id, node] of target) {
+                plantNodes.set(id, node);
+                registerNodePhysics(node);
+              }
               plantBiomass = plant.totalBiomass;
               plantEnergy = plant.totalEnergy;
               // Reset growth sequence on full sync (Phase 1.5)
@@ -4537,6 +4644,9 @@ function connect(): void {
                 }
               }
               otherPlayerPlants.set(plant.id, target);
+              for (const node of target.values()) {
+                registerNodePhysics(node);
+              }
             }
           }
           // Update renderer with all plants
@@ -4657,6 +4767,9 @@ function connect(): void {
             });
           }
           otherPlayerPlants.set(created.plant.id, otherPlant);
+          for (const node of otherPlant.values()) {
+            registerNodePhysics(node);
+          }
           // Update renderer with all plants
           if (plantRenderer) {
             const otherNodes: PlantNodeData[] = [];
@@ -4944,7 +5057,10 @@ function renderFrame(deltaTime: number): void {
     // Own plant's growing nodes
     for (const [nodeId, growthInfo] of growingNodes.entries()) {
       const node = plantNodes.get(nodeId);
-      if (!node) { growingNodes.delete(nodeId); continue; }
+      if (!node) {
+        growingNodes.delete(nodeId);
+        continue;
+      }
       const elapsed = Math.max(0, growNow - growthInfo.startTime);
       const progress = Math.min(1.0, elapsed / growthInfo.duration);
       if (progress >= 1.0) {
@@ -4959,7 +5075,10 @@ function renderFrame(deltaTime: number): void {
     for (const [nodeId, growthInfo] of otherGrowingNodes.entries()) {
       const otherPlant = otherPlayerPlants.get(growthInfo.plantId);
       const node = otherPlant?.get(nodeId);
-      if (!node) { otherGrowingNodes.delete(nodeId); continue; }
+      if (!node) {
+        otherGrowingNodes.delete(nodeId);
+        continue;
+      }
       const elapsed = Math.max(0, growNow - growthInfo.startTime);
       const progress = Math.min(1.0, elapsed / growthInfo.duration);
       if (progress >= 1.0) {
@@ -4995,6 +5114,12 @@ function renderFrame(deltaTime: number): void {
   // C03: Update environment renderer (sky dome, fog, rain particles, lightning)
   if (environmentRenderer) {
     environmentRenderer.update(deltaTime);
+  }
+
+  // Step Rapier physics and sync body transforms to Three.js meshes
+  if (physicsReady && rapierWorld.isReady) {
+    rapierWorld.step();
+    plantPhysicsSync.syncTransforms();
   }
 
   // Periodically notify the SDF renderer of updated growthProgress (it doesn't

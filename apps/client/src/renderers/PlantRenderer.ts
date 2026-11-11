@@ -41,6 +41,13 @@ export interface PlantNodeData {
   parentAttachX?: number;
   parentAttachY?: number;
   parentAttachZ?: number;
+  // Server-authoritative target position where a growing node ends up.
+  // When present and growthProgress < 1, the connector tube/segment runs from
+  // the parent to this target (scaled by growthProgress), so new growth is
+  // drawn connected to its parent instead of as a zero-length blob.
+  targetX?: number;
+  targetY?: number;
+  targetZ?: number;
 }
 
 /**
@@ -485,9 +492,18 @@ class PlantRenderer {
           Math.max(1, children.length),
         );
 
+        // Use the server-authoritative target position as the segment end so
+        // new growth is drawn as a connector extending from the parent toward
+        // where the node is growing, not as a zero-length segment at the parent.
+        const hasTarget =
+          node.targetX !== undefined && node.targetY !== undefined && node.targetZ !== undefined;
+        const segmentEnd = hasTarget
+          ? new THREE.Vector3(node.targetX, node.targetY, node.targetZ)
+          : node.position.clone();
+
         segments.push({
           p0: parent.position.clone(),
-          p1: node.position.clone(),
+          p1: segmentEnd,
           r0: parent.radius,
           r1: taperedRadius,
           primitive,
