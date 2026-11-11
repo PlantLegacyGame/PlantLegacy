@@ -13,6 +13,7 @@
  * - Full backward compatibility with old mesh-based API
  */
 import * as THREE from 'three';
+import { MeshPlantRenderer } from './MeshPlantRenderer.js';
 
 /**
  * PlantNodeData represents a single node in a plant's graph.
@@ -321,6 +322,10 @@ class PlantRenderer {
   // LOD
   private currentLOD = 0;
 
+  // Mesh-based L0/L1 renderer (replaces SDF raymarch for close plants)
+  private meshRenderer: MeshPlantRenderer | null = null;
+  private useMeshL0L1 = true;
+
   constructor(config: PlantRendererConfig) {
     this.config = { ...DEFAULT_CONFIG, ...config };
     this.scene = new THREE.Scene();
@@ -339,6 +344,8 @@ class PlantRenderer {
     this.createSDFShader();
     this.createFullscreenQuad();
     this.setupEmergenceAnimation();
+    // Create mesh-based L0/L1 renderer to replace expensive SDF raymarching
+    this.meshRenderer = new MeshPlantRenderer(scene);
   }
 
   /**
@@ -526,6 +533,11 @@ class PlantRenderer {
     // Update uniforms
     this.uniforms.uSegmentCount.value = this.segmentCount;
     this.uniforms.uNodeCount.value = this.nodeCount;
+
+    // Feed mesh-based L0/L1 renderer (used when SDF raymarching is disabled for close plants)
+    if (this.meshRenderer) {
+      this.meshRenderer.updatePlantData(nodes);
+    }
 
     // Update Root Sight SDF aura texture from root nodes
     this.updateRootAura(nodes);
@@ -772,7 +784,7 @@ class PlantRenderer {
    * Render the SDF plant
    */
   render(deltaTime: number): void {
-    if (!this.sdfMaterial || !this.fullscreenQuad || !this.camera) return;
+    if (!this.camera) return;
 
     this.update(deltaTime);
     this.updateCameraUniforms();
@@ -786,9 +798,29 @@ class PlantRenderer {
     // Update LOD
     this.updateLOD(this.camera.position);
 
-    // Render fullscreen quad
-    if (this.fullscreenQuad) {
-      this.fullscreenQuad.renderOrder = 0;
+    // Use mesh-based renderer for L0/L1 (close plants) to avoid expensive SDF raymarching
+    // SDF raymarching is reserved for L2 (distant) where organic fusion detail is less critical
+    // Root Sight mode requires SDF cutaway, so disable mesh renderer when active
+    const useMesh =
+      this.useMeshL0L1 &&
+      this.meshRenderer &&
+      !this.rootSightEnabled &&
+      (this.currentLOD === 0 || this.currentLOD === 1);
+    if (useMesh) {
+      this.meshRenderer?.render(deltaTime);
+      // Hide SDF fullscreen quad when mesh renderer is active
+      if (this.fullscreenQuad) {
+        this.fullscreenQuad.visible = false;
+      }
+    } else {
+      // SDF raymarch path for L2 or when mesh renderer disabled
+      if (this.fullscreenQuad) {
+        this.fullscreenQuad.visible = true;
+        this.fullscreenQuad.renderOrder = 0;
+      }
+      if (this.meshRenderer) {
+        this.meshRenderer.setVisible(false);
+      }
     }
   }
 
@@ -796,13 +828,17 @@ class PlantRenderer {
    * Update LOD based on camera distance
    */
   private updateLOD(_cameraPos: THREE.Vector3): void {
-    this.currentLOD = 0; // Fixed LOD 0 for now
+    // Use mesh-based rendering for L0/L1 to avoid expensive SDF raymarching
+    // (128 steps/pixel causes lag when zoomed in)
+    this.currentLOD = 0;
 
+    // SDF raymarch steps: reduced drastically for L0/L1 since mesh renderer handles them
+    // SDF is reserved for L2 (distant) or extreme close-ups where organic fusion matters
     if (this.currentLOD === 0) {
-      this.uniforms.uMaxSteps.value = this.config.l0RaymarchSteps;
+      this.uniforms.uMaxSteps.value = 16; // Was 128 - mesh handles L0
       this.uniforms.uHitEpsilon.value = this.config.l0RaymarchEpsilon;
     } else if (this.currentLOD === 1) {
-      this.uniforms.uMaxSteps.value = this.config.l1RaymarchSteps;
+      this.uniforms.uMaxSteps.value = 24; // Was 64 - mesh handles L1
       this.uniforms.uHitEpsilon.value = this.config.l1RaymarchEpsilon;
     } else {
       this.uniforms.uMaxSteps.value = this.config.l2RaymarchSteps;
@@ -841,6 +877,10 @@ class PlantRenderer {
     if (this.sdfRenderTarget) {
       this.sdfRenderTarget.dispose();
       this.sdfRenderTarget = null;
+    }
+    if (this.meshRenderer) {
+      this.meshRenderer.dispose();
+      this.meshRenderer = null;
     }
   }
 
