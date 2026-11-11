@@ -6,6 +6,9 @@ import {
   createClientWeatherStateMachine,
 } from './ClientWeatherStateMachine.js';
 
+/** Light value that maps to full daylight (config/resources.json tile_light_base). */
+const TILE_LIGHT_BASE = 80;
+
 export interface WeatherPayload {
   timeOfDay: number;
   isDay: boolean;
@@ -76,6 +79,12 @@ export class EnvironmentRenderer {
   // Time of day and sun intensity (client-side interpolation)
   private timeOfDay = 0.3;
   private sunIntensity = 1.0;
+
+  // Local tile light drives the sky grade. tile_light_base in
+  // config/resources.json is 80, so 80 = full daylight and 0 = full shade.
+  private localTileLight = 80;
+  private readonly localZenithTarget: THREE.Color = new THREE.Color();
+  private readonly localHorizonTarget: THREE.Color = new THREE.Color();
 
   constructor(
     scene: THREE.Scene,
@@ -252,6 +261,11 @@ export class EnvironmentRenderer {
       shader.uniforms.uSunDir = { value: new THREE.Vector3(0, 1, 0) };
       shader.uniforms.uSunColor = { value: new THREE.Color(0xffffee) };
       shader.uniforms.uSunIntensity = { value: 1.0 };
+      // Resource grid uniforms for per-tile ground lighting
+      shader.uniforms.uResourceGrid = { value: null };
+      shader.uniforms.uResourceGridSize = { value: new THREE.Vector2(1, 1) };
+      shader.uniforms.uTileSize = { value: 1.0 };
+      shader.uniforms.uResourceGridAvailable = { value: 0.0 };
 
       shader.vertexShader = shader.vertexShader
         .replace('#include <common>', '#include <common>\nvarying vec3 vSoilWorldPos;')
@@ -276,7 +290,13 @@ uniform float uSoilMoisture;
 // Sun uniforms for ground lighting
 uniform vec3 uSunDir;
 uniform vec3 uSunColor;
-uniform float uSunIntensity;`,
+uniform float uSunIntensity;
+// Resource grid for per-tile lighting
+uniform sampler2D uResourceGrid;
+uniform vec2 uResourceGridSize;
+uniform float uTileSize;
+uniform float uResourceGridAvailable;
+`,
         )
         .replace(
           '#include <dithering_fragment>',
@@ -303,12 +323,35 @@ uniform float uSunIntensity;`,
   float mineralNoise = fract(sin(dot(vSoilWorldPos.xz, vec2(12.9898, 78.233))) * 43758.5453);
   dynamicSoil = mix(dynamicSoil, uSoilMineralColor, mineralNoise * 0.08);
   
+  // Sample resource grid for per-tile lighting (with fallback)
+  float tileLight = 1.0;
+  float tileMoisture = uSoilMoisture;
+  float tileMinerals = 0.0;
+  
+  // Check if resource grid texture is available (uniform flag)
+  if (uResourceGridAvailable > 0.5) {
+    // Texture is available, sample it
+    vec2 gridUV = (vSoilWorldPos.xz / uTileSize + uResourceGridSize * 0.5) / uResourceGridSize;
+    vec4 resourceData = texture2D(uResourceGrid, gridUV);
+    tileLight = resourceData.r;
+    tileMoisture = resourceData.g;
+    tileMinerals = resourceData.b;
+  }
+  
+  // Use resource grid data for soil coloring
+  dynamicSoil = mix(uSoilDryColor, uSoilWetColor, clamp(tileMoisture, 0.0, 1.0));
+  dynamicSoil = mix(dynamicSoil, uSoilMineralColor, mineralNoise * 0.08 + tileMinerals * 0.12);
+  
   // Apply lighting to ground (use existing normal from standard material)
   // Flip normal for back faces when using DoubleSide
   vec3 groundNormal = normalize(vNormal);
   if (!gl_FrontFacing) groundNormal = -groundNormal;
   float NdotL = max(dot(groundNormal, normalize(-uSunDir)), 0.0);
   vec3 lightColor = uSunColor * uSunIntensity * NdotL;
+  
+  // Modulate light intensity by tile light level
+  lightColor *= mix(0.3, 1.0, tileLight);
+  
   gl_FragColor.rgb = dynamicSoil * (0.35 + 0.65 * lightColor);
   gl_FragColor.a = 1.0;`,
         );
@@ -362,7 +405,105 @@ uniform float uSunIntensity;`,
   }
 
   /**
-   * Called whenever server broadcasts WEATHER_UPDATE (type 21)
+   * Set full resource grid from server for per-tile ground lighting
+   */
+  public setResourceGrid(
+    tiles: Array<{
+      tileX: number;
+      tileZ: number;
+      light: number;
+      moisture: number;
+      minerals: number;
+    }>,
+    width: number,
+    height: number,
+    tileSize: number,
+  ): void {
+    if (!this.groundMesh || !this.groundMaterial.userData.shader) return;
+
+    // Create a data texture for the resource grid
+    const data = new Float32Array(width * height * 4); // RGBA: light, moisture, minerals, unused
+    for (const tile of tiles) {
+      const x = tile.tileX;
+      const z = tile.tileZ;
+      if (x >= 0 && x < width && z >= 0 && z < height) {
+        const idx = (z * width + x) * 4;
+        data[idx] = Math.max(0, Math.min(1, tile.light / TILE_LIGHT_BASE)); // normalize light
+        data[idx + 1] = Math.max(0, Math.min(1, tile.moisture / 255)); // normalize moisture
+        data[idx + 2] = Math.max(0, Math.min(1, tile.minerals / 255)); // normalize minerals
+        data[idx + 3] = 0;
+      }
+    }
+
+    const texture = new THREE.DataTexture(data, width, height, THREE.RGBAFormat, THREE.FloatType);
+    texture.needsUpdate = true;
+    texture.wrapS = THREE.ClampToEdgeWrapping;
+    texture.wrapT = THREE.ClampToEdgeWrapping;
+    texture.minFilter = THREE.LinearFilter;
+    texture.magFilter = THREE.LinearFilter;
+
+    this.resourceGridTexture = texture;
+    this.resourceGridWidth = width;
+    this.resourceGridHeight = height;
+
+    const shader = this.groundMaterial.userData.shader as {
+      uniforms?: Record<string, { value: unknown }>;
+    };
+    if (shader?.uniforms) {
+      shader.uniforms.uResourceGrid = { value: texture };
+      shader.uniforms.uResourceGridSize = { value: new THREE.Vector2(width, height) };
+      shader.uniforms.uTileSize = { value: tileSize };
+      shader.uniforms.uResourceGridAvailable = { value: 1.0 };
+    }
+  }
+
+  private resourceGridTexture: THREE.DataTexture | null = null;
+  private resourceGridWidth = 0;
+  private resourceGridHeight = 0;
+
+  /**
+   * Update only changed (dirty) tiles in the resource grid
+   */
+  public updateResourceGrid(
+    tiles: Array<{
+      tileX: number;
+      tileZ: number;
+      light: number;
+      moisture: number;
+      minerals: number;
+    }>,
+  ): void {
+    if (!this.resourceGridTexture || !this.groundMaterial.userData.shader) return;
+
+    const width = this.resourceGridWidth;
+    const height = this.resourceGridHeight;
+    const data = this.resourceGridTexture.image.data as Float32Array;
+
+    for (const tile of tiles) {
+      const x = tile.tileX;
+      const z = tile.tileZ;
+      if (x >= 0 && x < width && z >= 0 && z < height) {
+        const idx = (z * width + x) * 4;
+        data[idx] = Math.max(0, Math.min(1, tile.light / TILE_LIGHT_BASE));
+        data[idx + 1] = Math.max(0, Math.min(1, tile.moisture / 255));
+        data[idx + 2] = Math.max(0, Math.min(1, tile.minerals / 255));
+      }
+    }
+
+    this.resourceGridTexture.needsUpdate = true;
+  }
+
+  /**
+   * Feed the average light of the plant's local tiles into the sky grade.
+   * Called from RESOURCE_UPDATE with the averaged root-tile light.
+   */
+  public setLocalTileLight(light: number): void {
+    if (!Number.isFinite(light)) return;
+    this.localTileLight = Math.max(0, light);
+  }
+
+  /**
+   * Current normalized time of day [0, 1)
    */
   public handleWeatherUpdate(payload: WeatherPayload): void {
     this.timeOfDay = payload.timeOfDay;
@@ -397,9 +538,16 @@ uniform float uSunIntensity;`,
       this.camera.position.z,
     );
 
-    // 1. Smoothly interpolate sky dome colors using weather machine targets
-    this.currentZenithColor.lerp(weatherTargets.zenithColor, lerpRate);
-    this.currentHorizonColor.lerp(weatherTargets.horizonColor, lerpRate);
+    // 1. Smoothly interpolate sky dome colors using weather machine targets,
+    //    graded by the light actually reaching the plant's local tiles.
+    //    0 light = deep shade/night, 80 (tile_light_base) = full daylight.
+    const localLight01 = THREE.MathUtils.clamp(this.localTileLight / TILE_LIGHT_BASE, 0, 1.5);
+    const localBrightness =
+      0.55 + 0.45 * Math.min(1, localLight01) + Math.max(0, localLight01 - 1) * 0.25;
+    this.localZenithTarget.copy(weatherTargets.zenithColor).multiplyScalar(localBrightness);
+    this.localHorizonTarget.copy(weatherTargets.horizonColor).multiplyScalar(localBrightness);
+    this.currentZenithColor.lerp(this.localZenithTarget, lerpRate);
+    this.currentHorizonColor.lerp(this.localHorizonTarget, lerpRate);
     this.hemisphereLight.color.copy(this.currentZenithColor);
     this.hemisphereLight.groundColor.copy(this.currentHorizonColor);
 

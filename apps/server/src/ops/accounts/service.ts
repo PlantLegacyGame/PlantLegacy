@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { newId } from '@plant-legacy/shared/ids';
-import argon2 from 'argon2';
+import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import type { Pool } from 'pg';
 import type { AccountsConfig } from './config.ts';
@@ -69,17 +69,13 @@ export class AccountsService {
   }
 
   async hashPassword(password: string): Promise<string> {
-    return argon2.hash(password, {
-      type: argon2.argon2id,
-      timeCost: this.config.argon2TimeCost,
-      memoryCost: this.config.argon2MemoryCostKib,
-      parallelism: this.config.argon2Parallelism,
-    });
+    const salt = await bcrypt.genSalt(this.config.bcryptCost);
+    return bcrypt.hash(password, salt);
   }
 
   async verifyPassword(password: string, hash: string): Promise<boolean> {
     try {
-      return await argon2.verify(hash, password);
+      return await bcrypt.compare(password, hash);
     } catch {
       return false;
     }

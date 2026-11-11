@@ -77,6 +77,12 @@
       "value": 5000,
       "range": [1000, 30000],
       "notes": "HELLO message timeout in milliseconds"
+    },
+    "reconnect_window_ms": {
+      "type": "integer",
+      "value": 300000,
+      "range": [30000, 86400000],
+      "notes": "Reconnect window in milliseconds for plant reclaim"
     }
   }
 }

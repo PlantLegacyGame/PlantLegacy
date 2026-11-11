@@ -46,5 +46,7 @@ export function loadGrowthConfig(configs: Map<string, ConfigFile>): GrowthConfig
     growthMinWater: readNumber(configs, 'growth', 'growth_min_water'),
     growthMinNutrients: readNumber(configs, 'growth', 'growth_min_nutrients'),
     growthMinMinerals: readNumber(configs, 'growth', 'growth_min_minerals'),
+    germinationGate: configs.has('dev') ? readBoolean(configs, 'dev', 'germination_gate') : true,
+    autoGrowth: configs.has('dev') ? readBoolean(configs, 'dev', 'auto_growth') : false,
   };
 }

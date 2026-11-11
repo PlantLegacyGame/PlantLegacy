@@ -19,7 +19,7 @@ export interface WebGPUCapabilities {
 }
 
 export interface WebGPUDeviceConfig {
-  powerPreference: 'high-performance' | 'low-power';
+  powerPreference?: 'high-performance' | 'low-power';
   forceFallbackAdapter: boolean;
   requiredFeatures: GPUFeatureName[];
   requiredLimits: Record<string, number>;
@@ -27,7 +27,7 @@ export interface WebGPUDeviceConfig {
 }
 
 export const DEFAULT_WEBGPU_CONFIG: WebGPUDeviceConfig = {
-  powerPreference: 'high-performance',
+  powerPreference: undefined,
   forceFallbackAdapter: false,
   // Ask only for features that are actually useful for this renderer. Every
   // requested feature is filtered against the adapter before requestDevice.
@@ -67,10 +67,13 @@ export class WebGPUDevice {
     }
 
     try {
-      this.adapter = await navigator.gpu.requestAdapter({
-        powerPreference: this.config.powerPreference,
+      const adapterOptions: GPURequestAdapterOptions = {
         forceFallbackAdapter: this.config.forceFallbackAdapter,
-      });
+      };
+      if (this.config.powerPreference) {
+        adapterOptions.powerPreference = this.config.powerPreference;
+      }
+      this.adapter = await navigator.gpu.requestAdapter(adapterOptions);
 
       if (!this.adapter) {
         console.warn('No suitable WebGPU adapter found');

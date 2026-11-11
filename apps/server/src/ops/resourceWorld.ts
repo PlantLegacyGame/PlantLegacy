@@ -333,6 +333,80 @@ export class ResourceWorld {
     return this.height;
   }
 
+  /** Returns all tiles for full grid broadcast (ground rendering) */
+  getAllTiles(): Array<{
+    tileX: number;
+    tileZ: number;
+    light: number;
+    moisture: number;
+    minerals: number;
+  }> {
+    const tiles: Array<{
+      tileX: number;
+      tileZ: number;
+      light: number;
+      moisture: number;
+      minerals: number;
+    }> = [];
+    for (let tileZ = 0; tileZ < this.height; tileZ++) {
+      for (let tileX = 0; tileX < this.width; tileX++) {
+        const idx = tileZ * this.width + tileX;
+        const tile = this.tiles[idx];
+        if (tile) {
+          tiles.push({ tileX, tileZ, ...tile });
+        }
+      }
+    }
+    return tiles;
+  }
+
+  /** D01: Dev action - set photosynthesis rate multiplier */
+  setPhotosynthesisRate(rate: number): void {
+    this.config.photosynthesisRate = rate;
+  }
+
+  /** D01: Dev action - set diffusion rate */
+  setDiffusionRate(rate: number): void {
+    this.config.diffusionRate = rate;
+  }
+
+  /** D01: Dev action - set max absorption per tick */
+  setMaxAbsorptionPerTick(max: number): void {
+    this.config.maxAbsorptionPerTick = max;
+  }
+
+  /** D01: Dev action - set rain gain per second */
+  setRainGainPerS(gain: number): void {
+    this.config.rainGainPerS = gain;
+  }
+
+  /** D01: Dev action - set evaporation per second */
+  setEvaporationPerS(evap: number): void {
+    this.config.evaporationPerS = evap;
+  }
+
+  /** D01: Dev action - set canopy shade reduction */
+  setCanopyShadeReduction(reduction: number): void {
+    this.config.canopyShadeReduction = reduction;
+  }
+
+  /** D01: Dev action - reset resource config to defaults */
+  resetToDefaults(): void {
+    // Re-initialize tiles with base values
+    for (let i = 0; i < this.tiles.length; i++) {
+      this.tiles[i] = {
+        light: clamp(this.config.tileLightBase, 0, this.config.maxLight),
+        moisture: clamp(this.config.tileMoistureBase, 0, this.config.maxMoisture),
+        minerals: clamp(this.config.tileMineralsBase, 0, this.config.maxMinerals),
+      };
+    }
+    this.dirtyTiles.clear();
+    this.lastBroadcastLight.clear();
+    this.lastBroadcastMoisture.clear();
+    this.lastBroadcastMinerals.clear();
+    this.hasBroadcast = false;
+  }
+
   getRootTileCount(plant: PlantForResource): number {
     let count = 0;
     for (const node of plant.nodes.values()) {
@@ -375,10 +449,6 @@ export class ResourceWorld {
     return tiles;
   }
 
-  getAllTiles(): TileResources[] {
-    return this.tiles.map((t) => ({ ...t }));
-  }
-
   step(
     dt: number,
     plants: Map<string, PlantForResource>,
@@ -407,11 +477,17 @@ export class ResourceWorld {
   }
 
   private updateLight(plants: Map<string, PlantForResource>, weatherLightMult = 1.0): void {
-    const dayNightIndex = Math.min(
-      this.config.dayNightCurve.length - 1,
-      Math.max(0, Math.floor(this.timeOfDay * this.config.dayNightCurve.length)),
-    );
-    const dayNightMultiplier = this.config.dayNightCurve[dayNightIndex] ?? 1.0;
+    // Interpolate the day/night curve instead of sampling a single index.
+    // Index sampling made light sit on the curve's 1.0 plateau for minutes at a
+    // time, which read as a frozen value in the client.
+    const curve = this.config.dayNightCurve;
+    const curvePos = Math.min(1, Math.max(0, this.timeOfDay)) * Math.max(0, curve.length - 1);
+    const curveIndex = Math.floor(curvePos);
+    const curveNext = Math.min(curve.length - 1, curveIndex + 1);
+    const curveT = curvePos - curveIndex;
+    const curveA = curve[curveIndex] ?? 1.0;
+    const curveB = curve[curveNext] ?? curveA;
+    const dayNightMultiplier = curveA + (curveB - curveA) * curveT;
 
     for (let tz = 0; tz < this.height; tz++) {
       for (let tx = 0; tx < this.width; tx++) {

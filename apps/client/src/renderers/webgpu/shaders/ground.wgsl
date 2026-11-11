@@ -14,6 +14,10 @@ struct VertexOutput {
 
 @group(0) @binding(0) var<uniform> frame: FrameUniforms;
 
+// Root aura bindings for this pipeline's layout.
+@group(0) @binding(9) var rootAuraTexture: texture_2d<f32>;
+@group(0) @binding(10) var rootAuraSampler: sampler;
+
 // Stable 2D hash for coherent noise
 fn hash2(p: vec2f) -> f32 {
   var p3 = fract(p * vec2f(0.1031, 0.11367));

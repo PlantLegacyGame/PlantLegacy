@@ -14,6 +14,7 @@ export interface NetProtoConfig {
   };
   clientSendRateHz: number;
   helloTimeoutMs: number;
+  reconnectWindowMs: number;
 }
 
 import type { ConfigFile } from '@plant-legacy/shared/config';
@@ -44,6 +45,7 @@ export function loadNetProtoConfig(configs: Map<string, ConfigFile>): NetProtoCo
     },
     clientSendRateHz: readInteger(configs, 'net_proto', 'client_send_rate_hz'),
     helloTimeoutMs: readInteger(configs, 'net_proto', 'hello_timeout_ms'),
+    reconnectWindowMs: readInteger(configs, 'net_proto', 'reconnect_window_ms'),
   };
 }
 
@@ -56,6 +58,11 @@ export const MESSAGE_TYPE = {
   RESOURCE_QUERY: 5,
   PLANT_SYNC_REQUEST: 6,
   GROWTH_OPTIONS_REQUEST: 7,
+  DEV_ACTION: 8, // Client -> Server: dev panel actions
+  CHAT_MESSAGE: 9, // Client -> Server: chat message
+  INVENTORY_REQUEST: 24, // Client -> Server: request full inventory sync
+  INVENTORY_SLOT_USE: 25, // Client -> Server: use item from slot
+  INVENTORY_SLOT_SWAP: 26, // Client -> Server: swap inventory slots
 
   // Server -> Client
   WELCOME: 10,
@@ -71,8 +78,11 @@ export const MESSAGE_TYPE = {
   PLANT_REMOVED: 20,
   WEATHER_UPDATE: 21,
   GROWTH_OPTIONS_RESULT: 22,
+  CHAT_BROADCAST: 23, // Server -> Client: chat message from another player
+  INVENTORY_SYNC: 27, // Server -> Client: full inventory state
+  INVENTORY_SLOT_UPDATE: 28, // Server -> Client: single slot changed
 
-  // Dev commands (client -> server, server -> client)
+  // Dev commands (server -> client)
   DEV_RESPONSE: 99,
 } as const;
 
@@ -206,6 +216,13 @@ export interface GrowthEventNode {
   lastGrowthTick: number;
   growthProgress?: number;
   isSeed?: boolean;
+  // Server-authoritative growth timing for client sync
+  growthTimeSeconds?: number;
+  growthStartTick?: number;
+  // Parent attachment position for client sync (Fix 3)
+  parentAttachX?: number;
+  parentAttachY?: number;
+  parentAttachZ?: number;
 }
 
 export interface GrowthEventPayload {
@@ -249,6 +266,9 @@ export interface PlantSyncPayload {
       lastGrowthTick: number;
       growthProgress?: number;
       isSeed?: boolean;
+      // Server-authoritative growth timing for client sync
+      growthTimeSeconds?: number;
+      growthStartTick?: number;
     }>;
   }>;
 }
@@ -281,6 +301,9 @@ export interface PlantCreatedPayload {
       lastGrowthTick: number;
       growthProgress: number;
       isSeed: boolean;
+      // Server-authoritative growth timing for client sync
+      growthTimeSeconds?: number;
+      growthStartTick?: number;
     }>;
   };
 }

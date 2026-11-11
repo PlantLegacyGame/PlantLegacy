@@ -9,6 +9,7 @@
  * T01: Procedural Plant Renderer (Root Sight Shader).
  */
 
+import { createInputBus, type InputBus } from '@plant-legacy/input';
 import {
   clampGrowthDirectionByGene,
   NODE_GROWTH_CONSTRAINTS,
@@ -19,6 +20,7 @@ import { validateMessage } from '@plant-legacy/shared/protocol/messageSchemas';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import {
+  type ControlsConfig,
   loadControlsConfig,
   loadRenderConfig,
   loadRootSightConfig,
@@ -27,7 +29,6 @@ import {
   type RootSightConfig,
 } from './config/clientConfig.js';
 import { loadPlantRendererConfig } from './config/plantRendererConfig.js';
-import { createInputBus, type InputBus } from './input/InputBus.js';
 import { createQualityController, type QualityController } from './render/QualityController.js';
 import { EnvironmentRenderer } from './renderers/EnvironmentRenderer.js';
 import { DEFAULT_CONFIG, type PlantNodeData, PlantRenderer } from './renderers/PlantRenderer.js';
@@ -67,18 +68,26 @@ import './styles.css';
 const serverOrigin =
   document.querySelector('meta[name="server-origin"]')?.getAttribute('content') ?? '';
 
-const isLocalDev = location.hostname === '127.0.0.1' || location.hostname === 'localhost';
-const defaultServerPort = '8080';
-const httpOrigin =
-  serverOrigin ||
-  (isLocalDev
-    ? `${location.protocol}//${location.hostname}:${defaultServerPort}`
-    : location.origin);
-// In dev, connect directly to server WebSocket to avoid Vite proxy issues
+// Use the meta tag if present (production/staging deployment sets it).
+// In local dev the Vite server proxies /config, /ws, /health → :8080, so we
+// use the same origin as the page (empty string = relative URLs) rather than
+// pointing directly at :8080, which breaks when the browser is on a different
+// port or the server hasn't started yet.
+const isLocalDev =
+  !serverOrigin &&
+  (location.hostname === '127.0.0.1' || location.hostname === 'localhost') &&
+  location.port !== '8080'; // already on the game server port — no proxy needed
+
+const httpOrigin = serverOrigin || (isLocalDev ? '' : location.origin);
+
+// WebSocket: in local dev, go through the Vite proxy (/ws path on same port).
+// The proxy config in vite.config.ts forwards ws://localhost:4173/ws → ws://127.0.0.1:8080/ws.
 const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-const wsOrigin = isLocalDev
-  ? `${wsProtocol}//${location.hostname}:${defaultServerPort}`
-  : httpOrigin.replace(/^http/, 'ws');
+const wsOrigin = serverOrigin
+  ? serverOrigin.replace(/^http/, 'ws')
+  : isLocalDev
+    ? `${wsProtocol}//${location.hostname}:${location.port}`
+    : `${wsProtocol}//${location.host}`;
 
 // D01: Dev mode gate - only enable dev features with ?dev=1 query param
 const isDevMode = new URLSearchParams(location.search).has('dev');
@@ -97,9 +106,9 @@ interface OnboardingConfig {
 
 let onboardingConfig: OnboardingConfig = {
   hint_card_lines: [
-    'WASD / Arrows: Pan camera  |  Right-drag: Orbit  |  Scroll: Zoom  |  Click plant: Grow',
+    'WASD/Arrows: Pan camera  |  Left/Middle-drag: Orbit  |  Right-drag/1-finger: Pan  |  Scroll: Zoom',
+    'Left-click: Select (Normal: focus, Grow: options)  |  G: Grow Mode  |  R: Root Sight  |  E: Emotes  |  I: Inventory',
     'You are a plant. Grow roots down, canopy up. Read light, water, minerals.',
-    'Other players are other plants. Compete, ally, or parasitize. The world simulates offline.',
   ],
   show_hint_card_duration_ms: 10000,
   resource_tooltips: {
@@ -151,6 +160,13 @@ interface WelcomePayload {
     lastGrowthTick: number;
     growthProgress: number;
     isSeed: boolean;
+    // Server-authoritative fields for client sync
+    radius?: number;
+    growthTimeSeconds?: number;
+    growthStartTick?: number;
+    parentAttachX?: number;
+    parentAttachY?: number;
+    parentAttachZ?: number;
   }>;
 }
 
@@ -220,6 +236,13 @@ interface GrowthEventNode {
   children: string[];
   isSeed?: boolean;
   growthProgress?: number;
+  // Server-authoritative fields for client sync
+  radius?: number;
+  growthTimeSeconds?: number;
+  growthStartTick?: number;
+  parentAttachX?: number;
+  parentAttachY?: number;
+  parentAttachZ?: number;
 }
 
 interface GrowthEventPayload {
@@ -285,6 +308,8 @@ const MESSAGE_TYPE = {
   RESOURCE_QUERY: 5,
   PLANT_SYNC_REQUEST: 6,
   GROWTH_OPTIONS_REQUEST: 7,
+  DEV_ACTION: 8,
+  CHAT_MESSAGE: 9,
   WELCOME: 10,
   STATE: 11,
   KEYFRAME: 12,
@@ -298,12 +323,29 @@ const MESSAGE_TYPE = {
   PLANT_REMOVED: 20,
   WEATHER_UPDATE: 21,
   GROWTH_OPTIONS_RESULT: 22,
+  CHAT_BROADCAST: 23,
   DEV_RESPONSE: 99,
 } as const;
 
 let ws: WebSocket | null = null;
 let playerId: string | null = null;
 let serverTick = 0;
+
+// Per-node-type emergence delay (ms) for staggered growth animation.
+// Roots/radicles emerge first, then stems, then leaves/cotyledons.
+const EMERGENCE_DELAY_MS: Record<string, number> = {
+  radicle: 0,
+  root: 0,
+  lateral_root: 80,
+  seed: 0,
+  stem: 40,
+  branch: 40,
+  cotyledon: 160,
+  leaf: 200,
+  flower: 240,
+  spore_sac: 240,
+};
+
 let connecting = false;
 let plantId: string | null = null;
 let plantReady = false;
@@ -370,6 +412,17 @@ let plantEnergy = 0;
 let tileLight = 0;
 let tileWater = 40; // Default base moisture from config (tile_moisture_base)
 let tileMinerals = 0;
+
+// Controls config loaded from server /config/controls endpoint.
+// Loaded initially in initC01() before WebSocket connects; reloaded on WELCOME
+// so bindings are available even if the server wasn't ready on first fetch.
+let controlsConfig: ControlsConfig | null = null;
+
+// Track which plants have Root Sight already enabled, to avoid resetting
+// the state machine (and flickering aura circles) on every new underground node.
+const rootSightActivePlants = new Set<string>();
+let storedWater = 0;
+let storedMinerals = 0;
 const plantNodes = new Map<string, PlantNodeData>();
 
 // Plant mirror state for gap detection and resync (Phase 1.5)
@@ -438,14 +491,6 @@ const smoothedGrowthDir = new THREE.Vector3(0, -1, 0);
 let smoothedGrowthDist = 1.0;
 let isGrowthAtMaxReach = false;
 let isGrowthAngleClamped = false;
-
-// Client-side gene-based growth direction clamping & validation
-function clampGrowthDirectionForOption(
-  optionType: string,
-  dir: { x: number; y: number; z: number },
-): { x: number; y: number; z: number } {
-  return clampGrowthDirectionByGene(optionType as NodeType, dir);
-}
 
 // Visual preview: draw the gene-constrained 3D growth vector, reach guide, and legible constraints HUD.
 function updateGrowthDirectionLine(
@@ -654,9 +699,9 @@ function focusCameraOnNode(nodeData: PlantNodeData, immediate = false): void {
   const frameDist = Math.max(1.8, Math.min(3.5, (nodeData.radius || 0.05) * 25));
   targetCameraDistance = frameDist;
 
-  // Subterranean nodes: open Root Sight cutaway and allow underground camera elevation
+  // Allow camera to go below the horizon for underground nodes,
+  // but do NOT auto-enable Root Sight — that is a manual player toggle (R key).
   if (nodePos.y < -0.05 || nodeData.layer === 'root' || nodeData.type === 0) {
-    setRootSightEnabled(true);
     controls.maxPolarAngle = Math.PI - 0.05;
     // If camera is high above ground, smoothly guide its position down towards subterranean angle
     if (camera.position.y > 0.8) {
@@ -679,7 +724,8 @@ function focusCameraOnNode(nodeData: PlantNodeData, immediate = false): void {
 
 // Growth animation tracking - nodes with growthProgress < 1.0
 const growingNodes = new Map<string, { startTime: number; duration: number }>();
-const DEFAULT_GROWTH_DURATION_MS = 5000; // 5 seconds default
+// Growth animation tracking for other players' plants (nodeId -> {plantId, startTime, duration})
+const otherGrowingNodes = new Map<string, { plantId: string; startTime: number; duration: number }>();
 let lastGrowthUpdateTime = 0;
 const GROWTH_UPDATE_INTERVAL_MS = 100; // Update plant renderer every 100ms when growing
 
@@ -775,36 +821,39 @@ function frameCameraOnPlant(x: number, y: number, z: number): void {
   controls.update();
 }
 
-// WASD / arrows move the camera and its orbit target together on the ground
-// plane. Nothing on the plant moves (ADR-022).
+// WASD / arrows move the camera and its orbit target together.
+// W/ArrowUp   → camera UP   (+Y world axis)
+// S/ArrowDown → camera DOWN (-Y world axis)
+// A/ArrowLeft → pan left  (screen-right Ã— camera-up cross product)
+// D/ArrowRight → pan right
+// Nothing on the plant moves (ADR-022).
 function applyCameraPan(deltaTime: number): void {
   const speed = renderConfig?.cameraPanSpeed ?? 0;
   if (speed <= 0) return;
 
-  let x = 0;
-  let z = 0;
-  if (cameraPanState.forward) z -= 1;
-  if (cameraPanState.backward) z += 1;
+  let x = 0;    // left / right pan
+  let y = 0;    // up / down (W/S, ArrowUp/Down)
+  if (cameraPanState.forward) y += 1;   // W / ArrowUp   → camera UP
+  if (cameraPanState.backward) y -= 1;  // S / ArrowDown → camera DOWN
   if (cameraPanState.left) x -= 1;
   if (cameraPanState.right) x += 1;
-  if (x === 0 && z === 0) return;
+  if (x === 0 && y === 0) return;
 
-  const forward = new THREE.Vector3();
-  camera.getWorldDirection(forward);
-  forward.y = 0;
-  if (forward.lengthSq() < 1e-6) forward.set(0, 0, -1);
-  forward.normalize();
-  const right = new THREE.Vector3().crossVectors(forward, camera.up).normalize();
+  const right = new THREE.Vector3()
+    .crossVectors(camera.getWorldDirection(new THREE.Vector3()), camera.up)
+    .normalize();
 
   const move = new THREE.Vector3()
-    .addScaledVector(forward, -z)
     .addScaledVector(right, x)
+    .addScaledVector(new THREE.Vector3(0, 1, 0), y)
     .normalize()
     .multiplyScalar(speed * deltaTime);
 
-  // Only modify controls.target; OrbitControls.update() will compute the
-  // new camera position from the updated target + current spherical coords.
+  // Move both target and camera.position together so panning works even when
+  // controls.enabled = false (e.g. while the growth panel is open or drawing).
+  // OrbitControls.update() will keep the spherical offset intact.
   controls.target.add(move);
+  camera.position.add(move);
 }
 
 // T01: Plant Renderer
@@ -842,108 +891,56 @@ function setDetail(text: string): void {
   detailElement.textContent = text;
 }
 
-// T02: Root Sight toggle and transition
-function setRootSightEnabled(enabled: boolean): void {
+// T02: Root Sight toggle and transition.
+// Root Sight is a silent, player-controlled view mode (R key).
+// It activates the soil cutaway shader and allows underground polar angles.
+// It does NOT move the camera — the player keeps control at all times.
+function setRootSightEnabled(enabled: boolean, plantId?: string): void {
   if (!rootSightMachine) return;
 
-  rootSightStateMachineSetTarget(rootSightMachine, enabled ? 'underground' : 'surface');
+  if (enabled) {
+    // Drive the state machine toward underground whenever enabling.
+    // plantId tracking is used only to coordinate multi-plant deactivation.
+    if (plantId) rootSightActivePlants.add(plantId);
+    rootSightStateMachineSetTarget(rootSightMachine, 'underground');
+  } else {
+    if (plantId) rootSightActivePlants.delete(plantId);
+    // Only drive to surface if no plant still needs Root Sight active,
+    // OR if called without a plantId (explicit global disable, e.g. disconnect).
+    if (!plantId || rootSightActivePlants.size === 0) {
+      rootSightStateMachineSetTarget(rootSightMachine, 'surface');
+    }
+  }
+
+  // Adjust polar angle limits so underground nodes are reachable, but do NOT
+  // move the camera — the player orbits freely at all times.
+  if (enabled) {
+    controls.maxPolarAngle = Math.PI - 0.05;
+  } else {
+    controls.maxPolarAngle = renderConfig?.cameraMaxPolarAngle ?? Math.PI / 2 - 0.05;
+  }
+
   const isEnabled = rootSightStateMachineIsEnabled(rootSightMachine);
   setDetail(
     isEnabled ? 'Root Sight: ON — Underground view active' : 'Root Sight: OFF — Surface view',
   );
-
-  if (enabled) {
-    controls.maxPolarAngle = Math.PI - 0.05;
-    // Find lowest root node (or radicle) to focus and center on
-    const ownNodes = Array.from(plantNodes.values()).filter((n) => n.isOwnPlant);
-    const rootNodes = ownNodes.filter(
-      (n) => n.layer === 'root' || n.type === 0 || n.position.y < -0.01,
-    );
-    if (rootNodes.length > 0) {
-      rootNodes.sort((a, b) => a.position.y - b.position.y); // Lowest y first
-      focusCameraOnNode(rootNodes[0]);
-    }
-  } else {
-    controls.maxPolarAngle = renderConfig?.cameraMaxPolarAngle ?? Math.PI / 2 - 0.05;
-    // Return camera focus smoothly to crown / seed / stem
-    const crownNode =
-      Array.from(plantNodes.values()).find((n) => n.isOwnPlant && n.parentId === null) ??
-      Array.from(plantNodes.values()).find((n) => n.isOwnPlant);
-    if (crownNode) {
-      focusCameraOnNode(crownNode);
-    }
-  }
-
-  if (enabled) {
-    controls.maxPolarAngle = Math.PI - 0.05;
-    // Find lowest root node (or radicle) to focus and center on
-    const ownNodes = Array.from(plantNodes.values()).filter((n) => n.isOwnPlant);
-    const rootNodes = ownNodes.filter(
-      (n) => n.layer === 'root' || n.type === 0 || n.position.y < -0.01,
-    );
-    if (rootNodes.length > 0) {
-      rootNodes.sort((a, b) => a.position.y - b.position.y); // Lowest y first
-      focusCameraOnNode(rootNodes[0]);
-    }
-  } else {
-    controls.maxPolarAngle = renderConfig?.cameraMaxPolarAngle ?? Math.PI / 2 - 0.05;
-    // Return camera focus smoothly to crown / seed / stem
-    const crownNode =
-      Array.from(plantNodes.values()).find((n) => n.isOwnPlant && n.parentId === null) ??
-      Array.from(plantNodes.values()).find((n) => n.isOwnPlant);
-    if (crownNode) {
-      focusCameraOnNode(crownNode);
-    }
-  }
 }
 
 function toggleRootSight(): void {
   if (!rootSightMachine) return;
   rootSightStateMachineToggle(rootSightMachine);
   const isEnabled = rootSightStateMachineIsEnabled(rootSightMachine);
+
+  // Adjust polar angle limits silently — no camera movement.
+  if (isEnabled) {
+    controls.maxPolarAngle = Math.PI - 0.05;
+  } else {
+    controls.maxPolarAngle = renderConfig?.cameraMaxPolarAngle ?? Math.PI / 2 - 0.05;
+  }
+
   setDetail(
     isEnabled ? 'Root Sight: ON — Underground view active' : 'Root Sight: OFF — Surface view',
   );
-
-  if (isEnabled) {
-    controls.maxPolarAngle = Math.PI - 0.05;
-    const ownNodes = Array.from(plantNodes.values()).filter((n) => n.isOwnPlant);
-    const rootNodes = ownNodes.filter(
-      (n) => n.layer === 'root' || n.type === 0 || n.position.y < -0.01,
-    );
-    if (rootNodes.length > 0) {
-      rootNodes.sort((a, b) => a.position.y - b.position.y);
-      focusCameraOnNode(rootNodes[0]);
-    }
-  } else {
-    controls.maxPolarAngle = renderConfig?.cameraMaxPolarAngle ?? Math.PI / 2 - 0.05;
-    const crownNode =
-      Array.from(plantNodes.values()).find((n) => n.isOwnPlant && n.parentId === null) ??
-      Array.from(plantNodes.values()).find((n) => n.isOwnPlant);
-    if (crownNode) {
-      focusCameraOnNode(crownNode);
-    }
-  }
-
-  if (isEnabled) {
-    controls.maxPolarAngle = Math.PI - 0.05;
-    const ownNodes = Array.from(plantNodes.values()).filter((n) => n.isOwnPlant);
-    const rootNodes = ownNodes.filter(
-      (n) => n.layer === 'root' || n.type === 0 || n.position.y < -0.01,
-    );
-    if (rootNodes.length > 0) {
-      rootNodes.sort((a, b) => a.position.y - b.position.y);
-      focusCameraOnNode(rootNodes[0]);
-    }
-  } else {
-    controls.maxPolarAngle = renderConfig?.cameraMaxPolarAngle ?? Math.PI / 2 - 0.05;
-    const crownNode =
-      Array.from(plantNodes.values()).find((n) => n.isOwnPlant && n.parentId === null) ??
-      Array.from(plantNodes.values()).find((n) => n.isOwnPlant);
-    if (crownNode) {
-      focusCameraOnNode(crownNode);
-    }
-  }
 }
 
 // T00A: Hint card toggle
@@ -990,14 +987,16 @@ function updateRootSight(deltaTime: number): void {
 
 async function initC01(): Promise<void> {
   // Load C01 configs
-  const [loadedRenderConfig, controlsConfig, uiConfig, loadedRootSightConfig] = await Promise.all([
-    loadRenderConfig(httpOrigin),
-    loadControlsConfig(httpOrigin),
-    loadUIConfig(httpOrigin),
-    loadRootSightConfig(httpOrigin),
-  ]);
+  const [loadedRenderConfig, loadedControlsConfig, uiConfig, loadedRootSightConfig] =
+    await Promise.all([
+      loadRenderConfig(httpOrigin),
+      loadControlsConfig(httpOrigin),
+      loadUIConfig(httpOrigin),
+      loadRootSightConfig(httpOrigin),
+    ]);
 
   renderConfig = loadedRenderConfig;
+  controlsConfig = loadedControlsConfig;
   rootSightConfig = loadedRootSightConfig;
   rootSightMachine = createRootSightStateMachine(rootSightConfig);
 
@@ -1006,10 +1005,12 @@ async function initC01(): Promise<void> {
 
   // Build UI shell
   uiShell = createUIShell(uiConfig);
+  chatHudZIndex = uiConfig?.layers?.hud ?? 100;
 
   // Create HUD elements early so they're ready when WELCOME arrives
   createResourceReadout();
   createGrowthSelectionUI();
+  createChatUI();
 
   // Debug overlay
   const debugLayer = uiShell.getLayer('debug');
@@ -1096,7 +1097,12 @@ async function initC01(): Promise<void> {
         },
         regeneratePlant: () => {
           if (ws?.readyState === WebSocket.OPEN && plantId) {
-            ws.send(JSON.stringify({ type: 99, payload: { type: 'dev_regenerate_plant' } }));
+            ws.send(
+              JSON.stringify({
+                type: MESSAGE_TYPE.DEV_ACTION,
+                payload: { type: 'dev_regenerate_plant' },
+              }),
+            );
           }
         },
       },
@@ -1132,139 +1138,54 @@ async function initC01(): Promise<void> {
     document.body.appendChild(devPanel.panel);
   }
 
-  // Debug/Dev panel toggle (backtick `) - works regardless of debugOverlayEnabled
+  // Debug overlay toggle (Shift) - works regardless of dev mode
   inputBus.subscribe(
     (actionId, inputState: { pressed: boolean; toggled?: boolean; active?: boolean }) => {
       if (actionId === 'debug_toggle' && (inputState.pressed || inputState.toggled)) {
         if (debugOverlay) debugOverlay.setVisible(!debugOverlay.isVisible());
+      }
+    },
+  );
+
+  // Dev panel toggle (backtick `) - only available in dev mode
+  inputBus.subscribe(
+    (actionId, inputState: { pressed: boolean; toggled?: boolean; active?: boolean }) => {
+      if (actionId === 'dev_panel_toggle' && (inputState.pressed || inputState.toggled)) {
         if (devPanel) devPanel.toggle();
       }
     },
   );
 
-  // Dev command handlers (time/weather)
-  inputBus.subscribe((actionId: string, inputState: { pressed: boolean }) => {
-    if (!inputState.pressed) return;
-    switch (actionId) {
-      case 'dev_weather_clear':
-        environmentRenderer?.handleWeatherUpdate({
-          weatherState: 'clear',
-          timeOfDay: environmentRenderer.getTimeOfDay(),
-          sunIntensity: 1.0,
-          isDay: true,
-          conditionToken: 'sun',
-          stateTimeRemainingS: 300,
-          forecast: { nextWeatherState: 'clear', timeUntilNextStateS: 300 },
-        });
-        break;
-      case 'dev_weather_rain':
-        environmentRenderer?.handleWeatherUpdate({
-          weatherState: 'rain',
-          timeOfDay: environmentRenderer.getTimeOfDay(),
-          sunIntensity: 0.65,
-          isDay: true,
-          conditionToken: 'rain',
-          stateTimeRemainingS: 300,
-          forecast: { nextWeatherState: 'rain', timeUntilNextStateS: 300 },
-        });
-        break;
-      case 'dev_weather_storm_telegraph':
-        environmentRenderer?.handleWeatherUpdate({
-          weatherState: 'thunderstorm_telegraph',
-          timeOfDay: environmentRenderer.getTimeOfDay(),
-          sunIntensity: 0.5,
-          isDay: true,
-          conditionToken: 'overcast',
-          stateTimeRemainingS: 45,
-          forecast: { nextWeatherState: 'thunderstorm_telegraph', timeUntilNextStateS: 45 },
-        });
-        break;
-      case 'dev_weather_storm_active':
-        environmentRenderer?.handleWeatherUpdate({
-          weatherState: 'thunderstorm_active',
-          timeOfDay: environmentRenderer.getTimeOfDay(),
-          sunIntensity: 0.35,
-          isDay: true,
-          conditionToken: 'storm',
-          stateTimeRemainingS: 90,
-          forecast: { nextWeatherState: 'thunderstorm_active', timeUntilNextStateS: 90 },
-        });
-        break;
-      case 'dev_weather_storm_aftermath':
-        environmentRenderer?.handleWeatherUpdate({
-          weatherState: 'thunderstorm_aftermath',
-          timeOfDay: environmentRenderer.getTimeOfDay(),
-          sunIntensity: 0.65,
-          isDay: true,
-          conditionToken: 'mist',
-          stateTimeRemainingS: 60,
-          forecast: { nextWeatherState: 'thunderstorm_aftermath', timeUntilNextStateS: 60 },
-        });
-        break;
-      case 'dev_time_dawn':
-        if (environmentRenderer) {
-          environmentRenderer.setTimeOfDay(0.25);
-        }
-        break;
-      case 'dev_time_noon':
-        if (environmentRenderer) {
-          environmentRenderer.setTimeOfDay(0.5);
-        }
-        break;
-      case 'dev_time_dusk':
-        if (environmentRenderer) {
-          environmentRenderer.setTimeOfDay(0.75);
-        }
-        break;
-      case 'dev_time_night':
-        if (environmentRenderer) {
-          environmentRenderer.setTimeOfDay(0.0);
-        }
-        break;
-      case 'dev_weather_info':
-        console.log(
-          '[Dev] Weather:',
-          environmentRenderer?.getWeatherState(),
-          'Time:',
-          environmentRenderer?.getTimeOfDay().toFixed(3),
-          'Sun:',
-          environmentRenderer?.getSunIntensity().toFixed(2),
-        );
-        break;
-      case 'dev_panel_toggle':
-        if (devPanel) devPanel.toggle();
-        break;
-      case 'plant_regenerate':
-        if (ws?.readyState === WebSocket.OPEN && plantId) {
-          ws.send(JSON.stringify({ type: 99, payload: { type: 'dev_regenerate_plant' } }));
-        }
-        break;
-    }
-  });
+  // Grow mode state
+  let isGrowMode = false;
+  let growModeIndicator: HTMLDivElement | null = null;
 
-  // Growth actions (two-step: select node, then confirm)
-  inputBus.subscribe((actionId: string, state: { pressed: boolean; active?: boolean }) => {
-    if (actionId === 'grow_select' && state.pressed) {
-      // Left-click on a node is handled by canvas click handler
-      // This action can be used for keyboard alternative
-      const nodeId = Array.from(plantNodes.keys())[0]; // fallback
-      if (nodeId) requestGrowthOptions(nodeId);
-    }
-    if (actionId === 'grow_confirm' && state.pressed) {
-      if (growthSelectionStateMachineIsVisible(growthSelectionMachine)) {
-        const selectedNodeId = growthSelectionMachine.selectedNodeId;
-        const options = growthSelectionMachine.options;
-        if (selectedNodeId && options.length > 0) {
-          // Auto-select first available option
-          const option = options.find((o) => o.available);
-          if (option) confirmGrowth(selectedNodeId, option.type);
-        }
-      }
-    }
-    if (actionId === 'grow_cancel' && state.pressed) {
-      hideGrowthSelection();
-    }
-  });
+  function createGrowModeIndicator(): void {
+    const indicator = document.createElement('div');
+    indicator.id = 'grow-mode-indicator';
+    indicator.style.cssText = `
+      position: fixed;
+      top: 90px;
+      left: 16px;
+      z-index: 1000;
+      font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+      font-size: calc(13px * var(--text-scale));
+      font-weight: 600;
+      color: var(--leaf-400);
+      background: rgba(20, 24, 15, 0.85);
+      border: 1px solid var(--bark-700);
+      border-radius: 4px;
+      padding: 6px 12px;
+      pointer-events: none;
+      transition: opacity 0.2s ease;
+    `;
+    indicator.textContent = 'Mode: Normal (G to toggle)';
+    document.body.appendChild(indicator);
+    growModeIndicator = indicator;
+  }
+
+  // Create grow mode indicator
+  createGrowModeIndicator();
 
   // Quality controller
   qualityController = createQualityController({
@@ -1293,7 +1214,338 @@ async function initC01(): Promise<void> {
     soilCutawayUniforms,
   );
 
-  // Growth intent action - removed auto-growth; now click-to-select (ADR-018)
+  // Grow mode functions
+  function updateGrowModeIndicator(): void {
+    if (growModeIndicator) {
+      growModeIndicator.textContent = isGrowMode
+        ? 'Mode: GROW (G to toggle)'
+        : 'Mode: Normal (G to toggle)';
+      growModeIndicator.style.color = isGrowMode ? 'var(--ember-500)' : 'var(--leaf-400)';
+      growModeIndicator.style.borderColor = isGrowMode ? 'var(--ember-500)' : 'var(--bark-700)';
+    }
+  }
+
+  function setGrowMode(enabled: boolean): void {
+    isGrowMode = enabled;
+    updateGrowModeIndicator();
+    if (enabled) {
+      setDetail('Grow Mode ON — Click a node to grow');
+      uiShell?.toast({ message: 'Grow Mode enabled', kind: 'info', durationMs: 2000 });
+    } else {
+      setDetail('Grow Mode OFF — Click a node to focus');
+      uiShell?.toast({ message: 'Grow Mode disabled', kind: 'info', durationMs: 2000 });
+      hideGrowthSelection();
+    }
+  }
+
+  function toggleGrowMode(): void {
+    setGrowMode(!isGrowMode);
+  }
+
+  // Inventory/Overview panel stub
+  let inventoryOverviewPanel: HTMLDivElement | null = null;
+
+  function createInventoryOverviewPanel(): void {
+    const layer = uiShell?.getLayer('panel');
+    if (!layer) return;
+
+    const panel = document.createElement('div');
+    panel.id = 'inventory-overview-panel';
+    panel.style.cssText = `
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      z-index: 200;
+      background: rgba(20, 24, 15, 0.98);
+      border: 1px solid var(--bark-700);
+      border-radius: 8px;
+      padding: 16px 24px;
+      color: var(--bone-100);
+      font-family: ui-monospace, "JetBrains Mono", monospace;
+      font-size: calc(13px * var(--text-scale));
+      min-width: 360px;
+      max-width: 500px;
+      max-height: 70vh;
+      overflow-y: auto;
+      pointer-events: auto;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.6);
+      display: none;
+    `;
+
+    panel.innerHTML = `
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid var(--bark-700);">
+        <h2 style="margin: 0; color: var(--leaf-400);">Inventory & Plant Overview</h2>
+        <button id="inventory-close" style="background: none; border: none; color: var(--bark-300); cursor: pointer; font-size: 1.5em; line-height: 1;">Ã—</button>
+      </div>
+      <div id="plant-overview" style="margin-bottom: 16px;">
+        <h3 style="margin: 0 0 8px; color: var(--sprout-300);">Your Plant</h3>
+        <div id="plant-stats" style="font-size: 0.9em; color: var(--bark-300);">Loading...</div>
+      </div>
+      <div id="inventory-slots">
+        <h3 style="margin: 0 0 8px; color: var(--sprout-300);">Inventory (1-0 to select)</h3>
+        <div id="inventory-grid" style="display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px;"></div>
+      </div>
+    `;
+
+    layer.appendChild(panel);
+    inventoryOverviewPanel = panel;
+
+    panel.querySelector('#inventory-close')?.addEventListener('click', () => {
+      toggleInventoryOverview();
+    });
+
+    // Close on Escape
+    const handleInventoryEscape = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && inventoryOverviewPanel?.style.display !== 'none') {
+        toggleInventoryOverview();
+        window.removeEventListener('keydown', handleInventoryEscape);
+      }
+    };
+    window.addEventListener('keydown', handleInventoryEscape);
+
+    // Prevent clicks inside panel from bubbling
+    panel.addEventListener('click', (e) => e.stopPropagation());
+  }
+
+  function toggleInventoryOverview(): void {
+    if (!inventoryOverviewPanel) {
+      createInventoryOverviewPanel();
+    }
+    if (!inventoryOverviewPanel) return;
+    const isOpen = inventoryOverviewPanel.style.display !== 'none';
+    inventoryOverviewPanel.style.display = isOpen ? 'none' : 'block';
+    if (!isOpen) {
+      updateInventoryOverview();
+    }
+  }
+
+  function updateInventoryOverview(): void {
+    if (!inventoryOverviewPanel) return;
+
+    // Update plant stats
+    const plantStats = document.getElementById('plant-stats');
+    if (plantStats && plantId) {
+      const ownNodes = Array.from(plantNodes.values()).filter((n) => n.isOwnPlant);
+      const totalBiomass = ownNodes.reduce((sum, n) => sum + (n.biomass || 0), 0);
+      const nodeCount = ownNodes.length;
+      const rootNodes = ownNodes.filter((n) => n.layer === 'root' || n.type === 0).length;
+      const canopyNodes = ownNodes.filter((n) => n.layer === 'canopy' || n.type >= 1).length;
+      plantStats.innerHTML = `
+        <div>Plant ID: ${plantId.slice(0, 12)}...</div>
+        <div>Total Biomass: ${totalBiomass.toFixed(1)}</div>
+        <div>Nodes: ${nodeCount} (Roots: ${rootNodes}, Canopy: ${canopyNodes})</div>
+        <div>Energy: ${plantEnergy.toFixed(1)} / ${plantBiomass ? (plantBiomass * 10).toFixed(0) : '—'}</div>
+        <div>Light: ${tileLight.toFixed(0)} | Water: ${tileWater.toFixed(0)} | Minerals: ${tileMinerals.toFixed(0)}</div>
+        <div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--bark-700); color: var(--sprout-300);">
+          Growth: ${isGrowMode ? 'ACTIVE' : 'Idle'} | Root Sight: ${rootSightMachine && rootSightStateMachineIsEnabled(rootSightMachine) ? 'ON' : 'OFF'}
+        </div>
+      `;
+    }
+
+    // Update inventory grid (stub - 10 slots)
+    const inventoryGrid = document.getElementById('inventory-grid');
+    if (inventoryGrid) {
+      inventoryGrid.innerHTML = '';
+      for (let i = 1; i <= 10; i++) {
+        const slot = document.createElement('div');
+        slot.style.cssText = `
+          aspect-ratio: 1;
+          background: var(--bark-800);
+          border: 1px solid var(--bark-600);
+          border-radius: 4px;
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          font-size: 0.75em;
+          color: var(--bark-300);
+          position: relative;
+          transition: border-color 0.1s ease, background 0.1s ease;
+        `;
+        const keyLabel = i === 10 ? '0' : String(i);
+        slot.innerHTML = `
+          <div style="position: absolute; top: 2px; left: 4px; font-size: 0.65em; font-weight: bold; color: var(--bone-300); opacity: 0.7;">${keyLabel}</div>
+          <div style="font-size: 2em; line-height: 1;">ðŸ“¦</div>
+          <div style="margin-top: 4px; font-size: 0.7em;">Empty</div>
+        `;
+        // Highlight on hover
+        slot.addEventListener('mouseenter', () => {
+          slot.style.borderColor = 'var(--leaf-400)';
+          slot.style.background = 'rgba(20, 24, 15, 0.95)';
+        });
+        slot.addEventListener('mouseleave', () => {
+          slot.style.borderColor = 'var(--bark-600)';
+          slot.style.background = 'var(--bark-800)';
+        });
+        inventoryGrid.appendChild(slot);
+      }
+    }
+  }
+
+  // Emote definitions
+  const EMOTES = [
+    { id: 'wave', label: 'Wave', emoji: 'ðŸ‘‹' },
+    { id: 'cheer', label: 'Cheer', emoji: 'ðŸŽ‰' },
+    { id: 'thumbs_up', label: 'Thumbs Up', emoji: 'ðŸ‘' },
+    { id: 'heart', label: 'Heart', emoji: 'â¤ï¸' },
+    { id: 'think', label: 'Think', emoji: 'ðŸ¤”' },
+    { id: 'sleep', label: 'Sleep', emoji: 'ðŸ˜´' },
+    { id: 'dance', label: 'Dance', emoji: 'ðŸ’ƒ' },
+    { id: 'sad', label: 'Sad', emoji: 'ðŸ˜¢' },
+  ] as const;
+
+  let emoteWheelElement: HTMLDivElement | null = null;
+
+  function createEmoteWheel(): void {
+    const wheel = document.createElement('div');
+    wheel.id = 'emote-wheel';
+    wheel.style.cssText = `
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%) scale(0.8);
+      z-index: 400;
+      pointer-events: auto;
+      opacity: 0;
+      transition: opacity 0.15s ease, transform 0.15s ease;
+      display: none;
+    `;
+
+    const radius = 120;
+    const centerSize = 80;
+    const buttonSize = 64;
+
+    // Center close button
+    const center = document.createElement('div');
+    center.style.cssText = `
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: ${centerSize}px;
+      height: ${centerSize}px;
+      border-radius: 50%;
+      background: rgba(20, 24, 15, 0.95);
+      border: 2px solid var(--bark-700);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.5em;
+      color: var(--bone-100);
+      cursor: pointer;
+      z-index: 10;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+    `;
+    center.textContent = 'âœ•';
+    center.title = 'Close (Esc or click away)';
+    center.addEventListener('click', hideEmoteWheel);
+    wheel.appendChild(center);
+
+    // Emote buttons in a circle
+    EMOTES.forEach((emote, index) => {
+      const angle = (index / EMOTES.length) * Math.PI * 2 - Math.PI / 2;
+      const x = Math.cos(angle) * radius;
+      const y = Math.sin(angle) * radius;
+
+      const btn = document.createElement('button');
+      btn.dataset.emoteId = emote.id;
+      btn.style.cssText = `
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%) translate(${x}px, ${y}px);
+        width: ${buttonSize}px;
+        height: ${buttonSize}px;
+        border-radius: 50%;
+        background: rgba(20, 24, 15, 0.95);
+        border: 2px solid var(--bark-700);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        font-size: 1.8em;
+        color: var(--bone-100);
+        cursor: pointer;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+        transition: transform 0.1s ease, border-color 0.1s ease, background 0.1s ease;
+        padding: 0;
+        gap: 2px;
+      `;
+      btn.innerHTML = `
+        <span>${emote.emoji}</span>
+        <span style="font-size: 0.5em; font-weight: 600; text-transform: capitalize;">${emote.label}</span>
+      `;
+
+      btn.addEventListener('mouseenter', () => {
+        btn.style.transform = `translate(-50%, -50%) translate(${x}px, ${y}px) scale(1.15)`;
+        btn.style.borderColor = 'var(--leaf-400)';
+        btn.style.background = 'rgba(20, 24, 15, 0.98)';
+      });
+      btn.addEventListener('mouseleave', () => {
+        btn.style.transform = `translate(-50%, -50%) translate(${x}px, ${y}px) scale(1)`;
+        btn.style.borderColor = 'var(--bark-700)';
+        btn.style.background = 'rgba(20, 24, 15, 0.95)';
+      });
+      btn.addEventListener('click', () => {
+        sendEmote(emote.id);
+        hideEmoteWheel();
+      });
+
+      wheel.appendChild(btn);
+    });
+
+    // Click outside to close
+    wheel.addEventListener('click', (e) => {
+      if (e.target === wheel) hideEmoteWheel();
+    });
+
+    document.body.appendChild(wheel);
+    emoteWheelElement = wheel;
+  }
+
+  function showEmoteWheel(): void {
+    if (!emoteWheelElement) createEmoteWheel();
+    const wheel = emoteWheelElement;
+    if (!wheel) return;
+
+    wheel.style.display = 'block';
+    requestAnimationFrame(() => {
+      wheel.style.opacity = '1';
+      wheel.style.transform = 'translate(-50%, -50%) scale(1)';
+    });
+
+    // Close on Escape
+    const handleEscape = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        hideEmoteWheel();
+        window.removeEventListener('keydown', handleEscape);
+      }
+    };
+    window.addEventListener('keydown', handleEscape);
+  }
+
+  function hideEmoteWheel(): void {
+    if (!emoteWheelElement) return;
+    emoteWheelElement.style.opacity = '0';
+    emoteWheelElement.style.transform = 'translate(-50%, -50%) scale(0.8)';
+    setTimeout(() => {
+      if (emoteWheelElement) emoteWheelElement.style.display = 'none';
+    }, 150);
+  }
+
+  function sendEmote(emoteId: string): void {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    ws.send(
+      JSON.stringify({
+        type: MESSAGE_TYPE.CHAT_MESSAGE,
+        payload: { message: `/emote ${emoteId}` },
+      }),
+    );
+    console.log('[PlantLegacy] Sent emote:', emoteId);
+  }
+
+  // Input handlers
   inputBus.subscribe(
     (actionId: string, state: { pressed: boolean; toggled?: boolean; active?: boolean }) => {
       if (actionId === 'camera_pan_forward') cameraPanState.forward = state.active ?? false;
@@ -1309,13 +1561,11 @@ async function initC01(): Promise<void> {
         frameCameraOnPlant(target.x, target.y, target.z);
       }
       if (import.meta.env.DEV && actionId === 'plant_regenerate' && state.pressed) {
-        // Generate a test plant at origin for visual critique
         if (plantRenderer) {
           const testNodes = plantRenderer.generateTestPlant();
           plantRenderer.rebuild();
           plantRenderer.updatePlantData(testNodes);
           if (webgpuRenderer) webgpuRenderer.updatePlants(testNodes, performance.now());
-          // Center camera on origin
           controls.target.set(0, 0, 0);
           camera.position.set(0, 20, 30);
           controls.update();
@@ -1324,9 +1574,7 @@ async function initC01(): Promise<void> {
           );
         }
       }
-      if (actionId === 'root_sight_toggle' && rootSightConfig) {
-        // Hold mode: state.active is true while held, false when released
-        // Toggle mode: state.pressed/state.toggled for edge triggers
+      if (actionId === 'root_sight_toggle' && rootSightMachine) {
         if (typeof state.active === 'boolean') {
           setRootSightEnabled(state.active);
         } else if (state.pressed || state.toggled) {
@@ -1336,44 +1584,26 @@ async function initC01(): Promise<void> {
       if (actionId === 'hint_card_toggle' && (state.pressed || state.toggled)) {
         toggleHintCard();
       }
-      // Dev weather/time controls (1-9, 0 keys)
-      if (actionId.startsWith('dev_weather_') && state.pressed) {
-        const weatherState = actionId.replace('dev_weather_', '');
-        if (environmentRenderer) {
-          environmentRenderer.handleWeatherUpdate({
-            weatherState,
-            timeOfDay: environmentRenderer.getTimeOfDay(),
-            sunIntensity: environmentRenderer.getSunIntensity(),
-            isDay:
-              environmentRenderer.getTimeOfDay() > 0.2 && environmentRenderer.getTimeOfDay() < 0.8,
-            conditionToken: '',
-            stateTimeRemainingS: 300,
+      if (actionId === 'grow_mode_toggle' && (state.pressed || state.toggled)) {
+        toggleGrowMode();
+      }
+      if (actionId === 'inventory_overview_toggle' && (state.pressed || state.toggled)) {
+        toggleInventoryOverview();
+      }
+      if (actionId === 'emote_wheel' && state.pressed) {
+        showEmoteWheel();
+      }
+      // Inventory slot selection (1-0)
+      if (actionId.startsWith('inventory_slot_') && state.pressed) {
+        const slotNum = parseInt(actionId.replace('inventory_slot_', ''), 10);
+        if (!Number.isNaN(slotNum)) {
+          console.log(`[PlantLegacy] Inventory slot ${slotNum} selected`);
+          uiShell?.toast({
+            message: `Slot ${slotNum} selected (inventory UI not yet implemented)`,
+            kind: 'info',
+            durationMs: 1500,
           });
-          setDetail(`Weather set to: ${weatherState}`);
         }
-      }
-      if (actionId.startsWith('dev_time_') && state.pressed) {
-        const timePreset = actionId.replace('dev_time_', '');
-        const timeMap: Record<string, number> = {
-          dawn: 0.25,
-          noon: 0.5,
-          dusk: 0.75,
-          night: 0.0,
-        };
-        if (timeMap[timePreset] !== undefined && environmentRenderer) {
-          environmentRenderer.setTimeOfDay(timeMap[timePreset]);
-          setDetail(`Time set to: ${timePreset}`);
-        }
-      }
-      if (actionId === 'dev_weather_info' && state.pressed) {
-        console.log(
-          '[Dev] Weather:',
-          environmentRenderer?.getWeatherState(),
-          'Time:',
-          environmentRenderer?.getTimeOfDay().toFixed(3),
-          'Sun:',
-          environmentRenderer?.getSunIntensity().toFixed(2),
-        );
       }
     },
   );
@@ -1381,7 +1611,13 @@ async function initC01(): Promise<void> {
   // Keyboard producer
   window.addEventListener('keydown', (e) => {
     if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
-      if (e.code === 'Enter') inputBus?.handleKeyDown(e.code);
+      if (e.code === 'Enter')
+        inputBus?.handleKeyDown(e.code, {
+          shift: e.shiftKey,
+          ctrl: e.ctrlKey,
+          alt: e.altKey,
+          meta: e.metaKey,
+        });
       return;
     }
 
@@ -1408,19 +1644,23 @@ async function initC01(): Promise<void> {
       return;
     }
 
-    // Support Tab for Root Sight toggle (documented standard key)
-    if (e.code === 'Tab' && !e.ctrlKey && !e.altKey && !e.metaKey) {
-      e.preventDefault();
-      toggleRootSight();
+    // Don't prevent default for browser shortcuts (Ctrl/Alt/Meta combos)
+    // Shift alone is allowed for debug_toggle
+    if (e.ctrlKey || e.altKey || e.metaKey) {
+      inputBus?.handleKeyDown(e.code, {
+        shift: e.shiftKey,
+        ctrl: e.ctrlKey,
+        alt: e.altKey,
+        meta: e.metaKey,
+      });
       return;
     }
-
-    // Don't prevent default for browser shortcuts (Ctrl/Shift/Alt/Meta combos)
-    if (e.ctrlKey || e.shiftKey || e.altKey || e.metaKey) {
-      inputBus?.handleKeyDown(e.code);
-      return;
-    }
-    inputBus?.handleKeyDown(e.code);
+    inputBus?.handleKeyDown(e.code, {
+      shift: e.shiftKey,
+      ctrl: e.ctrlKey,
+      alt: e.altKey,
+      meta: e.metaKey,
+    });
     e.preventDefault();
   });
 
@@ -1438,11 +1678,23 @@ async function initC01(): Promise<void> {
       return;
     }
 
-    if (e.ctrlKey || e.shiftKey || e.altKey || e.metaKey) {
-      inputBus?.handleKeyUp(e.code);
+    // Don't prevent default for browser shortcuts (Ctrl/Alt/Meta combos)
+    // Shift alone is allowed for debug_toggle
+    if (e.ctrlKey || e.altKey || e.metaKey) {
+      inputBus?.handleKeyUp(e.code, {
+        shift: e.shiftKey,
+        ctrl: e.ctrlKey,
+        alt: e.altKey,
+        meta: e.metaKey,
+      });
       return;
     }
-    inputBus?.handleKeyUp(e.code);
+    inputBus?.handleKeyUp(e.code, {
+      shift: e.shiftKey,
+      ctrl: e.ctrlKey,
+      alt: e.altKey,
+      meta: e.metaKey,
+    });
     e.preventDefault();
   });
 
@@ -1568,7 +1820,12 @@ async function initC01(): Promise<void> {
 
     // Ignore if growth drawing is/was active or an option is selected (handled by pointer handlers)
     const gState = growthSelectionStateMachineGetState(growthSelectionMachine);
-    if (gState === 'drawing' || gState === 'option_selected') return;
+    if (gState === 'option_selected') {
+      // Clicking on canvas while an option is selected cancels growth and re-enables controls
+      hideGrowthSelection();
+      return;
+    }
+    if (gState === 'drawing') return;
 
     // Ignore clicks on UI elements (buttons, inputs, etc.)
     if (
@@ -1651,6 +1908,7 @@ async function initC01(): Promise<void> {
     // If we have a growth option selected, start drawing from this node on click/drag
     const growthState = growthSelectionStateMachineGetState(growthSelectionMachine);
     if (growthState === 'option_selected') {
+      console.log('[Click] option_selected state, starting drawing for node:', clickedNodeId);
       const selectedNodeId = growthSelectionMachine.selectedNodeId;
       if (clickedNodeId && selectedNodeId && clickedNodeId === selectedNodeId) {
         const nodeData = plantNodes.get(clickedNodeId);
@@ -1683,11 +1941,56 @@ async function initC01(): Promise<void> {
     }
 
     if (clickedNodeId) {
-      const clickedNode = plantNodes.get(clickedNodeId);
-      if (clickedNode) {
-        focusCameraOnNode(clickedNode);
+      // Single-click does NOT zoom into the node — double-click (dblclick) handles zooming.
+      // Only request growth options in Grow Mode
+      if (isGrowMode) {
+        requestGrowthOptions(clickedNodeId);
       }
-      requestGrowthOptions(clickedNodeId);
+    }
+  });
+
+  // Double-click on a node zooms in (focusCameraOnNode). Single click only opens growth options.
+  canvas.addEventListener('dblclick', (e) => {
+    if (e.button !== 0) return;
+    if (growthSelectionStateMachineGetState(growthSelectionMachine) === 'drawing') return;
+    if (
+      e.target instanceof HTMLElement &&
+      e.target.closest(
+        'button, input, select, textarea, [role="dialog"], #growth-selection-panel, #resource-readout, #hint-card',
+      )
+    )
+      return;
+
+    const rect = canvas.getBoundingClientRect();
+    const dblMouse = new THREE.Vector2(
+      ((e.clientX - rect.left) / rect.width) * 2 - 1,
+      -((e.clientY - rect.top) / rect.height) * 2 + 1,
+    );
+    const dblRaycaster = new THREE.Raycaster();
+    dblRaycaster.setFromCamera(dblMouse, camera);
+    const dblObjects: THREE.Object3D[] = [];
+    const dblMap = new Map<THREE.Object3D, string>();
+    const isRSEnabled = rootSightMachine ? rootSightStateMachineIsEnabled(rootSightMachine) : false;
+    const camBelowGround = camera.position.y < 0;
+    for (const [id, nodeData] of plantNodes.entries()) {
+      if (!nodeData.isOwnPlant) continue;
+      if (nodeData.type === 0 && !nodeData.isSeed && !isRSEnabled && !camBelowGround) continue;
+      const sphere = new THREE.Mesh(
+        new THREE.SphereGeometry(Math.max(nodeData.radius * 1.5, 0.35), 8, 8),
+        new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }),
+      );
+      sphere.position.copy(nodeData.position);
+      sphere.updateMatrixWorld(true);
+      dblObjects.push(sphere);
+      dblMap.set(sphere, id);
+    }
+    const dblIntersects = dblRaycaster.intersectObjects(dblObjects);
+    if (dblIntersects.length > 0) {
+      const nodeId = dblMap.get(dblIntersects[0].object);
+      if (nodeId) {
+        const nodeData = plantNodes.get(nodeId);
+        if (nodeData) focusCameraOnNode(nodeData);
+      }
     }
   });
 
@@ -1771,6 +2074,7 @@ async function initC01(): Promise<void> {
 
   const handleGrowthDrawMove = (e: MouseEvent | PointerEvent) => {
     if (!growthSelectionStateMachineIsDrawing(growthSelectionMachine)) return;
+    console.log('[GrowthDrawMove] drawing...');
 
     const drawingData = growthSelectionStateMachineGetDrawingData(growthSelectionMachine);
     if (!drawingData) return;
@@ -1792,6 +2096,12 @@ async function initC01(): Promise<void> {
   const handleGrowthDrawEnd = (e: MouseEvent | PointerEvent) => {
     if ((e as MouseEvent).button !== 0) return;
     const gState = growthSelectionStateMachineGetState(growthSelectionMachine);
+    console.log(
+      '[GrowthDrawEnd] state:',
+      gState,
+      'drawingData:',
+      growthSelectionStateMachineGetDrawingData(growthSelectionMachine),
+    );
     if (gState !== 'drawing' && gState !== 'option_selected') return;
     if (gState === 'option_selected') {
       // Click without drag capture starting: treat as a send attempt using selected option.
@@ -1835,13 +2145,13 @@ async function initC01(): Promise<void> {
       }
     }
     if (result) {
-      // Clamp final direction to satisfy server rules while preserving player bias
-      const clamped = clampGrowthDirectionForOption(result.optionType, {
+      // Send raw drawn direction; server is authoritative for clamping/validation
+      const rawDirection = {
         x: smoothedGrowthDir.x,
         y: smoothedGrowthDir.y,
         z: smoothedGrowthDir.z,
-      });
-      confirmGrowth(result.nodeId, result.optionType, clamped);
+      };
+      confirmGrowth(result.nodeId, result.optionType, rawDirection);
       uiShell?.toast({
         message: `Sent ${result.optionType} growth...`,
         kind: 'info',
@@ -1849,7 +2159,11 @@ async function initC01(): Promise<void> {
       });
       console.log('[PlantLegacy] Growth drawing confirmed', {
         ...result,
-        clampedDirection: clamped,
+        rawDirection: {
+          x: smoothedGrowthDir.x,
+          y: smoothedGrowthDir.y,
+          z: smoothedGrowthDir.z,
+        },
       });
     } else {
       console.warn('[PlantLegacy] Growth drawing: no drawingData/result', { drawingData, gState });
@@ -1897,6 +2211,19 @@ async function initC01(): Promise<void> {
     }
   });
 
+  // Toggle chat with T key (when not typing in input)
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 't' || e.key === 'T') {
+      const activeEl = document.activeElement;
+      const isTyping =
+        activeEl instanceof HTMLInputElement || activeEl instanceof HTMLTextAreaElement;
+      if (!isTyping && !growthSelectionStateMachineIsDrawing(growthSelectionMachine)) {
+        e.preventDefault();
+        toggleChat();
+      }
+    }
+  });
+
   // Visibility change: pause render loop & input when hidden
   if (renderConfig.pauseOnHidden) {
     document.addEventListener('visibilitychange', () => {
@@ -1916,6 +2243,13 @@ async function initC01(): Promise<void> {
         // Request full plant sync when tab becomes visible again
         if (ws && ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify({ type: MESSAGE_TYPE.PLANT_SYNC_REQUEST, payload: {} }));
+          // Request full resource grid for ground rendering
+          ws.send(
+            JSON.stringify({
+              type: MESSAGE_TYPE.RESOURCE_QUERY,
+              payload: { fullGrid: true },
+            }),
+          );
           // Also request current resource tile for own plant (light/moisture/minerals)
           // Use the local plant's root/seed node (parentId === null) for accurate position
           const ownRootNode = Array.from(plantNodes.values()).find((n) => n.parentId === null);
@@ -1979,8 +2313,9 @@ async function initPlantRenderer(): Promise<void> {
 
   // Try WebGPU renderer first (with automatic fallback to SDF)
   if (renderConfig?.webgpuEnabled && isWebGPUSupported()) {
+    let canvasEl: HTMLCanvasElement | null = null;
     try {
-      const canvasEl = document.createElement('canvas');
+      canvasEl = document.createElement('canvas');
       canvasEl.id = 'webgpu-canvas';
       canvasEl.style.cssText =
         'position:absolute; inset:0; width:100%; height:100%; pointer-events:none;';
@@ -2012,6 +2347,9 @@ async function initPlantRenderer(): Promise<void> {
           mutation2Param: config.mutation2Param,
           ownRootColor: rootSightConfig?.ownRootHighlightColor ?? '#4CAF50',
           rivalRootColor: rootSightConfig?.rivalRootHighlightColor ?? '#FF5722',
+          rainStreakLength: renderConfig.rainStreakLength,
+          rainStreakWidth: renderConfig.rainStreakWidth,
+          rainMaxVelocity: renderConfig.rainMaxVelocity,
         });
 
         const rendererReady = await gpuRenderer.initialize();
@@ -2053,6 +2391,7 @@ async function initPlantRenderer(): Promise<void> {
         webgpuCanvas.remove();
         webgpuCanvas = null;
       }
+      canvasEl?.remove();
     }
   }
 
@@ -2113,6 +2452,7 @@ async function initPlantRenderer(): Promise<void> {
     });
 
     plantRenderer.initialize(scene, camera);
+    plantRenderer.setViewportSize(renderer.domElement.width, renderer.domElement.height);
 
     // Initialize with existing plant nodes (root node from WELCOME, or empty)
     if (plantRenderer) {
@@ -2254,15 +2594,15 @@ function createResourceReadout(): void {
     `;
 
   const biomassEl = document.createElement('div');
-  biomassEl.innerHTML = `<span style="color: var(--leaf-400);">🌿</span> Biomass: <span id="res-biomass">0</span>`;
+  biomassEl.innerHTML = `<span style="color: var(--leaf-400);">ðŸŒ¿</span> Biomass: <span id="res-biomass">0</span>`;
   const energyEl = document.createElement('div');
-  energyEl.innerHTML = `<span style="color: var(--gold-400);">⚡</span> Energy: <span id="res-energy">0</span>`;
+  energyEl.innerHTML = `<span style="color: var(--gold-400);">âš¡</span> Energy: <span id="res-energy">0</span>`;
   const lightEl = document.createElement('div');
-  lightEl.innerHTML = `<span style="color: var(--gold-400);">☀</span> Light: <span id="res-light">0</span>`;
+  lightEl.innerHTML = `<span style="color: var(--gold-400);">â˜€</span> Light: <span id="res-light">0</span>`;
   const waterEl = document.createElement('div');
-  waterEl.innerHTML = `<span style="color: var(--water-400);">💧</span> Water: <span id="res-water">0</span>`;
+  waterEl.innerHTML = `<span style="color: var(--water-400);">ðŸ’§</span> Water: <span id="res-water">0</span>`;
   const mineralsEl = document.createElement('div');
-  mineralsEl.innerHTML = `<span style="color: var(--mineral-400);">⛏</span> Minerals: <span id="res-minerals">0</span>`;
+  mineralsEl.innerHTML = `<span style="color: var(--mineral-400);">â›</span> Minerals: <span id="res-minerals">0</span>`;
 
   resourceReadoutElement.appendChild(biomassEl);
   resourceReadoutElement.appendChild(energyEl);
@@ -2472,10 +2812,10 @@ function renderGrowthOptions(result: GrowthOptionsView): void {
 
     const reasonHtml =
       !opt.available && opt.reason
-        ? `<div style="font-size: 0.8em; color: #e08a7a; margin-top: 4px;">✗ ${opt.reason}</div>`
+        ? `<div style="font-size: 0.8em; color: #e08a7a; margin-top: 4px;">âœ— ${opt.reason}</div>`
         : '';
     const riskHtml = opt.risk
-      ? `<div style="font-size: 0.8em; color: #ffb26b; margin-top: 4px;">⚠ ${opt.risk}</div>`
+      ? `<div style="font-size: 0.8em; color: #ffb26b; margin-top: 4px;">âš  ${opt.risk}</div>`
       : '';
 
     // Build requirements display - show both germination (tile) and growth (stored) requirements
@@ -2483,16 +2823,16 @@ function renderGrowthOptions(result: GrowthOptionsView): void {
     if (result.conditions) {
       const c = result.conditions;
       // Germination requirements (tile-based)
-      const lightStatus = c.light >= c.minLight ? '✓' : '✗';
-      const moistureStatus = c.moisture >= c.minMoisture ? '✓' : '✗';
+      const lightStatus = c.light >= c.minLight ? 'âœ“' : 'âœ—';
+      const moistureStatus = c.moisture >= c.minMoisture ? 'âœ“' : 'âœ—';
 
       // Growth requirements (stored-based) - only show for non-seed nodes
       let growthReqHtml = '';
       if (!result.isSeed && c.storedWater !== undefined && c.storedMinerals !== undefined) {
         const waterStatus =
-          c.growthOk !== false && c.storedWater >= (c.growthMinWater ?? 0) ? '✓' : '✗';
+          c.growthOk !== false && c.storedWater >= (c.growthMinWater ?? 0) ? 'âœ“' : 'âœ—';
         const mineralStatus =
-          c.growthOk !== false && c.storedMinerals >= (c.growthMinMinerals ?? 0) ? '✓' : '✗';
+          c.growthOk !== false && c.storedMinerals >= (c.growthMinMinerals ?? 0) ? 'âœ“' : 'âœ—';
         growthReqHtml = `
           <div>Growth: ${waterStatus} Stored Water ${c.storedWater.toFixed(1)}/${c.growthMinWater?.toFixed(1) ?? 0} | ${mineralStatus} Stored Minerals ${c.storedMinerals.toFixed(1)}/${c.growthMinMinerals?.toFixed(1) ?? 0}</div>`;
       }
@@ -2500,7 +2840,7 @@ function renderGrowthOptions(result: GrowthOptionsView): void {
       // Per-option resource costs
       const optionCostHtml =
         opt.waterCost !== undefined || opt.mineralCost !== undefined
-          ? `<div>Cost: ${opt.waterCost?.toFixed(1) ?? 0} 💧 | ${opt.mineralCost?.toFixed(1) ?? 0} ⛏️</div>`
+          ? `<div>Cost: ${opt.waterCost?.toFixed(1) ?? 0} ðŸ’§ | ${opt.mineralCost?.toFixed(1) ?? 0} â›ï¸</div>`
           : '';
 
       requirementsHtml = `
@@ -2511,11 +2851,110 @@ function renderGrowthOptions(result: GrowthOptionsView): void {
         </div>`;
     }
 
+    // Detailed per-option info: upkeep, efficiency, photosynthesis, water/mineral
+    const typeLower = opt.type.toLowerCase();
+    const isLeafish = typeLower === 'leaf' || typeLower === 'cotyledon' || typeLower === 'vine';
+    const isRootish =
+      typeLower === 'radicle' || typeLower === 'root' || typeLower === 'lateral_root';
+    const isStemish = typeLower === 'stem' || typeLower === 'branch';
+    const isFlowerish = typeLower === 'flower' || typeLower === 'spore_sac';
+    const biomassPerEnergy =
+      opt.energyCost > 0 ? (opt.biomassGain / opt.energyCost).toFixed(2) : 'âˆž';
+
+    // Estimated per-second upkeep (positive = consumes, negative = produces via photosynthesis)
+    let upkeepEnergy = 0;
+    let upkeepWater = 0;
+    let upkeepMinerals = 0;
+    let doesPhotosynthesize = false;
+    let partDescription = '';
+
+    if (isLeafish) {
+      doesPhotosynthesize = true;
+      if (typeLower === 'cotyledon') {
+        upkeepEnergy = -0.8; // Cotyledons: strong early photosynthesis
+        upkeepWater = 0.15;
+        upkeepMinerals = 0.03;
+        partDescription =
+          'Cotyledon (seed leaf): initial photosynthetic organ, unfolds toward light.';
+      } else if (typeLower === 'vine') {
+        upkeepEnergy = -0.6;
+        upkeepWater = 0.15;
+        upkeepMinerals = 0.05;
+        partDescription = 'Vine: flexible climbing stem with leaves.';
+      } else {
+        upkeepEnergy = -1.2; // Mature leaves: strong photosynthesis
+        upkeepWater = 0.2;
+        upkeepMinerals = 0.08;
+        partDescription = 'Leaf: photosynthesizes sunlight into energy for the plant.';
+      }
+    } else if (isRootish) {
+      if (typeLower === 'radicle') {
+        upkeepEnergy = 0.05;
+        upkeepWater = 0.5; // Radicle: absorbs lots of moisture early
+        upkeepMinerals = 0.4;
+        partDescription = 'Radicle: first root, anchors seed and absorbs moisture.';
+      } else if (typeLower === 'lateral_root') {
+        upkeepEnergy = 0.03;
+        upkeepWater = 0.3;
+        upkeepMinerals = 0.25;
+        partDescription = 'Lateral root: branches from main root, increases absorption.';
+      } else {
+        upkeepEnergy = 0.08;
+        upkeepWater = 0.4;
+        upkeepMinerals = 0.35;
+        partDescription = 'Root: absorbs water and minerals from soil, anchors plant.';
+      }
+    } else if (isStemish) {
+      if (typeLower === 'stem') {
+        upkeepEnergy = 0.1;
+        upkeepWater = 0.05;
+        upkeepMinerals = 0.03;
+      } else {
+        upkeepEnergy = 0.08;
+        upkeepWater = 0.04;
+        upkeepMinerals = 0.02;
+      }
+      partDescription =
+        'Stem/Branch: structural support, transports nutrients between root and leaves.';
+    } else if (isFlowerish) {
+      if (typeLower === 'flower') {
+        upkeepEnergy = 0.2;
+        upkeepWater = 0.15;
+        upkeepMinerals = 0.1;
+        partDescription = 'Flower: reproductive organ, attracts pollinators.';
+      } else {
+        upkeepEnergy = 0.25;
+        upkeepWater = 0.18;
+        upkeepMinerals = 0.12;
+        partDescription = 'Spore sac: reproductive organ, releases spores for dispersal.';
+      }
+    } else if (typeLower === 'seed') {
+      partDescription = 'Seed: dormant embryonic plant, germinates when conditions are right.';
+    }
+
+    const upkeepEnergyHtml =
+      upkeepEnergy !== 0
+        ? `<div>Upkeep: ${upkeepEnergy > 0 ? '+' : ''}${upkeepEnergy.toFixed(2)} âš¡/s | ${upkeepWater > 0 ? '+' : ''}${upkeepWater.toFixed(2)} ðŸ’§/s | ${upkeepMinerals > 0 ? '+' : ''}${upkeepMinerals.toFixed(2)} â›ï¸/s</div>`
+        : '';
+    const photosynthesisHtml = doesPhotosynthesize
+      ? '<div>Photosynthesis: âœ“ converts light into energy</div>'
+      : '';
+    const efficiencyHtml = `
+      <div>Efficiency: +${opt.biomassGain.toFixed(1)} biomass per ${opt.energyCost.toFixed(1)} energy (ratio: ${biomassPerEnergy})</div>
+    `;
+    const descriptionHtml = partDescription
+      ? `<div style="font-size: 0.75em; color: var(--leaf-300); margin-top: 2px;">${partDescription}</div>`
+      : '';
+
     btn.innerHTML = `
       <div style="font-weight: bold; font-size: 0.95em;">${opt.label}</div>
       <div style="font-size: 0.8em; color: var(--bark-300); margin-top: 4px;">
-        Cost: ${opt.energyCost.toFixed(1)} ⚡ | Gain: +${opt.biomassGain.toFixed(1)} 🌿 | ~${opt.expectedSeconds.toFixed(1)}s
+        Cost: ${opt.energyCost.toFixed(1)} âš¡ | Gain: +${opt.biomassGain.toFixed(1)} ðŸŒ¿ | ~${opt.expectedSeconds.toFixed(1)}s
       </div>
+      ${efficiencyHtml}
+      ${upkeepEnergyHtml}
+      ${photosynthesisHtml}
+      ${descriptionHtml}
       ${requirementsHtml}
       ${reasonHtml}
       ${riskHtml}
@@ -2530,7 +2969,7 @@ function renderGrowthOptions(result: GrowthOptionsView): void {
         // If player selects a subterranean root option (radicle, root, lateral_root),
         // automatically enable Root Sight so the player can see underground growth!
         if (opt.type === 'radicle' || opt.type === 'root' || opt.type === 'lateral_root') {
-          setRootSightEnabled(true);
+          setRootSightEnabled(true, plantId ?? undefined);
         }
         controls.enabled = false;
         controls.enableRotate = false;
@@ -2597,6 +3036,327 @@ function hideGrowthSelection(): void {
   if (panel) panel.style.display = 'none';
 }
 
+// Chat UI
+let chatContainer: HTMLElement | null = null;
+let chatMessages: HTMLElement | null = null;
+let chatInput: HTMLInputElement | null = null;
+let chatOpen = false;
+const MAX_CHAT_MESSAGES = 50;
+let chatHudZIndex = 100;
+
+function createChatUI(): void {
+  const hudLayer = uiShell?.getLayer('hud');
+  if (!hudLayer) return;
+
+  chatContainer = document.createElement('div');
+  chatContainer.id = 'chat-container';
+  chatContainer.style.cssText = `
+    position: fixed;
+    bottom: 120px;
+    left: 16px;
+    width: 320px;
+    max-height: 300px;
+    background: var(--loam-900, #14180f);
+    border: 1px solid var(--bark-700, #2a281f);
+    border-radius: 8px;
+    display: none;
+    flex-direction: column;
+    font-family: inherit;
+    font-size: calc(13px * var(--text-scale, 1));
+    color: var(--bone-100, #efe9d8);
+    z-index: ${chatHudZIndex};
+    overflow: hidden;
+  `;
+
+  // Chat header
+  const header = document.createElement('div');
+  header.style.cssText = `
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--bark-700);
+    font-weight: bold;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  `;
+  header.innerHTML = `
+    <span>Chat</span>
+    <button id="chat-close" style="background: none; border: none; color: var(--bark-300); cursor: pointer; font-size: 1.2em; line-height: 1;">Ã—</button>
+  `;
+  chatContainer.appendChild(header);
+
+  // Messages area
+  chatMessages = document.createElement('div');
+  chatMessages.id = 'chat-messages';
+  chatMessages.style.cssText = `
+    flex: 1;
+    overflow-y: auto;
+    padding: 8px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    max-height: 200px;
+  `;
+  chatContainer.appendChild(chatMessages);
+
+  // Input area
+  const inputWrapper = document.createElement('div');
+  inputWrapper.style.cssText = `
+    padding: 8px 12px;
+    border-top: 1px solid var(--bark-700);
+    display: flex;
+    gap: 8px;
+  `;
+  chatInput = document.createElement('input');
+  chatInput.type = 'text';
+  chatInput.id = 'chat-input';
+  chatInput.placeholder = 'Type a message...';
+  chatInput.style.cssText = `
+    flex: 1;
+    background: var(--loam-800);
+    border: 1px solid var(--bark-600);
+    border-radius: 4px;
+    padding: 6px 10px;
+    color: var(--bone-100);
+    font-family: inherit;
+    font-size: calc(13px * var(--text-scale, 1));
+    outline: none;
+  `;
+  chatInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && chatInput?.value.trim()) {
+      sendChatMessage(chatInput.value.trim());
+      chatInput.value = '';
+    } else if (e.key === 'Escape') {
+      toggleChat(false);
+    }
+  });
+  inputWrapper.appendChild(chatInput);
+
+  const sendBtn = document.createElement('button');
+  sendBtn.textContent = 'Send';
+  sendBtn.style.cssText = `
+    background: var(--leaf-600);
+    border: none;
+    border-radius: 4px;
+    padding: 6px 12px;
+    color: var(--loam-900);
+    font-weight: bold;
+    cursor: pointer;
+  `;
+  sendBtn.onclick = () => {
+    if (chatInput?.value.trim()) {
+      sendChatMessage(chatInput.value.trim());
+      chatInput.value = '';
+    }
+  };
+  inputWrapper.appendChild(sendBtn);
+  chatContainer.appendChild(inputWrapper);
+
+  // Close button handler
+  header.querySelector('#chat-close')?.addEventListener('click', () => toggleChat(false));
+
+  hudLayer.appendChild(chatContainer);
+}
+
+function toggleChat(open?: boolean): void {
+  if (!chatContainer) return;
+  chatOpen = open ?? !chatOpen;
+  chatContainer.style.display = chatOpen ? 'flex' : 'none';
+  if (chatOpen) {
+    chatInput?.focus();
+  }
+}
+
+function addChatMessage(playerName: string, message: string, isOwn: boolean): void {
+  if (!chatMessages) return;
+
+  const msgEl = document.createElement('div');
+  msgEl.style.cssText = `
+    padding: 4px 8px;
+    background: ${isOwn ? 'var(--leaf-900)' : 'var(--bark-800)'};
+    border-radius: 4px;
+    max-width: 90%;
+    align-self: ${isOwn ? 'flex-end' : 'flex-start'};
+    word-wrap: break-word;
+  `;
+  const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const nameColor = isOwn ? 'var(--leaf-300)' : 'var(--bark-200)';
+  msgEl.innerHTML = `
+    <span style="font-weight: bold; color: ${nameColor}; margin-right: 6px;">${playerName}</span>
+    <span>${escapeHtml(message)}</span>
+    <span style="font-size: 0.75em; color: var(--bark-400); margin-left: 8px;">${time}</span>
+  `;
+
+  chatMessages.appendChild(msgEl);
+
+  // Limit message count
+  while (chatMessages.children.length > MAX_CHAT_MESSAGES) {
+    const firstChild = chatMessages.firstChild;
+    if (firstChild) chatMessages.removeChild(firstChild);
+  }
+
+  // Auto-scroll to bottom
+  chatMessages.scrollTop = chatMessages.scrollHeight;
+
+  // Show chat briefly if not open
+  if (!chatOpen && chatContainer) {
+    chatContainer.style.display = 'flex';
+    setTimeout(() => {
+      if (!chatOpen && chatContainer) chatContainer.style.display = 'none';
+    }, 5000);
+  }
+}
+
+function escapeHtml(text: string): string {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
+
+const EMOTE_EMOJIS: Record<string, string> = {
+  wave: 'ðŸ‘‹',
+  cheer: 'ðŸŽ‰',
+  thumbs_up: 'ðŸ‘',
+  heart: 'â¤ï¸',
+  think: 'ðŸ¤”',
+  sleep: 'ðŸ˜´',
+  dance: 'ðŸ’ƒ',
+  sad: 'ðŸ˜¢',
+};
+
+function showEmoteAbovePlant(fromPlayerId: string, playerName: string, emoteId: string): void {
+  const emoji = EMOTE_EMOJIS[emoteId] ?? 'âœ¨';
+  let targetPlantId: string | null = null;
+
+  // Find the plant for this player
+  if (fromPlayerId === playerId) {
+    targetPlantId = plantId;
+  } else {
+    // Check other players' plants - map key is plantId
+    for (const [pid, nodes] of otherPlayerPlants.entries()) {
+      if (nodes.size > 0) {
+        targetPlantId = pid;
+        break;
+      }
+    }
+  }
+
+  if (!targetPlantId) return;
+
+  // Get the root node position for this plant
+  let rootNode: PlantNodeData | undefined;
+  if (targetPlantId === plantId) {
+    const rootNodeId = Array.from(plantNodes.values()).find((n) => n.parentId === null)?.id;
+    if (rootNodeId) rootNode = plantNodes.get(rootNodeId);
+  } else {
+    const otherPlant = otherPlayerPlants.get(targetPlantId);
+    if (otherPlant) {
+      const rootNodeId = Array.from(otherPlant.values()).find((n) => n.parentId === null)?.id;
+      if (rootNodeId) rootNode = otherPlant.get(rootNodeId);
+    }
+  }
+
+  if (!rootNode) return;
+
+  // Create emote bubble above plant
+  const bubble = document.createElement('div');
+  bubble.style.cssText = `
+    position: fixed;
+    pointer-events: none;
+    z-index: 300;
+    font-size: 2.5em;
+    line-height: 1;
+    transform: translate(-50%, -100%);
+    animation: emote-pop 0.2s ease-out, emote-float 2s ease-out forwards;
+    text-shadow: 0 2px 8px rgba(0,0,0,0.6);
+    filter: drop-shadow(0 2px 4px rgba(0,0,0,0.5));
+  `;
+  bubble.textContent = emoji;
+
+  // Add name label
+  const nameLabel = document.createElement('div');
+  nameLabel.style.cssText = `
+    position: absolute;
+    bottom: -1.5em;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 0.35em;
+    font-weight: 600;
+    color: var(--bone-100);
+    background: rgba(20, 24, 15, 0.85);
+    padding: 2px 6px;
+    border-radius: 4px;
+    white-space: nowrap;
+    text-shadow: none;
+    filter: none;
+  `;
+  nameLabel.textContent = playerName;
+  bubble.appendChild(nameLabel);
+
+  document.body.appendChild(bubble);
+
+  // Project 3D position to screen
+  const projectAndPosition = () => {
+    if (!bubble.isConnected) return;
+    const v = new THREE.Vector3(
+      rootNode.position.x,
+      rootNode.position.y + 3,
+      rootNode.position.z,
+    ).project(camera);
+    if (v.z >= 1 || v.z <= -1) {
+      bubble.style.opacity = '0';
+      return;
+    }
+    const x = (v.x * 0.5 + 0.5) * window.innerWidth;
+    const y = (-v.y * 0.5 + 0.5) * window.innerHeight;
+    bubble.style.left = `${x}px`;
+    bubble.style.top = `${y}px`;
+    bubble.style.opacity = '1';
+  };
+
+  projectAndPosition();
+
+  // Update position each frame for 2 seconds
+  const startTime = performance.now();
+  const animate = () => {
+    if (!bubble.isConnected) return;
+    const elapsed = performance.now() - startTime;
+    if (elapsed > 2000) {
+      bubble.remove();
+      return;
+    }
+    projectAndPosition();
+    requestAnimationFrame(animate);
+  };
+  requestAnimationFrame(animate);
+
+  // Add CSS animations if not already added
+  if (!document.getElementById('emote-animations')) {
+    const style = document.createElement('style');
+    style.id = 'emote-animations';
+    style.textContent = `
+      @keyframes emote-pop {
+        0% { transform: translate(-50%, -100%) scale(0); opacity: 0; }
+        50% { transform: translate(-50%, -100%) scale(1.2); opacity: 1; }
+        100% { transform: translate(-50%, -100%) scale(1); opacity: 1; }
+      }
+      @keyframes emote-float {
+        0% { transform: translate(-50%, -100%) scale(1); opacity: 1; }
+        100% { transform: translate(-50%, -150%) scale(1); opacity: 0; }
+      }
+    `;
+    document.head.appendChild(style);
+  }
+}
+
+function sendChatMessage(message: string): void {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  const payload = JSON.stringify({
+    type: MESSAGE_TYPE.CHAT_MESSAGE,
+    payload: { message: message.slice(0, 500) },
+  });
+  ws.send(payload);
+}
+
 function confirmGrowth(
   nodeId: string,
   nodeType: string,
@@ -2632,6 +3392,7 @@ function confirmGrowth(
   hideGrowthSelection();
 
   // Use drawn direction if provided, otherwise fall back to automatic direction
+  // Server is authoritative for clamping/validation - send raw direction
   const dir = new THREE.Vector3(0, 1, 0);
   if (drawnDirection) {
     dir.set(drawnDirection.x, drawnDirection.y, drawnDirection.z);
@@ -2657,15 +3418,13 @@ function confirmGrowth(
     }
   }
 
-  const clampedDir = clampGrowthDirectionForOption(
-    nodeType,
-    drawnDirection ?? { x: dir.x, y: dir.y, z: dir.z },
-  );
+  // Server is authoritative for clamping/validation - send raw direction
+  const finalDir = drawnDirection ?? { x: dir.x, y: dir.y, z: dir.z };
 
   const intent: GrowthIntent = {
     plantId,
     nodeId,
-    direction: clampedDir,
+    direction: finalDir,
     nodeType,
     isAttack: false,
     tick: growthIntentTick,
@@ -2692,6 +3451,18 @@ const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 controls.dampingFactor = 0.05;
 controls.enablePan = true;
+controls.screenSpacePanning = true;
+// Mouse: left-drag orbits, middle-drag orbits, right-drag pans (left click still selects).
+// Touch: one-finger drag pans world, two-finger gesture orbits/zooms.
+controls.mouseButtons = {
+  LEFT: THREE.MOUSE.ROTATE,
+  MIDDLE: THREE.MOUSE.ROTATE,
+  RIGHT: THREE.MOUSE.PAN,
+};
+controls.touches = {
+  ONE: THREE.TOUCH.PAN,
+  TWO: THREE.TOUCH.DOLLY_ROTATE,
+};
 controls.minDistance = 1;
 controls.maxDistance = 200;
 controls.maxPolarAngle = Math.PI / 2 - 0.05;
@@ -2818,6 +3589,22 @@ function connect(): void {
           plantId = welcome.plantId;
           plantReady = true;
           serverTick = welcome.tick;
+
+          // Reload controls config now that the server is reachable.
+          // initC01() fetches /config/controls before WebSocket connects;
+          // if the server wasn't ready, bindings fell back to {}.
+          try {
+            const reloaded = await loadControlsConfig(httpOrigin);
+            if (reloaded.bindings && Object.keys(reloaded.bindings).length > 0) {
+              controlsConfig = reloaded;
+              inputBus?.setBindings(reloaded.bindings);
+              console.debug('[PlantLegacy] Controls config reloaded from server', {
+                actionCount: Object.keys(reloaded.bindings).length,
+              });
+            }
+          } catch {
+            // Keep existing bindings (may be empty from initC01 fallback).
+          }
           // Persist plantId for anonymous reconnect (ADR-029: dev switch)
           saveReconnectData({ plantId: welcome.plantId });
           plantNodes.clear();
@@ -2839,8 +3626,35 @@ function connect(): void {
                 spore_sac: 3,
               };
               const nodeTypeNum = typeMap[node.type] ?? 0;
-              const radius = nodeRadius(node.biomass, nodeTypeNum, node.y);
+              // Use server-authoritative radius (Murray's law) if available
+              const radius = node.radius ?? nodeRadius(node.biomass, nodeTypeNum, node.y);
               const health = Math.min(1, node.biomass / 10);
+
+              // Server-authoritative growth timing for nodes that are still growing
+              const SERVER_TICK_RATE_HZ = 20;
+              let spawnTime = performance.now();
+              let growthProgress = node.growthProgress ?? 1.0;
+
+              if (
+                node.growthTimeSeconds !== undefined &&
+                node.growthStartTick !== undefined &&
+                growthProgress < 1.0
+              ) {
+                const elapsedTicks = Math.max(0, serverTick - node.growthStartTick);
+                const serverProgress = Math.min(
+                  1,
+                  elapsedTicks / (node.growthTimeSeconds * SERVER_TICK_RATE_HZ),
+                );
+                growthProgress = node.growthProgress ?? serverProgress;
+                const totalMs = node.growthTimeSeconds * 1000;
+                spawnTime = performance.now() - growthProgress * totalMs;
+                // Back-date startTime so animation continues from server-reported progress, not 0.
+                growingNodes.set(node.id, {
+                  startTime: performance.now() - growthProgress * totalMs,
+                  duration: totalMs,
+                });
+              }
+
               plantNodes.set(node.id, {
                 id: node.id,
                 position: new THREE.Vector3(node.x, node.y, node.z),
@@ -2854,7 +3668,8 @@ function connect(): void {
                 isOwnPlant: true,
                 isSeed: node.isSeed ?? node.type === 'seed',
                 nodeType: node.type,
-                spawnTime: performance.now(),
+                spawnTime,
+                growthProgress,
               });
             }
             plantBiomass = welcome.totalBiomass;
@@ -2898,11 +3713,26 @@ function connect(): void {
             }
           }
 
+          // Focus camera on the player's plant (root/seed node)
+          const focusNode = Array.from(plantNodes.values()).find((n) => n.parentId === null);
+          if (focusNode) {
+            focusCameraOnNode(focusNode, true); // immediate = true for initial focus
+          }
+
           // Clear other players' plants to avoid stale data on reconnect
           otherPlayerPlants.clear();
           // Request full plant sync to discover other existing players in the world
           if (ws && ws.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify({ type: MESSAGE_TYPE.PLANT_SYNC_REQUEST, payload: {} }));
+          }
+          // Request full resource grid for ground rendering
+          if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(
+              JSON.stringify({
+                type: MESSAGE_TYPE.RESOURCE_QUERY,
+                payload: { fullGrid: true },
+              }),
+            );
           }
           // Request initial resource tile for own plant
           // Use the local plant's root/seed node (parentId === null) for accurate position
@@ -2929,6 +3759,14 @@ function connect(): void {
         case MESSAGE_TYPE.STATE:
         case MESSAGE_TYPE.KEYFRAME: {
           const state = payload as StatePayload | KeyframePayload;
+          // Guard against stale/out-of-order STATE jumping serverTick backward
+          if (serverTick !== 0 && state.tick < serverTick - 1000) {
+            console.debug('[PlantLegacy] Ignoring stale STATE/KEYFRAME tick', {
+              stateTick: state.tick,
+              serverTick,
+            });
+            break;
+          }
           serverTick = state.tick;
           console.debug('[PlantLegacy] STATE/KEYFRAME received:', {
             type,
@@ -2965,7 +3803,17 @@ function connect(): void {
             storedWater?: number;
             storedMinerals?: number;
             rootTileCount?: number;
+            fullGrid?: boolean;
+            delta?: boolean;
           };
+          if (serverTick !== 0 && Math.abs(update.tick - serverTick) > 1000) {
+            console.warn('[PlantLegacy] Ignoring stale RESOURCE_UPDATE', {
+              updateTick: update.tick,
+              serverTick,
+              diff: Math.abs(update.tick - serverTick),
+            });
+            return;
+          }
           serverTick = update.tick;
           if (debugOverlay) {
             debugOverlay.recordBytes(0, event.data.length);
@@ -2976,15 +3824,6 @@ function connect(): void {
             totalEnergy: update.totalEnergy,
             totalBiomass: update.totalBiomass,
           });
-          // Ignore stale RESOURCE_UPDATE from old server connections (tick too far from current serverTick)
-          if (serverTick !== 0 && Math.abs(update.tick - serverTick) > 1000) {
-            console.warn('[PlantLegacy] Ignoring stale RESOURCE_UPDATE', {
-              updateTick: update.tick,
-              serverTick,
-              diff: Math.abs(update.tick - serverTick),
-            });
-            return;
-          }
           const tile = update.tiles[0];
           if (tile) {
             console.debug('[PlantLegacy] Processing tile:', {
@@ -2999,49 +3838,98 @@ function connect(): void {
             });
             if (update.totalEnergy !== undefined) plantEnergy = update.totalEnergy;
             if (update.totalBiomass !== undefined) plantBiomass = update.totalBiomass;
-            // Use average tile resources for display
-            tileLight = tile.light;
-            tileWater = tile.moisture;
-            tileMinerals = tile.minerals;
+
+            // Delta broadcasts contain arbitrary dirty tiles and full-grid
+            // responses contain the whole world; neither represents the light
+            // reaching this plant. Only the per-player root-tile update does.
+            const isLocalTileUpdate = update.delta !== true && update.fullGrid !== true;
+            if (isLocalTileUpdate && update.tiles.length > 0) {
+              let lightSum = 0;
+              let moistureSum = 0;
+              let mineralsSum = 0;
+              for (const t of update.tiles) {
+                lightSum += t.light;
+                moistureSum += t.moisture;
+                mineralsSum += t.minerals;
+              }
+              const count = update.tiles.length;
+              tileLight = lightSum / count;
+              tileWater = moistureSum / count;
+              tileMinerals = mineralsSum / count;
+            }
+
             // Use plant's stored resources for growth panel
-            const storedWater = update.storedWater ?? 0;
-            const storedMinerals = update.storedMinerals ?? 0;
-            updateResourceReadout(
-              tile.light,
-              tile.moisture,
-              tile.minerals,
-              plantBiomass,
-              plantEnergy,
-              storedWater,
-              storedMinerals,
-            );
-            // Update dev panel tile info
-            if (devPanel?.updateTileInfo) {
-              devPanel.updateTileInfo(tile.tileX ?? 0, tile.tileZ ?? 0, {
-                light: tile.light,
-                moisture: tile.moisture,
-                minerals: tile.minerals,
+            storedWater = update.storedWater ?? 0;
+            storedMinerals = update.storedMinerals ?? 0;
+            if (isLocalTileUpdate) {
+              updateResourceReadout(
+                tileLight,
+                tileWater,
+                tileMinerals,
+                plantBiomass,
+                plantEnergy,
                 storedWater,
                 storedMinerals,
-                rootTileCount: update.rootTileCount ?? 1,
-              });
+              );
+              // Sky grade follows the light reaching the local tiles.
+              environmentRenderer?.setLocalTileLight(tileLight);
+              // Update dev panel tile info
+              if (devPanel?.updateTileInfo) {
+                devPanel.updateTileInfo(tile.tileX ?? 0, tile.tileZ ?? 0, {
+                  light: tileLight,
+                  moisture: tileWater,
+                  minerals: tileMinerals,
+                  storedWater,
+                  storedMinerals,
+                  rootTileCount: update.rootTileCount ?? 1,
+                });
+              }
+            }
+
+            // Handle full resource grid for ground rendering
+            if (update.fullGrid && update.width && update.height) {
+              environmentRenderer?.setResourceGrid(
+                update.tiles as Array<{
+                  tileX: number;
+                  tileZ: number;
+                  light: number;
+                  moisture: number;
+                  minerals: number;
+                }>,
+                update.width,
+                update.height,
+                update.tileSize,
+              );
+            }
+            // Handle delta (dirty tiles) - merge into existing grid
+            if (update.delta && update.width && update.height) {
+              environmentRenderer?.updateResourceGrid(
+                update.tiles as Array<{
+                  tileX: number;
+                  tileZ: number;
+                  light: number;
+                  moisture: number;
+                  minerals: number;
+                }>,
+              );
             }
             // Update growth panel if visible with live resource values
             if (
+              isLocalTileUpdate &&
               growthSelectionStateMachineIsVisible(growthSelectionMachine) &&
               growthSelectionStateMachineGetState(growthSelectionMachine) === 'options_visible' &&
               growthSelectionMachine.selectedNodeId &&
               growthSelectionMachine.conditions
             ) {
-              growthSelectionMachine.conditions.light = tile.light;
-              growthSelectionMachine.conditions.moisture = tile.moisture;
+              growthSelectionMachine.conditions.light = tileLight;
+              growthSelectionMachine.conditions.moisture = tileWater;
               growthSelectionMachine.conditions.storedWater = storedWater;
               growthSelectionMachine.conditions.storedMinerals = storedMinerals;
               const parts = prepareGrowthPanel(growthSelectionMachine.selectedNodeId);
               if (parts) {
                 const infoLines = [
                   `Biomass: ${plantBiomass.toFixed(1)} | Energy: ${plantEnergy.toFixed(1)}`,
-                  `Light: ${tile.light.toFixed(0)} / ${growthSelectionMachine.conditions.minLight.toFixed(0)} | Moisture: ${tile.moisture.toFixed(0)} / ${growthSelectionMachine.conditions.minMoisture.toFixed(0)}`,
+                  `Light: ${tileLight.toFixed(0)} / ${growthSelectionMachine.conditions.minLight.toFixed(0)} | Moisture: ${tileWater.toFixed(0)} / ${growthSelectionMachine.conditions.minMoisture.toFixed(0)}`,
                   `Stored Water: ${storedWater.toFixed(1)} | Stored Minerals: ${storedMinerals.toFixed(1)}`,
                 ];
                 parts.infoEl.innerHTML = infoLines.map((line) => `<div>${line}</div>`).join('');
@@ -3119,12 +4007,51 @@ function connect(): void {
             const existing = isOwnPlant
               ? plantNodes.get(node.id)
               : otherPlayerPlants.get(growth.plantId)?.get(node.id);
+
+            // Server-authoritative growth timing: use growthTimeSeconds and growthStartTick
+            // Server runs at 20 Hz (50ms per tick)
+            const SERVER_TICK_RATE_HZ = 20;
+
+            let spawnTime: number;
+            let growthProgress: number;
+
+            if (node.growthTimeSeconds !== undefined && node.growthStartTick !== undefined) {
+              // Compute spawnTime from server timeline
+              // elapsed server ticks since growth started
+              const elapsedTicks = Math.max(0, serverTick - node.growthStartTick);
+              const totalMs = node.growthTimeSeconds * 1000;
+              // Server's spawnTime = now - elapsedMs (where now is client's performance.now())
+              // But we need to account for network latency - use client's current time as reference
+              // For new nodes (progress ~0), spawnTime should be in the future from client perspective
+              // For existing growing nodes, we compute based on server progress
+              const serverProgress = Math.min(
+                1,
+                elapsedTicks / (node.growthTimeSeconds * SERVER_TICK_RATE_HZ),
+              );
+              growthProgress = node.growthProgress ?? serverProgress;
+
+              // Compute spawnTime so that growthProgress = smoothstep((now - spawnTime) / totalMs)
+              // => now - spawnTime = growthProgress * totalMs (approximately, using linear for spawnTime calc)
+              // => spawnTime = now - growthProgress * totalMs
+              // But we want the full smoothstep curve to match, so:
+              // growthProgress = smoothstep(elapsed / totalMs) => elapsed = smoothstepInv(growthProgress) * totalMs
+              // For smoothstep(t) = t*t*(3-2t), the inverse is complex.
+              // Approximation: use linear for spawnTime calculation, smoothstep will be applied in renderer
+              spawnTime = performance.now() - growthProgress * totalMs;
+            } else {
+              // Fallback to existing behavior
+              spawnTime = existing?.spawnTime ?? performance.now();
+              growthProgress = node.growthProgress ?? 1.0;
+            }
+
             return {
               id: node.id,
               position: new THREE.Vector3(node.x, node.y, node.z),
               type: nodeTypeNum,
-              radius: nodeRadius(node.biomass, nodeTypeNum, node.y),
+              // Use server-authoritative radius (Murray's law) if available
+              radius: node.radius ?? nodeRadius(node.biomass, nodeTypeNum, node.y),
               parentId: node.parentId,
+              children: node.children ?? existing?.children ?? [],
               age: node.age,
               health: Math.min(1, node.biomass / 10),
               mutationFlags: 0,
@@ -3132,8 +4059,14 @@ function connect(): void {
               isOwnPlant,
               isSeed: node.isSeed ?? node.type === 'seed',
               nodeType: node.type,
-              spawnTime: existing?.spawnTime ?? performance.now(),
-              growthProgress: node.growthProgress ?? 1.0,
+              layer:
+                node.layer === 'canopy' ? 'canopy' : node.layer === 'root' ? 'root' : undefined,
+              spawnTime,
+              growthProgress,
+              // Server-authoritative parent attachment position
+              parentAttachX: node.parentAttachX,
+              parentAttachY: node.parentAttachY,
+              parentAttachZ: node.parentAttachZ,
             };
           };
 
@@ -3144,21 +4077,19 @@ function connect(): void {
             for (const node of incomingNodes) {
               const nodeData = toNodeData(node, true);
               plantNodes.set(node.id, nodeData);
-              // If new node is subterranean (radicle or root), engage Root Sight
-              // so the player immediately watches the new root sprout and grow!
-              if (
-                node.type === 'radicle' ||
-                node.type === 'root' ||
-                node.type === 'lateral_root' ||
-                node.layer === 'root'
-              ) {
-                setRootSightEnabled(true);
-              }
-              // Focus camera on growing node to center it smoothly in the middle of the screen
-              focusCameraOnNode(nodeData);
-              // Track growing nodes for client-side animation
+              // Track growing nodes for client-side animation.
+              // Use server-authoritative growthTimeSeconds for duration.
+              // Staggered emergence per node type (roots first, leaves last).
+              // Back-date startTime so the animation continues from the
+              // server-reported growthProgress, not from zero.
               if ((nodeData.growthProgress ?? 1.0) < 1.0) {
-                growingNodes.set(node.id, { startTime: now, duration: DEFAULT_GROWTH_DURATION_MS });
+                const durationMs = (node.growthTimeSeconds ?? 5) * 1000;
+                const startDelayMs = EMERGENCE_DELAY_MS[node.type ?? ''] ?? 0;
+                const alreadyElapsedMs = (nodeData.growthProgress ?? 0) * durationMs;
+                growingNodes.set(node.id, {
+                  startTime: now + startDelayMs - alreadyElapsedMs,
+                  duration: durationMs,
+                });
               }
               // Update parent's children array (INV-NET-09)
               if (node.parentId) {
@@ -3197,8 +4128,8 @@ function connect(): void {
               tileMinerals,
               plantBiomass,
               plantEnergy,
-              undefined,
-              undefined,
+              storedWater,
+              storedMinerals,
             );
             if (plantRenderer) {
               const otherNodes: PlantNodeData[] = [];
@@ -3229,8 +4160,23 @@ function connect(): void {
               otherPlant = new Map();
               otherPlayerPlants.set(growth.plantId, otherPlant);
             }
+            const otherNow = performance.now();
             for (const node of incomingNodes) {
-              otherPlant.set(node.id, toNodeData(node, false));
+              const nodeData = toNodeData(node, false);
+              otherPlant.set(node.id, nodeData);
+              // Track growing animation for other players' newly grown nodes
+              if ((nodeData.growthProgress ?? 1.0) < 1.0 && node.growthTimeSeconds) {
+                const durationMs = node.growthTimeSeconds * 1000;
+                const startDelayMs = EMERGENCE_DELAY_MS[node.type ?? ''] ?? 0;
+                // Back-date startTime by already-elapsed server progress so the
+                // animation continues from the server-reported fraction, not from 0.
+                const alreadyElapsedMs = (nodeData.growthProgress ?? 0) * durationMs;
+                otherGrowingNodes.set(node.id, {
+                  plantId: growth.plantId,
+                  startTime: otherNow + startDelayMs - alreadyElapsedMs,
+                  duration: durationMs,
+                });
+              }
               // Update parent's children array (INV-NET-09)
               if (node.parentId) {
                 const parent = otherPlant.get(node.parentId);
@@ -3352,7 +4298,26 @@ function connect(): void {
                                 ? 'Plant not found — refresh to get a new seed'
                                 : reject.reason === 'plant_mismatch'
                                   ? 'Plant mismatch — refresh to sync'
-                                  : reject.reason;
+                                  : reject.reason === 'parent_node_not_found'
+                                    ? 'Parent node not found — plant may have changed'
+                                    : reject.reason === 'out_of_bounds'
+                                      ? 'Growth would go out of world bounds'
+                                      : reject.reason === 'invalid_direction'
+                                        ? 'Growth direction is invalid for this node type'
+                                        : reject.reason === 'max_nodes_reached'
+                                          ? 'Plant has reached maximum node limit'
+                                          : reject.reason === 'invalid_parent_for_cotyledon'
+                                            ? 'Cotyledons can only grow from seed crown or root crown'
+                                            : reject.reason === 'radicle_only_from_seed'
+                                              ? 'Radicle can only grow from a seed'
+                                              : reject.reason ===
+                                                  'radicle_required_before_cotyledon'
+                                                ? 'Must sprout a radicle before adding cotyledons'
+                                                : reject.reason === 'establish_seed_before_stem'
+                                                  ? 'Must establish seed (radicle + 2 cotyledons) before growing stem'
+                                                  : reject.reason === 'max_cotyledons_reached'
+                                                    ? 'Maximum cotyledons (2) already reached'
+                                                    : reject.reason;
           console.warn('[PlantLegacy] REJECT received:', reject);
           setDetail(`Growth Notice: ${readableReason}`);
           uiShell?.toast({ message: readableReason, kind: 'error', durationMs: 5000 });
@@ -3374,8 +4339,8 @@ function connect(): void {
           };
           console.log('[PlantLegacy] DEV_RESPONSE received:', response);
           const msg = response.success
-            ? '✓ Dev command succeeded'
-            : `✗ Dev command failed: ${response.message ?? 'unknown'}`;
+            ? 'âœ“ Dev command succeeded'
+            : `âœ— Dev command failed: ${response.message ?? 'unknown'}`;
           setDetail(msg);
           uiShell?.toast({
             message: msg,
@@ -3414,6 +4379,13 @@ function connect(): void {
                 lastGrowthTick: number;
                 isSeed?: boolean;
                 growthProgress?: number;
+                // Server-authoritative fields for client sync
+                radius?: number;
+                growthTimeSeconds?: number;
+                growthStartTick?: number;
+                parentAttachX?: number;
+                parentAttachY?: number;
+                parentAttachZ?: number;
               }>;
             }>;
           };
@@ -3444,6 +4416,7 @@ function connect(): void {
           // Rebuild it wholesale so reconnect restores the saved node graph
           // instead of keeping the one-node seed from WELCOME.
           otherPlayerPlants.clear();
+          otherGrowingNodes.clear(); // Reset other-player animation state on full sync
           for (const plant of sync.plants) {
             const isOwn =
               (plantId !== null && plant.id === plantId) ||
@@ -3470,13 +4443,40 @@ function connect(): void {
                 nodeType: string;
                 spawnTime?: number;
                 growthProgress?: number;
+                // Server-authoritative fields for client sync
+                parentAttachX?: number;
+                parentAttachY?: number;
+                parentAttachZ?: number;
+                growthTimeSeconds?: number;
               }
             >();
+            const SERVER_TICK_RATE_HZ = 20;
+
             for (const node of plant.nodes) {
               const nodeTypeNum = typeMap[node.type] ?? 0;
-              const radius = nodeRadius(node.biomass, nodeTypeNum, node.y);
+              // Use server-authoritative radius (Murray's law) if available
+              const radius = node.radius ?? nodeRadius(node.biomass, nodeTypeNum, node.y);
               const health = Math.min(1, node.biomass / 10);
               const existing = isOwn ? plantNodes.get(node.id) : undefined;
+
+              // Server-authoritative growth timing
+              let spawnTime: number;
+              let growthProgress: number;
+
+              if (node.growthTimeSeconds !== undefined && node.growthStartTick !== undefined) {
+                const elapsedTicks = Math.max(0, serverTick - node.growthStartTick);
+                const serverProgress = Math.min(
+                  1,
+                  elapsedTicks / (node.growthTimeSeconds * SERVER_TICK_RATE_HZ),
+                );
+                growthProgress = node.growthProgress ?? serverProgress;
+                const totalMs = node.growthTimeSeconds * 1000;
+                spawnTime = performance.now() - growthProgress * totalMs;
+              } else {
+                spawnTime = existing?.spawnTime ?? performance.now();
+                growthProgress = node.growthProgress ?? 1.0;
+              }
+
               target.set(node.id, {
                 id: node.id,
                 position: new THREE.Vector3(node.x, node.y, node.z),
@@ -3490,8 +4490,12 @@ function connect(): void {
                 isOwnPlant: isOwn,
                 isSeed: node.isSeed ?? node.type === 'seed',
                 nodeType: node.type,
-                spawnTime: existing?.spawnTime ?? performance.now(),
-                growthProgress: node.growthProgress ?? 1.0,
+                spawnTime,
+                growthProgress,
+                // Server-authoritative parent attachment position
+                parentAttachX: node.parentAttachX,
+                parentAttachY: node.parentAttachY,
+                parentAttachZ: node.parentAttachZ,
               });
             }
             if (isOwn) {
@@ -3506,17 +4510,32 @@ function connect(): void {
               const now = performance.now();
               for (const node of target.values()) {
                 if ((node.growthProgress ?? 1.0) < 1.0) {
-                  // Estimate remaining time based on current progress
+                  // Use server-authoritative growthTimeSeconds for duration
+                  const durationMs = (node.growthTimeSeconds ?? 5) * 1000;
                   const progress = node.growthProgress ?? 0;
-                  const elapsed = progress * DEFAULT_GROWTH_DURATION_MS;
+                  const elapsed = progress * durationMs;
                   growingNodes.set(node.id, {
                     startTime: now - elapsed,
-                    duration: DEFAULT_GROWTH_DURATION_MS,
+                    duration: durationMs,
                   });
                 }
               }
               // Don't call updateResourceReadout with zeros - wait for RESOURCE_UPDATE
             } else {
+              // Track growing nodes for other players from sync
+              const syncNow = performance.now();
+              for (const node of target.values()) {
+                if ((node.growthProgress ?? 1.0) < 1.0 && node.growthTimeSeconds) {
+                  const durationMs = node.growthTimeSeconds * 1000;
+                  const progress = node.growthProgress ?? 0;
+                  const elapsed = progress * durationMs;
+                  otherGrowingNodes.set(node.id, {
+                    plantId: plant.id,
+                    startTime: syncNow - elapsed,
+                    duration: durationMs,
+                  });
+                }
+              }
               otherPlayerPlants.set(plant.id, target);
             }
           }
@@ -3676,6 +4695,7 @@ function connect(): void {
             resetPlantMirror();
             clearReconnectData();
             hideGrowthSelection();
+            setRootSightEnabled(false, removed.plantId);
             plantBiomass = 0;
             plantEnergy = 0;
             updateResourceReadout(
@@ -3693,6 +4713,10 @@ function connect(): void {
             break;
           }
           if (otherPlayerPlants.delete(removed.plantId)) {
+            // Clean up growing-node tracking for the removed plant
+            for (const [nodeId, info] of otherGrowingNodes.entries()) {
+              if (info.plantId === removed.plantId) otherGrowingNodes.delete(nodeId);
+            }
             // Update renderer with remaining plants
             if (plantRenderer) {
               const otherNodes: PlantNodeData[] = [];
@@ -3718,15 +4742,42 @@ function connect(): void {
         case MESSAGE_TYPE.PONG:
           break;
 
+        case MESSAGE_TYPE.CHAT_BROADCAST: {
+          const chat = payload as {
+            playerId: string;
+            playerName: string;
+            message?: string;
+            emoteId?: string;
+            type?: string;
+            timestamp: number;
+          };
+          if (chat.type === 'emote' && chat.emoteId) {
+            showEmoteAbovePlant(chat.playerId, chat.playerName, chat.emoteId);
+          } else if (chat?.message) {
+            addChatMessage(chat.playerName, chat.message, chat.playerId === playerId);
+          }
+          break;
+        }
+
         default:
           console.warn('Unknown message type:', type);
       }
 
       // Frame camera on first spawn (after WELCOME). ADR-027: close framing on
       // the normal-sized plant model; the model itself is not enlarged.
-      if (welcome?.rootNode && !cameraFramed) {
+      // Guard on `welcome` (not `welcome.rootNode`) so initPlantRenderer() runs
+      // even when all nodes arrive via welcome.nodes (ADR-021 fast-path).
+      if (welcome && !cameraFramed) {
         cameraFramed = true;
-        frameCameraOnPlant(welcome.rootNode.x, welcome.rootNode.y, welcome.rootNode.z);
+        if (welcome.rootNode) {
+          frameCameraOnPlant(welcome.rootNode.x, welcome.rootNode.y, welcome.rootNode.z);
+        } else {
+          // Frame on the first own node (seed/root) when rootNode is omitted
+          const firstNode = Array.from(plantNodes.values()).find((n) => n.isOwnPlant);
+          if (firstNode) {
+            frameCameraOnPlant(firstNode.position.x, firstNode.position.y, firstNode.position.z);
+          }
+        }
         setDetail(
           `Welcome! Player ID: ${playerId}\nServer tick: ${serverTick}\nClick your plant to grow. Press H for hints.`,
         );
@@ -3736,6 +4787,9 @@ function connect(): void {
       }
     } catch (error) {
       console.error('Failed to parse message:', error);
+      if (error instanceof Error && error.stack) {
+        console.error(error.stack);
+      }
     }
   };
 
@@ -3745,6 +4799,8 @@ function connect(): void {
     plantReady = false;
     cameraFramed = false;
     hideGrowthSelection();
+    rootSightActivePlants.clear();
+    setRootSightEnabled(false);
     setStatus('Disconnected', 'down');
     setDetail(`Connection closed: code=${event.code}, reason=${event.reason || 'none'}`);
     setTimeout(connect, 3000);
@@ -3766,6 +4822,7 @@ window.addEventListener('resize', () => {
     growthDirectionOverlay.height = window.innerHeight;
   }
   if (plantRenderer) {
+    plantRenderer.setViewportSize(renderer.domElement.width, renderer.domElement.height);
     plantRenderer.onResize();
   }
   if (webgpuRenderer) {
@@ -3834,7 +4891,8 @@ function renderFrame(deltaTime: number): void {
   // Smooth keyboard camera zoom (- and + keys)
   if (keyboardZoomState.in || keyboardZoomState.out) {
     const currentDist = camera.position.distanceTo(controls.target);
-    const zoomRate = 2.0; // Scaled by current distance for smooth logarithmic feel
+    // Zoom rate from config; scales by current distance for smooth logarithmic feel
+    const zoomRate = renderConfig?.cameraZoomSpeed ?? 2.0;
     let delta = 0;
     if (keyboardZoomState.in) delta -= currentDist * zoomRate * deltaTime;
     if (keyboardZoomState.out) delta += currentDist * zoomRate * deltaTime;
@@ -3878,7 +4936,44 @@ function renderFrame(deltaTime: number): void {
     updateRootSight(deltaTime);
   }
 
-  // Update plant renderers
+  // Client-side growth animation: advance growthProgress FIRST so renderers
+  // always receive current-frame values (not one-frame-stale values).
+  if (growingNodes.size > 0 || otherGrowingNodes.size > 0) {
+    const growNow = performance.now();
+
+    // Own plant's growing nodes
+    for (const [nodeId, growthInfo] of growingNodes.entries()) {
+      const node = plantNodes.get(nodeId);
+      if (!node) { growingNodes.delete(nodeId); continue; }
+      const elapsed = Math.max(0, growNow - growthInfo.startTime);
+      const progress = Math.min(1.0, elapsed / growthInfo.duration);
+      if (progress >= 1.0) {
+        node.growthProgress = 1.0;
+        growingNodes.delete(nodeId);
+      } else {
+        node.growthProgress = progress;
+      }
+    }
+
+    // Other players' growing nodes
+    for (const [nodeId, growthInfo] of otherGrowingNodes.entries()) {
+      const otherPlant = otherPlayerPlants.get(growthInfo.plantId);
+      const node = otherPlant?.get(nodeId);
+      if (!node) { otherGrowingNodes.delete(nodeId); continue; }
+      const elapsed = Math.max(0, growNow - growthInfo.startTime);
+      const progress = Math.min(1.0, elapsed / growthInfo.duration);
+      if (progress >= 1.0) {
+        node.growthProgress = 1.0;
+        otherGrowingNodes.delete(nodeId);
+      } else {
+        node.growthProgress = progress;
+      }
+    }
+  }
+
+  // Update plant renderers with fresh growthProgress values.
+  // The SDF renderer (plantRenderer) throttles rebuilds internally;
+  // the WebGPU renderer re-writes joint matrices every frame.
   if (plantRenderer) {
     // Update sun lighting from environment
     if (environmentRenderer) {
@@ -3888,7 +4983,7 @@ function renderFrame(deltaTime: number): void {
         environmentRenderer.getSunIntensity(),
       );
     }
-    plantRenderer.update(deltaTime);
+    plantRenderer.render(deltaTime);
   }
   if (webgpuRenderer) {
     const allPlants: PlantNodeData[] = [...plantNodes.values()];
@@ -3902,36 +4997,16 @@ function renderFrame(deltaTime: number): void {
     environmentRenderer.update(deltaTime);
   }
 
-  // Client-side growth animation for Three.js SDF renderer
-  // Animate growthProgress for nodes that are still growing
-  if (plantRenderer && growingNodes.size > 0) {
-    const now = performance.now();
-    let hasGrowing = false;
-    for (const [nodeId, growthInfo] of growingNodes.entries()) {
-      const node = plantNodes.get(nodeId);
-      if (!node) {
-        growingNodes.delete(nodeId);
-        continue;
-      }
-      const elapsed = now - growthInfo.startTime;
-      const progress = Math.min(1.0, elapsed / growthInfo.duration);
-      if (progress >= 1.0) {
-        node.growthProgress = 1.0;
-        growingNodes.delete(nodeId);
-      } else {
-        node.growthProgress = progress;
-        hasGrowing = true;
-      }
-    }
-    // Periodically update plant renderer with new growth progress
-    if (hasGrowing && now - lastGrowthUpdateTime >= GROWTH_UPDATE_INTERVAL_MS) {
+  // Periodically notify the SDF renderer of updated growthProgress (it doesn't
+  // rebuild every frame unlike the WebGPU renderer which does joint matrices).
+  if (growingNodes.size > 0 || otherGrowingNodes.size > 0) {
+    const growNow2 = performance.now();
+    if (growNow2 - lastGrowthUpdateTime >= GROWTH_UPDATE_INTERVAL_MS) {
       const otherNodes: PlantNodeData[] = [];
-      for (const nodes of otherPlayerPlants.values()) {
-        otherNodes.push(...nodes.values());
-      }
+      for (const nodes of otherPlayerPlants.values()) otherNodes.push(...nodes.values());
       const allNodes = [...plantNodes.values(), ...otherNodes];
-      plantRenderer.updatePlantData(allNodes);
-      lastGrowthUpdateTime = now;
+      if (plantRenderer) plantRenderer.updatePlantData(allNodes);
+      lastGrowthUpdateTime = growNow2;
     }
   }
 
@@ -4020,6 +5095,7 @@ interface PlantLegacyDebugHandle {
   plantNodes: typeof plantNodes;
   readonly plantRenderer: PlantRenderer | null;
   readonly webgpuRenderer: WebGPURenderer | null;
+  readonly environmentRenderer: EnvironmentRenderer | null;
   readonly plantEnergy: number;
   readonly plantBiomass: number;
 }
@@ -4037,6 +5113,9 @@ if (import.meta.env.DEV) {
     },
     get webgpuRenderer() {
       return webgpuRenderer;
+    },
+    get environmentRenderer() {
+      return environmentRenderer;
     },
     get plantEnergy() {
       return plantEnergy;

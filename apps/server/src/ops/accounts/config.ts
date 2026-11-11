@@ -17,9 +17,7 @@ export interface AccountsConfig {
   rateLimitRefreshPerMinute: number;
   lockoutMaxFailedAttempts: number;
   lockoutDurationMin: number;
-  argon2TimeCost: number;
-  argon2MemoryCostKib: number;
-  argon2Parallelism: number;
+  bcryptCost: number;
   jwtAlgorithm: 'HS256' | 'RS256';
   jwtIssuer: string;
   jwtAudience: string;
@@ -46,9 +44,7 @@ export function loadAccountsConfig(configs: Map<string, ConfigFile>): AccountsCo
     rateLimitRefreshPerMinute: readInteger(configs, 'accounts', 'rate_limit_refresh_per_minute'),
     lockoutMaxFailedAttempts: readInteger(configs, 'accounts', 'lockout_max_failed_attempts'),
     lockoutDurationMin: readInteger(configs, 'accounts', 'lockout_duration_min'),
-    argon2TimeCost: readInteger(configs, 'accounts', 'argon2_time_cost'),
-    argon2MemoryCostKib: readInteger(configs, 'accounts', 'argon2_memory_cost_kib'),
-    argon2Parallelism: readInteger(configs, 'accounts', 'argon2_parallelism'),
+    bcryptCost: readInteger(configs, 'accounts', 'bcrypt_cost'),
     jwtAlgorithm: readString(configs, 'accounts', 'jwt_algorithm') as 'HS256' | 'RS256',
     jwtIssuer: readString(configs, 'accounts', 'jwt_issuer'),
     jwtAudience: readString(configs, 'accounts', 'jwt_audience'),

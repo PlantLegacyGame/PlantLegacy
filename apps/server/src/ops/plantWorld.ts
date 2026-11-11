@@ -16,6 +16,7 @@ import {
   getAvailableGrowthTypes,
   getLayerForNodeType,
   getNodeTypeDefinition,
+  NODE_GROWTH_CONSTRAINTS,
 } from '@plant-legacy/shared/growth';
 import { newId } from '@plant-legacy/shared/ids';
 import { clamp } from '@plant-legacy/shared/math';
@@ -91,6 +92,57 @@ function distance3d(
   return Math.sqrt(dx * dx + dy * dy + dz * dz);
 }
 
+/**
+ * Compute Murray's law radii for all nodes in a plant.
+ * Works bottom-up from leaves: r_parent^3 = sum(r_child_i^3)
+ * For binary branching: r_child ≈ 0.79 * r_parent
+ * Leaf nodes use their biomass to determine base radius.
+ */
+function computeMurrayRadii(plant: Plant): void {
+  const childrenMap = new Map<string, PlantNode[]>();
+  for (const node of plant.nodes.values()) {
+    if (node.parentId) {
+      if (!childrenMap.has(node.parentId)) {
+        childrenMap.set(node.parentId, []);
+      }
+      childrenMap.get(node.parentId)?.push(node);
+    }
+  }
+
+  // Base radius from biomass (similar to client's nodeRadius function)
+  function baseRadiusFromBiomass(biomass: number, isRoot: boolean): number {
+    // Biomass ~ volume ~ r^3 * length, so r ~ (biomass)^(1/3)
+    const r = Math.cbrt(Math.max(0.01, biomass)) * 0.5;
+    return isRoot ? Math.max(0.05, r * 1.5) : Math.max(0.01, r);
+  }
+
+  function computeRadius(node: PlantNode): number {
+    const children = childrenMap.get(node.id) || [];
+    const isRoot = node.layer === 'root';
+
+    if (children.length === 0) {
+      // Leaf node - base radius from biomass
+      return baseRadiusFromBiomass(node.biomass, isRoot);
+    }
+
+    // Parent radius from Murray's law: r_parent^3 = sum(r_child_i^3)
+    let sumCubed = 0;
+    for (const child of children) {
+      const childRadius = computeRadius(child);
+      sumCubed += childRadius ** 3;
+    }
+    const murrayRadius = Math.cbrt(sumCubed);
+    // Use max of base radius and Murray's law radius so parent never shrinks below base
+    const baseRadius = baseRadiusFromBiomass(node.biomass, isRoot);
+    return Math.max(baseRadius, murrayRadius);
+  }
+
+  // Compute and assign radii for all nodes
+  for (const node of plant.nodes.values()) {
+    node.radius = computeRadius(node);
+  }
+}
+
 function canGrow(plant: Plant, config: GrowthConfig): { ok: boolean; reason?: string } {
   // Check plant's internal resource storage for growth requirements
   if (plant.storedWater < config.growthMinWater) {
@@ -118,6 +170,7 @@ function canGrow(plant: Plant, config: GrowthConfig): { ok: boolean; reason?: st
 /**
  * Validates that the growth direction is realistic for the given node type.
  * Returns { ok: true } if valid, or { ok: false, reason } if invalid.
+ * Uses NODE_GROWTH_CONSTRAINTS for authoritative bounds.
  */
 function validateGrowthDirection(
   _parentNode: PlantNode,
@@ -126,50 +179,30 @@ function validateGrowthDirection(
   config: GrowthConfig,
   _isAttack = false,
 ): { ok: boolean; reason?: string } {
-  const targetLayer = getLayerForNodeType(targetType);
-
   // Get the node definition for growth bias
   const targetDef = getNodeTypeDefinition(config, targetType);
   const growthBias = targetDef.growth_direction_bias;
 
-  // Calculate angle from vertical/horizontal
-  const horizontalDist = Math.sqrt(dir.x * dir.x + dir.z * dir.z);
-  const verticalDist = Math.abs(dir.y);
+  // Get authoritative constraints from shared config
+  const constraints = NODE_GROWTH_CONSTRAINTS[targetType] ?? NODE_GROWTH_CONSTRAINTS.stem;
 
-  // Layer-specific validation
-  if (targetLayer === 'root') {
-    // Reasonable default clamp (genes/mutations may relax later): root/radicle should
-    // trend below the parent, but can travel partially above ground along the route
-    // and dip back in; lateral roots are more permissive.
-    if (!_isAttack && targetType !== 'lateral_root' && dir.y > 0.15) {
-      return {
-        ok: false,
-        reason:
-          'Root growth must trend below the selected node (can arc near surface, but not mostly upward)',
-      };
-    }
-    const maxHorizontal = _isAttack || targetType === 'lateral_root' ? 2.2 : 1.6;
-    if (horizontalDist > maxHorizontal) {
-      return { ok: false, reason: 'Root growth direction too horizontal' };
-    }
-  } else if (targetLayer === 'canopy') {
-    // Canopy growth depends on type
-    if (targetType === 'stem') {
-      // Stems grow upward
-      if (dir.y < 0.3) {
-        return { ok: false, reason: 'Stems must grow upward' };
-      }
-    } else if (targetType === 'branch' || targetType === 'vine') {
-      // Branches and vines grow outward/horizontal
-      if (verticalDist > 0.8) {
-        return { ok: false, reason: 'Branches and vines must grow outward' };
-      }
-    } else if (targetType === 'leaf' || targetType === 'cotyledon') {
-      // Leaves/cotyledons grow outward; allow a reasonable upward component.
-      if (verticalDist > 0.97) {
-        return { ok: false, reason: 'Leaves must grow outward' };
-      }
-    }
+  // Calculate horizontal distance
+  const horizontalDist = Math.sqrt(dir.x * dir.x + dir.z * dir.z);
+
+  // Validate Y bounds from constraints (authoritative)
+  if (dir.y < constraints.minY || dir.y > constraints.maxY) {
+    return {
+      ok: false,
+      reason: `Direction Y (${dir.y.toFixed(2)}) outside allowed range [${constraints.minY}, ${constraints.maxY}] for ${targetType}`,
+    };
+  }
+
+  // Validate horizontal bounds from constraints
+  if (horizontalDist < constraints.minHorizontal || horizontalDist > constraints.maxHorizontal) {
+    return {
+      ok: false,
+      reason: `Horizontal distance (${horizontalDist.toFixed(2)}) outside allowed range [${constraints.minHorizontal}, ${constraints.maxHorizontal}] for ${targetType}`,
+    };
   }
 
   // Check if direction aligns with growth bias (lenient, skip for attacks)
@@ -236,7 +269,7 @@ export class PlantWorld {
   private resourceProvider: ((x: number, z: number) => TileResources) | null = null;
 
   private readonly activeTickRateHz: number;
-  private readonly offlineDamageMultiplier: number;
+  private offlineDamageMultiplier: number;
 
   private tierMachine: PlantTierStateMachine;
 
@@ -340,6 +373,18 @@ export class PlantWorld {
     return this.config;
   }
 
+  setAutoGrowth(enabled: boolean): void {
+    this.config.autoGrowth = enabled;
+  }
+
+  setGerminationGate(enabled: boolean): void {
+    this.config.germinationGate = enabled;
+  }
+
+  setGerminationFailureKillsSeed(enabled: boolean): void {
+    this.config.germinationFailureKillsSeed = enabled;
+  }
+
   getGrowthCooldown(): number {
     return this.config.growthCooldown;
   }
@@ -372,11 +417,12 @@ export class PlantWorld {
         ? resources.light
         : 80;
 
-    // For germination: check tile light/moisture
+    // For germination: check tile light/moisture (respects dev germinationGate)
     // For growth: check plant's stored water/minerals
     const germinationOk =
-      safeLight >= this.config.germinationMinLight &&
-      safeMoisture >= this.config.germinationMinMoisture;
+      this.config.germinationGate === false ||
+      (safeLight >= this.config.germinationMinLight &&
+        safeMoisture >= this.config.germinationMinMoisture);
 
     // Check if plant has enough stored resources for growth
     const hasStoredWater = plant.storedWater >= this.config.growthMinWater;
@@ -721,6 +767,9 @@ export class PlantWorld {
     this.plantByOwner.get(ownerId)?.add(plantId);
     this.addNodeToSpatialIndex(seedNode);
 
+    // Compute initial Murray's law radii for the seed
+    computeMurrayRadii(plant);
+
     return plant;
   }
 
@@ -889,6 +938,28 @@ export class PlantWorld {
       } else {
         this.processPlantUpkeep(plant, dt);
         this.processGrowthProgress(plant, dt);
+        // Dev switch: auto-growth automatically triggers germination for seed
+        if (this.config.autoGrowth && plant.nodes.size === 1) {
+          const rootNode = plant.nodes.get(plant.rootNodeId ?? '');
+          if (
+            rootNode &&
+            rootNode.type === 'seed' &&
+            rootNode.isSeed &&
+            rootNode.children.length === 0
+          ) {
+            this.tryGrow(
+              {
+                plantId: plant.id,
+                nodeId: rootNode.id,
+                direction: { x: 0, y: -1, z: 0 },
+                nodeType: 'radicle',
+                isAttack: false,
+                tick: currentTick,
+              },
+              currentTick,
+            );
+          }
+        }
         // Only active-tier (online) plants deal root overlap damage.
         // Near-tier plants are offline players' plants; they should not deal damage.
         if (tier === 'active') {
@@ -1235,6 +1306,12 @@ export class PlantWorld {
       growthNutrientsConsumed: 0,
       growthMineralsConsumed: 0,
       isSeed: false,
+      growthTimeSeconds,
+      growthStartTick: currentTick,
+      // Parent attachment position for client sync
+      parentAttachX: parentNode.x,
+      parentAttachY: parentNode.y,
+      parentAttachZ: parentNode.z,
     };
 
     plant.nodes.set(newNodeId, newNode);
@@ -1245,6 +1322,9 @@ export class PlantWorld {
 
     parentNode.children.push(newNodeId);
     this.addNodeToSpatialIndex(newNode);
+
+    // Recompute Murray's law radii for the whole plant after structure change
+    computeMurrayRadii(plant);
 
     plant.growthSeq++;
 
@@ -1259,6 +1339,8 @@ export class PlantWorld {
       plant.nodes.set(parentNode.id, established);
       if (!plant.rootNodeId) plant.rootNodeId = parentNode.id;
       plant.growthSeq++;
+      // Recompute radii after parent update
+      computeMurrayRadii(plant);
       return {
         success: true,
         newNode,
@@ -1289,8 +1371,12 @@ export class PlantWorld {
     const resources = this.resourceProvider
       ? this.resourceProvider(seedNode.x, seedNode.z)
       : { light: 100, moisture: 100, minerals: 100 };
-    const moistureOk = (resources.moisture ?? 0) >= this.config.germinationMinMoisture;
-    const lightOk = (resources.light ?? 0) >= this.config.germinationMinLight;
+    const moistureOk =
+      this.config.germinationGate === false ||
+      (resources.moisture ?? 0) >= this.config.germinationMinMoisture;
+    const lightOk =
+      this.config.germinationGate === false ||
+      (resources.light ?? 0) >= this.config.germinationMinLight;
     if (!moistureOk || !lightOk) {
       if (this.config.germinationFailureKillsSeed) {
         this.killPlant(plant.id, 'germination_failed');
@@ -1341,6 +1427,12 @@ export class PlantWorld {
       growthNutrientsConsumed: 0,
       growthMineralsConsumed: 0,
       isSeed: false,
+      growthTimeSeconds,
+      growthStartTick: currentTick,
+      // Parent attachment position for client sync (seed position)
+      parentAttachX: seedNode.x,
+      parentAttachY: seedNode.y,
+      parentAttachZ: seedNode.z,
     };
 
     // Stepwise germination: keep the node as a seed/root-crown (isSeed) so the
@@ -1367,6 +1459,9 @@ export class PlantWorld {
       currentTick + Math.ceil(this.config.growthCooldown * this.activeTickRateHz);
     this.addNodeToSpatialIndex(radicleNode);
 
+    // Recompute Murray's law radii for the whole plant after structure change
+    computeMurrayRadii(plant);
+
     plant.growthSeq++;
     return {
       success: true,
@@ -1387,8 +1482,19 @@ export class PlantWorld {
     );
   }
 
-  removePlant(plantId: string): void {
-    this.killPlant(plantId, 'removed');
+  /** D01: Dev action - set offline damage multiplier */
+  setOfflineDamageMultiplier(multiplier: number): void {
+    this.offlineDamageMultiplier = multiplier;
+  }
+
+  /** D01: Dev action - create random plant for stress testing */
+  createRandomPlant(): string {
+    const worldId = 'world_1';
+    const ownerId = `dev_stress_${Math.random().toString(36).slice(2, 8)}`;
+    const x = (Math.random() - 0.5) * (this.worldBounds.maxX - this.worldBounds.minX) * 0.8;
+    const z = (Math.random() - 0.5) * (this.worldBounds.maxZ - this.worldBounds.minZ) * 0.8;
+    const plant = this.createPlant(ownerId, worldId, x, z);
+    return plant.id;
   }
 
   killPlant(plantId: string, cause: PlantDeathCause): PlantDeathRecord | null {
@@ -1429,6 +1535,11 @@ export class PlantWorld {
     // broadcast PLANT_REMOVED and deposit minerals exactly once.
     this.pendingDeaths.push(death);
     return death;
+  }
+
+  /** Removes a plant from the world (for dev actions). */
+  removePlant(plantId: string): void {
+    this.killPlant(plantId, 'removed');
   }
 
   /** Returns deaths queued since the last call and clears the queue. */

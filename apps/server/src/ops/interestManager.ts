@@ -21,8 +21,8 @@ export interface EntityUpdate {
 }
 
 export class InterestManager {
-  private readonly cellSize: number;
-  private readonly interestRingRadius: number;
+  private cellSize: number;
+  private interestRingRadius: number;
   private readonly entityCap: number;
   private readonly detailDistances: { L0: number; L1: number; L2: number };
 
@@ -205,5 +205,34 @@ export class InterestManager {
       }
     }
     return entityIds;
+  }
+
+  /** D01: Dev action - set cell size */
+  setCellSize(size: number): void {
+    this.cellSize = size;
+  }
+
+  /** D01: Dev action - set interest ring radius */
+  setRingRadius(radius: number): void {
+    this.interestRingRadius = radius;
+    // Recalculate subscribed cells for all clients
+    for (const interest of this.clientInterests.values()) {
+      interest.subscribedCells = this.getSubscribedCells(interest.cell);
+    }
+  }
+
+  /** D01: Dev action - set active tick rate */
+  setActiveTickRate(_hz: number): void {
+    // Handled by World.setTickRate
+  }
+
+  /** D01: Dev action - set near tick rate */
+  setNearTickRate(_hz: number): void {
+    // Handled by World tier config
+  }
+
+  /** D01: Dev action - set dormant interval */
+  setDormantInterval(_sec: number): void {
+    // Handled by World tier config
   }
 }

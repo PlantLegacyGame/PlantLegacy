@@ -1,3 +1,11 @@
+/**
+ * @plant-legacy/input - Input action state machine.
+ *
+ * Dependency-free finite state machine for mapping raw keyboard/mouse inputs
+ * to named actions with configurable modes: press (edge), toggle (latch), hold
+ * (continuous while down). Reusable across any project needing input abstraction.
+ */
+
 export type ActionMode = 'press' | 'toggle' | 'hold';
 
 export type InputActionState = 'inactive' | 'pressed' | 'active' | 'toggled';
@@ -12,16 +20,16 @@ export interface InputActionStateMachine {
   config: InputActionConfig;
 }
 
+export interface InputActionEvent {
+  kind: 'keyboard' | 'mouse';
+  down: boolean;
+}
+
 export function createInputActionStateMachine(config: InputActionConfig): InputActionStateMachine {
   return {
     state: 'inactive',
     config,
   };
-}
-
-export interface InputActionEvent {
-  kind: 'keyboard' | 'mouse';
-  down: boolean;
 }
 
 export function inputActionStateMachineProcess(
@@ -35,7 +43,6 @@ export function inputActionStateMachineProcess(
   const { mode } = config;
 
   if (event.down) {
-    // Key/button pressed
     switch (mode) {
       case 'press':
         if (state === 'inactive') {
@@ -60,7 +67,6 @@ export function inputActionStateMachineProcess(
         break;
     }
   } else {
-    // Key/button released
     switch (mode) {
       case 'press':
         if (state === 'active') {
@@ -69,7 +75,6 @@ export function inputActionStateMachineProcess(
         }
         break;
       case 'toggle':
-        // Toggle mode ignores release
         break;
       case 'hold':
         if (state === 'active') {

@@ -187,9 +187,6 @@ export class ClientWeatherStateMachine {
     // Update lightning
     this.updateLightning(deltaMs);
 
-    // Apply diurnal cycle to zenith/horizon colors
-    this.applyDiurnalColors();
-
     return { ...this.currentTargets };
   }
 
@@ -204,25 +201,6 @@ export class ClientWeatherStateMachine {
     current.fogFar = THREE.MathUtils.lerp(current.fogFar, target.fogFar, t);
     current.soilMoisture = THREE.MathUtils.lerp(current.soilMoisture, target.soilMoisture, t);
     current.isRaining = t > 0.5 ? target.isRaining : current.isRaining;
-  }
-
-  private applyDiurnalColors(): void {
-    // Calculate base colors from diurnal cycle
-    const baseZenith = new THREE.Color(this.config.clear.zenithColor).lerp(
-      new THREE.Color(this.config.clear.zenithColor),
-      this.dayFactor,
-    );
-
-    const baseHorizon = new THREE.Color(this.config.clear.horizonColor).lerp(
-      new THREE.Color(this.config.clear.horizonColor),
-      this.dayFactor,
-    );
-
-    // If not in a weather state, use diurnal colors
-    if (this.state === 'clear' && this.transitionProgress >= 1) {
-      this.currentTargets.zenithColor.copy(baseZenith);
-      this.currentTargets.horizonColor.copy(baseHorizon);
-    }
   }
 
   private scheduleNextLightning(): void {

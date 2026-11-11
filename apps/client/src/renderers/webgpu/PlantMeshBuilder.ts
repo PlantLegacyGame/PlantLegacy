@@ -2,10 +2,18 @@ import { hash01 } from '@plant-legacy/shared/math';
 import * as THREE from 'three';
 import type { PlantNodeData } from '../PlantRenderer';
 
-/** Interleaved mesh vertex: position(3) + normal(3) + uv(2) + packed(1 u32). */
-export const MESH_VERTEX_STRIDE = 36;
-const MESH_FLOATS_PER_VERTEX = 9;
+/** C02b: GPU skinning configuration */
+export const MAX_JOINTS_PER_VERTEX = 4;
+export const MAX_JOINTS_PER_PLANT = 64; // Max joints (segments) per plant
+
+/** Interleaved mesh vertex: position(3) + normal(3) + uv(2) + packed(1 u32) + emergence(2 f32) + jointIndices(4) + jointWeights(4). */
+export const MESH_VERTEX_STRIDE = 76; // 19 floats = 76 bytes
+const MESH_FLOATS_PER_VERTEX = 19;
 const MESH_PACKED_WORD = 8;
+const MESH_EMERGENCE_SPAWN_TIME = 9;
+const MESH_EMERGENCE_GROWTH_PROGRESS = 10;
+const MESH_JOINT_INDICES_START = 11;
+const MESH_JOINT_WEIGHTS_START = 15;
 
 export interface PlantMeshBuildOptions {
   leafSize: number;
@@ -13,6 +21,7 @@ export interface PlantMeshBuildOptions {
   tubeSides: number;
   rootSides: number;
   now: number;
+  sunDirection: THREE.Vector3;
   selectedNodeId?: string | null;
 }
 
@@ -36,26 +45,48 @@ const OWN_PLANT_COLOR: [number, number, number] = [0.3, 0.62, 0.24];
 const RIVAL_PLANT_COLOR: [number, number, number] = [0.46, 0.54, 0.2];
 const MAX_LEAVES_PER_PLANT = 48;
 
-function packNode(plantIndex: number, nodeType: number, isOwn: boolean): number {
-  return (plantIndex & 0xffff) | ((nodeType & 0xff) << 16) | ((isOwn ? 1 : 0) << 24);
+function packNode(
+  plantIndex: number,
+  nodeType: number,
+  isOwn: boolean,
+  variationIndex = 0,
+): number {
+  return (
+    (plantIndex & 0xffff) |
+    ((nodeType & 0xff) << 16) |
+    ((isOwn ? 1 : 0) << 24) |
+    ((variationIndex & 0xf) << 25)
+  );
 }
 
 function getVisualNodeType(node: PlantNodeData): number {
-  // Map string nodeType to visual types for distinct rendering
+  // Map string nodeType to visual types for distinct rendering per plant part
   const nt = node.nodeType?.toLowerCase();
-  if (nt === 'seed' || node.isSeed) return 4; // Seed - botanical teardrop
+
+  // Root crown: always render as seed coat (type 4) since it IS the seed coat base,
+  // both before and after germination
+  if (nt === 'seed') {
+    return 4;
+  }
   if (nt === 'flower') return 5; // Flower - pink/red
   if (nt === 'spore_sac') return 6; // Spore sac - brown/orange
-  if (nt === 'vine') return 2; // Vine - green (already type 2)
-  if (nt === 'cotyledon') return 7; // Cotyledon - distinct from leaf
-  if (nt === 'leaf') return 3; // Regular leaf
-  if (nt === 'stem') return 1; // Stem - trunk
-  if (nt === 'branch') return 1; // Branch - trunk
-  if (nt === 'root') return 0; // Root
-  if (nt === 'radicle') return 0; // Radicle - root
-  if (nt === 'lateral_root') return 0; // Lateral root - root
+  if (nt === 'vine') return 2; // Vine - green
+  if (nt === 'cotyledon') return 7; // Cotyledon - yellow-green seed leaf
+  if (nt === 'leaf') return 3; // Regular leaf - vibrant green
+  if (nt === 'stem') return 1; // Stem - woody trunk
+  if (nt === 'branch') return 1; // Branch - woody trunk
+  if (nt === 'radicle') return 0; // Radicle - delicate root
+  if (nt === 'root') return 0; // Root - woody root
+  if (nt === 'lateral_root') return 0; // Lateral root - thinner root
   // Fallback to numeric type
   return typeof node.type === 'number' ? node.type : 0;
+}
+
+/** C02b: Get texture variation index for a node (0-15) */
+function getVariationIndex(node: PlantNodeData, visualType: number): number {
+  // Use node ID hash to get deterministic variation
+  const hash = hash01(node.id, `variation_${visualType}`);
+  return Math.floor(hash * 16);
 }
 
 function groupByRoot(nodes: PlantNodeData[]): PlantNodeData[][] {
@@ -101,6 +132,9 @@ function perpendicularBasis(direction: THREE.Vector3): { u: THREE.Vector3; v: TH
 class MeshAccumulator {
   private readonly positions: number[] = [];
   private readonly packedValues: number[] = [];
+  private readonly emergenceData: number[] = []; // [spawnTime, growthProgress] per vertex
+  private readonly jointIndices: number[] = []; // 4 joint indices per vertex
+  private readonly jointWeights: number[] = []; // 4 joint weights per vertex
   readonly indices: number[] = [];
 
   get vertexCount(): number {
@@ -113,9 +147,18 @@ class MeshAccumulator {
     u: number,
     v: number,
     packed: number,
+    spawnTime: number = 0,
+    growthProgress: number = 1,
+    jointIndices: number[] = [0, 0, 0, 0],
+    jointWeights: number[] = [1, 0, 0, 0],
   ): void {
     this.positions.push(position.x, position.y, position.z, normal.x, normal.y, normal.z, u, v);
     this.packedValues.push(packed);
+    // Callers pass spawnTime in milliseconds (performance.now()); the shaders
+    // compare it against frame.time, which is in seconds.
+    this.emergenceData.push(spawnTime * 0.001, growthProgress);
+    this.jointIndices.push(...jointIndices);
+    this.jointWeights.push(...jointWeights);
   }
 
   addTriangle(a: number, b: number, c: number): void {
@@ -130,6 +173,9 @@ class MeshAccumulator {
     sides: number,
     packed: number,
     addCaps = false,
+    spawnTime = 0,
+    growthProgress = 1,
+    jointIndex = 0,
   ): void {
     const direction = new THREE.Vector3().subVectors(b, a);
     if (direction.lengthSq() < 1e-8) return;
@@ -151,7 +197,7 @@ class MeshAccumulator {
           .addScaledVector(v, Math.sin(angle));
         const normal = offset.clone().normalize();
         const position = center.clone().addScaledVector(offset, radius);
-        this.pushVertex(position, normal, side / sides, ring, packed);
+        this.pushVertex(position, normal, side / sides, ring, packed, spawnTime, growthProgress);
       }
     }
 
@@ -168,7 +214,7 @@ class MeshAccumulator {
     if (addCaps) {
       // Caps keep the tube watertight when a branch ends in open space.
       const startCenter = this.vertexCount;
-      this.pushVertex(a, direction.clone().negate(), 0.5, 0.5, packed);
+      this.pushVertex(a, direction.clone().negate(), 0.5, 0.5, packed, spawnTime, growthProgress);
       for (let side = 0; side < sides; side += 1) {
         const angle = (side / sides) * Math.PI * 2;
         const offset = u
@@ -177,7 +223,17 @@ class MeshAccumulator {
           .addScaledVector(v, Math.sin(angle));
         const position = a.clone().addScaledVector(offset, rA);
         const normal = direction.clone().negate();
-        this.pushVertex(position, normal, side / sides, 0, packed);
+        this.pushVertex(
+          position,
+          normal,
+          side / sides,
+          0,
+          packed,
+          spawnTime,
+          growthProgress,
+          [jointIndex, 0, 0, 0],
+          [1, 0, 0, 0],
+        );
       }
       for (let side = 0; side < sides; side += 1) {
         const next = (side + 1) % sides;
@@ -185,7 +241,17 @@ class MeshAccumulator {
       }
 
       const endCenter = this.vertexCount;
-      this.pushVertex(b, direction.clone(), 0.5, 0.5, packed);
+      this.pushVertex(
+        b,
+        direction.clone(),
+        0.5,
+        0.5,
+        packed,
+        spawnTime,
+        growthProgress,
+        [jointIndex + 1, 0, 0, 0],
+        [1, 0, 0, 0],
+      );
       for (let side = 0; side < sides; side += 1) {
         const angle = (side / sides) * Math.PI * 2;
         const offset = u
@@ -193,7 +259,18 @@ class MeshAccumulator {
           .multiplyScalar(Math.cos(angle))
           .addScaledVector(v, Math.sin(angle));
         const position = b.clone().addScaledVector(offset, rB);
-        this.pushVertex(position, direction.clone(), side / sides, 1, packed);
+        const normal = direction.clone();
+        this.pushVertex(
+          position,
+          normal,
+          side / sides,
+          1,
+          packed,
+          spawnTime,
+          growthProgress,
+          [jointIndex + 1, 0, 0, 0],
+          [1, 0, 0, 0],
+        );
       }
       for (let side = 0; side < sides; side += 1) {
         const next = (side + 1) % sides;
@@ -212,11 +289,14 @@ class MeshAccumulator {
     sides: number,
     packed: number,
     segments = 8,
+    spawnTime = 0,
+    growthProgress = 1,
+    jointIndex = 0,
   ): void {
-    const rA = Math.max(0.005, radiusA);
-    const rB = Math.max(0.003, radiusB);
-
     // Sample curve points
+    const emergentR = growthProgress;
+    const rA = Math.max(0.005, radiusA) * emergentR;
+    const rB = Math.max(0.003, radiusB) * emergentR;
     const points: THREE.Vector3[] = [];
     const radii: number[] = [];
     for (let i = 0; i <= segments; i += 1) {
@@ -263,7 +343,19 @@ class MeshAccumulator {
           .addScaledVector(v, Math.sin(angle));
         const normal = offset.clone().normalize();
         const position = pos.clone().addScaledVector(offset, radius);
-        this.pushVertex(position, normal, side / sides, i / segments, packed);
+        const segmentWeight = 1.0 - i / segments;
+        const nextSegmentWeight = i / segments;
+        this.pushVertex(
+          position,
+          normal,
+          side / sides,
+          i / segments,
+          packed,
+          spawnTime,
+          growthProgress,
+          [jointIndex, jointIndex + 1, 0, 0],
+          [segmentWeight, nextSegmentWeight, 0, 0],
+        );
       }
 
       if (i > 0) {
@@ -286,6 +378,9 @@ class MeshAccumulator {
     normal: THREE.Vector3,
     size: number,
     packed: number,
+    spawnTime = 0,
+    growthProgress = 1,
+    jointIndex = 0,
   ): void {
     const side = new THREE.Vector3().crossVectors(normal, direction);
     if (side.lengthSq() < 1e-8) {
@@ -298,7 +393,18 @@ class MeshAccumulator {
     const petioleRadius = size * 0.03;
     const petioleBase = base.clone();
     const petioleTip = base.clone().addScaledVector(direction, petioleLength);
-    this.addTube(petioleBase, petioleTip, petioleRadius, petioleRadius, 4, packed, false);
+    this.addTube(
+      petioleBase,
+      petioleTip,
+      petioleRadius,
+      petioleRadius,
+      4,
+      packed,
+      false,
+      spawnTime,
+      growthProgress,
+      jointIndex,
+    );
 
     // Leaf blade
     const p0 = base.clone().addScaledVector(direction, petioleLength);
@@ -307,18 +413,66 @@ class MeshAccumulator {
     const p3 = p0.clone().addScaledVector(side, -size * 0.22);
 
     const start = this.vertexCount;
-    this.pushVertex(p0, normal, 0, 0.5, packed);
-    this.pushVertex(p1, normal, 0.35, 1, packed);
-    this.pushVertex(p2, normal, 1, 0.5, packed);
-    this.pushVertex(p3, normal, 0.35, 0, packed);
+    this.pushVertex(
+      p0,
+      normal,
+      0,
+      0.5,
+      packed,
+      spawnTime,
+      growthProgress,
+      [jointIndex, 0, 0, 0],
+      [1, 0, 0, 0],
+    );
+    this.pushVertex(
+      p1,
+      normal,
+      0.35,
+      1,
+      packed,
+      spawnTime,
+      growthProgress,
+      [jointIndex, 0, 0, 0],
+      [1, 0, 0, 0],
+    );
+    this.pushVertex(
+      p2,
+      normal,
+      1,
+      0.5,
+      packed,
+      spawnTime,
+      growthProgress,
+      [jointIndex, 0, 0, 0],
+      [1, 0, 0, 0],
+    );
+    this.pushVertex(
+      p3,
+      normal,
+      0.35,
+      0,
+      packed,
+      spawnTime,
+      growthProgress,
+      [jointIndex, 0, 0, 0],
+      [1, 0, 0, 0],
+    );
     this.addTriangle(start, start + 1, start + 2);
     this.addTriangle(start, start + 2, start + 3);
   }
 
-  addJoint(center: THREE.Vector3, radius: number, packed: number): void {
+  addJoint(
+    center: THREE.Vector3,
+    radius: number,
+    packed: number,
+    spawnTime = 0,
+    growthProgress = 1,
+    jointIndex = 0,
+  ): void {
     const sides = 6;
     const rings = 4;
     const start = this.vertexCount;
+    const emergentRadius = radius * growthProgress;
 
     for (let ring = 0; ring <= rings; ring += 1) {
       const phi = (ring / rings) * Math.PI;
@@ -328,9 +482,20 @@ class MeshAccumulator {
         const theta = (side / sides) * Math.PI * 2;
         const x = r * Math.cos(theta);
         const z = r * Math.sin(theta);
-        const pos = new THREE.Vector3(x, y, z).multiplyScalar(radius).add(center);
+        const pos = new THREE.Vector3(x, y, z).multiplyScalar(emergentRadius).add(center);
         const normal = new THREE.Vector3(x, y, z).normalize();
-        this.pushVertex(pos, normal, side / sides, ring / rings, packed);
+        const ringWeight = 1.0 - ring / rings;
+        this.pushVertex(
+          pos,
+          normal,
+          side / sides,
+          ring / rings,
+          packed,
+          spawnTime,
+          growthProgress,
+          [jointIndex, 0, 0, 0],
+          [ringWeight, 1 - ringWeight, 0, 0],
+        );
       }
     }
 
@@ -346,21 +511,31 @@ class MeshAccumulator {
     }
   }
 
-  addSeed(center: THREE.Vector3, radius: number, packed: number): void {
+  addSeed(
+    center: THREE.Vector3,
+    radius: number,
+    packed: number,
+    spawnTime = 0,
+    growthProgress = 1,
+    jointIndex = 0,
+  ): void {
     const sides = 12;
     const rings = 8;
     const start = this.vertexCount;
+    const emergentRadius = radius * growthProgress;
 
     // Organic botanical seed shape:
-    // Slightly teardrop/ovoid (tapered top, rounded bottom, gentle lateral flattening)
+    // Egg-shaped: narrower at top (pointed apex), wider at bottom (rounded base)
+    // This matches a seed sitting on soil with radicle emerging downward
     for (let ring = 0; ring <= rings; ring += 1) {
       const v = ring / rings; // 0 (top) to 1 (bottom)
       const phi = v * Math.PI;
-      // Botanical seed profile: wider lower-middle, slightly pointed apex
       const y = Math.cos(phi); // +1 at top, -1 at bottom
-      // Teardrop curve: slightly pinched near top (v near 0)
-      const profile = Math.sin(phi) * (1.0 + 0.15 * Math.cos(phi));
-      const yScaled = y * 1.2; // Slightly taller than wide
+      // Egg profile: narrow pointed top, wide rounded bottom
+      // Asymmetric: top is pinched, bottom is bulbous
+      const eggTaper = 1.0 - 0.35 * v; // less taper toward bottom
+      const profile = Math.sin(phi) * eggTaper * (1.0 + 0.15 * Math.cos(phi));
+      const yScaled = y * 1.3; // Slightly taller than wide
 
       for (let side = 0; side <= sides; side += 1) {
         const u = side / sides;
@@ -369,9 +544,20 @@ class MeshAccumulator {
         const x = profile * Math.cos(theta) * 0.95;
         const z = profile * Math.sin(theta) * 0.85;
 
-        const pos = new THREE.Vector3(x, yScaled, z).multiplyScalar(radius).add(center);
+        const pos = new THREE.Vector3(x, yScaled, z).multiplyScalar(emergentRadius).add(center);
         const normal = new THREE.Vector3(x, y * 0.8, z).normalize();
-        this.pushVertex(pos, normal, u, v, packed);
+        const ringWeight = 1.0 - v;
+        this.pushVertex(
+          pos,
+          normal,
+          u,
+          v,
+          packed,
+          spawnTime,
+          growthProgress,
+          [jointIndex, 0, 0, 0],
+          [ringWeight, 1 - ringWeight, 0, 0],
+        );
       }
     }
 
@@ -404,6 +590,18 @@ class MeshAccumulator {
       floats[target + 6] = this.positions[source + 6];
       floats[target + 7] = this.positions[source + 7];
       words[target + MESH_PACKED_WORD] = this.packedValues[i];
+      floats[target + MESH_EMERGENCE_SPAWN_TIME] = this.emergenceData[i * 2];
+      floats[target + MESH_EMERGENCE_GROWTH_PROGRESS] = this.emergenceData[i * 2 + 1];
+      // Joint indices (4 u32)
+      words[target + MESH_JOINT_INDICES_START] = this.jointIndices[i * 4];
+      words[target + MESH_JOINT_INDICES_START + 1] = this.jointIndices[i * 4 + 1];
+      words[target + MESH_JOINT_INDICES_START + 2] = this.jointIndices[i * 4 + 2];
+      words[target + MESH_JOINT_INDICES_START + 3] = this.jointIndices[i * 4 + 3];
+      // Joint weights (4 f32)
+      floats[target + MESH_JOINT_WEIGHTS_START] = this.jointWeights[i * 4];
+      floats[target + MESH_JOINT_WEIGHTS_START + 1] = this.jointWeights[i * 4 + 1];
+      floats[target + MESH_JOINT_WEIGHTS_START + 2] = this.jointWeights[i * 4 + 2];
+      floats[target + MESH_JOINT_WEIGHTS_START + 3] = this.jointWeights[i * 4 + 3];
     }
 
     return floats;
@@ -416,6 +614,7 @@ function leafDirection(
   count: number,
   isCotyledon = false,
   nodeId: string,
+  sunDirection: THREE.Vector3 = new THREE.Vector3(0, 1, 0),
 ): { direction: THREE.Vector3; normal: THREE.Vector3 } {
   const up = new THREE.Vector3(0, 1, 0);
   const side = new THREE.Vector3().crossVectors(branchDirection, up);
@@ -429,9 +628,13 @@ function leafDirection(
   const angle = (index * goldenAngle) % (Math.PI * 2);
 
   // Cotyledon (first leaf from root crown): horizontal, perpendicular to stem
+  // Phototropism: slowly unfolds toward sun direction
   if (isCotyledon) {
-    const direction = side.clone().normalize(); // Pure horizontal
-    const normal = up.clone(); // Face straight up for photosynthesis
+    // Cotyledon normal starts facing up, tilts toward sun over time (handled via growthProgress)
+    const sunHorizontal = new THREE.Vector3(sunDirection.x, 0, sunDirection.z).normalize();
+    const tilt = sunHorizontal.clone().multiplyScalar(0.3);
+    const direction = side.clone().normalize().add(tilt).normalize();
+    const normal = up.clone().addScaledVector(sunDirection, 0.15).normalize();
     return { direction, normal };
   }
 
@@ -443,13 +646,17 @@ function leafDirection(
     .addScaledVector(branchDirection, spread)
     .normalize();
 
-  // Leaf normal faces UP (toward sun) for photosynthesis and realistic appearance
+  // Leaf normal faces UP (toward sun) for photosynthesis
   // Slight angle variation for natural look - deterministic from nodeId
+  // Phototropism: tilt leaf normal toward sun direction
+  const sunPull = sunDirection.clone().multiplyScalar(0.25);
   const normal = new THREE.Vector3(
     (hash01(nodeId, 'leafNormalX') - 0.5) * 0.3,
     0.85 + hash01(nodeId, 'leafNormalY') * 0.15,
     (hash01(nodeId, 'leafNormalZ') - 0.5) * 0.3,
-  ).normalize();
+  )
+    .add(sunPull)
+    .normalize();
 
   return { direction, normal };
 }
@@ -496,108 +703,120 @@ export function buildPlantMesh(
       }
     }
 
-    // Compute radii using Murray's Law (r_parent^3 = sum(r_child_i^3))
-    // Work bottom-up: leaves first, then parents
-    const _computeRadii = (node: PlantNodeData): number => {
-      const children = childrenMap.get(node.id) || [];
-      if (children.length === 0) {
-        // Leaf node - use server-provided radius
-        return node.radius;
-      }
-      // Parent radius from Murray's law
-      let sumCubed = 0;
-      for (const child of children) {
-        const childRadius = _computeRadii(child);
-        sumCubed += childRadius ** 3;
-      }
-      return Math.cbrt(sumCubed);
-    };
-
-    // Store computed radii
+    // Use server-authoritative Murray's law radii directly
+    // Server computes and sends radii for all nodes
     const computedRadii = new Map<string, number>();
-    const assignRadii = (node: PlantNodeData): void => {
-      const children = childrenMap.get(node.id) || [];
-      if (children.length === 0) {
-        computedRadii.set(node.id, node.radius);
-      } else {
-        let sumCubed = 0;
-        for (const child of children) {
-          assignRadii(child);
-          const childRadius = computedRadii.get(child.id);
-          if (childRadius !== undefined) {
-            sumCubed += childRadius ** 3;
-          }
-        }
-        const murrayRadius = Math.cbrt(sumCubed);
-        // Use max of server radius and Murray's law radius so parent never shrinks
-        // below its base thickness when gaining children, but can thicken with more children
-        computedRadii.set(node.id, Math.max(node.radius, murrayRadius));
-      }
-    };
-    assignRadii(root);
+    for (const node of group) {
+      computedRadii.set(node.id, node.radius);
+    }
 
     // Check if this is a seed plant (first node is a seed that hasn't grown beyond cotyledon)
-    const isSeedPlant = root.isSeed === true || root.nodeType === 'seed';
+    const isSeedPlant =
+      (root.isSeed === true || root.nodeType === 'seed') &&
+      (childrenMap.get(root.id)?.length ?? 0) === 0;
 
     if (isSeedPlant) {
-      // Render botanical teardrop seed firmly resting on the ground surface
+      // Render botanical teardrop seed sitting fully above the soil surface
       const seedRadius = Math.max(0.07, Math.min(0.12, root.radius * 1.3));
-      // Position seed center slightly above 0 so its rounded base penetrates into the soil
-      // and its tapered apex points upright into the air without floating.
+      // Position seed center at radius height so it sits on top of the ground
       const seedCenter = new THREE.Vector3(
         root.position.x,
-        root.position.y + seedRadius * 0.25,
+        root.position.y + seedRadius,
         root.position.z,
       );
-      mesh.addSeed(seedCenter, seedRadius, packNode(plantIndex, 4, isOwn));
+      mesh.addSeed(
+        seedCenter,
+        seedRadius,
+        packNode(plantIndex, 4, isOwn, getVariationIndex(root, 4)),
+        root.spawnTime ?? now,
+        1.0, // Seed crown is fully present from start, not "growing"
+        0, // jointIndex
+      );
       box.expandByPoint(seedCenter.clone().add(new THREE.Vector3(0, seedRadius * 1.3, 0)));
       box.expandByPoint(seedCenter.clone().add(new THREE.Vector3(0, -seedRadius * 1.3, 0)));
     } else {
       // Normal plant with root - render seed coat base (crown at surface)
-      // Only render the crown/junction at surface, NO underground root tubes
-      const crownRadius =
-        computedRadii.get(root.id) ?? Math.max(0.04, Math.min(0.07, root.radius * 0.45));
-      const crownPos = new THREE.Vector3(root.position.x, root.position.y, root.position.z);
-      mesh.addJoint(
-        crownPos,
-        crownRadius * 1.1,
-        packNode(plantIndex, getVisualNodeType(root), isOwn),
+      // Render as seed coat (egg-shaped) via addSeed, NOT as tan sphere via addJoint
+      const seedRadius = Math.max(
+        0.07,
+        Math.min(0.12, computedRadii.get(root.id) ?? root.radius * 1.3),
       );
-      box.expandByPoint(crownPos);
+      const seedCenter = new THREE.Vector3(
+        root.position.x,
+        root.position.y + seedRadius,
+        root.position.z,
+      );
+      const crownVisualType = 4; // Seed coat appearance
+      mesh.addSeed(
+        seedCenter,
+        seedRadius,
+        packNode(plantIndex, crownVisualType, isOwn, getVariationIndex(root, crownVisualType)),
+        root.spawnTime ?? now,
+        1.0, // Crown is always fully present (not "growing" like new nodes)
+        0, // jointIndex
+      );
+      box.expandByPoint(seedCenter.clone().add(new THREE.Vector3(0, seedRadius * 1.3, 0)));
+      box.expandByPoint(seedCenter.clone().add(new THREE.Vector3(0, -seedRadius * 1.3, 0)));
     }
 
     // Process all nodes in topological order (roots first, then children)
-    const processNode = (node: PlantNodeData, depth = 0): void => {
+    const processNode = (node: PlantNodeData, depth = 0, jointIndex = 1): void => {
       if (!node.parentId) return;
 
       const parent = allById.get(node.parentId);
       if (!parent) return;
 
-      // Client-side growth animation: compute from spawnTime (0.9s smooth easing)
-      const spawnTime = node.spawnTime ?? now - 5000;
-      const elapsed = Math.max(0, now - spawnTime);
-      const rawT = Math.min(1.0, elapsed / 900);
-      const growthEase = rawT * rawT * (3.0 - 2.0 * rawT); // smoothstep
-      if (growthEase < 0.02) return;
+      // Client-side growth animation: use server-synced growthProgress (0→1 animated by client loop)
+      const spawnTime = node.spawnTime ?? 0;
+      const growthEase = node.growthProgress ?? 0;
+      // NOTE: Do NOT early-return on growthEase < 0.02 — that delays new growth appearance.
+      // Geometry is already scaled by growthProgress (zero-radius tubes are invisible by default).
 
-      // For a seed parent, attach from the base of the seed at ground level (y = 0)
-      const parentAttachPos =
-        parent.isSeed || parent.nodeType === 'seed'
-          ? new THREE.Vector3(parent.position.x, 0, parent.position.z)
-          : parent.position;
+      // Use server-authoritative parent attachment position for growth animation
+      // Fall back to heuristic for older data without parentAttachPos
+      let parentAttachPos: THREE.Vector3;
+      if (
+        parent.parentAttachX !== undefined &&
+        parent.parentAttachY !== undefined &&
+        parent.parentAttachZ !== undefined
+      ) {
+        parentAttachPos = new THREE.Vector3(
+          parent.parentAttachX,
+          parent.parentAttachY,
+          parent.parentAttachZ,
+        );
+      } else {
+        // Legacy heuristic: for seed parents, attach from base at ground level (y = 0)
+        parentAttachPos =
+          parent.isSeed || parent.nodeType === 'seed'
+            ? new THREE.Vector3(parent.position.x, 0, parent.position.z)
+            : parent.position;
+      }
 
       const animatedPosition = parentAttachPos.clone().lerp(node.position, growthEase);
+      box.expandByPoint(animatedPosition);
       const branch = new THREE.Vector3().subVectors(animatedPosition, parentAttachPos);
+
+      // Use server-authoritative target position (node.position) for control point
+      // so the curve shape is fixed and doesn't change during growth animation
+      const targetPosition = node.position;
+
       if (branch.lengthSq() > 1e-8) {
         branch.normalize();
 
-        // Get Murray's law radii
-        const parentRadius = computedRadii.get(parent.id) ?? parent.radius;
-        const nodeRadius = computedRadii.get(node.id) ?? node.radius;
+        // Get Murray's law radii (clamped to prevent giant segments from server radii)
+        const parentRadius = Math.min(computedRadii.get(parent.id) ?? parent.radius, 0.2);
+        const nodeRadius = Math.min(computedRadii.get(node.id) ?? node.radius, 0.2);
 
         // Apply growth easing to radii for smooth emergence
         const rA = Math.max(0.015, parentRadius);
-        const rB = Math.max(0.01, nodeRadius * Math.max(0.25, growthEase));
+        // Per-part radius scaling: radicles thin, stems sturdy
+        let radiusMult = 1.0;
+        if (node.nodeType === 'radicle') radiusMult = 0.5;
+        else if (node.nodeType === 'root') radiusMult = 0.8;
+        else if (node.nodeType === 'lateral_root') radiusMult = 0.6;
+        else if (node.nodeType === 'stem' || node.nodeType === 'branch') radiusMult = 1.2;
+        const rB = Math.max(0.008, nodeRadius * radiusMult * Math.max(0.25, growthEase));
 
         // Use simpler root geometry (fewer sides) for underground roots
         const isRoot =
@@ -613,29 +832,58 @@ export function buildPlantMesh(
         const jointRadius = Math.max(rA, rB) * jointMult;
 
         const visualNodeType = getVisualNodeType(node);
-        mesh.addJoint(parentAttachPos, jointRadius, packNode(plantIndex, visualNodeType, isOwn));
+        const variationIdx = getVariationIndex(node, visualNodeType);
+        mesh.addJoint(
+          parentAttachPos,
+          jointRadius,
+          packNode(plantIndex, visualNodeType, isOwn, variationIdx),
+          spawnTime,
+          growthEase,
+          jointIndex,
+        );
 
         // Organic curvature with botanical gravitropism
-        const length = parentAttachPos.distanceTo(animatedPosition);
+        const length = parentAttachPos.distanceTo(targetPosition);
 
-        // Roots grow downward (gravitropism), stems grow upward (phototropism)
-        const tropismStrength = isRoot ? 0.25 : 0.15; // Roots curve more naturally
+        // Per-part gravtropism/phototropism bias
+        let tropismStrength = 0.25;
+        let gravityBias = -0.1;
+        if (node.nodeType === 'radicle') {
+          tropismStrength = 0.35;
+          gravityBias = -0.15;
+        } else if (node.nodeType === 'root') {
+          tropismStrength = 0.3;
+          gravityBias = -0.12;
+        } else if (node.nodeType === 'lateral_root') {
+          tropismStrength = 0.2;
+          gravityBias = -0.08;
+        } else if (node.nodeType === 'stem' || node.nodeType === 'branch') {
+          tropismStrength = 0.1;
+          gravityBias = 0.08; // Stems curve upward toward light
+        } else if (node.nodeType === 'vine') {
+          tropismStrength = 0.4;
+          gravityBias = -0.05;
+        }
 
         // Add subtle noise-based bend for organic feel
         const curvature = length * tropismStrength;
+        const branchDir = new THREE.Vector3()
+          .subVectors(targetPosition, parentAttachPos)
+          .normalize();
         const bendDir = new THREE.Vector3()
-          .crossVectors(branch, new THREE.Vector3(0, 1, 0))
+          .crossVectors(branchDir, new THREE.Vector3(0, 1, 0))
           .normalize();
         if (bendDir.lengthSq() < 1e-6) bendDir.set(1, 0, 0);
 
-        // Add gravitropic bias: roots bend downward, stems bend slightly upward
-        const gravityBias = isRoot ? -0.1 : 0.05;
         const controlPoint = parentAttachPos
           .clone()
-          .add(animatedPosition)
+          .add(targetPosition)
           .multiplyScalar(0.5)
           .addScaledVector(bendDir, curvature * (hash01(node.id, 'bend') - 0.5) * 2)
           .addScaledVector(new THREE.Vector3(0, 1, 0), gravityBias * length);
+
+        // Animate along the fixed curve using growthEase
+        const animatedPosition = parentAttachPos.clone().lerp(targetPosition, growthEase);
 
         mesh.addCurvedTube(
           parentAttachPos,
@@ -644,11 +892,16 @@ export function buildPlantMesh(
           rA,
           rB,
           tubeSides,
-          packNode(plantIndex, visualNodeType, isOwn),
+          packNode(plantIndex, visualNodeType, isOwn, variationIdx),
+          8,
+          spawnTime,
+          growthEase,
+          jointIndex + 1,
         );
       }
 
-      box.expandByPoint(animatedPosition);
+      // Use target position for bounding box (encompasses full curve)
+      box.expandByPoint(targetPosition);
       box.expandByPoint(parent.position);
 
       const isLeafNode = node.type === 3;
@@ -661,22 +914,34 @@ export function buildPlantMesh(
       const canGrowLeaves =
         options.leafCountPerNode > 0 &&
         leafCount < MAX_LEAVES_PER_PLANT &&
-        animatedPosition.y > 0.25 &&
+        targetPosition.y > 0.25 &&
         nodeTypeNum >= 1 &&
         !isSeedNode &&
         growthEase > 0.15;
 
       if (isLeafNode && canGrowLeaves) {
         const direction = branch.lengthSq() > 1e-8 ? branch.clone() : new THREE.Vector3(0, 1, 0);
-        const { normal } = leafDirection(direction, 0, 1, isCotyledon, node.id);
+        const { normal } = leafDirection(
+          direction,
+          0,
+          1,
+          isCotyledon,
+          node.id,
+          options.sunDirection,
+        );
         // Flower and spore_sac get distinct visual types
         const leafVisualType = isFlower ? 5 : isSporeSac ? 6 : nodeVisualType;
+        const leafVariationIdx = getVariationIndex(node, leafVisualType);
+        const leafSizeMult = isCotyledon ? 1.3 : 1.0;
         mesh.addLeaf(
           animatedPosition,
           direction,
           normal,
-          options.leafSize * 0.85 * growthEase,
-          packNode(plantIndex, leafVisualType, isOwn),
+          options.leafSize * 0.9 * growthEase * leafSizeMult,
+          packNode(plantIndex, leafVisualType, isOwn, leafVariationIdx),
+          spawnTime,
+          growthEase,
+          jointIndex,
         );
         leafCount += 1;
       } else if (canGrowLeaves && animatedPosition.y > 0.5) {
@@ -689,13 +954,22 @@ export function buildPlantMesh(
             count,
             false,
             node.id,
+            options.sunDirection,
           );
+          const leafVariationIdx = getVariationIndex(node, 3);
+          // Cotyledons use distinct visual type 7 (yellow-green seed leaf)
+          const leafVisualType = isCotyledon ? 7 : 3;
+          // Cotyledons are larger than regular leaves initially
+          const leafSizeMult = isCotyledon ? 1.6 : 1.0;
           mesh.addLeaf(
             animatedPosition,
             leafDir,
             normal,
-            options.leafSize * 0.75 * growthEase,
-            packNode(plantIndex, 3, isOwn),
+            options.leafSize * 0.75 * growthEase * leafSizeMult,
+            packNode(plantIndex, leafVisualType, isOwn, leafVariationIdx),
+            spawnTime,
+            growthEase,
+            jointIndex,
           );
           leafCount += 1;
         }
@@ -704,14 +978,14 @@ export function buildPlantMesh(
       // Recursively process children
       const children = childrenMap.get(node.id) || [];
       for (const child of children) {
-        processNode(child, depth + 1);
+        processNode(child, depth + 1, jointIndex + 2);
       }
     };
 
     // Start processing from root's children
     const rootChildren = childrenMap.get(root.id) || [];
     for (const child of rootChildren) {
-      processNode(child);
+      processNode(child, 0, 1);
     }
 
     box.expandByScalar(Math.max(0.2, options.leafSize));
@@ -758,7 +1032,15 @@ export function buildPlantMesh(
             .addScaledVector(v, Math.sin(angle));
           const position = ringCenter.clone().addScaledVector(offset, ringRadius);
           const normal = offset.clone().normalize();
-          mesh.pushVertex(position, normal, side / ringSides, 0, packNode(plantIndex, 8, isOwn));
+          mesh.pushVertex(
+            position,
+            normal,
+            side / ringSides,
+            0,
+            packNode(plantIndex, 8, isOwn),
+            0,
+            1,
+          );
         }
         for (let side = 0; side < ringSides; side += 1) {
           const a0 = ringStart + side;
@@ -779,7 +1061,15 @@ export function buildPlantMesh(
             .addScaledVector(v, Math.sin(angle));
           const position = ringCenter2.clone().addScaledVector(offset, ringRadius);
           const normal = offset.clone().normalize();
-          mesh.pushVertex(position, normal, side / ringSides, 1, packNode(plantIndex, 8, isOwn));
+          mesh.pushVertex(
+            position,
+            normal,
+            side / ringSides,
+            1,
+            packNode(plantIndex, 8, isOwn),
+            0,
+            1,
+          );
         }
         for (let side = 0; side < ringSides; side += 1) {
           const a0 = ringStart2 + side;

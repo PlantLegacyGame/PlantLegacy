@@ -37,6 +37,10 @@ export interface PlantNodeData {
   growthProgress?: number;
   isSeed?: boolean;
   layer?: 'root' | 'canopy';
+  // Server-authoritative parent attachment position for growth animation sync
+  parentAttachX?: number;
+  parentAttachY?: number;
+  parentAttachZ?: number;
 }
 
 /**
@@ -287,6 +291,10 @@ class PlantRenderer {
   private segmentCount = 0;
   private nodeCount = 0;
 
+  // Drawing-buffer size used for the raymarch camera ray setup.
+  private viewportWidth = 0;
+  private viewportHeight = 0;
+
   // Animation
   private emergenceStartTime = 0;
   private isEmerging = false;
@@ -386,8 +394,11 @@ class PlantRenderer {
       uniforms: this.uniforms,
       vertexShader: SDF_VERTEX_SHADER,
       fragmentShader: SDF_FRAGMENT_SHADER,
-      depthTest: true,
-      depthWrite: true,
+      // Missed rays output alpha 0, so the quad must blend over the sky/ground
+      // instead of writing depth across the whole screen.
+      depthTest: false,
+      depthWrite: false,
+      transparent: true,
     });
   }
 
@@ -446,7 +457,7 @@ class PlantRenderer {
       // Add node for endpoints and junctions
       const nodePos = node.position.clone();
       if (nodeTypeStr === 'seed' || node.isSeed) {
-        nodePos.y += node.radius * 0.25;
+        nodePos.y += node.radius;
       }
       sdfNodes.push({
         position: nodePos,
@@ -558,6 +569,47 @@ class PlantRenderer {
       this.uniforms.uEmergenceProgress.value = progress;
       if (progress >= 1.0) this.isEmerging = false;
     }
+  }
+
+  /** Set the drawing-buffer size used to build the raymarch camera rays. */
+  setViewportSize(width: number, height: number): void {
+    if (!Number.isFinite(width) || !Number.isFinite(height)) return;
+    this.viewportWidth = Math.max(1, Math.floor(width));
+    this.viewportHeight = Math.max(1, Math.floor(height));
+  }
+
+  /**
+   * Update camera uniforms and resolution for rendering
+   */
+  updateCameraUniforms(): void {
+    if (!this.camera || !this.sdfMaterial) return;
+
+    const resolution = this.sdfMaterial.uniforms.uResolution?.value;
+    if (resolution instanceof THREE.Vector2) {
+      // Prefer the renderer's drawing buffer; fall back to the window size.
+      const pixelRatio = window.devicePixelRatio || 1;
+      const width = this.viewportWidth > 0 ? this.viewportWidth : window.innerWidth * pixelRatio;
+      const height =
+        this.viewportHeight > 0 ? this.viewportHeight : window.innerHeight * pixelRatio;
+      resolution.set(width, height);
+    }
+
+    this.uniforms.uCameraPos.value.copy(this.camera.position);
+
+    const cameraDir = new THREE.Vector3(0, 0, -1)
+      .applyQuaternion(this.camera.quaternion)
+      .normalize();
+    this.uniforms.uCameraDir.value.copy(cameraDir);
+    this.uniforms.uCameraUp.value.copy(this.camera.up);
+    this.uniforms.uFov.value = this.camera.fov * (Math.PI / 180);
+    this.uniforms.uAspect.value = this.camera.aspect;
+  }
+
+  /**
+   * Handle window resize
+   */
+  onResize(): void {
+    this.updateCameraUniforms();
   }
 
   /**
@@ -701,50 +753,22 @@ class PlantRenderer {
   }
 
   /**
-   * Handle window resize
-   */
-  onResize(): void {
-    // Update resolution uniform
-    // This is called when window resizes
-  }
-
-  /**
    * Render the SDF plant
    */
   render(deltaTime: number): void {
     if (!this.sdfMaterial || !this.fullscreenQuad || !this.camera) return;
 
     this.update(deltaTime);
+    this.updateCameraUniforms();
 
     const time = performance.now() / 1000;
 
     // Update time uniforms
     this.uniforms.uTime.value = time;
     this.uniforms.uWindTime.value = time * this.config.windSpeed;
-    if (this.camera) {
-      this.uniforms.uCameraPos.value.copy(this.camera.position);
-
-      // Camera direction
-      const cameraDir = new THREE.Vector3(0, 0, -1)
-        .applyQuaternion(this.camera.quaternion)
-        .normalize();
-      this.uniforms.uCameraDir.value.copy(cameraDir);
-      this.uniforms.uCameraUp.value.copy(this.camera.up);
-      this.uniforms.uFov.value = this.camera.fov * (Math.PI / 180);
-      this.uniforms.uAspect.value = this.camera.aspect;
-
-      // Update LOD
-      this.updateLOD(this.camera.position);
-    }
-
-    // Update time uniforms
-    this.uniforms.uTime.value = time;
-    this.uniforms.uWindTime.value = time * this.config.windSpeed;
 
     // Update LOD
-    if (this.camera) {
-      this.updateLOD(this.camera.position);
-    }
+    this.updateLOD(this.camera.position);
 
     // Render fullscreen quad
     if (this.fullscreenQuad) {
@@ -938,6 +962,9 @@ const SDF_FRAGMENT_SHADER = `
 precision highp float;
 
 varying vec2 vUv;
+
+// Fragment output
+layout(location = 0) out vec4 outColor;
 
 // Uniforms
 uniform float uTime;
@@ -1227,12 +1254,6 @@ float map(vec3 p) {
   return dist;
 }
 
-// Smooth minimum for organic blending
-float smin(float a, float b, float k) {
-  float h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0);
-  return mix(b, a, h) - k * h * (1.0 - h);
-}
-
 // Raymarching
 vec3 raymarch(vec3 ro, vec3 rd) {
   float t = uNear;
@@ -1275,8 +1296,10 @@ void main() {
   vec3 p = raymarch(ro, rd);
   float d = map(p);
   
-  // Background
-  vec3 col = vec3(0.08, 0.10, 0.06);
+  // Background color (used for fog on hits)
+  vec3 bgColor = vec3(0.08, 0.10, 0.06);
+  vec3 col = bgColor;
+  float alpha = 0.0;
   
   if (d < uHitEpsilon) {
     // Hit plant - calculate normal and lighting
@@ -1323,18 +1346,22 @@ void main() {
       // Regular root sight: keep natural botanical bark/soil colors
       // Peeling back soil reveals roots without artificial neon recoloring
     }
+    
+    alpha = 1.0;
   }
   
-  // Fog
-  float fogDensity = 0.002;
-  float dist = length(p - uCameraPos);
-  float fog = exp(-fogDensity * dist * dist);
-  col = mix(col, vec3(0.08, 0.10, 0.06), 1.0 - fog);
+  // Fog (only applied to hit pixels, missed rays are transparent)
+  if (alpha > 0.0) {
+    float fogDensity = 0.002;
+    float dist = length(p - uCameraPos);
+    float fog = exp(-fogDensity * dist * dist);
+    col = mix(col, bgColor, 1.0 - fog);
+  }
   
   // Gamma correction
   col = pow(col, vec3(1.0/2.2));
   
-  gl_FragColor = vec4(col, 1.0);
+  outColor = vec4(col, alpha);
 }
 `;
 

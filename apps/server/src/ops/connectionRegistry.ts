@@ -156,6 +156,11 @@ export function connectionRegistryGetAccountId(
   return registry.connections.get(key)?.accountId;
 }
 
+/** D01: Dev action - get connection count */
+export function connectionRegistryGetConnectionCount(registry: ConnectionRegistry): number {
+  return registry.connections.size;
+}
+
 export function connectionRegistryRemove(
   registry: ConnectionRegistry,
   playerId: string,

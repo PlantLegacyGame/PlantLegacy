@@ -1,11 +1,11 @@
 {
   "_meta": {
     "system": "controls",
-    "version": "0.1.0",
+    "version": "1.0.0",
     "schema": "extended-1",
     "owner_task": "C01",
     "status": "active",
-    "notes": "C01 input abstraction: named actions, producers for keyboard/mouse/touch, bindings loaded at runtime. Gameplay code never reads raw keys."
+    "notes": "C01 input abstraction: named actions, producers for keyboard/mouse/touch, bindings loaded at runtime. Gameplay code never reads raw keys. Updated per user requirements: G=grow mode toggle, R=root sight, E=emote, I=inventory/overview, 1-0=inventory slots, `=dev panel."
   },
   "values": {
     "bindings_desktop": {
@@ -18,41 +18,34 @@
         "context": "string"
       },
       "value": [
-        { "action": "camera_orbit", "keys": [], "mouse": "right_drag", "mode": "hold", "context": "" },
-        { "action": "camera_pan", "keys": [], "mouse": "middle_drag", "mode": "hold", "context": "" },
+        { "action": "camera_orbit", "keys": [], "mouse": "left_drag", "mode": "hold", "context": "" },
+        { "action": "camera_pan", "keys": [], "mouse": "right_drag", "mode": "hold", "context": "" },
         { "action": "camera_pan_forward", "keys": ["KeyW", "ArrowUp"], "mouse": "", "mode": "hold", "context": "" },
         { "action": "camera_pan_backward", "keys": ["KeyS", "ArrowDown"], "mouse": "", "mode": "hold", "context": "" },
         { "action": "camera_pan_left", "keys": ["KeyA", "ArrowLeft"], "mouse": "", "mode": "hold", "context": "" },
         { "action": "camera_pan_right", "keys": ["KeyD", "ArrowRight"], "mouse": "", "mode": "hold", "context": "" },
         { "action": "camera_zoom", "keys": [], "mouse": "wheel", "mode": "hold", "context": "" },
         { "action": "camera_recenter", "keys": ["Space"], "mouse": "double_click_ground", "mode": "press", "context": "" },
-        { "action": "camera_rotate_left", "keys": ["KeyQ"], "mouse": "", "mode": "press", "context": "" },
-        { "action": "camera_rotate_right", "keys": ["KeyE"], "mouse": "", "mode": "press", "context": "" },
         { "action": "select_part", "keys": [], "mouse": "left_click", "mode": "press", "context": "" },
-        { "action": "grow_select", "keys": ["KeyG"], "mouse": "left_click", "mode": "press", "context": "growth" },
-        { "action": "grow_confirm", "keys": ["Enter"], "mouse": "", "mode": "press", "context": "growth" },
+        { "action": "grow_mode_toggle", "keys": ["KeyG"], "mouse": "", "mode": "toggle", "context": "" },
+        { "action": "root_sight_toggle", "keys": ["KeyR"], "mouse": "", "mode": "toggle", "context": "" },
+        { "action": "emote_wheel", "keys": ["KeyE"], "mouse": "", "mode": "press", "context": "" },
+        { "action": "inventory_overview_toggle", "keys": ["KeyI"], "mouse": "", "mode": "toggle", "context": "" },
+        { "action": "inventory_slot_1", "keys": ["Digit1"], "mouse": "", "mode": "press", "context": "" },
+        { "action": "inventory_slot_2", "keys": ["Digit2"], "mouse": "", "mode": "press", "context": "" },
+        { "action": "inventory_slot_3", "keys": ["Digit3"], "mouse": "", "mode": "press", "context": "" },
+        { "action": "inventory_slot_4", "keys": ["Digit4"], "mouse": "", "mode": "press", "context": "" },
+        { "action": "inventory_slot_5", "keys": ["Digit5"], "mouse": "", "mode": "press", "context": "" },
+        { "action": "inventory_slot_6", "keys": ["Digit6"], "mouse": "", "mode": "press", "context": "" },
+        { "action": "inventory_slot_7", "keys": ["Digit7"], "mouse": "", "mode": "press", "context": "" },
+        { "action": "inventory_slot_8", "keys": ["Digit8"], "mouse": "", "mode": "press", "context": "" },
+        { "action": "inventory_slot_9", "keys": ["Digit9"], "mouse": "", "mode": "press", "context": "" },
+        { "action": "inventory_slot_10", "keys": ["Digit0"], "mouse": "", "mode": "press", "context": "" },
         { "action": "grow_cancel", "keys": ["Escape"], "mouse": "right_click", "mode": "press", "context": "" },
-        { "action": "root_sight_toggle", "keys": ["ShiftLeft", "ShiftRight"], "mouse": "", "mode": "toggle", "context": "" },
-        { "action": "reroot_steer", "keys": ["KeyW", "KeyA", "KeyS", "KeyD"], "mouse": "", "mode": "hold", "context": "uprooted" },
-        { "action": "emote_wheel", "keys": ["KeyG"], "mouse": "", "mode": "hold", "context": "" },
-        { "action": "inventory_open", "keys": ["KeyI"], "mouse": "", "mode": "toggle", "context": "" },
-        { "action": "mutations_panel", "keys": ["KeyV"], "mouse": "", "mode": "toggle", "context": "" },
-        { "action": "chat_open", "keys": ["Enter"], "mouse": "", "mode": "press", "context": "" },
-        { "action": "menu_open", "keys": ["Escape"], "mouse": "", "mode": "toggle", "context": "" },
-        { "action": "debug_toggle", "keys": ["Backquote"], "mouse": "", "mode": "toggle", "context": "" },
-        { "action": "plant_regenerate", "keys": ["KeyR"], "mouse": "", "mode": "press", "context": "" },
+        { "action": "dev_panel_toggle", "keys": ["Backquote"], "mouse": "", "mode": "toggle", "context": "" },
+        { "action": "debug_toggle", "keys": ["ShiftLeft", "ShiftRight"], "mouse": "", "mode": "toggle", "context": "" },
         { "action": "hint_card_toggle", "keys": ["KeyH"], "mouse": "", "mode": "toggle", "context": "" },
-        { "action": "dev_weather_clear", "keys": ["Digit1"], "mouse": "", "mode": "press", "context": "" },
-        { "action": "dev_weather_rain", "keys": ["Digit2"], "mouse": "", "mode": "press", "context": "" },
-        { "action": "dev_weather_storm_telegraph", "keys": ["Digit3"], "mouse": "", "mode": "press", "context": "" },
-        { "action": "dev_weather_storm_active", "keys": ["Digit4"], "mouse": "", "mode": "press", "context": "" },
-        { "action": "dev_weather_storm_aftermath", "keys": ["Digit5"], "mouse": "", "mode": "press", "context": "" },
-        { "action": "dev_time_dawn", "keys": ["Digit6"], "mouse": "", "mode": "press", "context": "" },
-        { "action": "dev_time_noon", "keys": ["Digit7"], "mouse": "", "mode": "press", "context": "" },
-        { "action": "dev_time_dusk", "keys": ["Digit8"], "mouse": "", "mode": "press", "context": "" },
-        { "action": "dev_time_night", "keys": ["Digit9"], "mouse": "", "mode": "press", "context": "" },
-        { "action": "dev_weather_info", "keys": ["Digit0"], "mouse": "", "mode": "press", "context": "" },
-        { "action": "dev_panel_toggle", "keys": ["F1"], "mouse": "", "mode": "toggle", "context": "" }
+        { "action": "plant_regenerate", "keys": ["KeyR"], "mouse": "", "mode": "press", "context": "dev" }
       ]
     },
     "bindings_touch": {
@@ -63,9 +56,9 @@
         "context": "string"
       },
       "value": [
-        { "action": "camera_orbit", "gesture": "one_finger_drag", "context": "" },
+        { "action": "camera_pan", "gesture": "one_finger_drag", "context": "" },
         { "action": "camera_zoom", "gesture": "pinch", "context": "" },
-        { "action": "camera_pan", "gesture": "two_finger_drag", "context": "" },
+        { "action": "camera_orbit", "gesture": "two_finger_drag", "context": "" },
         { "action": "camera_recenter", "gesture": "double_tap", "context": "" },
         { "action": "select_part", "gesture": "tap", "context": "" },
         { "action": "root_sight_toggle", "gesture": "edge_button", "context": "" }

@@ -5,6 +5,7 @@ import {
   billboardShader,
   cullShader,
   groundShader,
+  impostorShader,
   meshShader,
   rainShader,
 } from './shaders/index.js';
@@ -20,13 +21,24 @@ import type { WebGPUDevice } from './WebGPUDevice.js';
  * billboard pass draws distant ones.
  */
 
-const FRAME_FLOATS = 92;
+const FRAME_FLOATS = 96;
 const FRAME_BYTES = FRAME_FLOATS * 4;
 const PLANT_FLOATS = 12;
 const PLANT_STRIDE = PLANT_FLOATS * 4;
 const RENDER_STRIDE = 16;
 const WORKGROUP_SIZE = 64;
-const VERTEX_STRIDE = 36;
+// C02b: GPU skinning - vertex now includes joint indices (4) and weights (4) = 19 floats = 76 bytes
+const VERTEX_STRIDE = 76; // 19 floats = 76 bytes (position3 + normal3 + uv2 + packed1 + emergence2 + jointIndices4 + jointWeights4)
+const MAX_JOINTS_PER_PLANT = 64;
+const JOINT_MATRIX_STRIDE = 64; // 16 floats = 64 bytes per mat4x4
+const JOINT_BUFFER_STRIDE = MAX_JOINTS_PER_PLANT * JOINT_MATRIX_STRIDE; // 64 * 64 = 4096 bytes per plant
+
+/** Impostor baking configuration */
+const IMPOSTOR_ATLAS_SIZE = 1024;
+const IMPOSTOR_VIEWS_HORIZONTAL = 8; // 8 horizontal angles (0-360)
+const IMPOSTOR_VIEWS_VERTICAL = 2; // 2 vertical angles (top, side)
+const IMPOSTOR_VIEWS = IMPOSTOR_VIEWS_HORIZONTAL * IMPOSTOR_VIEWS_VERTICAL; // 16 views per plant
+const IMPOSTOR_TILE_SIZE = IMPOSTOR_ATLAS_SIZE / IMPOSTOR_VIEWS_HORIZONTAL; // 128x128 per view
 
 /** Mesh growth easing in PlantMeshBuilder lasts 0.9 s; keep rebuilding a little longer. */
 const GROWTH_ACTIVE_MS = 1100;
@@ -51,6 +63,17 @@ export interface WebGPURendererConfig {
   ownRootColor: string;
   rivalRootColor: string;
   pointSizeScale: number;
+  // C02b: Rain rendering
+  rainStreakLength: number;
+  rainStreakWidth: number;
+  rainMaxVelocity: number;
+  // C02b: Impostor baking
+  impostorEnabled: boolean;
+  impostorUpdateIntervalMs: number;
+  // C02b: VRAM budgeting
+  vramBudgetBytes: number;
+  vramMaxVertexBytes: number;
+  vramMaxIndexBytes: number;
 }
 
 export const DEFAULT_WEBGPU_RENDERER_CONFIG: WebGPURendererConfig = {
@@ -72,7 +95,93 @@ export const DEFAULT_WEBGPU_RENDERER_CONFIG: WebGPURendererConfig = {
   ownRootColor: '#4CAF50',
   rivalRootColor: '#FF5722',
   pointSizeScale: 1.0,
+  // C02b: Rain rendering
+  rainStreakLength: 25.0,
+  rainStreakWidth: 0.02,
+  rainMaxVelocity: 35.0,
+  // C02b: Impostor baking
+  impostorEnabled: true,
+  impostorUpdateIntervalMs: 5000,
+  // C02b: VRAM budgeting
+  vramBudgetBytes: 256 * 1024 * 1024,
+  vramMaxVertexBytes: 64 * 1024 * 1024,
+  vramMaxIndexBytes: 16 * 1024 * 1024,
 };
+
+/** Texture array configuration for plant variation */
+const TEXTURE_ARRAY_LAYERS = 16; // Variations per plant part type (must match getVariationIndex range 0-15)
+const TEXTURE_ARRAY_SIZE = 256; // 256x256 per layer
+
+/** Plant part types that use texture arrays */
+enum PlantTextureType {
+  Bark = 0, // Stems, branches, vines, roots
+  Leaf = 1, // Leaves, cotyledons
+  Flower = 2, // Flowers
+  SporeSac = 3, // Spore sacs
+  Seed = 4, // Seeds
+  Count = 5,
+}
+
+/** C02b: Simple VRAM pool allocator for buffer management */
+class VRAMPool {
+  private device: GPUDevice;
+  private budgetBytes: number;
+  private allocatedBytes = 0;
+  private allocations = new Map<string, { buffer: GPUBuffer; size: number; label: string }>();
+
+  constructor(device: GPUDevice, budgetBytes: number) {
+    this.device = device;
+    this.budgetBytes = budgetBytes;
+  }
+
+  allocate(label: string, size: number, usage: GPUBufferUsageFlags): GPUBuffer | null {
+    if (this.allocatedBytes + size > this.budgetBytes) {
+      console.warn(
+        `[VRAMPool] Allocation ${label} (${(size / 1024 / 1024).toFixed(2)} MB) would exceed budget`,
+      );
+      return null;
+    }
+
+    const buffer = this.device.createBuffer({
+      label,
+      size,
+      usage,
+    });
+
+    this.allocations.set(label, { buffer, size, label });
+    this.allocatedBytes += size;
+    return buffer;
+  }
+
+  free(label: string): void {
+    const alloc = this.allocations.get(label);
+    if (alloc) {
+      alloc.buffer.destroy();
+      this.allocatedBytes -= alloc.size;
+      this.allocations.delete(label);
+    }
+  }
+
+  getAllocatedBytes(): number {
+    return this.allocatedBytes;
+  }
+
+  getBudgetBytes(): number {
+    return this.budgetBytes;
+  }
+
+  getUsagePercent(): number {
+    return this.allocatedBytes / this.budgetBytes;
+  }
+
+  destroy(): void {
+    for (const alloc of this.allocations.values()) {
+      alloc.buffer.destroy();
+    }
+    this.allocations.clear();
+    this.allocatedBytes = 0;
+  }
+}
 
 export class WebGPURenderer {
   private readonly device: WebGPUDevice;
@@ -86,6 +195,7 @@ export class WebGPURenderer {
   private renderBuffer: GPUBuffer | null = null;
   private vertexBuffer: GPUBuffer | null = null;
   private indexBuffer: GPUBuffer | null = null;
+  private jointBuffer: GPUBuffer | null = null;
   private depthTexture: GPUTexture | null = null;
 
   private computePipeline: GPUComputePipeline | null = null;
@@ -111,6 +221,27 @@ export class WebGPURenderer {
   private rootAuraTexture: GPUTexture | null = null;
   private rootAuraSampler: GPUSampler | null = null;
 
+  // C02b: Texture arrays for plant variation
+  private textureArrays: Map<PlantTextureType, GPUTexture> | null = null;
+  private textureArraySampler: GPUSampler | null = null;
+
+  // C02b: Billboard impostor baking
+  private impostorAtlasTexture: GPUTexture | null = null;
+  private impostorAtlasSampler: GPUSampler | null = null;
+  private impostorDepthTexture: GPUTexture | null = null;
+  private impostorPipeline: GPURenderPipeline | null = null;
+  private impostorBindGroup: GPUBindGroup | null = null;
+  private impostorViewsUniformBuffer: GPUBuffer | null = null;
+  private impostorTargetBuffer: GPUBuffer | null = null;
+  private impostorSlotsBuffer: GPUBuffer | null = null;
+  private lastImpostorBakeTime = Number.NEGATIVE_INFINITY;
+  // Track which plant occupies which atlas slot (for LRU eviction)
+  private impostorPlantSlots = new Map<number, { x: number; y: number; lastUsed: number }>();
+  private nextImpostorSlot = 0;
+
+  // C02b: VRAM pool for budgeting
+  private vramPool: VRAMPool | null = null;
+
   private vertexCapacityBytes = 0;
   private indexCapacityBytes = 0;
   private vertexCount = 0;
@@ -124,6 +255,8 @@ export class WebGPURenderer {
   private pendingNowMs = 0;
   private lastBuildTimeMs = Number.NEGATIVE_INFINITY;
   private lastBuildNodeCount = -1;
+  // Store plant render data (center, radius, etc.) for impostor baking
+  private plantRenderData: PlantRenderPlant[] = [];
 
   private readonly frameData = new Float32Array(FRAME_FLOATS);
   private readonly frameU32 = new Uint32Array(this.frameData.buffer);
@@ -138,7 +271,9 @@ export class WebGPURenderer {
   private rootSightRadius = 6;
   private rootSightAuraRadius = 3.0;
   private rootAuraNodeCount = 0;
-  private time = 0;
+  // Shader time base. Vertex spawnTime values come from performance.now()/1000,
+  // so anchor frame.time to the same clock instead of starting at zero.
+  private time = performance.now() / 1000;
   private deltaTime = 0;
 
   // Selected node for outline highlight
@@ -158,6 +293,9 @@ export class WebGPURenderer {
     }
 
     try {
+      // C02b: Initialize VRAM pool for budgeting
+      this.vramPool = new VRAMPool(device, this.config.vramBudgetBytes);
+
       const cullModule = await this.createShaderModule(device, cullShader, 'plant-cull');
       const meshModule = await this.createShaderModule(device, meshShader, 'plant-mesh');
       const billboardModule = await this.createShaderModule(
@@ -171,7 +309,7 @@ export class WebGPURenderer {
       this.createBuffers(device);
       this.createGroundVertexBuffer(device);
       this.createRainVertexBuffer(device);
-      this.createPipelines(
+      await this.createPipelines(
         device,
         cullModule,
         meshModule,
@@ -220,31 +358,49 @@ export class WebGPURenderer {
   }
 
   private createBuffers(device: GPUDevice): void {
-    this.frameUniformBuffer = device.createBuffer({
-      label: 'WebGPU frame uniforms',
-      size: FRAME_BYTES,
-      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-    });
+    if (!this.vramPool) {
+      throw new Error('VRAM pool not initialized');
+    }
 
-    this.plantBuffer = device.createBuffer({
-      label: 'WebGPU plant data',
-      size: this.config.maxPlants * PLANT_STRIDE,
-      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
-    });
+    const allocateOrThrow = (
+      label: string,
+      size: number,
+      usage: GPUBufferUsageFlags,
+    ): GPUBuffer => {
+      const buffer = this.vramPool?.allocate(label, size, usage);
+      if (!buffer) {
+        throw new Error(
+          `VRAM allocation failed for ${label} (${(size / 1024 / 1024).toFixed(2)} MB)`,
+        );
+      }
+      return buffer;
+    };
 
-    this.renderBuffer = device.createBuffer({
-      label: 'WebGPU render data',
-      size: this.config.maxPlants * RENDER_STRIDE,
-      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
-    });
+    this.frameUniformBuffer = allocateOrThrow(
+      'WebGPU frame uniforms',
+      FRAME_BYTES,
+      GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    );
+
+    this.plantBuffer = allocateOrThrow(
+      'WebGPU plant data',
+      this.config.maxPlants * PLANT_STRIDE,
+      GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+    );
+
+    this.renderBuffer = allocateOrThrow(
+      'WebGPU render data',
+      this.config.maxPlants * RENDER_STRIDE,
+      GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
+    );
 
     // Rain uniform buffer
     const RAIN_UNIFORM_BYTES = 32; // 8 f32s = 32 bytes
-    this.rainUniformBuffer = device.createBuffer({
-      label: 'WebGPU rain uniforms',
-      size: RAIN_UNIFORM_BYTES,
-      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-    });
+    this.rainUniformBuffer = allocateOrThrow(
+      'WebGPU rain uniforms',
+      RAIN_UNIFORM_BYTES,
+      GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    );
 
     // Root aura texture (64 nodes max, RGBA32Float, 1D texture)
     this.rootAuraTexture = device.createTexture({
@@ -262,6 +418,75 @@ export class WebGPURenderer {
       addressModeV: 'clamp-to-edge',
     });
 
+    // C02b: Texture arrays for plant variation
+    // Create procedural texture arrays for different plant part types
+    this.textureArrays = new Map<PlantTextureType, GPUTexture>();
+    this.textureArraySampler = device.createSampler({
+      label: 'Texture array sampler',
+      magFilter: 'linear',
+      minFilter: 'linear',
+      addressModeU: 'repeat',
+      addressModeV: 'repeat',
+    });
+    this.createTextureArrays(device);
+
+    // C02b: Impostor atlas texture for billboard baking
+    // 2D texture array: 16 views per plant, max 10000 plants = 160k layers (too many)
+    // Instead use a 2D atlas: 1024x1024 with 8x2 tiles = 16 views, each plant gets a row
+    // For maxPlants=10000, we'd need 10000 rows = too large
+    // Practical approach: bake impostors only for visible plants in billboard tiers (2-4)
+    // Use a smaller atlas with LRU eviction
+    this.impostorAtlasTexture = device.createTexture({
+      label: 'Impostor atlas',
+      size: { width: IMPOSTOR_ATLAS_SIZE, height: IMPOSTOR_ATLAS_SIZE, depthOrArrayLayers: 1 },
+      format: 'rgba8unorm',
+      usage:
+        GPUTextureUsage.RENDER_ATTACHMENT |
+        GPUTextureUsage.TEXTURE_BINDING |
+        GPUTextureUsage.COPY_DST,
+    });
+
+    this.impostorAtlasSampler = device.createSampler({
+      label: 'Impostor atlas sampler',
+      magFilter: 'linear',
+      minFilter: 'linear',
+      addressModeU: 'clamp-to-edge',
+      addressModeV: 'clamp-to-edge',
+    });
+
+    // Impostor uniform buffer for per-view projection matrices (16 views * 64 bytes)
+    const IMPOSTOR_UNIFORM_BYTES = 16 * 64;
+    this.impostorViewsUniformBuffer = allocateOrThrow(
+      'Impostor view uniforms',
+      IMPOSTOR_UNIFORM_BYTES,
+      GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    );
+
+    // Impostor target plant index uniform (16 bytes = 4 u32)
+    this.impostorTargetBuffer = allocateOrThrow(
+      'Impostor target plant index',
+      16,
+      GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    );
+
+    // Impostor slots buffer (plant index -> atlas slot x,y)
+    // 2 u32 per plant = 8 bytes per plant
+    const IMPOSTOR_SLOTS_BYTES = this.config.maxPlants * 8;
+    this.impostorSlotsBuffer = allocateOrThrow(
+      'Impostor slots',
+      IMPOSTOR_SLOTS_BYTES,
+      GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+    );
+
+    // C02b: GPU skinning - joint buffer for bone matrices
+    // Each plant has up to MAX_JOINTS_PER_PLANT joints, each joint is a mat4x4 (64 bytes)
+    const JOINT_BUFFER_BYTES = this.config.maxPlants * JOINT_BUFFER_STRIDE;
+    this.jointBuffer = allocateOrThrow(
+      'Joint matrices',
+      JOINT_BUFFER_BYTES,
+      GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+    );
+
     // Start every plant at the lowest tier with a full dwell timer so the first
     // compute dispatch is allowed to promote it immediately.
     const initial = new Float32Array(this.config.maxPlants * PLANT_FLOATS);
@@ -273,14 +498,14 @@ export class WebGPURenderer {
     device.queue.writeBuffer(this.plantBuffer, 0, initial);
   }
 
-  private createPipelines(
+  private async createPipelines(
     device: GPUDevice,
     cullModule: GPUShaderModule,
     meshModule: GPUShaderModule,
     billboardModule: GPUShaderModule,
     groundModule: GPUShaderModule,
     rainModule: GPUShaderModule,
-  ): void {
+  ): Promise<void> {
     const presentationFormat = this.device.getPresentationFormat();
 
     this.computePipeline = device.createComputePipeline({
@@ -307,8 +532,40 @@ export class WebGPURenderer {
               visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
               buffer: { type: 'read-only-storage' },
             },
-            { binding: 8, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
-            { binding: 9, visibility: GPUShaderStage.FRAGMENT, sampler: { type: 'filtering' } },
+            {
+              binding: 2,
+              visibility: GPUShaderStage.VERTEX,
+              buffer: { type: 'read-only-storage' },
+            },
+            // C02b: Texture arrays for plant variation (bindings 3-7)
+            {
+              binding: 3,
+              visibility: GPUShaderStage.FRAGMENT,
+              texture: { sampleType: 'float', viewDimension: '2d-array' },
+            },
+            {
+              binding: 4,
+              visibility: GPUShaderStage.FRAGMENT,
+              texture: { sampleType: 'float', viewDimension: '2d-array' },
+            },
+            {
+              binding: 5,
+              visibility: GPUShaderStage.FRAGMENT,
+              texture: { sampleType: 'float', viewDimension: '2d-array' },
+            },
+            {
+              binding: 6,
+              visibility: GPUShaderStage.FRAGMENT,
+              texture: { sampleType: 'float', viewDimension: '2d-array' },
+            },
+            {
+              binding: 7,
+              visibility: GPUShaderStage.FRAGMENT,
+              texture: { sampleType: 'float', viewDimension: '2d-array' },
+            },
+            { binding: 8, visibility: GPUShaderStage.FRAGMENT, sampler: { type: 'filtering' } },
+            { binding: 9, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
+            { binding: 10, visibility: GPUShaderStage.FRAGMENT, sampler: { type: 'filtering' } },
           ],
         }),
       ],
@@ -324,10 +581,15 @@ export class WebGPURenderer {
           {
             arrayStride: VERTEX_STRIDE,
             attributes: [
-              { shaderLocation: 0, offset: 0, format: 'float32x3' },
-              { shaderLocation: 1, offset: 12, format: 'float32x3' },
-              { shaderLocation: 2, offset: 24, format: 'float32x2' },
-              { shaderLocation: 3, offset: 32, format: 'uint32' },
+              { shaderLocation: 0, offset: 0, format: 'float32x3' }, // position
+              { shaderLocation: 1, offset: 12, format: 'float32x3' }, // normal
+              { shaderLocation: 2, offset: 24, format: 'float32x2' }, // uv
+              { shaderLocation: 3, offset: 32, format: 'uint32' }, // packed
+              { shaderLocation: 4, offset: 36, format: 'float32' }, // spawnTime
+              { shaderLocation: 5, offset: 40, format: 'float32' }, // growthProgress
+              // C02b: GPU skinning - joint indices and weights
+              { shaderLocation: 6, offset: 44, format: 'uint32x4' }, // jointIndices
+              { shaderLocation: 7, offset: 60, format: 'float32x4' }, // jointWeights
             ],
           },
         ],
@@ -356,10 +618,15 @@ export class WebGPURenderer {
           {
             arrayStride: VERTEX_STRIDE,
             attributes: [
-              { shaderLocation: 0, offset: 0, format: 'float32x3' },
-              { shaderLocation: 1, offset: 12, format: 'float32x3' },
-              { shaderLocation: 2, offset: 24, format: 'float32x2' },
-              { shaderLocation: 3, offset: 32, format: 'uint32' },
+              { shaderLocation: 0, offset: 0, format: 'float32x3' }, // position
+              { shaderLocation: 1, offset: 12, format: 'float32x3' }, // normal
+              { shaderLocation: 2, offset: 24, format: 'float32x2' }, // uv
+              { shaderLocation: 3, offset: 32, format: 'uint32' }, // packed
+              { shaderLocation: 4, offset: 36, format: 'float32' }, // spawnTime
+              { shaderLocation: 5, offset: 40, format: 'float32' }, // growthProgress
+              // C02b: GPU skinning - joint indices and weights
+              { shaderLocation: 6, offset: 44, format: 'uint32x4' }, // jointIndices
+              { shaderLocation: 7, offset: 60, format: 'float32x4' }, // jointWeights
             ],
           },
         ],
@@ -393,9 +660,69 @@ export class WebGPURenderer {
       },
     });
 
+    // Explicit layout for billboards: the shader declares all plant texture
+    // arrays plus the impostor atlas, and some of them are not statically used
+    // on every code path, so "auto" would omit bindings the bind group provides.
+    const billboardBindGroupLayout = device.createBindGroupLayout({
+      label: 'Plant billboard bind group layout',
+      entries: [
+        {
+          binding: 0,
+          visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
+          buffer: { type: 'uniform' },
+        },
+        {
+          binding: 1,
+          visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
+          buffer: { type: 'read-only-storage' },
+        },
+        {
+          binding: 2,
+          visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
+          buffer: { type: 'read-only-storage' },
+        },
+        {
+          binding: 3,
+          visibility: GPUShaderStage.FRAGMENT,
+          texture: { sampleType: 'float', viewDimension: '2d-array' },
+        },
+        {
+          binding: 4,
+          visibility: GPUShaderStage.FRAGMENT,
+          texture: { sampleType: 'float', viewDimension: '2d-array' },
+        },
+        {
+          binding: 5,
+          visibility: GPUShaderStage.FRAGMENT,
+          texture: { sampleType: 'float', viewDimension: '2d-array' },
+        },
+        {
+          binding: 6,
+          visibility: GPUShaderStage.FRAGMENT,
+          texture: { sampleType: 'float', viewDimension: '2d-array' },
+        },
+        {
+          binding: 7,
+          visibility: GPUShaderStage.FRAGMENT,
+          texture: { sampleType: 'float', viewDimension: '2d-array' },
+        },
+        { binding: 8, visibility: GPUShaderStage.FRAGMENT, sampler: { type: 'filtering' } },
+        { binding: 9, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
+        { binding: 10, visibility: GPUShaderStage.FRAGMENT, sampler: { type: 'filtering' } },
+        {
+          binding: 11,
+          visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
+          buffer: { type: 'read-only-storage' },
+        },
+      ],
+    });
+
     this.billboardPipeline = device.createRenderPipeline({
       label: 'Plant billboard pipeline',
-      layout: 'auto',
+      layout: device.createPipelineLayout({
+        label: 'Plant billboard pipeline layout',
+        bindGroupLayouts: [billboardBindGroupLayout],
+      }),
       vertex: { module: billboardModule, entryPoint: 'vs_main', buffers: [] },
       fragment: {
         module: billboardModule,
@@ -423,6 +750,44 @@ export class WebGPURenderer {
         format: 'depth24plus',
         depthWriteEnabled: false,
         depthCompare: 'less-equal',
+      },
+    });
+
+    // C02b: Impostor baking pipeline - renders plants to atlas from multiple views
+    const impostorModule = await this.createShaderModule(device, impostorShader, 'plant-impostor');
+
+    this.impostorPipeline = device.createRenderPipeline({
+      label: 'Plant impostor pipeline',
+      layout: 'auto',
+      vertex: {
+        module: impostorModule,
+        entryPoint: 'vs_main',
+        buffers: [
+          {
+            arrayStride: VERTEX_STRIDE,
+            attributes: [
+              { shaderLocation: 0, offset: 0, format: 'float32x3' },
+              { shaderLocation: 1, offset: 12, format: 'float32x3' },
+              { shaderLocation: 2, offset: 24, format: 'float32x2' },
+              { shaderLocation: 3, offset: 32, format: 'uint32' },
+              { shaderLocation: 4, offset: 36, format: 'float32' },
+              { shaderLocation: 5, offset: 40, format: 'float32' },
+              { shaderLocation: 6, offset: 44, format: 'uint32x4' },
+              { shaderLocation: 7, offset: 60, format: 'float32x4' },
+            ],
+          },
+        ],
+      },
+      fragment: {
+        module: impostorModule,
+        entryPoint: 'fs_main',
+        targets: [{ format: 'rgba8unorm' }],
+      },
+      primitive: { topology: 'triangle-list', cullMode: 'back' },
+      depthStencil: {
+        format: 'depth24plus',
+        depthWriteEnabled: true,
+        depthCompare: 'less',
       },
     });
 
@@ -527,8 +892,7 @@ export class WebGPURenderer {
       ],
     });
 
-    // The mesh shader reads the frame uniform and render data only; plants are
-    // not referenced there, so the auto layout does not expose binding 2.
+    // The mesh shader reads the frame uniform, render data, and joint matrices
     this.meshBindGroup = device.createBindGroup({
       label: 'Plant mesh bind group',
       layout: this.meshPipeline.getBindGroupLayout(0),
@@ -536,7 +900,79 @@ export class WebGPURenderer {
         { binding: 0, resource: frameBinding },
         { binding: 1, resource: renderBinding },
         {
-          binding: 8,
+          binding: 2,
+          resource: this.jointBuffer
+            ? { buffer: this.jointBuffer }
+            : { buffer: device.createBuffer({ size: 64, usage: GPUBufferUsage.STORAGE }) },
+        },
+        // C02b: Texture arrays for plant variation (bindings 3-7)
+        {
+          binding: 3,
+          resource:
+            this.textureArrays?.get(PlantTextureType.Bark)?.createView({ dimension: '2d-array' }) ??
+            device
+              .createTexture({
+                size: [1, 1],
+                format: 'rgba8unorm',
+                usage: GPUTextureUsage.TEXTURE_BINDING,
+              })
+              .createView({ dimension: '2d-array' }),
+        },
+        {
+          binding: 4,
+          resource:
+            this.textureArrays?.get(PlantTextureType.Leaf)?.createView({ dimension: '2d-array' }) ??
+            device
+              .createTexture({
+                size: [1, 1],
+                format: 'rgba8unorm',
+                usage: GPUTextureUsage.TEXTURE_BINDING,
+              })
+              .createView({ dimension: '2d-array' }),
+        },
+        {
+          binding: 5,
+          resource:
+            this.textureArrays
+              ?.get(PlantTextureType.Flower)
+              ?.createView({ dimension: '2d-array' }) ??
+            device
+              .createTexture({
+                size: [1, 1],
+                format: 'rgba8unorm',
+                usage: GPUTextureUsage.TEXTURE_BINDING,
+              })
+              .createView({ dimension: '2d-array' }),
+        },
+        {
+          binding: 6,
+          resource:
+            this.textureArrays
+              ?.get(PlantTextureType.SporeSac)
+              ?.createView({ dimension: '2d-array' }) ??
+            device
+              .createTexture({
+                size: [1, 1],
+                format: 'rgba8unorm',
+                usage: GPUTextureUsage.TEXTURE_BINDING,
+              })
+              .createView({ dimension: '2d-array' }),
+        },
+        {
+          binding: 7,
+          resource:
+            this.textureArrays?.get(PlantTextureType.Seed)?.createView({ dimension: '2d-array' }) ??
+            device
+              .createTexture({
+                size: [1, 1],
+                format: 'rgba8unorm',
+                usage: GPUTextureUsage.TEXTURE_BINDING,
+              })
+              .createView({ dimension: '2d-array' }),
+        },
+        { binding: 8, resource: this.textureArraySampler ?? device.createSampler() },
+        {
+          binding: 9,
           resource:
             this.rootAuraTexture?.createView() ??
             device
@@ -547,7 +983,7 @@ export class WebGPURenderer {
               })
               .createView(),
         },
-        { binding: 9, resource: this.rootAuraSampler ?? device.createSampler() },
+        { binding: 10, resource: this.rootAuraSampler ?? device.createSampler() },
       ],
     });
 
@@ -558,7 +994,7 @@ export class WebGPURenderer {
       entries: [
         { binding: 0, resource: frameBinding },
         {
-          binding: 8,
+          binding: 9,
           resource:
             this.rootAuraTexture?.createView() ??
             device
@@ -569,30 +1005,7 @@ export class WebGPURenderer {
               })
               .createView(),
         },
-        { binding: 9, resource: this.rootAuraSampler ?? device.createSampler() },
-      ],
-    });
-
-    this.billboardBindGroup = device.createBindGroup({
-      label: 'Plant billboard bind group',
-      layout: this.billboardPipeline.getBindGroupLayout(0),
-      entries: [
-        { binding: 0, resource: frameBinding },
-        { binding: 1, resource: renderBinding },
-        { binding: 2, resource: plantBinding },
-        {
-          binding: 8,
-          resource:
-            this.rootAuraTexture?.createView() ??
-            device
-              .createTexture({
-                size: [1, 1],
-                format: 'rgba16float',
-                usage: GPUTextureUsage.TEXTURE_BINDING,
-              })
-              .createView(),
-        },
-        { binding: 9, resource: this.rootAuraSampler ?? device.createSampler() },
+        { binding: 10, resource: this.rootAuraSampler ?? device.createSampler() },
       ],
     });
 
@@ -607,6 +1020,186 @@ export class WebGPURenderer {
       entries: [
         { binding: 0, resource: frameBinding },
         { binding: 1, resource: { buffer: this.rainUniformBuffer } },
+      ],
+    });
+
+    // C02b: Impostor bind group for baking
+    if (!this.impostorPipeline || !this.impostorViewsUniformBuffer || !this.impostorTargetBuffer) {
+      throw new Error('Impostor pipeline or uniform buffer not created');
+    }
+    if (!this.frameUniformBuffer || !this.renderBuffer) {
+      return;
+    }
+    this.impostorBindGroup = device.createBindGroup({
+      label: 'Impostor bind group',
+      layout: this.impostorPipeline.getBindGroupLayout(0),
+      entries: [
+        { binding: 0, resource: { buffer: this.frameUniformBuffer } },
+        { binding: 1, resource: { buffer: this.renderBuffer } },
+        { binding: 2, resource: { buffer: this.impostorTargetBuffer } },
+        { binding: 3, resource: { buffer: this.impostorViewsUniformBuffer } },
+        // C02b: Texture arrays for plant variation (bindings 4-8)
+        {
+          binding: 4,
+          resource:
+            this.textureArrays?.get(PlantTextureType.Bark)?.createView({ dimension: '2d-array' }) ??
+            device
+              .createTexture({
+                size: [1, 1],
+                format: 'rgba8unorm',
+                usage: GPUTextureUsage.TEXTURE_BINDING,
+              })
+              .createView({ dimension: '2d-array' }),
+        },
+        {
+          binding: 5,
+          resource:
+            this.textureArrays?.get(PlantTextureType.Leaf)?.createView({ dimension: '2d-array' }) ??
+            device
+              .createTexture({
+                size: [1, 1],
+                format: 'rgba8unorm',
+                usage: GPUTextureUsage.TEXTURE_BINDING,
+              })
+              .createView({ dimension: '2d-array' }),
+        },
+        {
+          binding: 6,
+          resource:
+            this.textureArrays
+              ?.get(PlantTextureType.Flower)
+              ?.createView({ dimension: '2d-array' }) ??
+            device
+              .createTexture({
+                size: [1, 1],
+                format: 'rgba8unorm',
+                usage: GPUTextureUsage.TEXTURE_BINDING,
+              })
+              .createView({ dimension: '2d-array' }),
+        },
+        {
+          binding: 7,
+          resource:
+            this.textureArrays
+              ?.get(PlantTextureType.SporeSac)
+              ?.createView({ dimension: '2d-array' }) ??
+            device
+              .createTexture({
+                size: [1, 1],
+                format: 'rgba8unorm',
+                usage: GPUTextureUsage.TEXTURE_BINDING,
+              })
+              .createView({ dimension: '2d-array' }),
+        },
+        {
+          binding: 8,
+          resource:
+            this.textureArrays?.get(PlantTextureType.Seed)?.createView({ dimension: '2d-array' }) ??
+            device
+              .createTexture({
+                size: [1, 1],
+                format: 'rgba8unorm',
+                usage: GPUTextureUsage.TEXTURE_BINDING,
+              })
+              .createView({ dimension: '2d-array' }),
+        },
+        { binding: 9, resource: this.textureArraySampler ?? device.createSampler() },
+      ],
+    });
+
+    // Billboard bind group (with impostor atlas for C02b)
+    this.billboardBindGroup = device.createBindGroup({
+      label: 'Plant billboard bind group',
+      layout: this.billboardPipeline.getBindGroupLayout(0),
+      entries: [
+        { binding: 0, resource: frameBinding },
+        { binding: 1, resource: renderBinding },
+        { binding: 2, resource: plantBinding },
+        // C02b: Texture arrays for plant variation (bindings 3-7)
+        {
+          binding: 3,
+          resource:
+            this.textureArrays?.get(PlantTextureType.Bark)?.createView({ dimension: '2d-array' }) ??
+            device
+              .createTexture({
+                size: [1, 1],
+                format: 'rgba8unorm',
+                usage: GPUTextureUsage.TEXTURE_BINDING,
+              })
+              .createView({ dimension: '2d-array' }),
+        },
+        {
+          binding: 4,
+          resource:
+            this.textureArrays?.get(PlantTextureType.Leaf)?.createView({ dimension: '2d-array' }) ??
+            device
+              .createTexture({
+                size: [1, 1],
+                format: 'rgba8unorm',
+                usage: GPUTextureUsage.TEXTURE_BINDING,
+              })
+              .createView({ dimension: '2d-array' }),
+        },
+        {
+          binding: 5,
+          resource:
+            this.textureArrays
+              ?.get(PlantTextureType.Flower)
+              ?.createView({ dimension: '2d-array' }) ??
+            device
+              .createTexture({
+                size: [1, 1],
+                format: 'rgba8unorm',
+                usage: GPUTextureUsage.TEXTURE_BINDING,
+              })
+              .createView({ dimension: '2d-array' }),
+        },
+        {
+          binding: 6,
+          resource:
+            this.textureArrays
+              ?.get(PlantTextureType.SporeSac)
+              ?.createView({ dimension: '2d-array' }) ??
+            device
+              .createTexture({
+                size: [1, 1],
+                format: 'rgba8unorm',
+                usage: GPUTextureUsage.TEXTURE_BINDING,
+              })
+              .createView({ dimension: '2d-array' }),
+        },
+        {
+          binding: 7,
+          resource:
+            this.textureArrays?.get(PlantTextureType.Seed)?.createView({ dimension: '2d-array' }) ??
+            device
+              .createTexture({
+                size: [1, 1],
+                format: 'rgba8unorm',
+                usage: GPUTextureUsage.TEXTURE_BINDING,
+              })
+              .createView({ dimension: '2d-array' }),
+        },
+        { binding: 8, resource: this.textureArraySampler ?? device.createSampler() },
+        {
+          binding: 9,
+          resource:
+            this.impostorAtlasTexture?.createView() ??
+            device
+              .createTexture({
+                size: [1, 1],
+                format: 'rgba8unorm',
+                usage: GPUTextureUsage.TEXTURE_BINDING,
+              })
+              .createView(),
+        },
+        { binding: 10, resource: this.impostorAtlasSampler ?? device.createSampler() },
+        {
+          binding: 11,
+          resource: this.impostorSlotsBuffer
+            ? { buffer: this.impostorSlotsBuffer }
+            : { buffer: device.createBuffer({ size: 8, usage: GPUBufferUsage.STORAGE }) },
+        },
       ],
     });
   }
@@ -726,9 +1319,10 @@ export class WebGPURenderer {
     }
 
     const growing = latestSpawn > this.pendingNowMs - GROWTH_ACTIVE_MS;
+    const anyGrowing = nodes.some((n) => (n.growthProgress ?? 1) < 1);
     const intervalElapsed = this.pendingNowMs - this.lastBuildTimeMs >= GROWTH_REBUILD_INTERVAL_MS;
 
-    if (countChanged || (growing && intervalElapsed)) {
+    if (countChanged || ((growing || anyGrowing) && intervalElapsed)) {
       this.rebuildMesh();
     }
   }
@@ -746,6 +1340,7 @@ export class WebGPURenderer {
       tubeSides: this.config.tubeSides,
       rootSides: this.config.rootSides,
       now: this.pendingNowMs,
+      sunDirection: this.sunDirection,
       selectedNodeId: this.selectedNodeId,
     });
 
@@ -758,6 +1353,7 @@ export class WebGPURenderer {
     this.outlineIndexOffset = built.outlineIndexOffset;
     this.outlineIndexCount = built.outlineIndexCount;
     this.plantCount = Math.min(built.plantData.length, this.config.maxPlants);
+    this.plantRenderData = built.plantData;
 
     this.lastBuildTimeMs = this.pendingNowMs;
     this.lastBuildNodeCount = this.pendingNodes.length;
@@ -815,10 +1411,176 @@ export class WebGPURenderer {
     );
   }
 
+  /** C02b: Create procedural texture arrays for plant variation */
+  private createTextureArrays(device: GPUDevice): void {
+    // Iterate over enum keys to avoid string/number issues
+    const textureTypes: PlantTextureType[] = [
+      PlantTextureType.Bark,
+      PlantTextureType.Leaf,
+      PlantTextureType.Flower,
+      PlantTextureType.SporeSac,
+      PlantTextureType.Seed,
+    ];
+    for (const texType of textureTypes) {
+      const texture = device.createTexture({
+        label: `Texture array: ${PlantTextureType[texType]}`,
+        size: {
+          width: TEXTURE_ARRAY_SIZE,
+          height: TEXTURE_ARRAY_SIZE,
+          depthOrArrayLayers: TEXTURE_ARRAY_LAYERS,
+        },
+        format: 'rgba8unorm',
+        usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
+        mipLevelCount: 1,
+      });
+      this.textureArrays?.set(texType, texture);
+      this.generateProceduralTexture(device, texType);
+    }
+  }
+
+  /** C02b: Generate procedural textures for a plant part type */
+  private generateProceduralTexture(device: GPUDevice, type: PlantTextureType): void {
+    const texture = this.textureArrays?.get(type);
+    if (!texture) return;
+
+    const layers = TEXTURE_ARRAY_LAYERS;
+    const size = TEXTURE_ARRAY_SIZE;
+    const bytesPerLayer = size * size * 4;
+
+    for (let layer = 0; layer < layers; layer++) {
+      const data = new Uint8Array(bytesPerLayer);
+      this.fillTextureLayer(data, size, type, layer);
+      device.queue.writeTexture(
+        { texture, origin: { x: 0, y: 0, z: layer } },
+        data,
+        { bytesPerRow: size * 4, rowsPerImage: size },
+        { width: size, height: size, depthOrArrayLayers: 1 },
+      );
+    }
+    // Note: WebGPU doesn't have built-in mipmap generation.
+    // Using single mip level (base) with linear filtering.
+    // For production, mipmaps would be generated via compute shader with
+    // per-mip-level texture views, but that requires multiple bind groups
+    // and dispatch calls. Skipping for now to avoid complexity.
+  }
+
+  /** C02b: Fill a single texture layer with procedural content */
+  private fillTextureLayer(
+    data: Uint8Array,
+    size: number,
+    type: PlantTextureType,
+    layer: number,
+  ): void {
+    switch (type) {
+      case PlantTextureType.Bark: {
+        // Bark: clean vertical gradient with subtle streaks, no random noise
+        for (let y = 0; y < size; y++) {
+          const uy = y / size;
+          const streak = Math.sin(uy * 8.0) * 0.15 + 0.85; // gentle vertical variation
+          for (let x = 0; x < size; x++) {
+            const idx = (y * size + x) * 4;
+            const baseR = 0.38 + layer * 0.02;
+            const baseG = 0.28 + layer * 0.015;
+            const baseB = 0.18 + layer * 0.01;
+            const intensity = 0.85 + streak * 0.15;
+            data[idx] = Math.floor(255 * baseR * intensity);
+            data[idx + 1] = Math.floor(255 * baseG * intensity);
+            data[idx + 2] = Math.floor(255 * baseB * intensity);
+            data[idx + 3] = 255;
+          }
+        }
+        break;
+      }
+      case PlantTextureType.Leaf: {
+        // Leaf: clean green with central vein, no noisy patterns
+        for (let y = 0; y < size; y++) {
+          for (let x = 0; x < size; x++) {
+            const idx = (y * size + x) * 4;
+            const ux = x / size;
+            // Central vein (vertical), fades toward edges
+            const vein = Math.exp(-((ux - 0.5) ** 2) * 40);
+            const baseG = 0.45 + layer * 0.03;
+            const baseR = 0.15 + layer * 0.01;
+            const baseB = 0.15 + layer * 0.005;
+            const intensity = 0.75 + vein * 0.25;
+            data[idx] = Math.floor(255 * baseR * intensity);
+            data[idx + 1] = Math.floor(255 * baseG * intensity);
+            data[idx + 2] = Math.floor(255 * baseB * intensity);
+            data[idx + 3] = 255;
+          }
+        }
+        break;
+      }
+      case PlantTextureType.Flower: {
+        // Flower: simple radial gradient petal, no petal-edge noise
+        for (let y = 0; y < size; y++) {
+          for (let x = 0; x < size; x++) {
+            const idx = (y * size + x) * 4;
+            const ux = (x - size / 2) / (size / 2);
+            const uyCentered = (y - size / 2) / (size / 2);
+            const dist = Math.sqrt(ux * ux + uyCentered * uyCentered);
+            const falloff = Math.max(0, 1 - dist * 1.3);
+            const baseR = 0.85 + layer * 0.02;
+            const baseG = 0.25 + layer * 0.02;
+            const baseB = 0.35 + layer * 0.01;
+            const intensity = falloff * 0.9 + 0.1;
+            data[idx] = Math.floor(255 * baseR * intensity);
+            data[idx + 1] = Math.floor(255 * baseG * intensity);
+            data[idx + 2] = Math.floor(255 * baseB * intensity);
+            data[idx + 3] = Math.floor(255 * falloff);
+          }
+        }
+        break;
+      }
+      case PlantTextureType.SporeSac: {
+        // Spore sac: smooth organic gradient, no bumpy sine noise
+        for (let y = 0; y < size; y++) {
+          const uy = y / size;
+          for (let x = 0; x < size; x++) {
+            const idx = (y * size + x) * 4;
+            const ux = x / size;
+            const dist = Math.sqrt((ux - 0.5) ** 2 + (uy - 0.5) ** 2);
+            const falloff = Math.max(0, 1 - dist * 1.4);
+            const baseR = 0.65 + layer * 0.02;
+            const baseG = 0.35 + layer * 0.015;
+            const baseB = 0.15 + layer * 0.01;
+            const intensity = falloff * 0.8 + 0.2;
+            data[idx] = Math.floor(255 * baseR * intensity);
+            data[idx + 1] = Math.floor(255 * baseG * intensity);
+            data[idx + 2] = Math.floor(255 * baseB * intensity);
+            data[idx + 3] = 255;
+          }
+        }
+        break;
+      }
+      case PlantTextureType.Seed: {
+        // Seed: clean teardrop gradient, no per-pixel random grain
+        for (let y = 0; y < size; y++) {
+          for (let x = 0; x < size; x++) {
+            const idx = (y * size + x) * 4;
+            const ux = (x - size / 2) / (size / 2);
+            const uyCentered = (y - size / 2) / (size / 2);
+            const dist = Math.sqrt(ux * ux + uyCentered * uyCentered * 1.5);
+            const falloff = Math.max(0, 1 - dist * 1.1);
+            const baseR = 0.42 + layer * 0.02;
+            const baseG = 0.28 + layer * 0.015;
+            const baseB = 0.16 + layer * 0.008;
+            const intensity = falloff * 0.9 + 0.1;
+            data[idx] = Math.floor(255 * baseR * intensity);
+            data[idx + 1] = Math.floor(255 * baseG * intensity);
+            data[idx + 2] = Math.floor(255 * baseB * intensity);
+            data[idx + 3] = Math.floor(255 * falloff);
+          }
+        }
+        break;
+      }
+    }
+  }
+
   private createGroundVertexBuffer(device: GPUDevice): void {
-    // Large ground plane at y = 0.0 (matching Three.js ground plane position)
+    // Large ground plane at y = -0.03 (matching Three.js ground plane position)
     const size = 500;
-    const y = 0.0;
+    const y = -0.03;
     const half = size / 2;
 
     // 2 triangles = 6 vertices
@@ -950,7 +1712,9 @@ export class WebGPURenderer {
 
   update(deltaTime: number): void {
     this.deltaTime = Math.max(0, deltaTime);
-    this.time += this.deltaTime;
+    // Keep the shader clock on the same timeline as performance.now()-derived
+    // spawnTime values even if the frame loop is throttled.
+    this.time = performance.now() / 1000;
   }
 
   resize(width: number, height: number, pixelRatio: number): void {
@@ -971,6 +1735,242 @@ export class WebGPURenderer {
     if (this.initialized) {
       this.recreateDepthTexture();
     }
+  }
+
+  /** C02b: Bake impostors for billboard-tier plants into atlas texture */
+  private async bakeImpostors(device: GPUDevice, encoder: GPUCommandEncoder): Promise<void> {
+    if (
+      !this.impostorAtlasTexture ||
+      !this.impostorViewsUniformBuffer ||
+      !this.impostorTargetBuffer ||
+      this.plantCount === 0
+    ) {
+      return;
+    }
+
+    const now = performance.now();
+    if (now - this.lastImpostorBakeTime < this.config.impostorUpdateIntervalMs) {
+      return;
+    }
+
+    // Read render data to find plants in billboard tiers (2-4)
+    const renderData = await this.readRenderData(this.plantCount);
+    // Guard: renderer may have been destroyed while we awaited the GPU readback.
+    if (!this.initialized) return;
+    const billboardPlants: Array<{ index: number; projectedSize: number }> = [];
+    for (let i = 0; i < renderData.length; i++) {
+      if (renderData[i].tier >= 2 && renderData[i].visible > 0) {
+        billboardPlants.push({ index: i, projectedSize: renderData[i].projectedSize });
+      }
+    }
+
+    if (billboardPlants.length === 0) {
+      return;
+    }
+
+    // Sort by projected size (closest first) to prioritize visible plants
+    billboardPlants.sort((a, b) => b.projectedSize - a.projectedSize);
+
+    // Bake up to max plants per frame
+    const plantsToBake = Math.min(4, billboardPlants.length);
+    let _baked = 0;
+
+    // Create/reuse depth texture for impostor rendering
+    if (!this.impostorDepthTexture) {
+      this.impostorDepthTexture = device.createTexture({
+        label: 'Impostor depth',
+        size: { width: IMPOSTOR_TILE_SIZE, height: IMPOSTOR_TILE_SIZE },
+        format: 'depth24plus',
+        usage: GPUTextureUsage.RENDER_ATTACHMENT,
+      });
+    }
+    const impostorDepthTexture = this.impostorDepthTexture;
+
+    // Frustum culling: compute view-projection matrix for main camera
+    // We'll cull plants that are outside the main camera view
+    const frustumPlanes = this.computeFrustumPlanes();
+
+    for (let i = 0; i < plantsToBake; i++) {
+      const plantInfo = billboardPlants[i];
+      const plantIdx = plantInfo.index;
+
+      // Get plant data for baking and frustum culling
+      const plantRenderInfo = this.plantRenderData[plantIdx];
+      if (!plantRenderInfo) continue;
+
+      // Frustum culling: skip plants not in view
+      if (!this.isSphereInFrustum(plantRenderInfo.center, plantRenderInfo.radius, frustumPlanes)) {
+        continue;
+      }
+      let slot = this.impostorPlantSlots.get(plantIdx);
+      if (!slot) {
+        // Assign new slot (simple grid packing)
+        const cols = Math.floor(IMPOSTOR_ATLAS_SIZE / IMPOSTOR_TILE_SIZE);
+        const rows = Math.floor(IMPOSTOR_ATLAS_SIZE / IMPOSTOR_TILE_SIZE);
+        const totalSlots = cols * rows;
+
+        let slotX: number;
+        let slotY: number;
+
+        if (this.nextImpostorSlot < totalSlots) {
+          // Free slot available
+          slotX = this.nextImpostorSlot % cols;
+          slotY = Math.floor(this.nextImpostorSlot / cols);
+          this.nextImpostorSlot++;
+        } else {
+          // Atlas full: LRU eviction
+          let lruPlantIdx: number | null = null;
+          let lruTime = Infinity;
+          for (const [idx, s] of this.impostorPlantSlots) {
+            if (s.lastUsed < lruTime) {
+              lruTime = s.lastUsed;
+              lruPlantIdx = idx;
+            }
+          }
+          if (lruPlantIdx !== null) {
+            const lruSlot = this.impostorPlantSlots.get(lruPlantIdx);
+            if (lruSlot) {
+              slotX = lruSlot.x;
+              slotY = lruSlot.y;
+              this.impostorPlantSlots.delete(lruPlantIdx);
+
+              // Clear the evicted plant's slot in GPU buffer
+              if (this.impostorSlotsBuffer) {
+                const emptySlot = new Uint32Array([0xffffffff, 0xffffffff]);
+                device.queue.writeBuffer(this.impostorSlotsBuffer, lruPlantIdx * 8, emptySlot);
+              }
+            } else {
+              continue;
+            }
+          } else {
+            // Should not happen, but fallback
+            continue;
+          }
+        }
+        slot = { x: slotX, y: slotY, lastUsed: now };
+        this.impostorPlantSlots.set(plantIdx, slot);
+
+        // Write slot to GPU buffer for billboard shader lookup
+        if (this.impostorSlotsBuffer) {
+          const slotData = new Uint32Array([slot.x, slot.y]);
+          device.queue.writeBuffer(this.impostorSlotsBuffer, plantIdx * 8, slotData);
+        }
+      }
+      slot.lastUsed = now;
+
+      // Pre-compute all 16 view-projection matrices
+      const viewProjs = new Float32Array(16 * 16); // 16 views * 16 floats (mat4)
+      for (let viewIdx = 0; viewIdx < IMPOSTOR_VIEWS; viewIdx++) {
+        const h = viewIdx % IMPOSTOR_VIEWS_HORIZONTAL;
+        const v = Math.floor(viewIdx / IMPOSTOR_VIEWS_HORIZONTAL);
+
+        const angle = (h / IMPOSTOR_VIEWS_HORIZONTAL) * Math.PI * 2;
+        const elevation = v === 0 ? Math.PI / 4 : Math.PI / 6; // 45Â° top, 30Â° side
+        const distance = Math.max(5, plantRenderInfo.radius * 2);
+
+        const eye = new THREE.Vector3(
+          Math.cos(angle) * Math.cos(elevation) * distance,
+          Math.sin(elevation) * distance,
+          Math.sin(angle) * Math.cos(elevation) * distance,
+        );
+        const target = new THREE.Vector3(0, 0, 0);
+        const up = new THREE.Vector3(0, 1, 0);
+
+        const viewMatrix = new THREE.Matrix4().lookAt(eye, target, up);
+        const projMatrix = new THREE.Matrix4();
+        (
+          projMatrix as unknown as {
+            makePerspective: (
+              fov: number,
+              aspect: number,
+              near: number,
+              far: number,
+            ) => THREE.Matrix4;
+          }
+        ).makePerspective(
+          Math.PI / 4, // 90Â° FOV
+          1, // aspect
+          0.1,
+          100,
+        );
+        const viewProj = new THREE.Matrix4().multiplyMatrices(projMatrix, viewMatrix);
+        viewProjs.set(viewProj.elements, viewIdx * 16);
+      }
+
+      // Write all view matrices to uniform buffer at once
+      device.queue.writeBuffer(this.impostorViewsUniformBuffer, 0, viewProjs);
+
+      // Write target plant index
+      const targetData = new Uint32Array([plantIdx, 0, 0, 0]);
+      device.queue.writeBuffer(this.impostorTargetBuffer, 0, targetData);
+
+      // Render all 16 views to a texture array (16 layers)
+      const impostorViewTexture = device.createTexture({
+        label: `Impostor views for plant ${plantIdx}`,
+        size: {
+          width: IMPOSTOR_TILE_SIZE,
+          height: IMPOSTOR_TILE_SIZE,
+          depthOrArrayLayers: IMPOSTOR_VIEWS,
+        },
+        format: 'rgba8unorm',
+        usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
+      });
+
+      // Single render pass with 16 instances (one per view/layer)
+      const renderPass = encoder.beginRenderPass({
+        label: `Impostor bake plant ${plantIdx} all views`,
+        colorAttachments: [
+          {
+            view: impostorViewTexture.createView({ dimension: '2d-array' }),
+            clearValue: { r: 0, g: 0, b: 0, a: 0 },
+            loadOp: 'clear',
+            storeOp: 'store',
+          },
+        ],
+        depthStencilAttachment: {
+          view: impostorDepthTexture.createView(),
+          depthClearValue: 1,
+          depthLoadOp: 'clear',
+          depthStoreOp: 'store',
+        },
+      });
+
+      if (
+        this.impostorPipeline &&
+        this.impostorBindGroup &&
+        this.vertexBuffer &&
+        this.indexBuffer &&
+        this.indexCount > 0
+      ) {
+        renderPass.setPipeline(this.impostorPipeline);
+        renderPass.setBindGroup(0, this.impostorBindGroup);
+        renderPass.setVertexBuffer(0, this.vertexBuffer);
+        renderPass.setIndexBuffer(this.indexBuffer, 'uint32');
+        // Draw 16 instances, each instance uses a different view matrix and renders to a different layer
+        renderPass.drawIndexed(this.indexCount, IMPOSTOR_VIEWS, 0, 0, 0);
+      }
+      renderPass.end();
+
+      // Copy each layer from the view texture to the atlas sub-rectangle
+      for (let viewIdx = 0; viewIdx < IMPOSTOR_VIEWS; viewIdx++) {
+        const h = viewIdx % IMPOSTOR_VIEWS_HORIZONTAL;
+        const v = Math.floor(viewIdx / IMPOSTOR_VIEWS_HORIZONTAL);
+        const atlasX = slot.x * IMPOSTOR_TILE_SIZE + h * IMPOSTOR_TILE_SIZE;
+        const atlasY = slot.y * IMPOSTOR_TILE_SIZE + v * IMPOSTOR_TILE_SIZE;
+
+        encoder.copyTextureToTexture(
+          { texture: impostorViewTexture, origin: { x: 0, y: 0, z: viewIdx } },
+          { texture: this.impostorAtlasTexture, origin: { x: atlasX, y: atlasY, z: 0 } },
+          { width: IMPOSTOR_TILE_SIZE, height: IMPOSTOR_TILE_SIZE, depthOrArrayLayers: 1 },
+        );
+      }
+
+      impostorViewTexture.destroy();
+
+      _baked++;
+    }
+
+    this.lastImpostorBakeTime = now;
   }
 
   render(): void {
@@ -1102,11 +2102,11 @@ export class WebGPURenderer {
       this.rainUniformBuffer &&
       this.rainParticleCount > 0
     ) {
-      // Update rain uniforms
+      // Update rain uniforms from config
       const rainData = new Float32Array(8);
-      rainData[0] = 25.0; // streakLength
-      rainData[1] = 0.02; // streakWidth
-      rainData[2] = 35.0; // maxVelocity
+      rainData[0] = this.config.rainStreakLength;
+      rainData[1] = this.config.rainStreakWidth;
+      rainData[2] = this.config.rainMaxVelocity;
       rainData[3] = this.rainParticleCount;
       rainData[4] = 60.0; // boxWidth
       rainData[5] = 35.0; // boxHeight
@@ -1122,11 +2122,46 @@ export class WebGPURenderer {
 
     renderPass.end();
     device.queue.submit([encoder.finish()]);
+
+    // Schedule impostor baking asynchronously (after frame submission)
+    if (this.config.impostorEnabled && this.impostorPipeline && this.impostorBindGroup) {
+      this.scheduleImpostorBake(device);
+    }
+  }
+
+  private scheduleImpostorBake(device: GPUDevice): void {
+    // Use setTimeout instead of queueMicrotask to avoid potential race with device loss
+    // and to yield to the event loop for better responsiveness
+    setTimeout(() => {
+      if (!this.initialized) {
+        return;
+      }
+      this.bakeImpostorsAsync(device).catch((err) => {
+        console.warn('[WebGPURenderer] Impostor bake failed:', err);
+      });
+    }, 0);
+  }
+
+  private async bakeImpostorsAsync(device: GPUDevice): Promise<void> {
+    // Create a separate command encoder for impostor baking
+    const encoder = device.createCommandEncoder({ label: 'Impostor bake' });
+    await this.bakeImpostors(device, encoder);
+    // Guard: renderer may have been destroyed while awaiting the readback.
+    if (!this.initialized) return;
+    device.queue.submit([encoder.finish()]);
   }
 
   private writeFrameUniforms(device: GPUDevice, viewportHeight: number): void {
     if (!this.frameUniformBuffer || !this.camera) {
       return;
+    }
+
+    // Validate frame uniform struct size matches WGSL definition
+    const expectedFloats = 96; // FRAME_FLOATS
+    if (this.frameData.length !== expectedFloats) {
+      throw new Error(
+        `Frame uniform size mismatch: expected ${expectedFloats} floats (${expectedFloats * 4} bytes), got ${this.frameData.length}`,
+      );
     }
 
     const camera = this.camera;
@@ -1145,66 +2180,263 @@ export class WebGPURenderer {
     data[35] = 1;
 
     const world = camera.matrixWorld.elements;
+    // cameraRight (X axis)
     data[36] = world[0];
     data[37] = world[1];
     data[38] = world[2];
     data[39] = 0;
-
+    // cameraUp (Y axis)
     data[40] = world[4];
     data[41] = world[5];
     data[42] = world[6];
     data[43] = 0;
-
-    data[44] = this.sunDirection.x;
-    data[45] = this.sunDirection.y;
-    data[46] = this.sunDirection.z;
+    // cameraForward (negative Z axis - camera looks down -Z)
+    data[44] = -world[8];
+    data[45] = -world[9];
+    data[46] = -world[10];
     data[47] = 0;
 
-    data[48] = this.ownRootColor.r;
-    data[49] = this.ownRootColor.g;
-    data[50] = this.ownRootColor.b;
-    data[51] = 1;
+    data[48] = this.sunDirection.x;
+    data[49] = this.sunDirection.y;
+    data[50] = this.sunDirection.z;
+    data[51] = 0;
 
-    data[52] = this.rivalRootColor.r;
-    data[53] = this.rivalRootColor.g;
-    data[54] = this.rivalRootColor.b;
+    data[52] = this.ownRootColor.r;
+    data[53] = this.ownRootColor.g;
+    data[54] = this.ownRootColor.b;
     data[55] = 1;
 
-    data[56] = this.rootSightCenter.x;
-    data[57] = this.rootSightCenter.y;
-    data[58] = this.rootSightCenter.z;
+    data[56] = this.rivalRootColor.r;
+    data[57] = this.rivalRootColor.g;
+    data[58] = this.rivalRootColor.b;
     data[59] = 1;
 
-    data[60] = this.time;
-    data[61] = this.config.windStrength;
-    data[62] = this.config.windSpeed;
-    data[63] = this.config.healthTintStrength;
-    data[64] = this.config.mutation0Param;
-    data[65] = this.config.mutation1Param;
-    data[66] = this.config.mutation2Param;
-    data[67] = viewportHeight;
-    this.frameU32[68] = this.rootSightEnabled ? 1 : 0;
-    data[69] = this.rootSightProgress;
-    data[70] = this.rootSightRadius;
-    data[71] = this.rootSightAuraRadius;
-    this.frameU32[72] = this.rootAuraNodeCount;
-    data[73] = this.config.tierThresholds[0];
-    data[74] = this.config.tierThresholds[1];
-    data[75] = this.config.tierThresholds[2];
-    data[76] = this.config.tierThresholds[3];
-    data[77] = this.config.hysteresisPromote;
-    data[78] = this.config.hysteresisDemote;
-    data[79] = this.config.minDwellTime;
-    data[80] = this.config.pointSizeScale;
-    data[81] = camera.projectionMatrix.elements[5];
-    data[82] = this.deltaTime;
-    data[83] = 0;
-    data[84] = 0;
-    data[85] = 0;
-    data[86] = 0;
+    data[60] = this.rootSightCenter.x;
+    data[61] = this.rootSightCenter.y;
+    data[62] = this.rootSightCenter.z;
+    data[63] = 1;
+
+    data[64] = this.time;
+    data[65] = this.config.windStrength;
+    data[66] = this.config.windSpeed;
+    data[67] = this.config.healthTintStrength;
+    data[68] = this.config.mutation0Param;
+    data[69] = this.config.mutation1Param;
+    data[70] = this.config.mutation2Param;
+    data[71] = viewportHeight;
+    this.frameU32[72] = this.rootSightEnabled ? 1 : 0;
+    data[73] = this.rootSightProgress;
+    data[74] = this.rootSightRadius;
+    data[75] = this.rootSightAuraRadius;
+    this.frameU32[76] = this.rootAuraNodeCount;
+    data[77] = this.config.tierThresholds[0];
+    data[78] = this.config.tierThresholds[1];
+    data[79] = this.config.tierThresholds[2];
+    data[80] = this.config.tierThresholds[3];
+    data[81] = this.config.hysteresisPromote;
+    data[82] = this.config.hysteresisDemote;
+    data[83] = this.config.minDwellTime;
+    data[84] = this.config.pointSizeScale;
+    data[85] = camera.projectionMatrix.elements[5];
+    data[86] = this.deltaTime;
     data[87] = 0;
+    data[88] = 0;
+    data[89] = 0;
+    data[90] = 0;
+    data[91] = 0;
 
     device.queue.writeBuffer(this.frameUniformBuffer, 0, data);
+
+    // C02b: GPU skinning - compute and upload joint matrices for each plant
+    this.writeJointMatrices(device);
+  }
+
+  /** C02b: GPU skinning - compute joint matrices for plant growth animation */
+  private writeJointMatrices(device: GPUDevice): void {
+    if (!this.jointBuffer || this.plantCount === 0) {
+      return;
+    }
+
+    // Group nodes by plant (same logic as PlantMeshBuilder)
+    const plantGroups = this.groupNodesByPlant(this.pendingNodes);
+
+    const jointData = new Float32Array((this.config.maxPlants * JOINT_BUFFER_STRIDE) / 4);
+
+    for (let plantIdx = 0; plantIdx < this.plantCount; plantIdx++) {
+      const plantNodes = plantGroups[plantIdx];
+      if (!plantNodes || plantNodes.length === 0) {
+        // Fill with identity matrices
+        const baseOffset = plantIdx * MAX_JOINTS_PER_PLANT * 16;
+        this.fillIdentityMatrices(jointData, baseOffset);
+        continue;
+      }
+
+      const baseOffset = plantIdx * MAX_JOINTS_PER_PLANT * 16;
+      const now = this.pendingNowMs;
+
+      // Build node map for parent lookup
+      const nodeMap = new Map<string, PlantNodeData>();
+      for (const node of plantNodes) {
+        nodeMap.set(node.id, node);
+      }
+
+      // Compute joint matrices for each node in this plant
+      for (let jointIdx = 0; jointIdx < MAX_JOINTS_PER_PLANT; jointIdx++) {
+        const matrixOffset = baseOffset + jointIdx * 16;
+
+        if (jointIdx < plantNodes.length) {
+          const node = plantNodes[jointIdx];
+          const matrix = this.computeJointMatrix(node, nodeMap, now);
+
+          // Write column-major matrix
+          jointData[matrixOffset + 0] = matrix.elements[0];
+          jointData[matrixOffset + 1] = matrix.elements[1];
+          jointData[matrixOffset + 2] = matrix.elements[2];
+          jointData[matrixOffset + 3] = matrix.elements[3];
+          jointData[matrixOffset + 4] = matrix.elements[4];
+          jointData[matrixOffset + 5] = matrix.elements[5];
+          jointData[matrixOffset + 6] = matrix.elements[6];
+          jointData[matrixOffset + 7] = matrix.elements[7];
+          jointData[matrixOffset + 8] = matrix.elements[8];
+          jointData[matrixOffset + 9] = matrix.elements[9];
+          jointData[matrixOffset + 10] = matrix.elements[10];
+          jointData[matrixOffset + 11] = matrix.elements[11];
+          jointData[matrixOffset + 12] = matrix.elements[12];
+          jointData[matrixOffset + 13] = matrix.elements[13];
+          jointData[matrixOffset + 14] = matrix.elements[14];
+          jointData[matrixOffset + 15] = matrix.elements[15];
+        } else {
+          // Identity for unused joints
+          jointData[matrixOffset + 0] = 1;
+          jointData[matrixOffset + 1] = 0;
+          jointData[matrixOffset + 2] = 0;
+          jointData[matrixOffset + 3] = 0;
+          jointData[matrixOffset + 4] = 0;
+          jointData[matrixOffset + 5] = 1;
+          jointData[matrixOffset + 6] = 0;
+          jointData[matrixOffset + 7] = 0;
+          jointData[matrixOffset + 8] = 0;
+          jointData[matrixOffset + 9] = 0;
+          jointData[matrixOffset + 10] = 1;
+          jointData[matrixOffset + 11] = 0;
+          jointData[matrixOffset + 12] = 0;
+          jointData[matrixOffset + 13] = 0;
+          jointData[matrixOffset + 14] = 0;
+          jointData[matrixOffset + 15] = 1;
+        }
+      }
+    }
+
+    device.queue.writeBuffer(this.jointBuffer, 0, jointData);
+  }
+
+  /** Group nodes by plant root (copied from PlantMeshBuilder logic) */
+  private groupNodesByPlant(nodes: PlantNodeData[]): PlantNodeData[][] {
+    const byId = new Map<string, PlantNodeData>();
+    for (const node of nodes) {
+      byId.set(node.id, node);
+    }
+
+    const groups = new Map<string, PlantNodeData[]>();
+    for (const node of nodes) {
+      let root = node;
+      const seen = new Set<string>();
+      while (root.parentId !== null) {
+        if (seen.has(root.id)) break;
+        seen.add(root.id);
+        const parent = byId.get(root.parentId);
+        if (!parent) break;
+        root = parent;
+      }
+
+      let group = groups.get(root.id);
+      if (!group) {
+        group = [];
+        groups.set(root.id, group);
+      }
+      group.push(node);
+    }
+
+    return [...groups.values()];
+  }
+
+  /** Fill identity matrices for a plant's joint slots */
+  private fillIdentityMatrices(jointData: Float32Array, baseOffset: number): void {
+    for (let jointIdx = 0; jointIdx < MAX_JOINTS_PER_PLANT; jointIdx++) {
+      const matrixOffset = baseOffset + jointIdx * 16;
+      jointData[matrixOffset + 0] = 1;
+      jointData[matrixOffset + 1] = 0;
+      jointData[matrixOffset + 2] = 0;
+      jointData[matrixOffset + 3] = 0;
+      jointData[matrixOffset + 4] = 0;
+      jointData[matrixOffset + 5] = 1;
+      jointData[matrixOffset + 6] = 0;
+      jointData[matrixOffset + 7] = 0;
+      jointData[matrixOffset + 8] = 0;
+      jointData[matrixOffset + 9] = 0;
+      jointData[matrixOffset + 10] = 1;
+      jointData[matrixOffset + 11] = 0;
+      jointData[matrixOffset + 12] = 0;
+      jointData[matrixOffset + 13] = 0;
+      jointData[matrixOffset + 14] = 0;
+      jointData[matrixOffset + 15] = 1;
+    }
+  }
+
+  /** Compute joint matrix for a node based on its animated growthProgress.
+   *  The `_now` parameter is kept for API stability but no longer used —
+   *  the caller (writeJointMatrices) passes pendingNowMs which is still
+   *  forwarded in case future code needs it.
+   */
+  private computeJointMatrix(
+    node: PlantNodeData,
+    nodeMap: Map<string, PlantNodeData>,
+    _now: number,
+  ): THREE.Matrix4 {
+    const matrix = new THREE.Matrix4();
+
+    // Get parent attachment position (where this joint connects to parent)
+    let parentAttachPos = new THREE.Vector3(node.position.x, node.position.y, node.position.z);
+    if (node.parentId) {
+      const parent = nodeMap.get(node.parentId);
+      if (parent) {
+        // Use server-authoritative parent attachment position
+        if (
+          parent.parentAttachX !== undefined &&
+          parent.parentAttachY !== undefined &&
+          parent.parentAttachZ !== undefined
+        ) {
+          parentAttachPos = new THREE.Vector3(
+            parent.parentAttachX,
+            parent.parentAttachY,
+            parent.parentAttachZ,
+          );
+        } else {
+          // Legacy heuristic
+          parentAttachPos =
+            parent.isSeed || parent.nodeType === 'seed'
+              ? new THREE.Vector3(parent.position.x, 0, parent.position.z)
+              : new THREE.Vector3(parent.position.x, parent.position.y, parent.position.z);
+        }
+      }
+    }
+
+    // Use the client-animated growthProgress directly — same value used by PlantMeshBuilder.
+    // The main.ts growth loop back-dates startTime so that growthProgress tracks the
+    // server-authoritative elapsed fraction.  The old spawnTime / 900 ms heuristic
+    // finished the joint animation instantly for slow-growing nodes (e.g. 10 s stems)
+    // because spawnTime was set to now - progress*totalMs → elapsed already ≥ 900 ms.
+    const growthEase = node.growthProgress ?? 1.0;
+
+    // Joint matrix translates from parent attachment to current animated position
+    const animatedPosition = parentAttachPos
+      .clone()
+      .lerp(new THREE.Vector3(node.position.x, node.position.y, node.position.z), growthEase);
+
+    // Translation component of the joint transform
+    matrix.setPosition(animatedPosition.sub(parentAttachPos));
+
+    return matrix;
   }
 
   /**
@@ -1235,7 +2467,20 @@ export class WebGPURenderer {
     encoder.copyBufferToBuffer(this.renderBuffer, 0, staging, 0, byteLength);
     device.queue.submit([encoder.finish()]);
 
-    await staging.mapAsync(GPUMapMode.READ);
+    try {
+      await staging.mapAsync(GPUMapMode.READ);
+    } catch (err) {
+      // AbortError: device was destroyed before the mapping resolved.
+      // Silently discard the readback; the renderer is being torn down.
+      staging.destroy();
+      return [];
+    }
+    // Guard: renderer may have been destroyed while awaiting the GPU readback
+    // (device.destroy() causes mapAsync to reject with AbortError).
+    if (!this.initialized) {
+      staging.destroy();
+      return [];
+    }
     const mapped = staging.getMappedRange().slice(0);
     const words = new Uint32Array(mapped);
     const floats = new Float32Array(mapped);
@@ -1270,32 +2515,141 @@ export class WebGPURenderer {
     return this.initialized;
   }
 
+  /** Compute frustum planes from view-projection matrix for culling */
+  private computeFrustumPlanes(): THREE.Plane[] {
+    const planes: THREE.Plane[] = [];
+    const m = this.viewProjection.elements;
+
+    // Left plane: m[3] + m[0], m[7] + m[4], m[11] + m[8], m[15] + m[12]
+    planes.push(
+      new THREE.Plane().setFromNormalAndCoplanarPoint(
+        new THREE.Vector3(m[3] + m[0], m[7] + m[4], m[11] + m[8]).normalize(),
+        new THREE.Vector3(0, 0, 0),
+      ),
+    );
+
+    // Right plane: m[3] - m[0], m[7] - m[4], m[11] - m[8], m[15] - m[12]
+    planes.push(
+      new THREE.Plane().setFromNormalAndCoplanarPoint(
+        new THREE.Vector3(m[3] - m[0], m[7] - m[4], m[11] - m[8]).normalize(),
+        new THREE.Vector3(0, 0, 0),
+      ),
+    );
+
+    // Bottom plane: m[3] + m[1], m[7] + m[5], m[11] + m[9], m[15] + m[13]
+    planes.push(
+      new THREE.Plane().setFromNormalAndCoplanarPoint(
+        new THREE.Vector3(m[3] + m[1], m[7] + m[5], m[11] + m[9]).normalize(),
+        new THREE.Vector3(0, 0, 0),
+      ),
+    );
+
+    // Top plane: m[3] - m[1], m[7] - m[5], m[11] - m[9], m[15] - m[13]
+    planes.push(
+      new THREE.Plane().setFromNormalAndCoplanarPoint(
+        new THREE.Vector3(m[3] - m[1], m[7] - m[5], m[11] - m[9]).normalize(),
+        new THREE.Vector3(0, 0, 0),
+      ),
+    );
+
+    // Near plane: m[3] + m[2], m[7] + m[6], m[11] + m[10], m[15] + m[14]
+    planes.push(
+      new THREE.Plane().setFromNormalAndCoplanarPoint(
+        new THREE.Vector3(m[3] + m[2], m[7] + m[6], m[11] + m[10]).normalize(),
+        new THREE.Vector3(0, 0, 0),
+      ),
+    );
+
+    // Far plane: m[3] - m[2], m[7] - m[6], m[11] - m[10], m[15] - m[14]
+    planes.push(
+      new THREE.Plane().setFromNormalAndCoplanarPoint(
+        new THREE.Vector3(m[3] - m[2], m[7] - m[6], m[11] - m[10]).normalize(),
+        new THREE.Vector3(0, 0, 0),
+      ),
+    );
+
+    return planes;
+  }
+
+  /** Check if sphere intersects frustum */
+  private isSphereInFrustum(center: THREE.Vector3, radius: number, planes: THREE.Plane[]): boolean {
+    for (const plane of planes) {
+      if (plane.distanceToPoint(center) < -radius) {
+        return false;
+      }
+    }
+    return true;
+  }
+
   destroy(): void {
     this.frameUniformBuffer?.destroy();
     this.plantBuffer?.destroy();
     this.renderBuffer?.destroy();
     this.vertexBuffer?.destroy();
     this.indexBuffer?.destroy();
+    this.jointBuffer?.destroy();
     this.depthTexture?.destroy();
+    this.impostorDepthTexture?.destroy();
+
+    this.rootAuraTexture?.destroy();
+    this.impostorAtlasTexture?.destroy();
+    // C02b: Destroy texture arrays
+    if (this.textureArrays) {
+      for (const texture of this.textureArrays.values()) {
+        texture.destroy();
+      }
+    }
+    this.groundVertexBuffer?.destroy();
+    this.rainVertexBuffer?.destroy();
+    this.rainInstanceBuffer?.destroy();
+    this.rainUniformBuffer?.destroy();
+    this.impostorViewsUniformBuffer?.destroy();
 
     this.frameUniformBuffer = null;
     this.plantBuffer = null;
     this.renderBuffer = null;
     this.vertexBuffer = null;
     this.indexBuffer = null;
+    this.jointBuffer = null;
     this.depthTexture = null;
+    this.rootAuraTexture = null;
+    this.rootAuraSampler = null;
+    this.impostorAtlasTexture = null;
+    this.impostorAtlasSampler = null;
+    this.textureArrays = null;
+    this.textureArraySampler = null;
+    this.groundVertexBuffer = null;
+    this.rainVertexBuffer = null;
+    this.rainInstanceBuffer = null;
+    this.rainUniformBuffer = null;
+    this.impostorViewsUniformBuffer = null;
     this.computePipeline = null;
     this.meshPipeline = null;
     this.billboardPipeline = null;
+    this.outlinePipeline = null;
+    this.groundPipeline = null;
+    this.rainPipeline = null;
+    this.impostorPipeline = null;
     this.computeBindGroup = null;
     this.meshBindGroup = null;
     this.billboardBindGroup = null;
+    this.groundBindGroup = null;
+    this.rainBindGroup = null;
+    this.impostorBindGroup = null;
+    this.sharedPipelineLayout = null;
+
+    // C02b: Destroy VRAM pool
+    this.vramPool?.destroy();
+    this.vramPool = null;
 
     this.vertexCapacityBytes = 0;
     this.indexCapacityBytes = 0;
     this.vertexCount = 0;
     this.indexCount = 0;
     this.plantCount = 0;
+    this.outlineIndexOffset = 0;
+    this.outlineIndexCount = 0;
+    this.rainParticleCount = 0;
     this.pendingNodes = [];
     this.lastBuildNodeCount = -1;
     this.initialized = false;

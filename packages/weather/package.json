@@ -1,0 +1,17 @@
+{
+  "name": "@plant-legacy/weather",
+  "version": "0.1.0",
+  "private": false,
+  "type": "module",
+  "description": "Deterministic weather state machine with seeded RNG, day/night cycle, sun intensity, light multipliers, and moisture deposition. Reusable across any JS/TS project.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@plant-legacy/shared": "workspace:*"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "node --test \"src/**/*.test.ts\""
+  }
+}

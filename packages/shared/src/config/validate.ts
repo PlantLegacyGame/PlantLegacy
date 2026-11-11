@@ -22,7 +22,7 @@ const SCHEMA_FIELD_TYPES = new Set([
 
 const COLOR_PATTERN = /^#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/;
 const VERSION_PATTERN = /^\d+\.\d+(?:\.\d+)?$/;
-const TASK_ID_PATTERN = /^(?:T|C|O|H)\d+[A-Za-z]?$/;
+const TASK_ID_PATTERN = /^(?:T|C|O|H|D)\d+[A-Za-z]?$/;
 const SYSTEM_PATTERN = /^[a-z][a-z0-9_]*$/;
 const CONFIG_STATUSES = new Set(['stub', 'draft', 'active', 'deprecated']);
 

@@ -1,10 +1,10 @@
 {
   "_meta": {
     "system": "onboarding",
-    "version": "0.1.0",
+    "version": "1.0.0",
     "schema": "extended-1",
     "owner_task": "T00A",
-    "status": "draft",
+    "status": "active",
     "notes": "Minimal onboarding per RULE_13: 3-line hint card + contextual tooltips"
   },
   "values": {
@@ -12,9 +12,9 @@
       "type": "array",
       "item_type": "string",
       "value": [
-        "WASD / Arrows: Pan camera  |  Right-drag: Orbit  |  Scroll: Zoom  |  Click plant: Grow",
-        "You are a plant. Grow roots down, canopy up. Read light, water, minerals.",
-        "Other players are other plants. Compete, ally, or parasitize. The world simulates offline."
+        "WASD/Arrows: Pan camera  |  Left/Middle-drag: Orbit  |  Right-drag/1-finger: Pan  |  Scroll: Zoom",
+        "Left-click: Select (Normal: focus, Grow: options)  |  G: Grow Mode  |  R: Root Sight  |  E: Emotes  |  I: Inventory",
+        "You are a plant. Grow roots down, canopy up. Read light, water, minerals."
       ],
       "notes": "Exactly 3 lines per RULE_13. No editorial text, no strategy hints."
     },

@@ -47,6 +47,7 @@ function makeTestConfig(
       },
       client_send_rate_hz: { type: 'integer', value: 20, range: [5, 60] },
       hello_timeout_ms: { type: 'integer', value: 5000, range: [1000, 30000] },
+      reconnect_window_ms: { type: 'integer', value: 300000, range: [30000, 86400000] },
     },
   };
   configs.set('net_proto', baseConfig);
@@ -91,6 +92,7 @@ describe('loadNetProtoConfig', () => {
         },
         client_send_rate_hz: { type: 'integer', value: 20, range: [5, 60] },
         hello_timeout_ms: { type: 'integer', value: 5000, range: [1000, 30000] },
+        reconnect_window_ms: { type: 'integer', value: 300000, range: [30000, 86400000] },
       },
     };
     configs.set('net_proto', baseConfig);

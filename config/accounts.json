@@ -99,23 +99,11 @@
       "range": [5, 1440],
       "description": "Lockout duration in minutes"
     },
-    "argon2_time_cost": {
+    "bcrypt_cost": {
       "type": "integer",
-      "value": 3,
-      "range": [1, 10],
-      "description": "Argon2id time cost (iterations)"
-    },
-    "argon2_memory_cost_kib": {
-      "type": "integer",
-      "value": 65536,
-      "range": [8192, 1048576],
-      "description": "Argon2id memory cost in KiB"
-    },
-    "argon2_parallelism": {
-      "type": "integer",
-      "value": 4,
-      "range": [1, 8],
-      "description": "Argon2id parallelism factor"
+      "value": 12,
+      "range": [4, 15],
+      "description": "bcrypt cost factor (work factor)"
     },
     "jwt_algorithm": {
       "type": "enum",

@@ -18,6 +18,10 @@ export interface DevPanelAPI {
       rootTileCount?: number;
     },
   ) => void;
+  /** Load dev config from server and update UI */
+  loadConfig: () => Promise<void>;
+  /** Reset all config to defaults */
+  resetToDefaults: () => Promise<void>;
 }
 
 export interface DevPanelConfig {
@@ -266,7 +270,7 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
           createNumberInput(
             'Photosynthesis Rate',
             () => 10000,
-            (v) => send(99, { type: 'dev_set_resources', photosynthesis_rate: v }),
+            (v) => send(8, { type: 'dev_set_resources', photosynthesis_rate: v }),
             0,
             50000,
             100,
@@ -274,7 +278,7 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
           createSelect(
             'Light Curve',
             () => 'default',
-            (v) => send(99, { type: 'dev_set_resources', light_curve: v }),
+            (v) => send(8, { type: 'dev_set_resources', light_curve: v }),
             [
               { value: 'default', label: 'Default' },
               { value: 'high', label: 'High Efficiency' },
@@ -284,7 +288,7 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
           createSelect(
             'Moisture Curve',
             () => 'default',
-            (v) => send(99, { type: 'dev_set_resources', moisture_curve: v }),
+            (v) => send(8, { type: 'dev_set_resources', moisture_curve: v }),
             [
               { value: 'default', label: 'Default' },
               { value: 'high', label: 'High Efficiency' },
@@ -294,7 +298,7 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
           createSelect(
             'Mineral Curve',
             () => 'default',
-            (v) => send(99, { type: 'dev_set_resources', mineral_curve: v }),
+            (v) => send(8, { type: 'dev_set_resources', mineral_curve: v }),
             [
               { value: 'default', label: 'Default' },
               { value: 'high', label: 'High Efficiency' },
@@ -304,7 +308,7 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
           createNumberInput(
             'Diffusion Rate',
             () => 0.01,
-            (v) => send(99, { type: 'dev_set_resources', diffusion_rate: v }),
+            (v) => send(8, { type: 'dev_set_resources', diffusion_rate: v }),
             0,
             0.1,
             0.001,
@@ -312,7 +316,7 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
           createNumberInput(
             'Max Absorption/Tick',
             () => 1.0,
-            (v) => send(99, { type: 'dev_set_resources', max_absorption_per_tick: v }),
+            (v) => send(8, { type: 'dev_set_resources', max_absorption_per_tick: v }),
             0,
             10,
             0.1,
@@ -320,7 +324,7 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
           createNumberInput(
             'Rain Gain/sec',
             () => 0.5,
-            (v) => send(99, { type: 'dev_set_resources', rain_gain_per_s: v }),
+            (v) => send(8, { type: 'dev_set_resources', rain_gain_per_s: v }),
             0,
             5,
             0.1,
@@ -328,7 +332,7 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
           createNumberInput(
             'Evaporation/sec',
             () => 0.1,
-            (v) => send(99, { type: 'dev_set_resources', evaporation_per_s: v }),
+            (v) => send(8, { type: 'dev_set_resources', evaporation_per_s: v }),
             0,
             1,
             0.01,
@@ -336,7 +340,7 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
           createNumberInput(
             'Canopy Shade',
             () => 0.1,
-            (v) => send(99, { type: 'dev_set_resources', canopy_shade_reduction: v }),
+            (v) => send(8, { type: 'dev_set_resources', canopy_shade_reduction: v }),
             0,
             1,
             0.01,
@@ -345,7 +349,7 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
             {
               label: 'Apply to Server',
               action: () => {
-                send(99, {
+                send(8, {
                   type: 'dev_set_resources',
                   payload: {
                     photosynthesis_rate: (
@@ -378,7 +382,7 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
               },
               primary: true,
             },
-            { label: 'Reset Defaults', action: () => send(99, { type: 'dev_reset_resources' }) },
+            { label: 'Reset Defaults', action: () => send(8, { type: 'dev_reset_resources' }) },
           ]),
         ]);
         addSection(container, 'Tile Actions (at plant)', [
@@ -388,7 +392,7 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
               action: () => {
                 if (state.currentTile) {
                   rw.setTileResources(state.currentTile.x, state.currentTile.z, { moisture: 500 });
-                  send(99, {
+                  send(8, {
                     type: 'dev_set_tile',
                     x: state.currentTile.x,
                     z: state.currentTile.z,
@@ -402,7 +406,7 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
               action: () => {
                 if (state.currentTile) {
                   rw.setTileResources(state.currentTile.x, state.currentTile.z, { minerals: 500 });
-                  send(99, {
+                  send(8, {
                     type: 'dev_set_tile',
                     x: state.currentTile.x,
                     z: state.currentTile.z,
@@ -420,7 +424,7 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
                     moisture: 500,
                     minerals: 500,
                   });
-                  send(99, {
+                  send(8, {
                     type: 'dev_set_tile',
                     x: state.currentTile.x,
                     z: state.currentTile.z,
@@ -440,7 +444,7 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
                     moisture: 0,
                     minerals: 0,
                   });
-                  send(99, {
+                  send(8, {
                     type: 'dev_set_tile',
                     x: state.currentTile.x,
                     z: state.currentTile.z,
@@ -484,7 +488,7 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
           createNumberInput(
             'Cooldown',
             () => 0.5,
-            (v) => send(99, { type: 'dev_set_growth', growth_cooldown: v }),
+            (v) => send(8, { type: 'dev_set_growth', growth_cooldown: v }),
             0,
             10,
             0.1,
@@ -493,7 +497,7 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
           createNumberInput(
             'Root Attack ×',
             () => 2.0,
-            (v) => send(99, { type: 'dev_set_growth', root_attack_damage_multiplier: v }),
+            (v) => send(8, { type: 'dev_set_growth', root_attack_damage_multiplier: v }),
             0.5,
             10,
             0.1,
@@ -530,7 +534,7 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
           createNumberInput(
             'Min Moisture',
             () => 30,
-            (v) => send(99, { type: 'dev_set_growth', germination_min_moisture: v }),
+            (v) => send(8, { type: 'dev_set_growth', germination_min_moisture: v }),
             0,
             100,
             1,
@@ -538,7 +542,7 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
           createNumberInput(
             'Min Light',
             () => 10,
-            (v) => send(99, { type: 'dev_set_growth', germination_min_light: v }),
+            (v) => send(8, { type: 'dev_set_growth', germination_min_light: v }),
             0,
             100,
             1,
@@ -547,12 +551,12 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
         addSection(container, 'Actions', [
           createButtonGroup('Instant', [
             { label: '🌱 Regenerate', action: () => pw.regeneratePlant(), primary: true },
-            { label: '⚡ Fill Energy', action: () => send(99, { type: 'dev_fill_energy' }) },
-            { label: '🌿 Fill Biomass', action: () => send(99, { type: 'dev_fill_biomass' }) },
+            { label: '⚡ Fill Energy', action: () => send(8, { type: 'dev_fill_energy' }) },
+            { label: '🌿 Fill Biomass', action: () => send(8, { type: 'dev_fill_biomass' }) },
             {
               label: '💀 Kill Plant',
               action: () => {
-                if (confirm('Kill plant?')) send(99, { type: 'dev_kill_plant' });
+                if (confirm('Kill plant?')) send(8, { type: 'dev_kill_plant' });
               },
               danger: true,
             },
@@ -802,22 +806,22 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
           createNumberInput(
             'Tick Rate (Hz)',
             () => 20,
-            (v) => send(99, { type: 'dev_set_tick_rate', rate: v }),
+            (v) => send(8, { type: 'dev_set_tick_rate', rate: v }),
             10,
             60,
             1,
           ),
           createButtonGroup('Control', [
-            { label: '⏸ Pause', action: () => send(99, { type: 'dev_pause_simulation' }) },
-            { label: '▶ Resume', action: () => send(99, { type: 'dev_resume_simulation' }) },
-            { label: '⏭ Step Once', action: () => send(99, { type: 'dev_step_simulation' }) },
+            { label: '⏸ Pause', action: () => send(8, { type: 'dev_pause_simulation' }) },
+            { label: '▶ Resume', action: () => send(8, { type: 'dev_resume_simulation' }) },
+            { label: '⏭ Step Once', action: () => send(8, { type: 'dev_step_simulation' }) },
           ]),
         ]);
         addSection(container, 'Interest', [
           createNumberInput(
             'Cell Size',
             () => 64,
-            (v) => send(99, { type: 'dev_set_simulation', cell_size: v }),
+            (v) => send(8, { type: 'dev_set_simulation', cell_size: v }),
             16,
             256,
             16,
@@ -826,7 +830,7 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
           createNumberInput(
             'Ring Radius',
             () => 1,
-            (v) => send(99, { type: 'dev_set_simulation', interest_ring_radius: v }),
+            (v) => send(8, { type: 'dev_set_simulation', interest_ring_radius: v }),
             0,
             3,
             1,
@@ -834,7 +838,7 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
           createNumberInput(
             'Active Hz',
             () => 20,
-            (v) => send(99, { type: 'dev_set_simulation', active_tick_rate_hz: v }),
+            (v) => send(8, { type: 'dev_set_simulation', active_tick_rate_hz: v }),
             10,
             60,
             1,
@@ -842,7 +846,7 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
           createNumberInput(
             'Near Hz',
             () => 5,
-            (v) => send(99, { type: 'dev_set_simulation', near_tick_rate_hz: v }),
+            (v) => send(8, { type: 'dev_set_simulation', near_tick_rate_hz: v }),
             1,
             20,
             1,
@@ -850,7 +854,7 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
           createNumberInput(
             'Dormant Interval (s)',
             () => 30,
-            (v) => send(99, { type: 'dev_set_simulation', dormant_step_interval_sec: v }),
+            (v) => send(8, { type: 'dev_set_simulation', dormant_step_interval_sec: v }),
             10,
             300,
             10,
@@ -858,7 +862,7 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
           createNumberInput(
             'Offline Damage ×',
             () => 1.0,
-            (v) => send(99, { type: 'dev_set_simulation', offline_damage_multiplier: v }),
+            (v) => send(8, { type: 'dev_set_simulation', offline_damage_multiplier: v }),
             0,
             1,
             0.01,
@@ -867,7 +871,7 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
             {
               label: 'Apply',
               action: () => {
-                send(99, {
+                send(8, {
                   type: 'dev_set_simulation',
                   cell_size: (document.getElementById('dev-cell-size') as HTMLInputElement)?.value,
                   interest_ring_radius: (
@@ -892,15 +896,53 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
         ]);
         addSection(container, 'Persistence', [
           createButtonGroup('Data', [
-            { label: '💾 Force Save', action: () => send(99, { type: 'dev_force_save' }) },
+            { label: '💾 Force Save', action: () => send(8, { type: 'dev_force_save' }) },
             {
               label: '🗑️ Clear All',
               action: () => {
-                if (confirm('Clear ALL persistence?')) send(99, { type: 'dev_clear_persistence' });
+                if (confirm('Clear ALL persistence?')) send(8, { type: 'dev_clear_persistence' });
               },
               danger: true,
             },
           ]),
+        ]);
+        addSection(container, 'Game Switches', [
+          createToggle(
+            'Auto Growth',
+            () => false, // Will be updated by loadConfig
+            (v) => send(8, { type: 'dev_set_config', key: 'auto_growth', value: v }),
+            'auto_growth',
+          ),
+          createToggle(
+            'Germination Gate',
+            () => false,
+            (v) => send(8, { type: 'dev_set_config', key: 'germination_gate', value: v }),
+            'germination_gate',
+          ),
+          createToggle(
+            'Germination Failure Kills Seed',
+            () => false,
+            (v) =>
+              send(8, { type: 'dev_set_config', key: 'germination_failure_kills_seed', value: v }),
+            'germination_failure_kills_seed',
+          ),
+          createToggle(
+            'Persistence Enabled',
+            () => false,
+            (v) => send(8, { type: 'dev_set_config', key: 'persistence_enabled', value: v }),
+            'persistence_enabled',
+          ),
+          createSelect(
+            'Seed Size Class',
+            () => 'normal',
+            (v) => send(8, { type: 'dev_set_config', key: 'seed_size_class', value: v }),
+            [
+              { value: 'normal', label: 'Normal' },
+              { value: 'large', label: 'Large (2×)' },
+              { value: 'giant', label: 'Giant (4×)' },
+            ],
+            'seed_size_class',
+          ),
         ]);
       },
     },
@@ -923,9 +965,9 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
                 console.log('Plant:', getPlant());
               },
             },
-            { label: '🌿 Server Plants', action: () => send(99, { type: 'dev_log_plants' }) },
-            { label: '📦 Resources', action: () => send(99, { type: 'dev_log_resources' }) },
-            { label: '📡 Network', action: () => send(99, { type: 'dev_log_network' }) },
+            { label: '🌿 Server Plants', action: () => send(8, { type: 'dev_log_plants' }) },
+            { label: '📦 Resources', action: () => send(8, { type: 'dev_log_resources' }) },
+            { label: '📡 Network', action: () => send(8, { type: 'dev_log_network' }) },
             { label: '🧹 Clear Console', action: () => console.clear() },
             {
               label: '📤 Export JSON',
@@ -950,27 +992,27 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
         ]);
         addSection(container, 'Renderer', [
           createButtonGroup('GPU', [
-            { label: '🔄 Toggle WebGPU', action: () => send(99, { type: 'dev_toggle_webgpu' }) },
+            { label: '🔄 Toggle WebGPU', action: () => send(8, { type: 'dev_toggle_webgpu' }) },
             {
               label: '🔧 Reinit Renderer',
-              action: () => send(99, { type: 'dev_reinit_renderer' }),
+              action: () => send(8, { type: 'dev_reinit_renderer' }),
             },
-            { label: '📝 Dump Shaders', action: () => send(99, { type: 'dev_dump_shaders' }) },
+            { label: '📝 Dump Shaders', action: () => send(8, { type: 'dev_dump_shaders' }) },
           ]),
         ]);
         addSection(container, 'Stress Test', [
           createButtonGroup('Load', [
             {
               label: '100 Plants',
-              action: () => send(99, { type: 'dev_stress_test', count: 100 }),
+              action: () => send(8, { type: 'dev_stress_test', count: 100 }),
             },
             {
               label: '500 Plants',
-              action: () => send(99, { type: 'dev_stress_test', count: 500 }),
+              action: () => send(8, { type: 'dev_stress_test', count: 500 }),
             },
             {
               label: '1000 Plants',
-              action: () => send(99, { type: 'dev_stress_test', count: 1000 }),
+              action: () => send(8, { type: 'dev_stress_test', count: 1000 }),
             },
           ]),
         ]);
@@ -1006,6 +1048,7 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
     max: number,
     step: number,
     unit = '',
+    configKey?: string,
   ): HTMLElement {
     const numRow = document.createElement('div');
     numRow.style.display = 'flex';
@@ -1021,6 +1064,7 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
     input.max = String(max);
     input.step = String(step);
     input.value = String(getter());
+    if (configKey) input.setAttribute('data-config-key', configKey);
     input.style.cssText =
       'flex:1;min-width:100px;max-width:200px;background:var(--bark-900);border:1px solid var(--bark-600);color:var(--bone-100);padding:6px 10px;border-radius:4px;font-family:inherit;font-size:11px';
     input.onchange = () => setter(input.valueAsNumber);
@@ -1043,6 +1087,7 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
     getter: () => string,
     setter: (v: string) => void,
     options: { value: string; label: string }[],
+    configKey?: string,
   ): HTMLElement {
     const selRow = document.createElement('div');
     selRow.style.display = 'flex';
@@ -1053,6 +1098,7 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
     selLabelEl.textContent = labelText;
     selLabelEl.style.cssText = 'color:var(--bark-200);font-size:11px;min-width:110px';
     const select = document.createElement('select');
+    if (configKey) select.setAttribute('data-config-key', configKey);
     select.style.cssText =
       'flex:1;min-width:120px;background:var(--bark-900);border:1px solid var(--bark-600);color:var(--bone-100);padding:6px 10px;border-radius:4px;font-family:inherit;font-size:11px';
     options.forEach((opt) => {
@@ -1072,6 +1118,7 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
     labelText: string,
     getter: () => boolean,
     setter: (v: boolean) => void,
+    configKey?: string,
   ): HTMLElement {
     const togRow = document.createElement('div');
     togRow.style.display = 'flex';
@@ -1081,6 +1128,7 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
     togLabelEl.textContent = labelText;
     togLabelEl.style.cssText = 'color:var(--bark-200);font-size:11px;min-width:110px';
     const toggle = document.createElement('label');
+    if (configKey) toggle.setAttribute('data-config-key', configKey);
     toggle.style.cssText =
       'width:44px;height:24px;background:var(--bark-700);border:1px solid var(--bark-600);border-radius:12px;position:relative;cursor:pointer;transition:all 0.15s';
     const thumb = document.createElement('span');
@@ -1311,9 +1359,69 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
     state.currentTile = { x: tileX, z: tileZ };
   }
 
+  // Load dev config from server
+  async function loadConfig(): Promise<void> {
+    try {
+      const response = await fetch('/dev/config', { credentials: 'omit' });
+      if (!response.ok) {
+        console.warn('[DevPanel] Failed to load config:', response.status);
+        return;
+      }
+      const data = await response.json();
+      if (data.ok && data.config) {
+        // Update UI elements with loaded config
+        applyConfigToUI(data.config);
+      }
+    } catch (error) {
+      console.warn('[DevPanel] Config load failed:', error);
+    }
+  }
+
+  // Apply config values to UI inputs
+  function applyConfigToUI(config: Record<string, unknown>): void {
+    // Update all input elements that have data-config-key attribute
+    document.querySelectorAll('[data-config-key]').forEach((el) => {
+      const key = el.getAttribute('data-config-key');
+      if (key && config[key] !== undefined) {
+        const value = config[key];
+        if (el instanceof HTMLInputElement) {
+          if (el.type === 'checkbox') {
+            el.checked = Boolean(value);
+          } else if (el.type === 'number') {
+            el.value = String(value);
+          } else {
+            el.value = String(value);
+          }
+        } else if (el instanceof HTMLSelectElement) {
+          el.value = String(value);
+        }
+      }
+    });
+  }
+
+  // Reset config to defaults
+  async function resetToDefaults(): Promise<void> {
+    if (!confirm('Reset all dev config to defaults?')) return;
+    try {
+      const response = await fetch('/dev/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reset: true }),
+        credentials: 'omit',
+      });
+      if (response.ok) {
+        await loadConfig();
+      } else {
+        console.error('[DevPanel] Reset failed:', response.status);
+      }
+    } catch (error) {
+      console.error('[DevPanel] Reset error:', error);
+    }
+  }
+
   // Initial render
   renderTabs();
   renderContent();
 
-  return { panel, show, hide, toggle, isVisible, updateTileInfo };
+  return { panel, show, hide, toggle, isVisible, updateTileInfo, loadConfig, resetToDefaults };
 }

@@ -68,6 +68,12 @@
       "range": [0.5, 100.0],
       "notes": "WASD/arrow camera pan speed in world units per second."
     },
+    "camera_zoom_speed": {
+      "type": "number",
+      "value": 2.0,
+      "range": [0.5, 10.0],
+      "notes": "Keyboard zoom rate multiplier for - and + keys (logarithmic, applied per second)."
+    },
     "idle_drop_timeout_ms": {
       "type": "integer",
       "value": 30000,
@@ -275,6 +281,24 @@
       "value": 0.25,
       "range": [0.05, 1.5],
       "notes": "Rendered size of rain streaks."
+    },
+    "rain_streak_length": {
+      "type": "number",
+      "value": 25.0,
+      "range": [5.0, 100.0],
+      "notes": "Length of rain streaks in world units."
+    },
+    "rain_streak_width": {
+      "type": "number",
+      "value": 0.02,
+      "range": [0.005, 0.1],
+      "notes": "Width of rain streaks in world units."
+    },
+    "rain_max_velocity": {
+      "type": "number",
+      "value": 35.0,
+      "range": [10.0, 100.0],
+      "notes": "Maximum rain particle velocity for streak scaling."
     },
     "lightning_flash_duration_ms": {
       "type": "integer",

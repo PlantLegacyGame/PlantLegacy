@@ -541,4 +541,15 @@ export class PlantPersistence {
   async close(): Promise<void> {
     await this.pool.end();
   }
+
+  /** D01: Dev action - save all plants */
+  async saveAll(): Promise<void> {
+    // This would need access to all plants from PlantWorld
+    // For now, this is a placeholder - the periodic save in main.ts handles this
+  }
+
+  /** D01: Dev action - clear all persistence data */
+  async clearAll(): Promise<void> {
+    await this.pool.query('DELETE FROM world_plants WHERE world_id = $1', [this.worldId]);
+  }
 }

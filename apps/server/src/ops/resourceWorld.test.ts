@@ -97,6 +97,24 @@ describe('ResourceWorld', () => {
     }
   });
 
+  it('light follows the day/night curve instead of staying fixed', () => {
+    const world = makeWorld();
+    const read = (timeOfDay: number): number => {
+      world.step(0.05, new Map(), 0, timeOfDay);
+      return world.getTileResourcesAt(0, 0)?.light ?? 0;
+    };
+
+    const night = read(0.0);
+    const dawn = read(0.2);
+    const midday = read(0.5);
+
+    assert.ok(midday > night, `midday light ${midday} should exceed night ${night}`);
+    assert.ok(
+      dawn > night && dawn < midday,
+      `dawn light ${dawn} should sit between night ${night} and midday ${midday}`,
+    );
+  });
+
   it('getTileResourcesAt returns null outside grid', () => {
     const world = makeWorld();
     assert.strictEqual(world.getTileResourcesAt(-1, 0), null);

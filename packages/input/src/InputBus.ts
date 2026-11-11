@@ -1,12 +1,11 @@
 /**
- * C01 input abstraction.
+ * @plant-legacy/input - InputBus action dispatcher.
  *
  * Gameplay code never reads raw keys. Keyboard, mouse and touch are
- * *producers*; `controls.json` maps physical inputs to named actions.
+ * *producers*; a controls config maps physical inputs to named actions.
  * This module owns the action state and dispatches it to subscribers.
  *
- * DESIGN.md 17.2-17.4. Context rules (17.3): conflicting inputs resolve by
- * priority modal > text input > context actions > camera.
+ * Dependency-free: no Three.js, no Vite, no DOM. Works in any JS/TS runtime.
  */
 
 export type ActionMode = 'press' | 'toggle' | 'hold';
@@ -16,6 +15,7 @@ export interface Binding {
   mouse: string;
   mode: ActionMode;
   context: string;
+  modifiers?: ('shift' | 'ctrl' | 'alt' | 'meta')[];
 }
 
 export interface ActionState {
@@ -40,7 +40,7 @@ import {
   inputActionStateMachineGetState,
   inputActionStateMachineIsActive,
   inputActionStateMachineProcess,
-} from './InputActionStateMachine';
+} from './InputActionStateMachine.ts';
 
 export class InputBus {
   private readonly bindings = new Map<string, Binding>();
@@ -126,7 +126,7 @@ export class InputBus {
     this.textInputActive = active;
   }
 
-  /** Which actions are valid in the current context (D-15). */
+  /** Which actions are valid in the current context. */
   get validActions(): string[] {
     const out: string[] = [];
     for (const [action, binding] of this.bindings) {
@@ -140,12 +140,18 @@ export class InputBus {
 
   // ---- Keyboard producer ---------------------------------------------
 
-  handleKeyDown(code: string): void {
-    this.produce('keyboard', code, true);
+  handleKeyDown(
+    code: string,
+    modifiers: { shift?: boolean; ctrl?: boolean; alt?: boolean; meta?: boolean } = {},
+  ): void {
+    this.produce('keyboard', code, true, modifiers);
   }
 
-  handleKeyUp(code: string): void {
-    this.produce('keyboard', code, false);
+  handleKeyUp(
+    code: string,
+    modifiers: { shift?: boolean; ctrl?: boolean; alt?: boolean; meta?: boolean } = {},
+  ): void {
+    this.produce('keyboard', code, false, modifiers);
   }
 
   // ---- Mouse producer ------------------------------------------------
@@ -161,22 +167,30 @@ export class InputBus {
   }
 
   handleWheel(deltaY: number): void {
-    // Wheel is a continuous axis, not a press; emit as active/inactive.
     this.produce('mouse', 'wheel', deltaY !== 0);
   }
 
   // ---- Core producer -------------------------------------------------
 
-  private produce(kind: 'keyboard' | 'mouse', input: string, down: boolean): void {
+  private produce(
+    kind: 'keyboard' | 'mouse',
+    input: string,
+    down: boolean,
+    modifiers: { shift?: boolean; ctrl?: boolean; alt?: boolean; meta?: boolean } = {},
+  ): void {
     if (this.modalOpen) return;
 
     for (const [action, binding] of this.bindings) {
       if (binding.context && binding.context !== this.activeContext) continue;
-      const matched =
-        (kind === 'keyboard' && binding.keys.includes(input)) ||
-        (kind === 'mouse' && binding.mouse === input);
+      const keyMatched = kind === 'keyboard' && binding.keys.includes(input);
+      const mouseMatched = kind === 'mouse' && binding.mouse === input;
+      if (!keyMatched && !mouseMatched) continue;
 
-      if (!matched) continue;
+      if (binding.modifiers && binding.modifiers.length > 0) {
+        const requiredModifiers = binding.modifiers;
+        const hasAllModifiers = requiredModifiers.every((mod) => modifiers[mod] === true);
+        if (!hasAllModifiers) continue;
+      }
 
       const machine = this.machines.get(action);
       if (!machine) continue;
@@ -201,7 +215,7 @@ export class InputBus {
   }
 }
 
-/** Build a default InputBus from the C01 controls config. */
+/** Build a default InputBus from a controls config bindings object. */
 export function createInputBus(config: { bindings: Record<string, Binding> }): InputBus {
   return new InputBus(config);
 }

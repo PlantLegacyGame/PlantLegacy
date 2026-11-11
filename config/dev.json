@@ -1,146 +1,108 @@
 {
-  "_meta": {
-    "system": "dev",
-    "version": "1.0",
-    "schema": "extended-1",
-    "owner_task": "T00",
-    "status": "draft",
-    "notes": "Dev-only settings engine (D01). Only loaded when NODE_ENV !== 'production' or ?dev=1 query param."
-  },
-  "values": {
-    "dev_panel_enabled": {
-      "type": "boolean",
-      "value": true,
-      "description": "Enable the dev panel (requires ?dev=1 on client)"
+    "_meta": {
+        "system": "dev",
+        "version": "0.1.0",
+        "schema": "extended-1",
+        "owner_task": "D01",
+        "status": "active",
+        "notes": "Dev-only settings engine. Only loaded when NODE_ENV !== 'production'."
     },
-    "persistence_enabled": {
-      "type": "boolean",
-      "value": false,
-      "description": "Enable plant persistence across disconnects. Default false per ADR-029 (use world.json for server default)."
-    },
-    "reconnect_window_min": {
-      "type": "integer",
-      "value": 5,
-      "range": [
-        1,
-        60
-      ],
-      "description": "Reconnect window in minutes"
-    },
-    "auto_growth": {
-      "type": "boolean",
-      "value": false,
-      "description": "Enable automatic growth without player commits"
-    },
-    "germination_gate": {
-      "type": "boolean",
-      "value": true,
-      "description": "Enforce germination moisture/light thresholds"
-    },
-    "germination_failure_kills_seed": {
-      "type": "boolean",
-      "value": true,
-      "description": "Failed germination destroys the seed/plant"
-    },
-    "plant_size_class": {
-      "type": "enum",
-      "value": "normal",
-      "enum": [
-        "normal",
-        "large",
-        "giant"
-      ],
-      "description": "Plant size scaling class"
-    },
-    "camera_start_distance": {
-      "type": "number",
-      "value": 6,
-      "range": [
-        1,
-        100
-      ],
-      "description": "Initial camera distance from plant"
-    },
-    "camera_pan_speed": {
-      "type": "number",
-      "value": 2,
-      "range": [
-        0.1,
-        10
-      ],
-      "description": "Camera pan speed multiplier"
-    },
-    "resource_rates": {
-      "type": "object",
-      "value": {
-        "photosynthesis_biomass_rate": 1,
-        "photosynthesis_energy_rate": 1,
-        "absorption_per_s": 0.5,
-        "evaporation_rate": 0.02,
-        "diffusion_rate": 0.1
-      },
-      "description": "Resource simulation rates (multipliers)"
-    },
-    "webgpu_enabled": {
-      "type": "boolean",
-      "value": true,
-      "description": "Enable WebGPU renderer when available"
-    },
-    "webgpu_tier0_threshold": {
-      "type": "integer",
-      "value": 300,
-      "range": [
-        50,
-        1000
-      ],
-      "description": "Projected pixel size for tier 0 (full mesh)"
-    },
-    "webgpu_tier1_threshold": {
-      "type": "integer",
-      "value": 80,
-      "range": [
-        20,
-        500
-      ],
-      "description": "Projected pixel size for tier 1 (mesh, no leaves)"
-    },
-    "webgpu_tier2_threshold": {
-      "type": "integer",
-      "value": 12,
-      "range": [
-        5,
-        100
-      ],
-      "description": "Projected pixel size for tier 2 (billboard)"
-    },
-    "webgpu_tier3_threshold": {
-      "type": "integer",
-      "value": 2,
-      "range": [
-        1,
-        50
-      ],
-      "description": "Projected pixel size for tier 3 (billboard)"
-    },
-    "log_level": {
-      "type": "enum",
-      "value": "info",
-      "enum": [
-        "debug",
-        "info",
-        "warn",
-        "error"
-      ],
-      "description": "Server log level"
-    },
-    "tick_budget_warn_threshold_ms": {
-      "type": "number",
-      "value": 40,
-      "range": [
-        1,
-        100
-      ],
-      "description": "Active tier ms warning threshold"
+    "values": {
+        "dev_panel_enabled": {
+            "type": "boolean",
+            "value": true,
+            "notes": "Master switch for dev panel. When false, panel cannot be opened even with ?dev=1"
+        },
+        "persistence_enabled": {
+            "type": "boolean",
+            "value": false,
+            "notes": "When true, plants persist across disconnects within the reconnect window. When false (default), plants are session-only and removed immediately on disconnect."
+        },
+        "reconnect_window_seconds": {
+            "type": "integer",
+            "value": 300,
+            "range": [30, 86400],
+            "notes": "How long a plant waits for its owner to reconnect before being removed (persistence must be enabled)."
+        },
+        "auto_growth": {
+            "type": "boolean",
+            "value": false,
+            "notes": "When true, seeds can auto-germinate and plants can grow without player commits. When false (default), all growth requires player action."
+        },
+        "germination_gate": {
+            "type": "boolean",
+            "value": true,
+            "notes": "When true, germination requires moisture and light thresholds. When false, germination always succeeds."
+        },
+        "germination_failure_kills_seed": {
+            "type": "boolean",
+            "value": true,
+            "notes": "When true, failing germination destroys the seed/plant. When false, it just pauses growth."
+        },
+        "seed_size_class": {
+            "type": "enum",
+            "value": "normal",
+            "enum": ["normal", "large", "giant"],
+            "notes": "Scales the initial plant model and camera framing. Normal = standard, Large = 2x, Giant = 4x."
+        },
+        "camera_start_distance": {
+            "type": "number",
+            "value": 26.0,
+            "range": [5.0, 200.0],
+            "notes": "Initial camera distance from plant root on spawn."
+        },
+        "camera_recenter_distance": {
+            "type": "number",
+            "value": 18.0,
+            "range": [5.0, 200.0],
+            "notes": "Camera distance when Space is pressed to recenter on plant."
+        },
+        "camera_pan_speed": {
+            "type": "number",
+            "value": 5.0,
+            "range": [0.5, 50.0],
+            "notes": "Camera pan speed in units per second for WASD/arrow keys."
+        },
+        "resource_rates": {
+            "type": "object",
+            "value": {
+              "photosynthesis_energy_per_second": 10.0,
+              "energy_upkeep_per_biomass": 0.001,
+              "max_energy_per_plant": 10000,
+              "growth_water_consumption_rate": 0.1,
+              "growth_nutrient_consumption_rate": 0.1,
+              "growth_mineral_consumption_rate": 0.05
+            },
+            "notes": "Runtime-adjustable resource and growth rates"
+        },
+        "webgpu_enabled": {
+            "type": "boolean",
+            "value": true,
+            "notes": "Enable WebGPU render path when available"
+        },
+        "webgpu_tier0_threshold": {
+            "type": "integer",
+            "value": 300,
+            "range": [100, 500],
+            "notes": "Projected pixel size for tier 0 (full mesh)"
+        },
+        "webgpu_tier1_threshold": {
+            "type": "integer",
+            "value": 80,
+            "range": [40, 150],
+            "notes": "Projected pixel size for tier 1 (mid mesh)"
+        },
+        "webgpu_tier2_threshold": {
+            "type": "integer",
+            "value": 12,
+            "range": [6, 30],
+            "notes": "Projected pixel size for tier 2 (billboard)"
+        },
+        "webgpu_tier3_threshold": {
+            "type": "integer",
+            "value": 2,
+            "range": [1, 8],
+            "notes": "Projected pixel size for tier 3 (billboard); below uses tier 4"
+        }
     }
-  }
 }

@@ -1,0 +1,114 @@
+{
+  "_meta": {
+    "system": "items",
+    "version": "1.0.0",
+    "schema": "extended-1",
+    "owner_task": "T08A",
+    "status": "active",
+    "notes": "Item definitions per DESIGN.md Part 6.1"
+  },
+  "values": {
+    "item_definitions": {
+      "type": "schema_array",
+      "schema": {
+        "id": "string",
+        "category": "string",
+        "name": "string",
+        "description": "string",
+        "stack_limit": "integer",
+        "tradeable": "boolean",
+        "mailable": "boolean",
+        "listable": "boolean",
+        "account_bound": "boolean"
+      },
+      "value": [
+        {
+          "id": "starter_fertilizer",
+          "category": "fertilizer",
+          "name": "Starter Fertilizer",
+          "description": "Basic fertilizer to boost soil minerals. Consumed on use.",
+          "stack_limit": 99,
+          "tradeable": false,
+          "mailable": false,
+          "listable": false,
+          "account_bound": true
+        },
+        {
+          "id": "starter_dung",
+          "category": "dung",
+          "name": "Starter Dung",
+          "description": "Organic matter to boost soil moisture and nutrients. Consumed on use.",
+          "stack_limit": 99,
+          "tradeable": false,
+          "mailable": false,
+          "listable": false,
+          "account_bound": true
+        },
+        {
+          "id": "gene_booster_basic",
+          "category": "booster",
+          "name": "Basic Gene Booster",
+          "description": "Temporarily increases growth speed. Consumed on use.",
+          "stack_limit": 10,
+          "tradeable": false,
+          "mailable": false,
+          "listable": false,
+          "account_bound": true
+        },
+        {
+          "id": "heirloom_seed_basic",
+          "category": "heirloom_seed",
+          "name": "Basic Heirloom Seed",
+          "description": "A seed with stable genetics. Can be planted to start a new plant.",
+          "stack_limit": 1,
+          "tradeable": true,
+          "mailable": true,
+          "listable": true,
+          "account_bound": false
+        },
+        {
+          "id": "offspring_seed_basic",
+          "category": "offspring_seed",
+          "name": "Offspring Seed",
+          "description": "A seed from your plant. Contains mixed genetics.",
+          "stack_limit": 1,
+          "tradeable": true,
+          "mailable": true,
+          "listable": true,
+          "account_bound": false
+        },
+        {
+          "id": "essence_growth",
+          "category": "essence",
+          "name": "Growth Essence",
+          "description": "Pure growth energy. Instantly restores 500 energy when consumed.",
+          "stack_limit": 10,
+          "tradeable": false,
+          "mailable": false,
+          "listable": false,
+          "account_bound": true
+        }
+      ],
+      "notes": "Starting item definitions. All account_bound items have tradeable/mailable/listable = false per RULE_23."
+    },
+    "starting_inventory": {
+      "type": "schema_array",
+      "schema": {
+        "item_id": "string",
+        "count": "integer"
+      },
+      "value": [
+        { "item_id": "starter_fertilizer", "count": 3 },
+        { "item_id": "starter_dung", "count": 2 },
+        { "item_id": "essence_growth", "count": 1 }
+      ],
+      "notes": "Items given to new players on first spawn."
+    },
+    "inventory_slots": {
+      "type": "integer",
+      "value": 10,
+      "range": [5, 50],
+      "notes": "Number of inventory slots per player."
+    }
+  }
+}

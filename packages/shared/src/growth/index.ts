@@ -221,6 +221,8 @@ export interface GrowthConfig {
   growthMinWater: number;
   growthMinNutrients: number;
   growthMinMinerals: number;
+  germinationGate?: boolean;
+  autoGrowth?: boolean;
 }
 
 export interface PlantNode {
@@ -252,6 +254,15 @@ export interface PlantNode {
   growthNutrientsConsumed?: number;
   growthMineralsConsumed?: number;
   isSeed: boolean;
+  // Server-authoritative growth timing for client sync
+  growthTimeSeconds?: number;
+  growthStartTick?: number;
+  // Server-authoritative radius (Murray's law) for client sync
+  radius?: number;
+  // Parent attachment position for client sync
+  parentAttachX?: number;
+  parentAttachY?: number;
+  parentAttachZ?: number;
 }
 
 export interface Plant {

@@ -1,6 +1,8 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { createServer } from 'node:http';
 import process from 'node:process';
+import { validateMessage } from '@plant-legacy/shared/protocol/messageSchemas';
+import { loadDayNightConfig, loadWeatherConfig, WeatherSystem } from '@plant-legacy/weather';
 import { WebSocket, WebSocketServer } from 'ws';
 import { loadRuntimeConfig } from './core/config.ts';
 import { SERVICE_VERSION } from './core/version.ts';
@@ -10,6 +12,7 @@ import { AccountsService } from './ops/accounts/service.ts';
 import {
   type ConnectionRegistry,
   connectionRegistryClearHelloTimer,
+  connectionRegistryGetConnectionCount,
   connectionRegistryInstallHandler,
   connectionRegistryRegister,
   connectionRegistryRemove,
@@ -18,6 +21,7 @@ import {
   createConnectionRegistry,
 } from './ops/connectionRegistry.ts';
 import { DatabaseProbe } from './ops/db.ts';
+import { handleGetDevConfig, handlePostDevConfig } from './ops/dev.ts';
 import { loadGrowthConfig } from './ops/growth.ts';
 import {
   createGrowthIntentStateMachine,
@@ -28,6 +32,8 @@ import {
 } from './ops/growthIntentStateMachine.ts';
 import { buildHealthReport, isReady } from './ops/health.ts';
 import { InterestManager } from './ops/interestManager.ts';
+import { addItem, createInventory, type Inventory } from './ops/inventory.ts';
+import { loadItemsConfig } from './ops/items.ts';
 import { createLogger } from './ops/log.ts';
 import {
   type ErrorPayload,
@@ -53,7 +59,6 @@ import {
 } from './ops/reconnectStateMachine.ts';
 import { loadResourcesConfig, ResourceWorld } from './ops/resourceWorld.ts';
 import { createTickClock, type TickClock, tickClockStart, tickClockStop } from './ops/tickClock.ts';
-import { loadDayNightConfig, loadWeatherConfig, WeatherSystem } from './ops/weather.ts';
 import { loadWorldConfig } from './ops/world.ts';
 
 const STARTED_AT = Date.now();
@@ -106,8 +111,10 @@ interface ConnectedPlayer {
   playerId: string;
   plantId: string | null;
   accountId: string | undefined;
+  displayName: string;
   lastInputTick: number;
   pendingInputs: Map<number, PlayerInput>;
+  inventory: Inventory;
 }
 
 class World {
@@ -122,6 +129,14 @@ class World {
   private growthIntentMachine: GrowthIntentStateMachine;
   private connectionRegistry: ConnectionRegistry;
   private tickClock: TickClock;
+  private plantPersistence: PlantPersistence | null;
+  private maxFrameTimeMs: number;
+  private persistenceEnabled: boolean;
+  private itemsConfig: ReturnType<typeof loadItemsConfig>;
+  private readonly maxMinerals: number;
+  private readonly maxMoisture: number;
+  private readonly maxEnergyPerPlant: number;
+  private onAllPlayersLeft?: () => void;
 
   getPlayers(): Map<string, ConnectedPlayer> {
     return this.players;
@@ -137,6 +152,10 @@ class World {
 
   getPlayer(playerId: string): ConnectedPlayer | undefined {
     return this.players.get(playerId);
+  }
+
+  setOnAllPlayersLeft(callback: () => void): void {
+    this.onAllPlayersLeft = callback;
   }
 
   getInterestManager(): InterestManager {
@@ -213,7 +232,9 @@ class World {
     interestManager: InterestManager,
     reconnectWindowMs: number,
     persistenceEnabled: boolean,
+    plantPersistence: PlantPersistence | null = null,
     maxFrameTimeMs = 100,
+    itemsConfig: ReturnType<typeof loadItemsConfig>,
   ) {
     this.config = config;
     this.log = log;
@@ -221,6 +242,13 @@ class World {
     this.resourceWorld = resourceWorld;
     this.weatherSystem = weatherSystem;
     this.interestManager = interestManager;
+    this.plantPersistence = plantPersistence;
+    this.maxFrameTimeMs = maxFrameTimeMs;
+    this.persistenceEnabled = persistenceEnabled;
+    this.itemsConfig = itemsConfig;
+    this.maxMinerals = itemsConfig.itemDefinitions.size > 0 ? 500 : 0;
+    this.maxMoisture = itemsConfig.itemDefinitions.size > 0 ? 500 : 0;
+    this.maxEnergyPerPlant = 10000;
     this.reconnectMachine = createReconnectStateMachine(reconnectWindowMs, persistenceEnabled);
     this.growthIntentMachine = createGrowthIntentStateMachine(100);
     this.connectionRegistry = createConnectionRegistry(config.helloTimeoutMs);
@@ -230,6 +258,19 @@ class World {
       onTick: (tick: number, dt: number) => this.onTick(tick, dt),
       onError: (error: Error) => this.log.error('tick error', { error: String(error) }),
     });
+  }
+
+  setPersistenceEnabled(enabled: boolean): void {
+    this.persistenceEnabled = enabled;
+    // Recreate reconnect state machine with new setting
+    this.reconnectMachine = createReconnectStateMachine(
+      this.config.reconnectWindowMs ?? 300000,
+      enabled,
+    );
+  }
+
+  getPersistenceEnabled(): boolean {
+    return this.persistenceEnabled;
   }
 
   addPlayer(
@@ -267,9 +308,15 @@ class World {
       playerId,
       plantId,
       accountId,
+      displayName: 'Player',
       lastInputTick: 0,
       pendingInputs: new Map(),
+      inventory: createInventory(this.itemsConfig.inventorySlots),
     };
+    // Give starting inventory
+    for (const item of this.itemsConfig.startingInventory) {
+      addItem(player.inventory, item.itemId, item.count, this.itemsConfig.itemDefinitions);
+    }
     this.players.set(playerId, player);
 
     const rootNodeId = plant.rootNodeId;
@@ -366,6 +413,12 @@ class World {
       playerId,
       totalPlayers: this.players.size,
     });
+
+    // Auto-shutdown when all clients disconnect and persistence is off
+    if (!this.persistenceEnabled && this.players.size === 0) {
+      this.log.info('all clients disconnected, shutting down');
+      this.onAllPlayersLeft?.();
+    }
   }
 
   reclaimPlant(
@@ -413,8 +466,10 @@ class World {
       playerId: newPlayerId,
       plantId: plant.id,
       accountId,
+      displayName: 'Player',
       lastInputTick: 0,
       pendingInputs: new Map(),
+      inventory: createInventory(this.itemsConfig.inventorySlots),
     };
     this.players.set(newPlayerId, player);
 
@@ -509,8 +564,10 @@ class World {
       playerId: newPlayerId,
       plantId: plant.id,
       accountId: undefined,
+      displayName: 'Player',
       lastInputTick: 0,
       pendingInputs: new Map(),
+      inventory: createInventory(this.itemsConfig.inventorySlots),
     };
     this.players.set(newPlayerId, player);
 
@@ -614,10 +671,117 @@ class World {
     this.send(ws, MESSAGE_TYPE.PONG, {});
   }
 
+  private sendInventorySync(player: ConnectedPlayer): void {
+    const slots = player.inventory.slots.map((slot) =>
+      slot ? { itemId: slot.itemId, count: slot.count } : { itemId: null, count: null },
+    );
+    this.send(player.ws, MESSAGE_TYPE.INVENTORY_SYNC, {
+      slots,
+      maxSlots: player.inventory.maxSlots,
+    });
+  }
+
+  private sendInventorySlotUpdate(player: ConnectedPlayer, slotIndex: number): void {
+    if (slotIndex < 0 || slotIndex >= player.inventory.maxSlots) return;
+    const slot = player.inventory.slots[slotIndex];
+    this.send(player.ws, MESSAGE_TYPE.INVENTORY_SLOT_UPDATE, {
+      slotIndex,
+      itemId: slot?.itemId ?? null,
+      count: slot?.count ?? null,
+    });
+  }
+
+  private handleInventorySlotUse(player: ConnectedPlayer, slotIndex: number): void {
+    if (slotIndex < 0 || slotIndex >= player.inventory.maxSlots) {
+      this.log.warn('Invalid inventory slot index', { playerId: player.playerId, slotIndex });
+      return;
+    }
+
+    const slot = player.inventory.slots[slotIndex];
+    if (!slot) return;
+
+    const itemDef = this.itemsConfig.itemDefinitions.get(slot.itemId);
+    if (!itemDef) return;
+
+    // Handle different item types
+    if (itemDef.category === 'fertilizer' || itemDef.category === 'dung') {
+      // Consumable that affects the plant's resources
+      if (!player.plantId) return;
+      const plant = this.plantWorld.getPlant(player.plantId);
+      if (!plant) return;
+
+      if (itemDef.category === 'fertilizer') {
+        plant.storedMinerals = Math.min(this.maxMinerals, plant.storedMinerals + 50);
+      } else if (itemDef.category === 'dung') {
+        plant.storedWater = Math.min(this.maxMoisture, plant.storedWater + 30);
+        plant.storedMinerals = Math.min(this.maxMinerals, plant.storedMinerals + 20);
+      }
+
+      // Remove one from inventory
+      this.removeItemFromInventory(player, slotIndex, 1);
+      this.sendInventorySlotUpdate(player, slotIndex);
+
+      this.log.info('Item used', {
+        playerId: player.playerId,
+        itemId: slot.itemId,
+        category: itemDef.category,
+      });
+    } else if (itemDef.category === 'essence') {
+      // Consumable that restores energy
+      if (!player.plantId) return;
+      const plant = this.plantWorld.getPlant(player.plantId);
+      if (!plant) return;
+
+      plant.totalEnergy = Math.min(this.maxEnergyPerPlant, plant.totalEnergy + 500);
+
+      this.removeItemFromInventory(player, slotIndex, 1);
+      this.sendInventorySlotUpdate(player, slotIndex);
+    }
+    // Other item types can be added here
+  }
+
+  private removeItemFromInventory(player: ConnectedPlayer, slotIndex: number, count: number): void {
+    const slot = player.inventory.slots[slotIndex];
+    if (!slot) return;
+
+    slot.count -= count;
+    if (slot.count <= 0) {
+      player.inventory.slots[slotIndex] = null;
+    }
+  }
+
+  private handleInventorySlotSwap(
+    player: ConnectedPlayer,
+    fromIndex: number,
+    toIndex: number,
+  ): void {
+    if (fromIndex < 0 || fromIndex >= player.inventory.maxSlots) return;
+    if (toIndex < 0 || toIndex >= player.inventory.maxSlots) return;
+
+    const temp = player.inventory.slots[fromIndex];
+    player.inventory.slots[fromIndex] = player.inventory.slots[toIndex];
+    player.inventory.slots[toIndex] = temp;
+
+    this.sendInventorySlotUpdate(player, fromIndex);
+    this.sendInventorySlotUpdate(player, toIndex);
+  }
+
   handlePostHelloMessage(playerId: string, data: Buffer): void {
     try {
       const message = JSON.parse(data.toString());
       const { type, payload } = message;
+
+      // Validate message schema before processing
+      const validation = validateMessage(type, payload);
+      if (!validation.ok) {
+        this.log.warn('PlantLegacy: skipping malformed client message', {
+          playerId,
+          type,
+          issues: validation.issues,
+          payloadKeys: Object.keys(payload || {}),
+        });
+        return;
+      }
 
       switch (type) {
         case MESSAGE_TYPE.INPUT: {
@@ -642,10 +806,37 @@ class World {
           break;
         }
         case MESSAGE_TYPE.RESOURCE_QUERY: {
-          const query = payload as ResourceQueryPayload;
+          const query = payload as ResourceQueryPayload & { fullGrid?: boolean };
           let resources: { light: number; moisture: number; minerals: number } | null = null;
           let tileX: number | undefined;
           let tileZ: number | undefined;
+
+          // Support full grid request for ground rendering
+          if (query.fullGrid) {
+            const allTiles = this.resourceWorld.getAllTiles();
+            const player = this.players.get(playerId);
+            if (player?.plantId) {
+              const plant = this.plantWorld.getPlant(player.plantId);
+              if (plant) {
+                this.send(player.ws, MESSAGE_TYPE.RESOURCE_UPDATE, {
+                  tick: this.getTick(),
+                  tiles: allTiles,
+                  width: this.resourceWorld.getWidth(),
+                  height: this.resourceWorld.getHeight(),
+                  tileSize: this.resourceWorld.getTileSize(),
+                  totalEnergy: plant.totalEnergy,
+                  totalBiomass: plant.totalBiomass,
+                  storedWater: plant.storedWater,
+                  storedMinerals: plant.storedMinerals,
+                  rootTileCount: this.resourceWorld.getRootTileCount(
+                    plant as unknown as import('./ops/resourceWorld.ts').PlantForResource,
+                  ),
+                  fullGrid: true,
+                });
+              }
+            }
+            break;
+          }
 
           if (typeof query.tileX === 'number' && typeof query.tileZ === 'number') {
             tileX = query.tileX;
@@ -781,6 +972,92 @@ class World {
           });
           break;
         }
+        case MESSAGE_TYPE.DEV_ACTION: {
+          // D01: Handle dev panel actions (non-production only)
+          if (process.env.NODE_ENV === 'production') {
+            this.log.warn('Dev action rejected in production', {
+              type: (payload as Record<string, unknown>)?.type,
+            });
+            break;
+          }
+          const devAction = payload as { type: string; [key: string]: unknown };
+          const player = this.players.get(playerId);
+          if (player?.ws) {
+            this.handleDevAction(playerId, player.ws, devAction);
+          }
+          break;
+        }
+        case MESSAGE_TYPE.CHAT_MESSAGE: {
+          const chatPayload = payload as { message: string };
+          const player = this.players.get(playerId);
+          if (!player || !chatPayload?.message) break;
+
+          // Sanitize and limit message length
+          const message = chatPayload.message.trim().slice(0, 500);
+          if (message.length === 0) break;
+
+          // Check for emote command
+          const emoteMatch = message.match(/^\/emote\s+(\w+)$/i);
+          if (emoteMatch) {
+            const emoteId = emoteMatch[1].toLowerCase();
+            const validEmotes = [
+              'wave',
+              'cheer',
+              'thumbs_up',
+              'heart',
+              'think',
+              'sleep',
+              'dance',
+              'sad',
+            ];
+            if (validEmotes.includes(emoteId)) {
+              // Broadcast emote to all players
+              const emotePayload = {
+                playerId,
+                playerName: player.displayName ?? 'Player',
+                emoteId,
+                timestamp: Date.now(),
+              };
+              for (const [_, p] of this.players) {
+                this.send(p.ws, MESSAGE_TYPE.CHAT_BROADCAST, { ...emotePayload, type: 'emote' });
+              }
+              break;
+            }
+          }
+
+          // Regular chat message
+          const broadcastPayload = {
+            playerId,
+            playerName: player.displayName ?? 'Player',
+            message,
+            timestamp: Date.now(),
+          };
+
+          for (const [_, p] of this.players) {
+            this.send(p.ws, MESSAGE_TYPE.CHAT_BROADCAST, broadcastPayload);
+          }
+          break;
+        }
+        case MESSAGE_TYPE.INVENTORY_REQUEST: {
+          const player = this.players.get(playerId);
+          if (!player) break;
+          this.sendInventorySync(player);
+          break;
+        }
+        case MESSAGE_TYPE.INVENTORY_SLOT_USE: {
+          const payload2 = payload as { slotIndex: number };
+          const player2 = this.players.get(playerId);
+          if (!player2) break;
+          this.handleInventorySlotUse(player2, payload2.slotIndex);
+          break;
+        }
+        case MESSAGE_TYPE.INVENTORY_SLOT_SWAP: {
+          const payload2 = payload as { fromIndex: number; toIndex: number };
+          const player2 = this.players.get(playerId);
+          if (!player2) break;
+          this.handleInventorySlotSwap(player2, payload2.fromIndex, payload2.toIndex);
+          break;
+        }
         default: {
           this.log.warn('Unknown message type after HELLO', { type, playerId });
         }
@@ -895,6 +1172,19 @@ class World {
         tileSize: this.resourceWorld.getTileSize(),
       };
       this.broadcast(MESSAGE_TYPE.STATE, statePayload);
+    }
+
+    // Broadcast only dirty (changed) tiles - delta compression for bandwidth efficiency
+    const dirtyTiles = this.resourceWorld.getDirtyTiles();
+    if (dirtyTiles.length > 0) {
+      this.broadcast(MESSAGE_TYPE.RESOURCE_UPDATE, {
+        tick,
+        tiles: dirtyTiles,
+        width: this.resourceWorld.getWidth(),
+        height: this.resourceWorld.getHeight(),
+        tileSize: this.resourceWorld.getTileSize(),
+        delta: true,
+      });
     }
 
     for (const player of this.players.values()) {
@@ -1079,6 +1369,266 @@ class World {
     }
   }
 
+  /** D01: Handle dev panel actions from client (type 8 DEV_ACTION). */
+  private handleDevAction(
+    playerId: string,
+    ws: WebSocket,
+    action: { type: string; [key: string]: unknown },
+  ): void {
+    const player = this.players.get(playerId);
+    if (!player?.plantId) {
+      this.sendDevResponse(ws, action.type, { ok: false, error: 'no_plant' });
+      return;
+    }
+
+    const plant = this.plantWorld.getPlant(player.plantId);
+    if (!plant) {
+      this.sendDevResponse(ws, action.type, { ok: false, error: 'plant_not_found' });
+      return;
+    }
+
+    try {
+      switch (action.type) {
+        case 'dev_set_resources': {
+          // Resource simulation rates
+          if (action.photosynthesis_rate !== undefined) {
+            this.resourceWorld.setPhotosynthesisRate(action.photosynthesis_rate as number);
+          }
+          if (action.diffusion_rate !== undefined) {
+            this.resourceWorld.setDiffusionRate(action.diffusion_rate as number);
+          }
+          if (action.max_absorption_per_tick !== undefined) {
+            this.resourceWorld.setMaxAbsorptionPerTick(action.max_absorption_per_tick as number);
+          }
+          if (action.rain_gain_per_s !== undefined) {
+            this.resourceWorld.setRainGainPerS(action.rain_gain_per_s as number);
+          }
+          if (action.evaporation_per_s !== undefined) {
+            this.resourceWorld.setEvaporationPerS(action.evaporation_per_s as number);
+          }
+          if (action.canopy_shade_reduction !== undefined) {
+            this.resourceWorld.setCanopyShadeReduction(action.canopy_shade_reduction as number);
+          }
+          // Light/moisture/mineral curves would need config reload
+          this.sendDevResponse(ws, action.type, { ok: true });
+          break;
+        }
+        case 'dev_reset_resources': {
+          this.resourceWorld.resetToDefaults();
+          this.sendDevResponse(ws, action.type, { ok: true });
+          break;
+        }
+        case 'dev_set_tile': {
+          const x = action.x as number;
+          const z = action.z as number;
+          if (x !== undefined && z !== undefined) {
+            const resources: Record<string, number> = {};
+            if (action.light !== undefined) resources.light = action.light as number;
+            if (action.moisture !== undefined) resources.moisture = action.moisture as number;
+            if (action.minerals !== undefined) resources.minerals = action.minerals as number;
+            this.resourceWorld.setTileResources(x, z, resources);
+          }
+          this.sendDevResponse(ws, action.type, { ok: true });
+          break;
+        }
+        case 'dev_set_growth': {
+          if (action.growth_cooldown !== undefined) {
+            plant.growthCooldownUntil = Date.now() + (action.growth_cooldown as number) * 1000;
+          }
+          if (action.root_attack_damage_multiplier !== undefined) {
+            this.plantWorld.getConfig().rootAttackDamageMultiplier =
+              action.root_attack_damage_multiplier as number;
+          }
+          if (action.germination_min_moisture !== undefined) {
+            this.plantWorld.getConfig().germinationMinMoisture =
+              action.germination_min_moisture as number;
+          }
+          if (action.germination_min_light !== undefined) {
+            this.plantWorld.getConfig().germinationMinLight =
+              action.germination_min_light as number;
+          }
+          this.sendDevResponse(ws, action.type, { ok: true });
+          break;
+        }
+        case 'dev_fill_energy': {
+          plant.totalEnergy = this.plantWorld.getConfig().maxEnergyPerPlant;
+          this.sendDevResponse(ws, action.type, { ok: true });
+          break;
+        }
+        case 'dev_fill_biomass': {
+          plant.totalBiomass =
+            this.plantWorld.getConfig().maxNodesPerPlant *
+            this.plantWorld.getConfig().nodeCostBase *
+            10;
+          this.sendDevResponse(ws, action.type, { ok: true });
+          break;
+        }
+        case 'dev_kill_plant': {
+          this.plantWorld.killPlant(player.plantId, 'damage');
+          this.sendDevResponse(ws, action.type, { ok: true });
+          break;
+        }
+        case 'dev_regenerate_plant': {
+          this.plantWorld.removePlant(player.plantId);
+          const newPlant = this.plantWorld.createPlant(player.accountId ?? 'anon', 'world_1', 0, 0);
+          const playerData = this.players.get(playerId);
+          if (playerData) playerData.plantId = newPlant.id;
+          this.sendDevResponse(ws, action.type, { ok: true, newPlantId: newPlant.id });
+          break;
+        }
+        case 'dev_set_tick_rate': {
+          if (action.rate !== undefined) {
+            this.setTickRate(action.rate as number);
+          }
+          this.sendDevResponse(ws, action.type, { ok: true });
+          break;
+        }
+        case 'dev_pause_simulation': {
+          this.pauseSimulation();
+          this.sendDevResponse(ws, action.type, { ok: true });
+          break;
+        }
+        case 'dev_resume_simulation': {
+          this.resumeSimulation();
+          this.sendDevResponse(ws, action.type, { ok: true });
+          break;
+        }
+        case 'dev_step_simulation': {
+          this.stepSimulationOnce();
+          this.sendDevResponse(ws, action.type, { ok: true });
+          break;
+        }
+        case 'dev_set_simulation': {
+          if (action.cell_size !== undefined)
+            this.interestManager.setCellSize(action.cell_size as number);
+          if (action.interest_ring_radius !== undefined)
+            this.interestManager.setRingRadius(action.interest_ring_radius as number);
+          if (action.active_tick_rate_hz !== undefined)
+            this.interestManager.setActiveTickRate(action.active_tick_rate_hz as number);
+          if (action.near_tick_rate_hz !== undefined)
+            this.interestManager.setNearTickRate(action.near_tick_rate_hz as number);
+          if (action.dormant_step_interval_sec !== undefined)
+            this.interestManager.setDormantInterval(action.dormant_step_interval_sec as number);
+          if (action.offline_damage_multiplier !== undefined)
+            this.plantWorld.setOfflineDamageMultiplier(action.offline_damage_multiplier as number);
+          this.sendDevResponse(ws, action.type, { ok: true });
+          break;
+        }
+        case 'dev_force_save': {
+          this.getPlantPersistence().saveAll();
+          this.sendDevResponse(ws, action.type, { ok: true });
+          break;
+        }
+        case 'dev_clear_persistence': {
+          this.getPlantPersistence().clearAll();
+          this.sendDevResponse(ws, action.type, { ok: true });
+          break;
+        }
+        case 'dev_log_plants': {
+          this.log.info('Dev: Plant dump', {
+            plants: this.plantWorld
+              .getAllPlants()
+              .map((p) => ({ id: p.id, owner: p.ownerId, biomass: p.totalBiomass })),
+          });
+          this.sendDevResponse(ws, action.type, { ok: true });
+          break;
+        }
+        case 'dev_log_resources': {
+          this.log.info('Dev: Resource dump', { resources: this.resourceWorld.getAllTiles() });
+          this.sendDevResponse(ws, action.type, { ok: true });
+          break;
+        }
+        case 'dev_log_network': {
+          this.log.info('Dev: Network stats', {
+            players: this.players.size,
+            connections: connectionRegistryGetConnectionCount(this.connectionRegistry),
+          });
+          this.sendDevResponse(ws, action.type, { ok: true });
+          break;
+        }
+        case 'dev_toggle_webgpu':
+        case 'dev_reinit_renderer':
+        case 'dev_dump_shaders': {
+          // Client-side only actions, just acknowledge
+          this.sendDevResponse(ws, action.type, { ok: true });
+          break;
+        }
+        case 'dev_stress_test': {
+          const count = (action.count as number) ?? 100;
+          for (let i = 0; i < count; i++) {
+            this.plantWorld.createRandomPlant();
+          }
+          this.sendDevResponse(ws, action.type, { ok: true, created: count });
+          break;
+        }
+        case 'dev_set_config': {
+          // Update dev config values
+          const key = action.key as string;
+          const value = action.value;
+          if (!key || value === undefined) {
+            this.sendDevResponse(ws, action.type, { ok: false, error: 'missing_key_or_value' });
+            break;
+          }
+          // Apply to in-memory config (runtime only)
+          // Note: In production, this would also persist to disk
+          try {
+            // These would need corresponding setters in the world/resource/plant objects
+            switch (key) {
+              case 'auto_growth':
+                this.plantWorld.setAutoGrowth(value as boolean);
+                break;
+              case 'germination_gate':
+                this.plantWorld.setGerminationGate(value as boolean);
+                break;
+              case 'germination_failure_kills_seed':
+                this.plantWorld.setGerminationFailureKillsSeed(value as boolean);
+                break;
+              case 'persistence_enabled':
+                this.setPersistenceEnabled(value as boolean);
+                break;
+              case 'seed_size_class':
+                // Camera framing handled client-side
+                this.sendDevResponse(ws, action.type, { ok: true, note: 'client_side_only' });
+                break;
+              default:
+                this.sendDevResponse(ws, action.type, {
+                  ok: false,
+                  error: `unknown_config_key: ${key}`,
+                });
+                break;
+            }
+            this.sendDevResponse(ws, action.type, { ok: true, key, value });
+          } catch (error) {
+            this.log.error('Failed to set config', { key, error: String(error) });
+            this.sendDevResponse(ws, action.type, { ok: false, error: 'internal_error' });
+          }
+          break;
+        }
+        default: {
+          this.log.warn('Unknown dev action', { type: action.type });
+          this.sendDevResponse(ws, action.type, { ok: false, error: 'unknown_action' });
+        }
+      }
+    } catch (error) {
+      this.log.error('Dev action failed', { type: action.type, error: String(error) });
+      this.sendDevResponse(ws, action.type, { ok: false, error: 'internal_error' });
+    }
+  }
+
+  private sendDevResponse(
+    ws: WebSocket,
+    actionType: string,
+    payload: Record<string, unknown>,
+  ): void {
+    if (ws.readyState !== WebSocket.OPEN) return;
+    ws.send(
+      JSON.stringify({
+        type: MESSAGE_TYPE.DEV_RESPONSE,
+        payload: { action: actionType, ...payload },
+      }),
+    );
+  }
+
   start(): void {
     tickClockStart(this.tickClock);
     this.log.info('world simulation started', { tickRateHz: this.config.tickRateHz });
@@ -1102,6 +1652,44 @@ class World {
   ): { light: number; moisture: number; minerals: number } | null {
     return this.resourceWorld.getTileResourcesAt(tileX, tileZ);
   }
+
+  /** D01: Dev action - set tick rate */
+  setTickRate(hz: number): void {
+    // Update tick clock and active tier rate
+    this.config.tickRateHz = hz;
+    this.tickClock = createTickClock({
+      tickRateHz: hz,
+      maxFrameTimeMs: this.maxFrameTimeMs,
+      onTick: this.onTick.bind(this),
+    });
+    if (this.tickClock.running) {
+      tickClockStart(this.tickClock);
+    }
+  }
+
+  /** D01: Dev action - pause simulation */
+  pauseSimulation(): void {
+    tickClockStop(this.tickClock);
+  }
+
+  /** D01: Dev action - resume simulation */
+  resumeSimulation(): void {
+    tickClockStart(this.tickClock);
+  }
+
+  /** D01: Dev action - step simulation once */
+  stepSimulationOnce(): void {
+    const tick = this.tickClock.tick;
+    this.onTick(tick, 1 / this.config.tickRateHz);
+  }
+
+  /** D01: Dev action - get plant persistence instance */
+  getPlantPersistence(): PlantPersistence {
+    if (!this.plantPersistence) {
+      throw new Error('Plant persistence not available (no database)');
+    }
+    return this.plantPersistence;
+  }
 }
 
 async function main(): Promise<void> {
@@ -1120,6 +1708,7 @@ async function main(): Promise<void> {
   const growthConfig = loadGrowthConfig(configs);
   const worldConfig = loadWorldConfig(configs);
   const resourcesConfig = loadResourcesConfig(configs);
+  const itemsConfig = loadItemsConfig(configs);
 
   // Plant growth world (T01) with T03 tier support
   const plantWorld = new PlantWorld(
@@ -1234,7 +1823,9 @@ async function main(): Promise<void> {
     interestManager,
     worldConfig.reconnectWindowMin * 60 * 1000, // convert minutes to ms
     worldConfig.persistenceEnabled,
+    plantPersistence,
     worldConfig.maxFrameTimeMs,
+    itemsConfig,
   );
 
   // Periodic plant persistence (T03)
@@ -1369,9 +1960,9 @@ async function main(): Promise<void> {
         // Extract values from extended-1 format
         const values = config.values || {};
         const hintCardLines = values.hint_card_lines?.value || [
-          'WASD / Arrows: Move  |  Mouse: Orbit camera  |  Scroll: Zoom',
+          'WASD / Arrows: Pan camera  |  Left-drag: Orbit  |  Middle-drag: Pan  |  Scroll: Zoom',
+          'Click node: Focus  |  G: Toggle Grow Mode  |  R: Root Sight  |  E: Emotes  |  I: Inventory',
           'You are a plant. Grow roots down, canopy up. Read light, water, minerals.',
-          'Other players are other plants. Compete, ally, or parasitize. The world simulates offline.',
         ];
         const showHintCardDurationMs = values.show_hint_card_duration_ms?.value || 10000;
         const resourceTooltips = values.resource_tooltips?.value || {
@@ -1595,8 +2186,207 @@ async function main(): Promise<void> {
         sendJson(response, 200, controlsConfig);
         return;
       } catch {
+        // Default bindings matching config/controls.json
+        const defaultBindings: Record<string, unknown> = {
+          camera_orbit: {
+            action: 'camera_orbit',
+            keys: [],
+            mouse: 'left_drag',
+            mode: 'hold',
+            context: '',
+          },
+          camera_pan: {
+            action: 'camera_pan',
+            keys: [],
+            mouse: 'right_drag',
+            mode: 'hold',
+            context: '',
+          },
+          camera_pan_forward: {
+            action: 'camera_pan_forward',
+            keys: ['KeyW', 'ArrowUp'],
+            mouse: '',
+            mode: 'hold',
+            context: '',
+          },
+          camera_pan_backward: {
+            action: 'camera_pan_backward',
+            keys: ['KeyS', 'ArrowDown'],
+            mouse: '',
+            mode: 'hold',
+            context: '',
+          },
+          camera_pan_left: {
+            action: 'camera_pan_left',
+            keys: ['KeyA', 'ArrowLeft'],
+            mouse: '',
+            mode: 'hold',
+            context: '',
+          },
+          camera_pan_right: {
+            action: 'camera_pan_right',
+            keys: ['KeyD', 'ArrowRight'],
+            mouse: '',
+            mode: 'hold',
+            context: '',
+          },
+          camera_zoom: {
+            action: 'camera_zoom',
+            keys: [],
+            mouse: 'wheel',
+            mode: 'hold',
+            context: '',
+          },
+          camera_recenter: {
+            action: 'camera_recenter',
+            keys: ['Space'],
+            mouse: 'double_click_ground',
+            mode: 'press',
+            context: '',
+          },
+          select_part: {
+            action: 'select_part',
+            keys: [],
+            mouse: 'left_click',
+            mode: 'press',
+            context: '',
+          },
+          grow_mode_toggle: {
+            action: 'grow_mode_toggle',
+            keys: ['KeyG'],
+            mouse: '',
+            mode: 'toggle',
+            context: '',
+          },
+          root_sight_toggle: {
+            action: 'root_sight_toggle',
+            keys: ['KeyR'],
+            mouse: '',
+            mode: 'toggle',
+            context: '',
+          },
+          emote_wheel: {
+            action: 'emote_wheel',
+            keys: ['KeyE'],
+            mouse: '',
+            mode: 'press',
+            context: '',
+          },
+          inventory_overview_toggle: {
+            action: 'inventory_overview_toggle',
+            keys: ['KeyI'],
+            mouse: '',
+            mode: 'toggle',
+            context: '',
+          },
+          inventory_slot_1: {
+            action: 'inventory_slot_1',
+            keys: ['Digit1'],
+            mouse: '',
+            mode: 'press',
+            context: '',
+          },
+          inventory_slot_2: {
+            action: 'inventory_slot_2',
+            keys: ['Digit2'],
+            mouse: '',
+            mode: 'press',
+            context: '',
+          },
+          inventory_slot_3: {
+            action: 'inventory_slot_3',
+            keys: ['Digit3'],
+            mouse: '',
+            mode: 'press',
+            context: '',
+          },
+          inventory_slot_4: {
+            action: 'inventory_slot_4',
+            keys: ['Digit4'],
+            mouse: '',
+            mode: 'press',
+            context: '',
+          },
+          inventory_slot_5: {
+            action: 'inventory_slot_5',
+            keys: ['Digit5'],
+            mouse: '',
+            mode: 'press',
+            context: '',
+          },
+          inventory_slot_6: {
+            action: 'inventory_slot_6',
+            keys: ['Digit6'],
+            mouse: '',
+            mode: 'press',
+            context: '',
+          },
+          inventory_slot_7: {
+            action: 'inventory_slot_7',
+            keys: ['Digit7'],
+            mouse: '',
+            mode: 'press',
+            context: '',
+          },
+          inventory_slot_8: {
+            action: 'inventory_slot_8',
+            keys: ['Digit8'],
+            mouse: '',
+            mode: 'press',
+            context: '',
+          },
+          inventory_slot_9: {
+            action: 'inventory_slot_9',
+            keys: ['Digit9'],
+            mouse: '',
+            mode: 'press',
+            context: '',
+          },
+          inventory_slot_10: {
+            action: 'inventory_slot_10',
+            keys: ['Digit0'],
+            mouse: '',
+            mode: 'press',
+            context: '',
+          },
+          grow_cancel: {
+            action: 'grow_cancel',
+            keys: ['Escape'],
+            mouse: 'right_click',
+            mode: 'press',
+            context: '',
+          },
+          dev_panel_toggle: {
+            action: 'dev_panel_toggle',
+            keys: ['Backquote'],
+            mouse: '',
+            mode: 'toggle',
+            context: '',
+          },
+          debug_toggle: {
+            action: 'debug_toggle',
+            keys: ['ShiftLeft', 'ShiftRight'],
+            mouse: '',
+            mode: 'toggle',
+            context: '',
+          },
+          hint_card_toggle: {
+            action: 'hint_card_toggle',
+            keys: ['KeyH'],
+            mouse: '',
+            mode: 'toggle',
+            context: '',
+          },
+          plant_regenerate: {
+            action: 'plant_regenerate',
+            keys: ['KeyR'],
+            mouse: '',
+            mode: 'press',
+            context: 'dev',
+          },
+        };
         sendJson(response, 200, {
-          bindings: {},
+          bindings: defaultBindings,
           touch_min_target_px: 44,
           hud_max_screen_fraction: 0.2,
           root_sight_mode: 'toggle',
@@ -1709,6 +2499,16 @@ async function main(): Promise<void> {
       }
     }
 
+    // D01: Dev config endpoints (non-production only)
+    if (url.pathname === '/dev/config' && request.method === 'GET') {
+      await handleGetDevConfig(request, response);
+      return;
+    }
+    if (url.pathname === '/dev/config' && request.method === 'POST') {
+      await handlePostDevConfig(request, response);
+      return;
+    }
+
     sendJson(response, 404, { error: 'not_found' });
   };
 
@@ -1735,6 +2535,17 @@ async function main(): Promise<void> {
 
     // Wait for HELLO with auth before creating player
     let helloReceived = false;
+    let helloTimeout: NodeJS.Timeout;
+    let playerId: string | null = null;
+
+    const cleanupConnection = () => {
+      if (helloTimeout) {
+        clearTimeout(helloTimeout);
+      }
+      if (playerId) {
+        world.removePlayer(playerId);
+      }
+    };
 
     ws.on('message', (data: Buffer) => {
       try {
@@ -1743,7 +2554,28 @@ async function main(): Promise<void> {
 
         if (type === MESSAGE_TYPE.HELLO && !helloReceived) {
           helloReceived = true;
-          handleHelloMessage(ws, payload);
+          clearTimeout(helloTimeout);
+
+          // Validate HELLO message schema
+          const validation = validateMessage(type, payload);
+          if (!validation.ok) {
+            log.warn('PlantLegacy: skipping malformed HELLO message', {
+              issues: validation.issues,
+            });
+            const error: ErrorPayload = {
+              code: 'INVALID_MESSAGE',
+              message: 'Invalid HELLO payload',
+            };
+            ws.send(JSON.stringify({ type: MESSAGE_TYPE.ERROR, payload: error }));
+            ws.close(4000, 'Invalid HELLO');
+            cleanupConnection();
+            return;
+          }
+
+          handleHelloMessage(ws, payload).catch((err) => {
+            log.error('handleHelloMessage failed', { error: String(err) });
+            cleanupConnection();
+          });
           return;
         }
 
@@ -1756,15 +2588,16 @@ async function main(): Promise<void> {
     });
 
     ws.on('close', () => {
-      // Clean up if HELLO was never received
+      cleanupConnection();
     });
 
     ws.on('error', (error: Error) => {
-      log.error('websocket error', { error: error.message });
+      log.error('websocket error', { error: error.message, playerId });
+      cleanupConnection();
     });
 
     // Set a timeout for HELLO
-    const helloTimeout = setTimeout(() => {
+    helloTimeout = setTimeout(() => {
       if (!helloReceived) {
         log.warn('websocket closed: hello timeout');
         ws.close(4008, 'Hello timeout');
@@ -1813,7 +2646,6 @@ async function main(): Promise<void> {
 
       // Check if this account has a plant pending reclaim (reconnect window)
       let welcome: WelcomePayload;
-      let playerId: string;
       if (accountId) {
         const reclaimed = world.reclaimPlant(
           accountId,
@@ -1861,16 +2693,25 @@ async function main(): Promise<void> {
       });
       ws.send(welcomeMsg);
 
+      // Send full resource grid immediately so ground renders with correct lighting
+      const rw = world.getResourceWorld();
+      const allTiles = rw.getAllTiles();
+      ws.send(
+        JSON.stringify({
+          type: MESSAGE_TYPE.RESOURCE_UPDATE,
+          payload: {
+            tick: world.getTick(),
+            tiles: allTiles,
+            width: rw.getWidth(),
+            height: rw.getHeight(),
+            tileSize: rw.getTileSize(),
+            fullGrid: true,
+          },
+        }),
+      );
+
       // ConnectionRegistry in World.addPlayer already installed the message handler
       // that routes to world.handlePostHelloMessage
-
-      ws.on('close', () => {
-        world.removePlayer(playerId);
-      });
-
-      ws.on('error', (error: Error) => {
-        log.error('websocket error', { error: error.message, playerId });
-      });
     }
   });
 
@@ -1920,6 +2761,9 @@ async function main(): Promise<void> {
 
   process.on('SIGINT', () => shutdown('SIGINT'));
   process.on('SIGTERM', () => shutdown('SIGTERM'));
+
+  // Auto-shutdown when all clients disconnect (persistence off)
+  world.setOnAllPlayersLeft(() => shutdown('all clients disconnected'));
 
   server.listen(runtime.port, runtime.host, () => {
     log.info('listening', {

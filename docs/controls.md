@@ -7,19 +7,27 @@
 
 | Action | Binding | Notes |
 |---|---|---|
-| Move forward | `W` / `ArrowUp` | Sent as `PlayerInput.moveForward` |
-| Move backward | `S` / `ArrowDown` | Sent as `PlayerInput.moveBackward` |
-| Move left | `A` / `ArrowLeft` | Sent as `PlayerInput.moveLeft` |
-| Move right | `D` / `ArrowRight` | Sent as `PlayerInput.moveRight` |
-| Orbit camera | Left-drag | `OrbitControls`, with damping |
-| Pan camera | Right-drag | `OrbitControls` |
-| Zoom (mouse) | Scroll wheel | `OrbitControls`, smooth continuous zoom |
+| Orbit camera | Left-drag / Middle-drag / Two-finger drag | `OrbitControls`; camera rotates around its target |
+| Pan camera (mouse) | Right-drag | `OrbitControls` screen-space pan (moves camera + target) |
+| Pan camera (keyboard) | `W` / `ArrowUp` | Move camera forward on ground plane |
+| Pan camera (keyboard) | `S` / `ArrowDown` | Move camera backward on ground plane |
+| Pan camera (keyboard) | `A` / `ArrowLeft` | Move camera left on ground plane |
+| Pan camera (keyboard) | `D` / `ArrowRight` | Move camera right on ground plane |
+| Pan camera (touch) | One-finger drag | Drag on world pans camera |
+| Zoom (mouse/touch) | Scroll wheel / Pinch | `OrbitControls`, smooth continuous zoom |
 | Zoom (keyboard) | `-` / `+` (or `=`) | Smooth keyboard zoom with acceleration/damping |
-| Focus node | Click on player node | Recenters and smoothly frames node at ideal zoom distance |
-| Growth draw | Click option + Drag | Silky-smooth gene-constrained 3D vector with HUD guide |
-| Root Sight toggle | `Tab` | Toggles organic ground cutaways & subterranean camera elevation |
-| Emote wheel | `G` | Opens emote selection |
-| Growth intent | `E` | Opens growth panel on selected node |
+| Recenter camera | `Space` / Double-click ground / Double-tap | Frames root node |
+| Select node | Left-click / Tap | In Grow Mode: opens growth options. In Normal Mode: focuses camera on node |
+| Grow Mode toggle | `G` | Toggles between Normal Mode and Grow Mode |
+| Root Sight toggle | `R` | Toggles organic ground cutaways & subterranean camera elevation |
+| Emote wheel | `E` | Opens emote selection |
+| Inventory / Overview | `I` | Toggles combined inventory + plant overview panel |
+| Inventory slot 1–10 | `1`–`9`, `0` | Selects inventory slot |
+| Cancel growth / Close panel | `Escape` / Right-click (context) | Cancels growth drawing, hides panels |
+| Dev panel toggle | `` ` `` (backtick) | Opens dev panel with admin commands (only with `?dev=1`) |
+| Debug overlay toggle | `Shift` | Toggles debug metrics overlay |
+| Hint card toggle | `H` | Shows/hides first-spawn hint card |
+| Regenerate plant (dev) | `R` (dev context) | Generates test plant at origin |
 
 Input is sampled and sent to the server at 20 Hz. The server validates every
 move (velocity, world bounds, quantization) and returns `REJECT` plus
@@ -30,6 +38,13 @@ The first-spawn hint card auto-hides after
 `onboarding.show_hint_card_duration_ms`; there is no manual dismiss control yet.
 The light/water/minerals readout and its tooltips exist, but the numbers are
 placeholders until the server sends resource data.
+
+## Grow Mode vs Normal Mode
+
+- **Normal Mode (default):** Left-click a node → camera smoothly focuses on that node. No growth panel opens.
+- **Grow Mode:** Press `G` to toggle. Left-click a node → growth options panel opens for that node. Select an option, then drag on the canvas to set growth direction, release to confirm.
+
+Mode state is shown in the UI (top-left indicator).
 
 ## Implemented by C01
 
@@ -44,6 +59,9 @@ placeholders until the server sends resource data.
 - Touch producers for mobile (desktop only currently).
 - Rebinding UI and persistence.
 - Camera recenter and game actions beyond movement.
+- Emote wheel UI (action bound, UI not built).
+- Inventory/Overview panel UI (action bound, UI not built).
+- Inventory slot selection UI (actions bound, UI not built).
 
 ## Contract C01 satisfies
 
@@ -60,10 +78,10 @@ These names are provisional until C04 adds the full settings UI:
 
 | Group | Examples |
 |---|---|
-| Movement | `move_forward`, `move_back`, `strafe_left`, `strafe_right`, `jump` |
-| Camera | `orbit`, `zoom_in`, `zoom_out`, `recenter` |
-| Interaction | `interact`, `primary`, `secondary`, `cancel` |
-| UI | `open_inventory`, `open_map`, `open_chat`, `toggle_debug` |
+| Camera | `camera_orbit`, `camera_pan`, `camera_zoom`, `camera_recenter`, `camera_pan_forward`, `camera_pan_backward`, `camera_pan_left`, `camera_pan_right` |
+| Interaction | `select_part`, `grow_mode_toggle`, `grow_cancel` |
+| UI | `root_sight_toggle`, `emote_wheel`, `inventory_overview_toggle`, `inventory_slot_1`–`inventory_slot_10`, `dev_panel_toggle`, `debug_toggle`, `hint_card_toggle` |
+| Dev | `plant_regenerate` |
 
 When the C04 settings UI lands, replace this file with the actual action table,
 default bindings, and the touch layout.

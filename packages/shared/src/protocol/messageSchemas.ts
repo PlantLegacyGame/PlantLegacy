@@ -278,14 +278,20 @@ export const MESSAGE_SCHEMAS: Record<number, Record<string, FieldRule>> = {
     // PING (empty payload)
   },
   4: {
-    // GROWTH_INTENT
-    plantId: { type: 'string', required: true },
-    nodeId: { type: 'string', required: true },
-    direction: vec3,
-    nodeType,
-    isAttack: { type: 'boolean', required: true },
-    tick: { type: 'number', required: true },
-    growthMode: { type: 'string' },
+    // GROWTH_INTENT (wrapped in { intent: GrowthIntent } like INPUT)
+    intent: {
+      type: 'object',
+      required: true,
+      fields: {
+        plantId: { type: 'string', required: true },
+        nodeId: { type: 'string', required: true },
+        direction: vec3,
+        nodeType,
+        isAttack: { type: 'boolean', required: true },
+        tick: { type: 'number', required: true },
+        growthMode: { type: 'string' },
+      },
+    },
   },
   5: {
     // RESOURCE_QUERY — tile or world coordinates
@@ -301,6 +307,18 @@ export const MESSAGE_SCHEMAS: Record<number, Record<string, FieldRule>> = {
     // GROWTH_OPTIONS_REQUEST
     plantId: { type: 'string', required: true },
     nodeId: { type: 'string', required: true },
+  },
+  24: {
+    // INVENTORY_REQUEST (empty payload)
+  },
+  25: {
+    // INVENTORY_SLOT_USE
+    slotIndex: { type: 'integer', required: true },
+  },
+  26: {
+    // INVENTORY_SLOT_SWAP
+    fromIndex: { type: 'integer', required: true },
+    toIndex: { type: 'integer', required: true },
   },
 
   // Server -> Client
@@ -450,5 +468,42 @@ export const MESSAGE_SCHEMAS: Record<number, Record<string, FieldRule>> = {
     energy: { type: 'number', required: true },
     biomass: { type: 'number', required: true },
     options: { type: 'array' },
+  },
+  8: {
+    // DEV_ACTION (client -> server)
+    type: { type: 'string', required: true },
+  },
+  9: {
+    // CHAT_MESSAGE (client -> server)
+    message: { type: 'string', required: true },
+  },
+  23: {
+    // CHAT_BROADCAST (server -> client)
+    playerId: { type: 'string', required: true },
+    playerName: { type: 'string', required: true },
+    message: { type: 'string', required: true },
+    timestamp: { type: 'number', required: true },
+  },
+  27: {
+    // INVENTORY_SYNC
+    slots: {
+      type: 'array',
+      required: true,
+      items: {
+        type: 'object',
+        required: true,
+        fields: {
+          itemId: { type: 'string', required: false, nullable: true },
+          count: { type: 'integer', required: false, nullable: true },
+        },
+      },
+    },
+    maxSlots: { type: 'integer', required: true },
+  },
+  28: {
+    // INVENTORY_SLOT_UPDATE
+    slotIndex: { type: 'integer', required: true },
+    itemId: { type: 'string', required: false, nullable: true },
+    count: { type: 'integer', required: false, nullable: true },
   },
 };

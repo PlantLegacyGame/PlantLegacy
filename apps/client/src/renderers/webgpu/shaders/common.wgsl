@@ -7,6 +7,7 @@ struct FrameUniforms {
   cameraPos: vec4f,
   cameraRight: vec4f,
   cameraUp: vec4f,
+  cameraForward: vec4f,
   sunDirection: vec4f,
   ownRootColor: vec4f,
   rivalRootColor: vec4f,
@@ -42,9 +43,16 @@ struct FrameUniforms {
   _pad6: f32,
 }
 
-// Root aura bindings at high indices to avoid conflicts with pipeline-specific bindings
-@group(0) @binding(8) var rootAuraTexture: texture_2d<f32>;
-@group(0) @binding(9) var rootAuraSampler: sampler;
+// C02b: Per-vertex emergence data for GPU skinning
+struct VertexEmergenceData {
+  spawnTime: f32,
+  growthProgress: f32,
+  nodeIndex: u32,
+  _pad: u32,
+}
+
+// Resource bindings live in the per-pipeline shaders because their indices
+// differ between passes (mesh/joints, billboard/impostor, ground, cull).
 
 struct PlantData {
   center: vec4f,
@@ -62,7 +70,7 @@ struct PlantRenderData {
   _pad: f32,
 }
 
-fn windOffset(position: vec3f, frame: FrameUniforms) -> vec3f {
+fn windOffset(position: vec3f, frame: FrameUniforms, swayStiffness: f32) -> vec3f {
   let height = max(0.0, position.y);
   if (height < 0.1 || frame.windStrength < 0.01) {
     return position;
@@ -70,8 +78,10 @@ fn windOffset(position: vec3f, frame: FrameUniforms) -> vec3f {
 
   let factor = (height * height) / (height * height + 64.0);
   let time = frame.time * frame.windSpeed;
-  let swayX = sin(time * 1.1 + position.y * 0.06) * frame.windStrength * 0.22 * factor;
-  let swayZ = cos(time * 0.85 + position.y * 0.06) * frame.windStrength * 0.15 * factor;
+  // swayStiffness: 0.15 = very flexible (leaves), 0.45 = stiff (roots)
+  let swayAmount = 1.0 - swayStiffness; // invert: lower stiffness = more sway
+  let swayX = sin(time * 1.1 + position.y * 0.06) * frame.windStrength * 0.22 * factor * swayAmount;
+  let swayZ = cos(time * 0.85 + position.y * 0.06) * frame.windStrength * 0.15 * factor * swayAmount;
   return vec3f(position.x - swayX, position.y, position.z - swayZ);
 }
 
@@ -87,44 +97,8 @@ fn applyRootSight(
   return color;
 }
 
-fn sampleRootAuraSDF(worldPos: vec3f, frame: FrameUniforms) -> f32 {
-  if (frame.rootAuraNodeCount == 0u) {
-    return 0.0;
-  }
-  
-  let count = min(frame.rootAuraNodeCount, 64u);
-  var sdfDist: f32 = 1000.0; // Large initial distance
-  
-  let auraRadius = frame.rootSightAuraRadius;
-  let capsuleRadius = auraRadius * 0.5;
-  
-  for (var i: u32 = 0u; i < count; i++) {
-    let idx = f32(i);
-    let texCoord = vec2f((idx + 0.5) / 64.0, 0.5);
-    let nodeData = textureSample(rootAuraTexture, rootAuraSampler, texCoord);
-    let nodePos = nodeData.xyz;
-    let valid = nodeData.w;
-    
-    // Compute capsule SDF for this root node
-    // Capsule from nodePos to slightly above (for vertical roots)
-    let segmentHeight = auraRadius;
-    let segmentCenter = nodePos + vec3f(0.0, segmentHeight * 0.5, 0.0);
-    let toCenter = worldPos - segmentCenter;
-    let dy = abs(toCenter.y) - segmentHeight * 0.5;
-    let dxz = length(toCenter.xz);
-    var capsuleDist = max(dxz - capsuleRadius, dy);
-    capsuleDist = min(capsuleDist, max(dxz, dy));
-    
-    // Smooth minimum (smin) to blend capsules into one continuous volume
-    let k = auraRadius * 0.3; // Blend factor
-    let h = clamp(0.5 + 0.5 * (capsuleDist - sdfDist) / k, 0.0, 1.0);
-    sdfDist = mix(capsuleDist, sdfDist, h) - k * h * (1.0 - h);
-  }
-  
-  // Convert SDF distance to strength (1 at surface, 0 at radius)
-  let strength = 1.0 - smoothstep(0.0, auraRadius, max(sdfDist, 0.0));
-  return strength;
-}
+// C02b: GPU skinning helpers live in skinning.wgsl so only the mesh pass
+// declares the joint-matrix binding.
 
 struct RainUniforms {
   streakLength: f32,

@@ -20,6 +20,7 @@ export interface RenderConfig {
   cameraMaxPolarAngle: number;
   cameraStartDistance: number;
   cameraPanSpeed: number;
+  cameraZoomSpeed: number;
   idleDropTimeoutMs: number;
   shadowMapSize: number;
   debugOverlayEnabled: boolean;
@@ -63,6 +64,9 @@ export interface RenderConfig {
   rainBoxWidth: number;
   rainBoxHeight: number;
   rainParticleSize: number;
+  rainStreakLength: number;
+  rainStreakWidth: number;
+  rainMaxVelocity: number;
   lightningFlashDurationMs: number;
   lightningIntensityBoost: number;
   lightningMinIntervalS: number;
@@ -159,6 +163,8 @@ interface RenderConfigResponse {
   cameraStartDistance?: number;
   camera_pan_speed?: number;
   cameraPanSpeed?: number;
+  camera_zoom_speed?: number;
+  cameraZoomSpeed?: number;
   idle_drop_timeout_ms?: number;
   idleDropTimeoutMs?: number;
   shadow_map_size?: number;
@@ -231,6 +237,12 @@ interface RenderConfigResponse {
   rainBoxHeight?: number;
   rain_particle_size?: number;
   rainParticleSize?: number;
+  rain_streak_length?: number;
+  rainStreakLength?: number;
+  rain_streak_width?: number;
+  rainStreakWidth?: number;
+  rain_max_velocity?: number;
+  rainMaxVelocity?: number;
   lightning_flash_duration_ms?: number;
   lightningFlashDurationMs?: number;
   lightning_intensity_boost?: number;
@@ -347,6 +359,7 @@ function normalizeRenderConfig(data: RenderConfigResponse, fallback: RenderConfi
     cameraStartDistance:
       data.camera_start_distance ?? data.cameraStartDistance ?? fallback.cameraStartDistance,
     cameraPanSpeed: data.camera_pan_speed ?? data.cameraPanSpeed ?? fallback.cameraPanSpeed,
+    cameraZoomSpeed: data.camera_zoom_speed ?? data.cameraZoomSpeed ?? fallback.cameraZoomSpeed,
     idleDropTimeoutMs:
       data.idle_drop_timeout_ms ?? data.idleDropTimeoutMs ?? fallback.idleDropTimeoutMs,
     shadowMapSize: data.shadow_map_size ?? data.shadowMapSize ?? fallback.shadowMapSize,
@@ -398,6 +411,9 @@ function normalizeRenderConfig(data: RenderConfigResponse, fallback: RenderConfi
     rainBoxWidth: data.rain_box_width ?? data.rainBoxWidth ?? fallback.rainBoxWidth,
     rainBoxHeight: data.rain_box_height ?? data.rainBoxHeight ?? fallback.rainBoxHeight,
     rainParticleSize: data.rain_particle_size ?? data.rainParticleSize ?? fallback.rainParticleSize,
+    rainStreakLength: data.rain_streak_length ?? data.rainStreakLength ?? fallback.rainStreakLength,
+    rainStreakWidth: data.rain_streak_width ?? data.rainStreakWidth ?? fallback.rainStreakWidth,
+    rainMaxVelocity: data.rain_max_velocity ?? data.rainMaxVelocity ?? fallback.rainMaxVelocity,
     lightningFlashDurationMs:
       data.lightning_flash_duration_ms ??
       data.lightningFlashDurationMs ??
@@ -543,10 +559,11 @@ export async function loadRenderConfig(serverOrigin: string): Promise<RenderConf
     cameraMaxPolarAngle: 1.52,
     cameraStartDistance: 6.0,
     cameraPanSpeed: 8.0,
+    cameraZoomSpeed: 2.0,
     idleDropTimeoutMs: 30000,
     shadowMapSize: 2048,
     debugOverlayEnabled: true,
-    debugOverlayKey: '`',
+    debugOverlayKey: 'Shift',
     pauseOnHidden: true,
     qualityTiers: [
       {
@@ -601,6 +618,9 @@ export async function loadRenderConfig(serverOrigin: string): Promise<RenderConf
     rainBoxWidth: 60.0,
     rainBoxHeight: 35.0,
     rainParticleSize: 0.25,
+    rainStreakLength: 25.0,
+    rainStreakWidth: 0.02,
+    rainMaxVelocity: 35.0,
     lightningFlashDurationMs: 120,
     lightningIntensityBoost: 4.0,
     lightningMinIntervalS: 3.5,

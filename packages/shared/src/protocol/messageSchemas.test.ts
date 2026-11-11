@@ -43,12 +43,14 @@ describe('validateMessage', () => {
   it('accepts a well-formed GROWTH_INTENT', () => {
     assert.deepEqual(
       validateMessage(4, {
-        plantId: 'p1',
-        nodeId: 'n1',
-        direction: { x: 0, y: 1, z: 0 },
-        nodeType: 'stem',
-        isAttack: false,
-        tick: 5,
+        intent: {
+          plantId: 'p1',
+          nodeId: 'n1',
+          direction: { x: 0, y: 1, z: 0 },
+          nodeType: 'stem',
+          isAttack: false,
+          tick: 5,
+        },
       }).issues,
       [],
     );
@@ -57,12 +59,14 @@ describe('validateMessage', () => {
   it('rejects GROWTH_INTENT with a bad direction', () => {
     assert.ok(
       codes(4, {
-        plantId: 'p1',
-        nodeId: 'n1',
-        direction: { x: 0, y: 1 }, // missing z
-        nodeType: 'stem',
-        isAttack: false,
-        tick: 5,
+        intent: {
+          plantId: 'p1',
+          nodeId: 'n1',
+          direction: { x: 0, y: 1 }, // missing z
+          nodeType: 'stem',
+          isAttack: false,
+          tick: 5,
+        },
       }).includes('message.field_missing'),
     );
   });
@@ -70,12 +74,14 @@ describe('validateMessage', () => {
   it('rejects GROWTH_INTENT with non-integer... accepts numeric tick', () => {
     assert.deepEqual(
       validateMessage(4, {
-        plantId: 'p1',
-        nodeId: 'n1',
-        direction: { x: 0, y: 0, z: 0 },
-        nodeType: 'stem',
-        isAttack: false,
-        tick: 5,
+        intent: {
+          plantId: 'p1',
+          nodeId: 'n1',
+          direction: { x: 0, y: 0, z: 0 },
+          nodeType: 'stem',
+          isAttack: false,
+          tick: 5,
+        },
       }).issues,
       [],
     );

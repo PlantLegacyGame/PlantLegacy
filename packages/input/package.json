@@ -1,0 +1,14 @@
+{
+  "name": "@plant-legacy/input",
+  "version": "0.1.0",
+  "private": false,
+  "type": "module",
+  "description": "Dependency-free input action abstraction: InputBus dispatcher + per-action state machine. Reusable across any JS/TS project.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "node --test \"src/**/*.test.ts\""
+  }
+}
