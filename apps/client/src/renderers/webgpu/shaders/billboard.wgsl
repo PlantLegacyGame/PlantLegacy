@@ -11,6 +11,9 @@ struct VertexOutput {
   @location(3) isOwn: f32,
   @location(4) @interpolate(flat) plantIndex: u32,
   @location(5) @interpolate(flat) tier: u32,
+  @location(6) @interpolate(flat) blendFactor: f32,
+  // C02b: mutation signature bits for this plant.
+  @location(7) @interpolate(flat) mutationMask: u32,
 }
 
 @group(0) @binding(0) var<uniform> frame: FrameUniforms;
@@ -36,17 +39,19 @@ const IMPOSTOR_TILE_SIZE: f32 = 128.0;
 const IMPOSTOR_VIEWS_HORIZONTAL: u32 = 8;
 const IMPOSTOR_VIEWS_VERTICAL: u32 = 2;
 
-fn hiddenVertex() -> VertexOutput {
-  return VertexOutput(
-    vec4f(2.0, 2.0, 2.0, 1.0),
-    vec2f(0.0, 0.0),
-    vec3f(0.0, 0.0, 0.0),
-    vec3f(0.0, 0.0, 0.0),
-    0.0,
-    0u,
-    4u,
-  );
-}
+ fn hiddenVertex() -> VertexOutput {
+   return VertexOutput(
+     vec4f(2.0, 2.0, 2.0, 1.0),
+     vec2f(0.0, 0.0),
+     vec3f(0.0, 0.0, 0.0),
+     vec3f(0.0, 0.0, 0.0),
+     0.0,
+     0u,
+     4u,
+     0.0,
+     0u,
+   );
+ }
 
 @vertex
 fn vs_main(
@@ -58,7 +63,7 @@ fn vs_main(
   }
 
   let renderInfo = renderData[instanceIndex];
-  if (renderInfo.visible == 0u || renderInfo.tier < 2u) {
+  if (renderInfo.visible == 0u || renderInfo.tier < 1u || (renderInfo.tier == 1u && renderInfo.blendFactor <= 0.0)) {
     return hiddenVertex();
   }
 
@@ -98,6 +103,8 @@ fn vs_main(
     isOwn,
     instanceIndex,
     renderInfo.tier,
+    renderInfo.blendFactor,
+    plant.mutationMask,
   );
 }
 
@@ -143,6 +150,11 @@ fn calculateImpostorUV(plantIndex: u32, cameraRight: vec3f, cameraUp: vec3f, cam
 
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4f {
+  // Distant plants are buried by the same soil test as the near ones.
+  if (soilOccludes(input.worldPosition)) {
+    discard;
+  }
+
   let distanceFromCenter = length(input.uv - vec2f(0.5)) * 2.0;
   var alpha = 1.0 - smoothstep(0.45, 1.0, distanceFromCenter);
   if (alpha < 0.04) {
@@ -169,7 +181,13 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4f {
   let rim = pow(1.0 - max(dot(approxNormal, viewDir), 0.0), 2.0) * 0.15;
   color += vec3f(0.12, 0.22, 0.12) * rim;
 
-  if (frame.mutation0Param > 0.01) {
+  // C02b: mutation signatures. Billboards are per plant, not per node, so the
+  // plant's mask decides which signatures show at distance.
+  if ((input.mutationMask & 4u) != 0u) {
+    let mottle = 0.5 + 0.5 * sin(input.worldPosition.x * 9.0) * sin(input.worldPosition.z * 7.0);
+    color = mix(color, color * vec3f(0.82, 1.08, 0.62), mottle * frame.mutation2Param);
+  }
+  if ((input.mutationMask & 1u) != 0u && frame.mutation0Param > 0.01) {
     color += vec3f(0.20, 0.75, 0.45) * (frame.mutation0Param * 0.18);
   }
 
@@ -185,7 +203,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4f {
   );
   color = mix(color, texColor, 0.5); // Blend with procedural color
 
-  color = applyRootSight(color, input.worldPosition, 1.0, input.isOwn, frame);
+  color = applyRootSight(color, input.worldPosition, 1.0, input.isOwn, frame).rgb;
   
   // C02b: Impostor atlas sampling
   let impostorUV = calculateImpostorUV(input.plantIndex, frame.cameraRight.xyz, frame.cameraUp.xyz, -frame.cameraForward.xyz);
@@ -193,5 +211,5 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4f {
   let impostorColor = textureSampleLevel(impostorAtlas, impostorSampler, impostorUV, 0.0).rgb;
   color = mix(color, impostorColor, select(0.0, 0.5, hasImpostor));
 
-  return vec4f(color * alpha, alpha);
+  return vec4f(color * alpha, alpha * input.blendFactor);
 }

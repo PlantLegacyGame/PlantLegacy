@@ -34,24 +34,24 @@
         },
         "day_night_curve": {
             "type": "array",
-            "value": [0.0, 0.0, 0.0, 0.0, 0.05, 0.2, 0.5, 0.8, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.9, 0.8, 0.6, 0.4, 0.2, 0.05, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
-            "notes": "Day/night multiplier curve (32 steps, 0=midnight, 8=6am, 16=noon, 24=6pm)"
+            "value": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.02, 0.15, 0.45, 0.7, 0.9, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.9, 0.7, 0.45, 0.15, 0.02, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "notes": "Day/night multiplier curve, sampled at index = timeOfDay * 32. 0 = midnight, 8 (0.25) = sunrise, 16 (0.5) = noon, 24 (0.75) = sunset: the same phase as the renderer's sun arc. The previous curve peaked at sunrise and reached zero by mid-afternoon, so the sky stayed bright while tile light (and germination, and photosynthesis) read 0 for the rest of the day."
         },
         "tile_moisture_base": {
             "type": "integer",
-            "value": 40,
+            "value": 150,
             "range": [0, 500],
             "notes": "Base moisture level"
         },
         "rain_gain_per_s": {
             "type": "number",
-            "value": 0.5,
+            "value": 1.5,
             "range": [0, 5],
             "notes": "Moisture gain per second during rain"
         },
         "evaporation_per_s": {
             "type": "number",
-            "value": 0.1,
+            "value": 0.025,
             "range": [0, 1],
             "notes": "Base moisture loss per second at reference temperature (20°C)"
         },
@@ -99,9 +99,9 @@
         },
         "absorption_per_s": {
             "type": "number",
-            "value": 0.2,
+            "value": 2.4,
             "range": [0, 5],
-            "notes": "Minerals/moisture absorbed by roots per second"
+            "notes": "Minerals/moisture absorbed by roots per second, per unit of node draw. Multiplied by the root node's resource_draw_water / resource_draw_minerals."
         },
         "absorption_radius": {
             "type": "number",
@@ -135,15 +135,45 @@
         },
         "photosynthesis_rate": {
             "type": "number",
-            "value": 10000.0,
-            "range": [0, 50000],
-            "notes": "Base photosynthesis rate"
+            "value": 1.0,
+            "range": [0, 10],
+            "notes": "Global multiplier on photosynthetic energy output. Structural biomass does NOT come from photosynthesis; only node growth creates biomass."
         },
         "photosynthesis_energy_per_second": {
             "type": "number",
-            "value": 10.0,
+            "value": 2.0,
             "range": [0.1, 100.0],
-            "notes": "Base energy production per leaf per second at max light/moisture/minerals"
+            "notes": "Base energy per photosynthetic organ per second at full light, full hydration and optimum temperature, before the organ's photosynthesis stat modifier"
+        },
+        "photosynthesis_water_per_energy": {
+            "type": "number",
+            "value": 0.03,
+            "range": [0, 1],
+            "notes": "Stored water spent per unit of energy fixed by photosynthesis (transpirational cost of carbon gain)"
+        },
+        "photosynthesis_mineral_per_energy": {
+            "type": "number",
+            "value": 0.006,
+            "range": [0, 1],
+            "notes": "Stored minerals spent per unit of energy fixed by photosynthesis (enzyme cofactors such as magnesium in chlorophyll)"
+        },
+        "water_status_full_fraction": {
+            "type": "number",
+            "value": 0.12,
+            "range": [0.05, 1],
+            "notes": "Fraction of water capacity at which the plant counts as fully hydrated for photosynthesis. Below this, carbon gain falls away."
+        },
+        "mineral_status_full_fraction": {
+            "type": "number",
+            "value": 0.12,
+            "range": [0.05, 1],
+            "notes": "Fraction of mineral capacity at which the plant counts as fully supplied for photosynthesis"
+        },
+        "night_transpiration_multiplier": {
+            "type": "number",
+            "value": 0.15,
+            "range": [0, 1],
+            "notes": "Fraction of daytime water loss that continues at night. Stomata close in darkness but rarely fully; measured night transpiration is often 10-30% of daytime."
         },
         "light_factor_curve": {
             "type": "array",
@@ -178,7 +208,7 @@
         },
         "diffusion_rate": {
             "type": "number",
-            "value": 0.01,
+            "value": 0.03,
             "range": [0, 0.1],
             "notes": "Resource diffusion rate between tiles"
         },

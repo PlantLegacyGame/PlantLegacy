@@ -1,37 +1,106 @@
+/* ===== PLANT LEGACY — GAME UI =====
+   Earthy, solid, warm, plant, soft, close together.
+   No website chrome — just game HUD that feels like part of the soil. */
+
 :root {
-  --loam-900: #14180f;
-  --loam-800: #1a1f14;
-  --loam-700: #21281a;
-  --bark-900: #0d0f0a;
-  --bark-800: #151810;
-  --bark-700: #2a281f;
-  --bark-600: #3a3828;
-  --bark-500: #4a4633;
-  --bark-400: #5a563f;
-  --bark-300: #7a7555;
+  /* Earthy soil / bark — grounding, dark, rich */
+  --loam-900: #0a0c08;
+  --loam-800: #12140e;
+  --loam-700: #1c1e14;
+  --bark-900: #050603;
+  --bark-800: #0b0d07;
+  --bark-700: #181a12;
+  --bark-600: #28271c;
+  --bark-500: #3c3a2b;
+  --bark-400: #54523e;
+  --bark-300: #706c56;
   --bark-200: #9a9577;
   --bark-100: #bab699;
-  --bone-300: #cfc8b2;
-  --bone-200: #dfdac8;
-  --bone-100: #efe9d8;
-  --leaf-800: #2a3a1a;
-  --leaf-700: #3a5525;
-  --leaf-600: #5a7a35;
-  --leaf-500: #7fa648;
-  --leaf-400: #9fc860;
-  --leaf-300: #bfea78;
-  --leaf-200: #dfee90;
-  --leaf-100: #efffb0;
-  --sprout-300: #b7d47c;
-  --sprout-200: #cfe8a0;
-  --sprout-100: #e7f4c8;
-  --ember-500: #d4553a;
-  --ember-400: #e07555;
-  --ember-300: #ec9578;
+
+  /* Warm parchment / bone — soft light surfaces (high contrast text) */
+  --bone-300: #e3dcc2;
+  --bone-200: #efe9d8;
+  --bone-100: #f7f4ed;
+  --bone-50: #fdfbf6;
+
+  /* Plant life — leaf greens, tender sprouts (vibrant, distinct) */
+  --leaf-900: #1c2610;
+  --leaf-800: #2a3a18;
+  --leaf-700: #426520;
+  --leaf-600: #5a902e;
+  --leaf-500: #7db83d;
+  --leaf-400: #9ed95c;
+  --leaf-300: #c8ff80;
+  --leaf-200: #dfee8e;
+  --leaf-100: #effeb0;
+
+  /* Sprout — tender new growth yellow-green */
+  --sprout-300: #c8e86c;
+  --sprout-200: #dcf0a0;
+  --sprout-100: #eef4c8;
+
+  /* Ember — warnings, dry soil (bright, attention-grabbing) */
+  --ember-900: #5c2215;
+  --ember-800: #7a3020;
+  --ember-700: #a5442a;
+  --ember-600: #d06034;
+  --ember-500: #ee7040;
+  --ember-400: #ff8c5f;
+
+  /* Resource accents — vibrant, high distinction */
+  --gold-400: #f0c05b;
+  --water-400: #8ec9f0;
+  --mineral-400: #c8a8f0;
+
   --text-scale: 1;
+
+  /* HUD tokens — soft, organic, plant-like, fewer hard edges */
+  --hud-bg: rgba(10, 12, 8, 0.95);
+  --hud-bg-hover: rgba(18, 22, 14, 0.96);
+  --hud-border: rgba(94, 122, 53, 0.35);
+  --hud-border-focus: var(--leaf-400);
+  --hud-border-muted: rgba(50, 58, 40, 0.5);
+  --hud-shadow: 0 16px 48px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(157, 198, 94, 0.1);
+  --hud-shadow-sm: 0 8px 24px rgba(0, 0, 0, 0.5);
+  --hud-radius: 14px;
+  --hud-radius-sm: 10px;
+
+  /* Responsive HUD metrics. Every panel pulls its padding, type size and edge
+     inset from these, so the whole HUD tightens on small screens and stops
+     wasting space on large ones instead of using fixed pixels. */
+  --hud-font-sm: clamp(0.58rem, 0.5rem + 0.26vw, 0.74rem);
+  --hud-font-md: clamp(0.64rem, 0.55rem + 0.3vw, 0.82rem);
+  --hud-pad-y: clamp(3px, 0.6vh, 8px);
+  --hud-pad-x: clamp(6px, 0.8vw, 12px);
+  --hud-gap: clamp(2px, 0.4vh, 6px);
+  --hud-corner: clamp(8px, 1.1vw, 28px);
+  --hud-detail-bottom: var(--hud-corner);
+  --hud-top: clamp(44px, 8vh, 96px);
+  --hud-panel-max-h: clamp(150px, 44vh, 540px);
+  /* Chat box: fixed height so it never grows while messages arrive; the list
+     scrolls inside. Width shrinks with the viewport. */
+  --hud-chat-h: clamp(150px, 30vh, 400px);
+  --hud-chat-w: clamp(200px, 34vw, 320px);
+  --hud-readout-top: var(--hud-top);
+  --hud-transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+  --leaf-glow: rgba(157, 198, 94, 0.18);
+  --ember-glow: rgba(238, 112, 64, 0.18);
+  --warm-ink: #f0ead6;
+  --ink-muted: #c9c2ad;
+  --ink-dim: #9a937a;
+
+  --ok-color: var(--leaf-500);
+  --low-color: var(--ember-500);
+
+  /* Cinematic overlay tokens — vignette, film grain, atmospheric depth */
+  --vignette: radial-gradient(circle at 50% 50%, transparent 0%, rgba(0, 0, 0, 0.55) 100%);
+  --film-grain: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)' opacity='0.03'/%3E%3C/svg%3E");
 }
 
-* {
+/* Base */
+*,
+*::before,
+*::after {
   box-sizing: border-box;
   margin: 0;
   padding: 0;
@@ -43,12 +112,13 @@ body {
   padding: 0;
   width: 100%;
   height: 100%;
-  background: radial-gradient(circle at 50% 0%, #232a19 0%, var(--loam-900) 70%);
+  background: radial-gradient(circle at 50% 0%, #2d371f 0%, var(--loam-900) 70%);
   color: var(--bone-100);
-  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
-  font-size: calc(16px * var(--text-scale));
-  line-height: 1.5;
+  font-family: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: calc(13px * var(--text-scale));
+  line-height: 1.3;
   overflow: hidden;
+  -webkit-font-smoothing: antialiased;
 }
 
 #app {
@@ -68,6 +138,489 @@ body {
   touch-action: none;
 }
 
+/* Cinematic overlay — vignette + film grain drawn over canvas but behind UI.
+   Draws the eye toward the center where the plant lives, adding atmosphere
+   and depth like film cinematography. */
+#cinematic-overlay {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 50;
+  background: var(--vignette);
+  mask-image: var(--film-grain);
+  -webkit-mask-image: var(--film-grain);
+}
+
+/* ===== HUD primitives — game UI, not website chrome ===== */
+
+.hud-panel {
+  position: fixed;
+  pointer-events: auto;
+  inset: auto;
+  background: linear-gradient(180deg, rgba(10, 12, 8, 0.96) 0%, rgba(18, 22, 14, 0.9) 100%);
+  border: 1.5px solid var(--hud-border);
+  border-radius: var(--hud-radius);
+  box-shadow: var(--hud-shadow);
+  color: var(--warm-ink);
+  /* Every HUD panel carries live numbers; equal-width digits stop a value from
+     changing the width of the text (and the panel) as it ticks. */
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  backdrop-filter: blur(8px);
+}
+
+/* Centered modal panels — inventory, etc. */
+#inventory-overview-panel {
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 300;
+}
+
+.hud-panel-title {
+  margin: 0;
+  padding: 11px 14px;
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--leaf-300);
+  background: rgba(94, 122, 53, 0.06);
+  border-bottom: 1px solid rgba(94, 122, 53, 0.1);
+}
+
+.hud-btn {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 7px 14px;
+  border: 1.5px solid var(--hud-border);
+  border-radius: var(--hud-radius-sm);
+  background: rgba(17, 19, 12, 0.7);
+  color: var(--warm-ink);
+  font-family: inherit;
+  font-size: 0.78rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: var(--hud-transition);
+  white-space: nowrap;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+}
+
+.hud-btn:hover:not(:disabled) {
+  border-color: var(--hud-border-focus);
+  background: rgba(26, 34, 20, 0.75);
+  color: var(--leaf-300);
+  box-shadow: 0 6px 18px var(--leaf-glow);
+}
+
+.hud-btn:active:not(:disabled) {
+  border-color: var(--leaf-500);
+  background: var(--leaf-600);
+  color: var(--bark-900);
+  transform: scale(0.96);
+}
+
+.hud-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  filter: grayscale(0.7);
+  border-color: var(--bark-600);
+}
+
+.hud-btn:focus-visible {
+  outline: none;
+  border-color: var(--leaf-500);
+  box-shadow:
+    0 0 0 2px var(--leaf-glow),
+    var(--hud-shadow-sm);
+}
+
+.hud-slot:focus-visible {
+  outline: none;
+  border-color: var(--leaf-500);
+  box-shadow: 0 0 0 2px var(--leaf-glow);
+}
+
+.hud-btn-primary {
+  background: var(--leaf-600);
+  border-color: var(--leaf-500);
+  color: var(--bark-900);
+}
+
+.hud-btn-primary:hover:not(:disabled) {
+  background: var(--leaf-500);
+  border-color: var(--leaf-400);
+  box-shadow: 0 6px 18px var(--leaf-glow);
+}
+
+.hud-btn-group {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 14px;
+}
+
+.hud-card {
+  background: rgba(14, 17, 10, 0.4);
+  border: 1px solid rgba(94, 122, 53, 0.15);
+  border-radius: var(--hud-radius-sm);
+  padding: 10px 12px;
+  margin: 12px 0;
+  overflow: hidden;
+  transition: var(--hud-transition);
+  box-shadow: var(--hud-shadow-sm);
+}
+
+.hud-card * {
+  overflow-wrap: break-word;
+}
+
+/* Narrow or short screens: the bottom band is crowded, so the tick readout
+   lifts above the always-on "G" hint instead of running into it. */
+@media (max-width: 720px), (max-height: 520px) {
+  :root {
+    --hud-detail-bottom: calc(var(--hud-corner) + 26px);
+  }
+}
+
+/* Phones only: the chat takes the width, the resource readout drops below it,
+   and the growth panel keeps clear of both by capping its height. The breakpoint
+   stays below typical panel widths so a narrow desktop window keeps the normal
+   HUD instead of switching to this stacked phone layout. */
+@media (max-width: 360px) {
+  :root {
+    --hud-chat-w: calc(100vw - var(--hud-corner) * 2);
+    --hud-readout-top: calc(var(--hud-top) + var(--hud-chat-h) + 8px);
+    --hud-panel-max-h: clamp(110px, 26vh, 240px);
+  }
+}
+
+/* Short windows (landscape phone): same idea, vertical room is the constraint. */
+@media (max-height: 520px) {
+  :root {
+    --hud-chat-h: clamp(130px, 26vh, 200px);
+    --hud-panel-max-h: clamp(110px, 30vh, 200px);
+  }
+}
+
+.hud-card:hover {
+  border-color: rgba(157, 198, 94, 0.35);
+  background: rgba(20, 26, 15, 0.6);
+}
+
+.hud-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 0.62rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.hud-badge-ok {
+  background: rgba(125, 184, 61, 0.2);
+  color: var(--leaf-300);
+  border: 1px solid rgba(125, 184, 61, 0.4);
+}
+
+.hud-badge-low {
+  background: rgba(238, 112, 64, 0.2);
+  color: var(--ember-400);
+  border: 1px solid rgba(238, 112, 64, 0.4);
+}
+
+.hud-badge-neutral {
+  background: rgba(90, 122, 53, 0.2);
+  color: var(--bark-200);
+  border: 1px solid rgba(90, 122, 53, 0.4);
+}
+
+.hud-slot {
+  width: 40px;
+  height: 40px;
+  border: 1.5px solid var(--hud-border);
+  border-radius: var(--hud-radius-sm);
+  background: rgba(17, 19, 12, 0.6);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.6rem;
+  color: var(--warm-ink);
+  position: relative;
+  transition: var(--hud-transition);
+  overflow: hidden;
+  cursor: pointer;
+  flex-shrink: 0;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+}
+
+.hud-slot:hover {
+  border-color: var(--hud-border-focus);
+  background: rgba(26, 34, 20, 0.7);
+  box-shadow: 0 0 0 2px var(--leaf-glow);
+}
+
+.hud-slot:active {
+  transform: scale(0.94);
+  background: var(--leaf-600);
+  border-color: var(--leaf-500);
+  color: var(--bark-900);
+}
+
+.hud-slot-empty .slot-icon {
+  font-size: 1.3rem;
+  line-height: 1;
+  color: var(--bark-500);
+  opacity: 0.3;
+}
+
+.hud-slot-key {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  font-size: 0.55rem;
+  font-weight: 700;
+  color: var(--bone-300);
+  opacity: 0.45;
+}
+
+.hud-slot .slot-icon {
+  font-size: 1.3rem;
+  line-height: 1;
+  color: var(--bark-500);
+  opacity: 0.35;
+}
+
+.hud-slot .slot-label {
+  margin-top: 3px;
+  font-size: 0.6rem;
+  color: inherit;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+.hud-slot-filled {
+  background: linear-gradient(135deg, var(--leaf-700) 0%, var(--leaf-500) 100%);
+  color: var(--bark-900);
+  border-color: var(--leaf-400);
+}
+
+.hud-slot-filled .slot-icon {
+  opacity: 1;
+  color: var(--bark-900);
+}
+
+.hud-slot-filled .slot-label {
+  color: var(--bark-900);
+  font-weight: 700;
+}
+
+.hud-label {
+  display: block;
+  font-size: 0.6rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+  margin-bottom: 3px;
+}
+
+.hud-value {
+  font-size: 0.85rem;
+  color: var(--bone-100);
+  font-weight: 600;
+}
+
+.hud-note {
+  font-size: 0.72rem;
+  color: var(--ink-muted);
+  line-height: 1.5;
+  overflow-wrap: break-word;
+}
+
+.hud-divider {
+  border: none;
+  border-top: 1px solid var(--hud-border-muted);
+  margin: 14px 0;
+}
+
+.hud-group-title {
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--leaf-400);
+  margin: 18px 0 10px;
+  padding-left: 3px;
+}
+
+/* Toasts — warm, soft, close to bottom center */
+.ui-toast {
+  position: fixed;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 500;
+  background: rgba(22, 27, 18, 0.94);
+  border: 1.5px solid var(--hud-border);
+  border-radius: var(--hud-radius);
+  box-shadow: var(--hud-shadow);
+  color: var(--warm-ink);
+  font-family: inherit;
+  font-size: 0.76rem;
+  padding: 10px 14px;
+  max-width: 85vw;
+  pointer-events: none;
+  overflow-wrap: break-word;
+  animation: toastSlide 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.ui-toast.ui-toast-error {
+  border-color: var(--ember-400);
+  background: rgba(238, 112, 64, 0.18);
+}
+
+.ui-toast.ui-toast-state {
+  border-color: var(--leaf-500);
+  background: rgba(125, 184, 61, 0.18);
+}
+
+@keyframes toastSlide {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 6px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+
+/* Growth option — compact, visual-first */
+.hud-grow-option {
+  border: 1.5px solid var(--hud-border-muted);
+  border-radius: var(--hud-radius-sm);
+  background: rgba(10, 12, 8, 0.45);
+  padding: 10px 12px;
+  margin: 10px 0;
+  cursor: pointer;
+  transition: var(--hud-transition);
+  overflow: hidden;
+  box-shadow: var(--hud-shadow-sm);
+}
+
+.hud-grow-option:hover:not([disabled]) {
+  border-color: var(--hud-border-focus);
+  background: rgba(26, 34, 20, 0.62);
+  box-shadow: 0 0 0 2px var(--leaf-glow);
+}
+
+.hud-grow-option:active:not([disabled]) {
+  transform: scale(0.97);
+}
+
+.hud-grow-option[disabled] {
+  opacity: 0.5;
+  cursor: not-allowed;
+  filter: grayscale(0.7);
+  border-color: var(--bark-600);
+}
+
+.hud-grow-option.selected {
+  border-color: var(--leaf-500);
+  background: rgba(125, 184, 61, 0.18);
+  box-shadow: 0 0 0 2px var(--leaf-glow);
+}
+
+.hud-grow-option__name {
+  font-weight: 800;
+  font-size: 0.88rem;
+  color: var(--leaf-300);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.hud-grow-option__cost {
+  font-size: 0.7rem;
+  color: var(--warm-ink);
+  margin-top: 4px;
+  white-space: nowrap;
+}
+
+.hud-grow-option__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 0.62rem;
+  font-weight: 800;
+  border: 1px solid var(--hud-border-muted);
+  white-space: nowrap;
+  margin-top: 3px;
+}
+
+.hud-grow-option__chip-root {
+  background: rgba(90, 122, 53, 0.25);
+  color: var(--leaf-300);
+  border-color: rgba(90, 122, 53, 0.45);
+}
+
+.hud-grow-option__chip-stem {
+  background: rgba(125, 184, 61, 0.25);
+  color: var(--leaf-300);
+  border-color: rgba(125, 184, 61, 0.45);
+}
+
+.hud-grow-option__chip-leaf {
+  background: rgba(191, 232, 118, 0.2);
+  color: var(--leaf-300);
+  border-color: rgba(191, 232, 118, 0.4);
+}
+
+.hud-grow-option__status {
+  font-size: 0.64rem;
+  font-weight: 700;
+  margin-top: 3px;
+}
+
+.hud-cue {
+  border: 1px solid var(--hud-border-focus);
+  border-radius: var(--hud-radius-sm);
+  background: rgba(157, 198, 94, 0.08);
+  padding: 10px 12px;
+  margin: 12px 0;
+  font-size: 0.72rem;
+  color: var(--warm-ink);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Animations */
+@keyframes cozyFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Legacy shell compat */
 .shell {
   max-width: 40rem;
   margin: 0 auto;
@@ -89,10 +642,10 @@ body {
 }
 
 .panel {
-  border: 1px solid var(--bark-700);
-  border-radius: 12px;
+  border: 2px solid var(--hud-border);
+  border-radius: var(--hud-radius);
   padding: 1rem 1.25rem;
-  background: rgb(27 32 20 / 70%);
+  background: var(--hud-bg);
 }
 
 .status {
@@ -110,7 +663,7 @@ body {
 
 .detail {
   margin: 0.75rem 0 0;
-  font-family: ui-monospace, "JetBrains Mono", monospace;
+  font-family: inherit;
   font-size: 0.8rem;
   color: var(--bone-300);
   white-space: pre-wrap;
@@ -122,7 +675,7 @@ body {
   color: var(--bone-300);
 }
 
-/* ===== DEV PANEL STYLES ===== */
+/* Dev panel — game-styled, stays out of the way */
 #dev-panel {
   position: fixed;
   top: 60px;
@@ -131,11 +684,11 @@ body {
   z-index: 10000;
   background: linear-gradient(180deg, var(--bark-900) 0%, var(--bark-800) 100%);
   border: 2px solid var(--leaf-600);
-  border-radius: 12px;
+  border-radius: var(--hud-radius);
   padding: 0;
   color: var(--bone-100);
   font-family: ui-monospace, "JetBrains Mono", monospace;
-  font-size: 12px;
+  font-size: 11px;
   width: 420px;
   max-width: 90vw;
   max-height: calc(100vh - 80px);
@@ -143,9 +696,8 @@ body {
   pointer-events: auto;
   display: none;
   box-shadow:
-    0 16px 48px rgba(0, 0, 0, 0.7),
-    inset 0 1px 0 rgba(255, 255, 255, 0.05),
-    0 0 0 1px rgba(127, 166, 72, 0.1);
+    0 20px 60px rgba(0, 0, 0, 0.7),
+    inset 0 1px 0 rgba(157, 198, 94, 0.1);
   font-weight: 400;
   resize: both;
   min-width: 380px;
@@ -160,10 +712,10 @@ body {
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
-  padding: 6px 8px;
+  padding: 8px 12px;
   background: var(--bark-800);
-  border-bottom: 1px solid var(--bark-600);
-  border-radius: 10px 10px 0 0;
+  border-bottom: 1px solid var(--hud-border);
+  border-radius: var(--hud-radius) var(--hud-radius) 0 0;
   user-select: none;
 }
 
@@ -176,7 +728,7 @@ body {
   font-size: 10px;
   text-transform: uppercase;
   letter-spacing: 0.5px;
-  transition: all 0.15s;
+  transition: var(--hud-transition);
   display: flex;
   align-items: center;
   gap: 6px;
@@ -185,7 +737,7 @@ body {
 }
 
 #dev-panel .dev-tab:hover {
-  background: rgba(74, 96, 54, 0.2);
+  background: rgba(86, 120, 51, 0.18);
   color: var(--leaf-300);
   border-color: var(--bark-500);
 }
@@ -198,9 +750,9 @@ body {
 }
 
 #dev-panel .dev-content {
-  padding: 12px 16px;
+  padding: 14px 18px;
   display: none;
-  max-height: calc(100vh - 200px);
+  max-height: calc(100vh - 220px);
   overflow-y: auto;
   scrollbar-width: thin;
   scrollbar-color: var(--leaf-500) var(--bark-800);
@@ -227,18 +779,6 @@ body {
 
 #dev-panel .dev-content.active {
   display: block;
-  animation: devFadeIn 0.15s ease;
-}
-
-@keyframes devFadeIn {
-  from {
-    opacity: 0;
-    transform: translateY(4px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
 }
 
 #dev-panel .dev-category {
@@ -253,31 +793,32 @@ body {
   text-transform: uppercase;
   letter-spacing: 1px;
   color: var(--leaf-500);
-  margin-bottom: 8px;
-  padding-bottom: 4px;
-  border-bottom: 1px solid var(--bark-700);
+  margin-bottom: 10px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--bark-600);
   cursor: pointer;
   user-select: none;
 }
 
 #dev-panel .dev-entry {
-  background: rgba(30, 35, 22, 0.6);
-  border: 1px solid var(--bark-700);
-  border-radius: 8px;
-  margin-bottom: 8px;
+  background: rgba(28, 33, 22, 0.55);
+  border: 1px solid var(--hud-border);
+  border-radius: var(--hud-radius);
+  margin-bottom: 10px;
   overflow: hidden;
-  transition: all 0.2s;
+  transition: var(--hud-transition);
 }
 
 #dev-panel .dev-entry:hover {
-  border-color: var(--bark-500);
+  border-color: var(--leaf-400);
+  background: rgba(38, 46, 28, 0.7);
 }
 
 #dev-panel .dev-entry-header {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 10px 12px;
+  padding: 11px 14px;
   cursor: pointer;
   user-select: none;
 }
@@ -302,7 +843,7 @@ body {
   flex: 1;
   color: var(--bone-100);
   font-size: 11px;
-  font-weight: 500;
+  font-weight: 600;
 }
 
 #dev-panel .dev-entry-live {
@@ -310,9 +851,9 @@ body {
   align-items: center;
   gap: 6px;
   padding: 2px 8px;
-  background: rgba(74, 96, 54, 0.15);
+  background: rgba(86, 120, 51, 0.15);
   border: 1px solid var(--leaf-800);
-  border-radius: 4px;
+  border-radius: 6px;
   font-size: 10px;
   font-family: inherit;
   color: var(--leaf-300);
@@ -327,14 +868,14 @@ body {
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  border-radius: 4px;
+  border-radius: 6px;
   color: var(--bark-400);
-  transition: all 0.15s;
+  transition: var(--hud-transition);
   flex-shrink: 0;
 }
 
 #dev-panel .dev-entry-lock:hover {
-  background: rgba(74, 96, 54, 0.2);
+  background: rgba(86, 120, 51, 0.18);
   color: var(--leaf-300);
 }
 
@@ -352,12 +893,12 @@ body {
   transition:
     max-height 0.25s ease,
     padding 0.25s ease;
-  padding: 0 12px;
+  padding: 0 14px;
 }
 
 #dev-panel .dev-entry.expanded .dev-entry-body {
-  max-height: 500px;
-  padding: 0 12px 12px;
+  max-height: 600px;
+  padding: 0 14px 14px;
 }
 
 #dev-panel .dev-entry-description {
@@ -365,7 +906,7 @@ body {
   font-size: 10px;
   line-height: 1.5;
   margin-bottom: 10px;
-  padding-top: 8px;
+  padding-top: 10px;
   border-top: 1px solid var(--bark-700);
 }
 
@@ -393,32 +934,34 @@ body {
 #dev-panel input[type="text"],
 #dev-panel select {
   background: var(--bark-900);
-  border: 1px solid var(--bark-600);
+  border: 1px solid var(--hud-border);
   color: var(--bone-100);
-  padding: 6px 10px;
-  border-radius: 4px;
+  padding: 7px 12px;
+  border-radius: 6px;
   font-family: inherit;
   font-size: 11px;
-  min-width: 100px;
+  min-width: 110px;
   flex: 1;
-  max-width: 200px;
+  max-width: 220px;
+  transition: var(--hud-transition);
 }
 
 #dev-panel input[type="number"]:focus,
 #dev-panel select:focus {
   outline: none;
   border-color: var(--leaf-500);
+  box-shadow: 0 0 0 2px rgba(125, 164, 70, 0.2);
 }
 
 #dev-panel .dev-toggle {
-  width: 44px;
-  height: 24px;
+  width: 46px;
+  height: 26px;
   background: var(--bark-700);
-  border: 1px solid var(--bark-600);
-  border-radius: 12px;
+  border: 1px solid var(--hud-border);
+  border-radius: 13px;
   position: relative;
   cursor: pointer;
-  transition: all 0.15s;
+  transition: var(--hud-transition);
 }
 
 #dev-panel .dev-toggle.active {
@@ -429,13 +972,13 @@ body {
 #dev-panel .dev-toggle::after {
   content: "";
   position: absolute;
-  top: 2px;
-  left: 2px;
+  top: 3px;
+  left: 3px;
   width: 18px;
   height: 18px;
   background: var(--bone-100);
   border-radius: 50%;
-  transition: transform 0.15s;
+  transition: transform 0.18s cubic-bezier(0.4, 0, 0.2, 1);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
 }
 
@@ -445,14 +988,14 @@ body {
 
 #dev-panel .dev-btn {
   background: var(--bark-800);
-  border: 1px solid var(--bark-600);
+  border: 1px solid var(--hud-border);
   color: var(--bone-100);
   padding: 8px 14px;
-  border-radius: 4px;
+  border-radius: 6px;
   cursor: pointer;
   font-family: inherit;
   font-size: 11px;
-  transition: all 0.1s;
+  transition: var(--hud-transition);
   flex: 1;
   min-width: 100px;
 }
@@ -479,13 +1022,13 @@ body {
 }
 
 #dev-panel .dev-btn-danger {
-  background: #8b3a3a;
+  background: #7a3a3a;
   border-color: #a84a4a;
   color: #ffd0d0;
 }
 
 #dev-panel .dev-btn-danger:hover {
-  background: #a84a4a;
+  background: #984a4a;
 }
 
 #dev-panel .dev-btn-group {
@@ -495,32 +1038,32 @@ body {
 }
 
 #dev-panel .dev-readonly-value {
-  background: rgba(30, 35, 22, 0.8);
-  border: 1px solid var(--bark-600);
-  padding: 6px 10px;
-  border-radius: 4px;
+  background: rgba(28, 33, 22, 0.7);
+  border: 1px solid var(--hud-border);
+  padding: 7px 12px;
+  border-radius: 6px;
   font-family: inherit;
   font-size: 11px;
   color: var(--bark-100);
-  min-width: 100px;
+  min-width: 110px;
   flex: 1;
-  max-width: 200px;
+  max-width: 220px;
   text-align: right;
 }
 
 #dev-panel .dev-close {
   position: absolute;
-  top: 8px;
-  right: 12px;
+  top: 10px;
+  right: 14px;
   background: none;
   border: none;
   color: var(--bark-300);
-  font-size: 18px;
+  font-size: 1.5rem;
   line-height: 1;
   padding: 6px;
+  border-radius: 6px;
   cursor: pointer;
-  border-radius: 4px;
-  transition: all 0.15s;
+  transition: var(--hud-transition);
 }
 
 #dev-panel .dev-close:hover {
@@ -530,14 +1073,15 @@ body {
 
 #dev-panel .dev-search {
   width: 100%;
-  padding: 10px 14px;
+  padding: 11px 16px;
   background: var(--bark-900);
-  border: 1px solid var(--bark-600);
-  border-radius: 6px;
+  border: 1px solid var(--hud-border);
+  border-radius: 8px;
   color: var(--bone-100);
   font-family: inherit;
   font-size: 11px;
-  margin-bottom: 12px;
+  margin-bottom: 14px;
+  transition: var(--hud-transition);
 }
 
 #dev-panel .dev-search:focus {
@@ -552,35 +1096,34 @@ body {
 #dev-panel .dev-validation-warning {
   color: #ff6b6b;
   font-size: 9px;
-  margin-top: 4px;
-  padding: 2px 6px;
+  margin-top: 5px;
+  padding: 3px 8px;
   background: rgba(255, 107, 107, 0.1);
-  border: 1px solid #ff6b6b33;
-  border-radius: 3px;
+  border: 1px solid rgba(255, 107, 107, 0.25);
+  border-radius: 4px;
 }
 
 #dev-panel .dev-validation-warning.warning {
   color: #ffb26b;
   background: rgba(255, 178, 107, 0.1);
-  border-color: #ffb26b33;
+  border-color: rgba(255, 178, 107, 0.25);
 }
 
-/* Draggable handle */
 #dev-panel .dev-drag-handle {
   position: absolute;
   top: 0;
   left: 0;
   right: 0;
-  height: 32px;
+  height: 34px;
   cursor: grab;
   background: linear-gradient(180deg, var(--bark-800) 0%, var(--bark-700) 100%);
-  border-bottom: 1px solid var(--bark-600);
-  border-radius: 10px 10px 0 0;
+  border-bottom: 1px solid var(--hud-border);
+  border-radius: var(--hud-radius) var(--hud-radius) 0 0;
   z-index: 10;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 12px;
+  padding: 0 14px;
   user-select: none;
 }
 
@@ -603,9 +1146,9 @@ body {
 
 #dev-panel .dev-minimize-btn,
 #dev-panel .dev-close-btn {
-  width: 24px;
-  height: 24px;
-  border-radius: 4px;
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
   background: var(--bark-700);
   border: 1px solid var(--bark-500);
   color: var(--bark-300);
@@ -613,7 +1156,7 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: all 0.15s;
+  transition: var(--hud-transition);
 }
 
 #dev-panel .dev-minimize-btn:hover,
@@ -629,7 +1172,7 @@ body {
 }
 
 #dev-panel.minimized {
-  height: 32px;
-  max-height: 32px;
+  height: 34px;
+  max-height: 34px;
   resize: none;
 }

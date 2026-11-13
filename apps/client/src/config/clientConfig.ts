@@ -16,13 +16,25 @@ export interface RenderConfig {
   maxPixelRatio: number;
   cameraSmoothing: number;
   cameraMinDistance: number;
+  cameraMinDistanceRoot: number;
   cameraMaxDistance: number;
   cameraMaxPolarAngle: number;
+  cameraCollisionEnabled: boolean;
+  cameraCollisionMargin: number;
   cameraStartDistance: number;
   cameraPanSpeed: number;
   cameraZoomSpeed: number;
   idleDropTimeoutMs: number;
   shadowMapSize: number;
+  shadowBias: number;
+  shadowNormalBias: number;
+  /** Radius of the planet the world sits on; 0 means a flat plane. */
+  planetRadiusM: number;
+  /** Orbit-view framing, as multiples of planetRadiusM. */
+  planetViewDistanceMultiplier: number;
+  planetViewFarMultiplier: number;
+  planetViewMinDistanceMultiplier: number;
+  planetViewNearMultiplier: number;
   debugOverlayEnabled: boolean;
   debugOverlayKey: string;
   pauseOnHidden: boolean;
@@ -67,6 +79,14 @@ export interface RenderConfig {
   rainStreakLength: number;
   rainStreakWidth: number;
   rainMaxVelocity: number;
+  /** Horizontal drift of rain streaks per unit fallen. */
+  rainSlant: number;
+  /** Orbit radius that puts the directional light on the visual sun. */
+  sunOrbitalDistance: number;
+  /** Cross-fade between weather sky/fog presets. */
+  weatherTransitionMs: number;
+  /** Peak flash intensity the storm state emits. */
+  lightningMaxIntensity: number;
   lightningFlashDurationMs: number;
   lightningIntensityBoost: number;
   lightningMinIntervalS: number;
@@ -74,8 +94,35 @@ export interface RenderConfig {
   soilDryColor: string;
   soilWetColor: string;
   soilMineralTint: string;
+  soilGrainStrength: number;
+  soilMineralStrength: number;
+  // Root Sight underground backdrop.
+  undergroundViewColor: string;
+  // Growth aim gizmo (ring + curved arrow) proportions, in metres / multiples.
+  growthAimRingScale: number;
+  growthAimRingThickness: number;
+  growthAimRingMin: number;
+  growthAimGrabPx: number;
+
+  growthAimReachMin: number;
+  growthAimTubeRadius: number;
+  growthAimHeadRadius: number;
+  growthAimHeadLength: number;
+  growthAimTipRadius: number;
+  growthAimCurveBend: number;
+  growthAimCurveWobble: number;
   terrainMeshSubdivisions: number;
   terrainRadius: number;
+  /** Peak height of the procedural ground relief, in metres. 0 = smooth sphere. */
+  terrainAmplitudeM: number;
+  /** Depth of the dirt layer under the surface, in metres. */
+  soilDepthM: number;
+  /** Minimum height the eye keeps above the terrain it is over, in metres. */
+  cameraGroundClearanceM: number;
+  /** Gravity for the player's vertical physics, in metres per second squared. */
+  playerGravityMps2: number;
+  /** How far above the ground the player spawns, in metres. */
+  playerSpawnHeightM: number;
   rootAuraRadius: number;
   // C02b: WebGPU plant renderer
   webgpuEnabled: boolean;
@@ -131,6 +178,30 @@ export interface RootSightConfig {
   cameraTarget: 'own_plant' | 'camera_position';
 }
 
+export interface ChatConfig {
+  proximityRangePx: number;
+  worldRateMsgPerMin: number;
+  logSize: number;
+}
+
+export interface NetworkConfig {
+  slowRttMs: number;
+  stallMs: number;
+}
+
+export interface ReportReason {
+  id: string;
+  label: string;
+  category: string;
+}
+
+export interface ReportsConfig {
+  reportReasons: ReportReason[];
+  contextLineCount: number;
+  reportFreeTextMax: number;
+  reportRateLimitPerMin: number;
+}
+
 interface QualityTierResponse {
   name?: string;
   pixel_ratio?: number;
@@ -155,10 +226,16 @@ interface RenderConfigResponse {
   cameraSmoothing?: number;
   camera_min_distance?: number;
   cameraMinDistance?: number;
+  camera_min_distance_root?: number;
+  cameraMinDistanceRoot?: number;
   camera_max_distance?: number;
   cameraMaxDistance?: number;
   camera_max_polar_angle?: number;
   cameraMaxPolarAngle?: number;
+  camera_collision_enabled?: boolean;
+  camera_collision_margin?: number;
+  cameraCollisionEnabled?: boolean;
+  cameraCollisionMargin?: number;
   camera_start_distance?: number;
   cameraStartDistance?: number;
   camera_pan_speed?: number;
@@ -169,6 +246,20 @@ interface RenderConfigResponse {
   idleDropTimeoutMs?: number;
   shadow_map_size?: number;
   shadowMapSize?: number;
+  shadow_bias?: number;
+  shadowBias?: number;
+  shadow_normal_bias?: number;
+  shadowNormalBias?: number;
+  planet_radius_m?: number;
+  planetRadiusM?: number;
+  planet_view_distance_multiplier?: number;
+  planetViewDistanceMultiplier?: number;
+  planet_view_far_multiplier?: number;
+  planetViewFarMultiplier?: number;
+  planet_view_min_distance_multiplier?: number;
+  planetViewMinDistanceMultiplier?: number;
+  planet_view_near_multiplier?: number;
+  planetViewNearMultiplier?: number;
   debug_overlay_enabled?: boolean;
   debugOverlayEnabled?: boolean;
   debug_overlay_key?: string;
@@ -251,16 +342,63 @@ interface RenderConfigResponse {
   lightningMinIntervalS?: number;
   lightning_max_interval_s?: number;
   lightningMaxIntervalS?: number;
+  rain_slant?: number;
+  rainSlant?: number;
+  sun_orbital_distance?: number;
+  sunOrbitalDistance?: number;
+  weather_transition_ms?: number;
+  weatherTransitionMs?: number;
+  lightning_max_intensity?: number;
+  lightningMaxIntensity?: number;
   soil_dry_color?: string;
   soilDryColor?: string;
   soil_wet_color?: string;
   soilWetColor?: string;
   soil_mineral_tint?: string;
   soilMineralTint?: string;
+  soil_grain_strength?: number;
+  soilGrainStrength?: number;
+  soil_mineral_strength?: number;
+  soilMineralStrength?: number;
+  underground_view_color?: string;
+  undergroundViewColor?: string;
+  growth_aim_ring_scale?: number;
+  growthAimRingScale?: number;
+  growth_aim_ring_thickness?: number;
+  growthAimRingThickness?: number;
+  growth_aim_ring_min?: number;
+  growthAimRingMin?: number;
+  growth_aim_grab_px?: number;
+  growthAimGrabPx?: number;
+
+  growth_aim_reach_min?: number;
+  growthAimReachMin?: number;
+  growth_aim_tube_radius?: number;
+  growthAimTubeRadius?: number;
+  growth_aim_head_radius?: number;
+  growthAimHeadRadius?: number;
+  growth_aim_head_length?: number;
+  growthAimHeadLength?: number;
+  growth_aim_tip_radius?: number;
+  growthAimTipRadius?: number;
+  growth_aim_curve_bend?: number;
+  growthAimCurveBend?: number;
+  growth_aim_curve_wobble?: number;
+  growthAimCurveWobble?: number;
   terrain_mesh_subdivisions?: number;
   terrainMeshSubdivisions?: number;
   terrain_radius?: number;
   terrainRadius?: number;
+  terrain_amplitude_m?: number;
+  terrainAmplitudeM?: number;
+  soil_depth_m?: number;
+  soilDepthM?: number;
+  camera_ground_clearance_m?: number;
+  cameraGroundClearanceM?: number;
+  player_gravity_mps2?: number;
+  playerGravityMps2?: number;
+  player_spawn_height_m?: number;
+  playerSpawnHeightM?: number;
   root_aura_radius?: number;
   rootAuraRadius?: number;
   webgpu_enabled?: boolean;
@@ -352,10 +490,18 @@ function normalizeRenderConfig(data: RenderConfigResponse, fallback: RenderConfi
     cameraSmoothing: data.camera_smoothing ?? data.cameraSmoothing ?? fallback.cameraSmoothing,
     cameraMinDistance:
       data.camera_min_distance ?? data.cameraMinDistance ?? fallback.cameraMinDistance,
+    cameraMinDistanceRoot:
+      data.camera_min_distance_root ?? data.cameraMinDistanceRoot ?? fallback.cameraMinDistanceRoot,
     cameraMaxDistance:
       data.camera_max_distance ?? data.cameraMaxDistance ?? fallback.cameraMaxDistance,
     cameraMaxPolarAngle:
       data.camera_max_polar_angle ?? data.cameraMaxPolarAngle ?? fallback.cameraMaxPolarAngle,
+    cameraCollisionEnabled:
+      data.camera_collision_enabled ??
+      data.cameraCollisionEnabled ??
+      fallback.cameraCollisionEnabled,
+    cameraCollisionMargin:
+      data.camera_collision_margin ?? data.cameraCollisionMargin ?? fallback.cameraCollisionMargin,
     cameraStartDistance:
       data.camera_start_distance ?? data.cameraStartDistance ?? fallback.cameraStartDistance,
     cameraPanSpeed: data.camera_pan_speed ?? data.cameraPanSpeed ?? fallback.cameraPanSpeed,
@@ -363,6 +509,25 @@ function normalizeRenderConfig(data: RenderConfigResponse, fallback: RenderConfi
     idleDropTimeoutMs:
       data.idle_drop_timeout_ms ?? data.idleDropTimeoutMs ?? fallback.idleDropTimeoutMs,
     shadowMapSize: data.shadow_map_size ?? data.shadowMapSize ?? fallback.shadowMapSize,
+    shadowBias: data.shadow_bias ?? data.shadowBias ?? fallback.shadowBias,
+    shadowNormalBias: data.shadow_normal_bias ?? data.shadowNormalBias ?? fallback.shadowNormalBias,
+    planetRadiusM: data.planet_radius_m ?? data.planetRadiusM ?? fallback.planetRadiusM,
+    planetViewDistanceMultiplier:
+      data.planet_view_distance_multiplier ??
+      data.planetViewDistanceMultiplier ??
+      fallback.planetViewDistanceMultiplier,
+    planetViewFarMultiplier:
+      data.planet_view_far_multiplier ??
+      data.planetViewFarMultiplier ??
+      fallback.planetViewFarMultiplier,
+    planetViewMinDistanceMultiplier:
+      data.planet_view_min_distance_multiplier ??
+      data.planetViewMinDistanceMultiplier ??
+      fallback.planetViewMinDistanceMultiplier,
+    planetViewNearMultiplier:
+      data.planet_view_near_multiplier ??
+      data.planetViewNearMultiplier ??
+      fallback.planetViewNearMultiplier,
     debugOverlayEnabled:
       data.debug_overlay_enabled ?? data.debugOverlayEnabled ?? fallback.debugOverlayEnabled,
     debugOverlayKey: data.debug_overlay_key ?? data.debugOverlayKey ?? fallback.debugOverlayKey,
@@ -426,14 +591,62 @@ function normalizeRenderConfig(data: RenderConfigResponse, fallback: RenderConfi
       data.lightning_min_interval_s ?? data.lightningMinIntervalS ?? fallback.lightningMinIntervalS,
     lightningMaxIntervalS:
       data.lightning_max_interval_s ?? data.lightningMaxIntervalS ?? fallback.lightningMaxIntervalS,
+    rainSlant: data.rain_slant ?? data.rainSlant ?? fallback.rainSlant,
+    sunOrbitalDistance:
+      data.sun_orbital_distance ?? data.sunOrbitalDistance ?? fallback.sunOrbitalDistance,
+    weatherTransitionMs:
+      data.weather_transition_ms ?? data.weatherTransitionMs ?? fallback.weatherTransitionMs,
+    lightningMaxIntensity:
+      data.lightning_max_intensity ?? data.lightningMaxIntensity ?? fallback.lightningMaxIntensity,
     soilDryColor: data.soil_dry_color ?? data.soilDryColor ?? fallback.soilDryColor,
     soilWetColor: data.soil_wet_color ?? data.soilWetColor ?? fallback.soilWetColor,
     soilMineralTint: data.soil_mineral_tint ?? data.soilMineralTint ?? fallback.soilMineralTint,
+    soilGrainStrength:
+      data.soil_grain_strength ?? data.soilGrainStrength ?? fallback.soilGrainStrength,
+    soilMineralStrength:
+      data.soil_mineral_strength ?? data.soilMineralStrength ?? fallback.soilMineralStrength,
+    undergroundViewColor:
+      data.underground_view_color ?? data.undergroundViewColor ?? fallback.undergroundViewColor,
+    growthAimRingScale:
+      data.growth_aim_ring_scale ?? data.growthAimRingScale ?? fallback.growthAimRingScale,
+    growthAimRingThickness:
+      data.growth_aim_ring_thickness ??
+      data.growthAimRingThickness ??
+      fallback.growthAimRingThickness,
+    growthAimRingMin:
+      data.growth_aim_ring_min ?? data.growthAimRingMin ?? fallback.growthAimRingMin,
+    growthAimGrabPx: data.growth_aim_grab_px ?? data.growthAimGrabPx ?? fallback.growthAimGrabPx,
+
+    growthAimReachMin:
+      data.growth_aim_reach_min ?? data.growthAimReachMin ?? fallback.growthAimReachMin,
+    growthAimTubeRadius:
+      data.growth_aim_tube_radius ?? data.growthAimTubeRadius ?? fallback.growthAimTubeRadius,
+    growthAimHeadRadius:
+      data.growth_aim_head_radius ?? data.growthAimHeadRadius ?? fallback.growthAimHeadRadius,
+    growthAimHeadLength:
+      data.growth_aim_head_length ?? data.growthAimHeadLength ?? fallback.growthAimHeadLength,
+    growthAimTipRadius:
+      data.growth_aim_tip_radius ?? data.growthAimTipRadius ?? fallback.growthAimTipRadius,
+    growthAimCurveBend:
+      data.growth_aim_curve_bend ?? data.growthAimCurveBend ?? fallback.growthAimCurveBend,
+    growthAimCurveWobble:
+      data.growth_aim_curve_wobble ?? data.growthAimCurveWobble ?? fallback.growthAimCurveWobble,
     terrainMeshSubdivisions:
       data.terrain_mesh_subdivisions ??
       data.terrainMeshSubdivisions ??
       fallback.terrainMeshSubdivisions,
     terrainRadius: data.terrain_radius ?? data.terrainRadius ?? fallback.terrainRadius,
+    terrainAmplitudeM:
+      data.terrain_amplitude_m ?? data.terrainAmplitudeM ?? fallback.terrainAmplitudeM,
+    soilDepthM: data.soil_depth_m ?? data.soilDepthM ?? fallback.soilDepthM,
+    cameraGroundClearanceM:
+      data.camera_ground_clearance_m ??
+      data.cameraGroundClearanceM ??
+      fallback.cameraGroundClearanceM,
+    playerGravityMps2:
+      data.player_gravity_mps2 ?? data.playerGravityMps2 ?? fallback.playerGravityMps2,
+    playerSpawnHeightM:
+      data.player_spawn_height_m ?? data.playerSpawnHeightM ?? fallback.playerSpawnHeightM,
     rootAuraRadius: data.root_aura_radius ?? data.rootAuraRadius ?? fallback.rootAuraRadius,
     webgpuEnabled: data.webgpu_enabled ?? data.webgpuEnabled ?? fallback.webgpuEnabled,
     webgpuMaxPlants: data.webgpu_max_plants ?? data.webgpuMaxPlants ?? fallback.webgpuMaxPlants,
@@ -516,6 +729,28 @@ function normalizeRootSightConfig(
   };
 }
 
+function normalizeChatConfig(data: Record<string, unknown>, fallback: ChatConfig): ChatConfig {
+  return {
+    proximityRangePx: Number(data.proximity_range_px ?? fallback.proximityRangePx),
+    worldRateMsgPerMin: Number(data.world_rate_msg_per_min ?? fallback.worldRateMsgPerMin),
+    logSize: Number(data.log_size ?? fallback.logSize),
+  };
+}
+
+function normalizeReportsConfig(
+  data: Record<string, unknown>,
+  fallback: ReportsConfig,
+): ReportsConfig {
+  return {
+    reportReasons: Array.isArray(data.report_reasons)
+      ? data.report_reasons
+      : fallback.reportReasons,
+    contextLineCount: Number(data.context_line_count ?? fallback.contextLineCount),
+    reportFreeTextMax: Number(data.report_free_text_max ?? fallback.reportFreeTextMax),
+    reportRateLimitPerMin: Number(data.report_rate_limit_per_min ?? fallback.reportRateLimitPerMin),
+  };
+}
+
 async function fetchFlat<T>(serverOrigin: string, path: string, fallback: T): Promise<T> {
   try {
     const response = await fetch(`${serverOrigin}${path}`, { cache: 'no-store' });
@@ -539,12 +774,49 @@ async function fetchFlat<T>(serverOrigin: string, path: string, fallback: T): Pr
           fallback as RootSightConfig,
         ) as T;
       }
+      if (path === '/config/chat') {
+        return normalizeChatConfig(data, fallback as ChatConfig) as T;
+      }
+      if (path === '/config/reports') {
+        return normalizeReportsConfig(data, fallback as ReportsConfig) as T;
+      }
       return data as T;
     }
   } catch {
     // Fall through to defaults.
   }
   return fallback;
+}
+
+export interface GrowthSegmentConfig {
+  rootSegmentLength: number;
+  canopySegmentLength: number;
+  nodeLengths: Record<string, number>;
+}
+
+/** One real growth step per layer, used to draw a to-scale aim preview. */
+export async function loadGrowthSegmentConfig(serverOrigin: string): Promise<GrowthSegmentConfig> {
+  try {
+    const response = await fetch(`${serverOrigin}/config/growth`, { cache: 'no-store' });
+    if (response.ok) {
+      const data = (await response.json()) as {
+        root_growth_speed?: number;
+        canopy_growth_speed?: number;
+        rootGrowthSpeed?: number;
+        canopyGrowthSpeed?: number;
+        node_lengths?: Record<string, number>;
+        nodeLengths?: Record<string, number>;
+      };
+      return {
+        rootSegmentLength: data.root_growth_speed ?? data.rootGrowthSpeed ?? 0.85,
+        canopySegmentLength: data.canopy_growth_speed ?? data.canopyGrowthSpeed ?? 0.95,
+        nodeLengths: data.node_lengths ?? data.nodeLengths ?? {},
+      };
+    }
+  } catch {
+    // Fall through to the defaults.
+  }
+  return { rootSegmentLength: 0.85, canopySegmentLength: 0.95, nodeLengths: {} };
 }
 
 export async function loadRenderConfig(serverOrigin: string): Promise<RenderConfig> {
@@ -555,13 +827,23 @@ export async function loadRenderConfig(serverOrigin: string): Promise<RenderConf
     maxPixelRatio: 2.0,
     cameraSmoothing: 0.05,
     cameraMinDistance: 10.0,
+    cameraMinDistanceRoot: 0.15,
     cameraMaxDistance: 200.0,
     cameraMaxPolarAngle: 1.52,
+    cameraCollisionEnabled: true,
+    cameraCollisionMargin: 0.3,
     cameraStartDistance: 6.0,
     cameraPanSpeed: 8.0,
     cameraZoomSpeed: 2.0,
     idleDropTimeoutMs: 30000,
     shadowMapSize: 2048,
+    shadowBias: -0.0005,
+    shadowNormalBias: 0.5,
+    planetRadiusM: 100000,
+    planetViewDistanceMultiplier: 3.0,
+    planetViewFarMultiplier: 12.0,
+    planetViewMinDistanceMultiplier: 1.4,
+    planetViewNearMultiplier: 0.01,
     debugOverlayEnabled: true,
     debugOverlayKey: 'Shift',
     pauseOnHidden: true,
@@ -621,15 +903,39 @@ export async function loadRenderConfig(serverOrigin: string): Promise<RenderConf
     rainStreakLength: 25.0,
     rainStreakWidth: 0.02,
     rainMaxVelocity: 35.0,
+    rainSlant: 0.12,
+    sunOrbitalDistance: 120.0,
+    weatherTransitionMs: 6000,
+    lightningMaxIntensity: 1.0,
     lightningFlashDurationMs: 120,
     lightningIntensityBoost: 4.0,
     lightningMinIntervalS: 3.5,
     lightningMaxIntervalS: 9.0,
-    soilDryColor: '#4A4536',
-    soilWetColor: '#1B2014',
+    soilDryColor: '#6B5539',
+    soilWetColor: '#2E2418',
     soilMineralTint: '#5A8FA8',
+    soilGrainStrength: 0.02,
+    soilMineralStrength: 0.05,
+    undergroundViewColor: '#241D16',
+    growthAimRingScale: 1.6,
+    growthAimRingThickness: 0.004,
+    growthAimRingMin: 0.02,
+    growthAimGrabPx: 34,
+
+    growthAimReachMin: 0.22,
+    growthAimTubeRadius: 0.009,
+    growthAimHeadRadius: 0.032,
+    growthAimHeadLength: 0.095,
+    growthAimTipRadius: 0.014,
+    growthAimCurveBend: 0.24,
+    growthAimCurveWobble: 0.05,
     terrainMeshSubdivisions: 48,
     terrainRadius: 300.0,
+    terrainAmplitudeM: 2.4,
+    soilDepthM: 1.6,
+    cameraGroundClearanceM: 0.3,
+    playerGravityMps2: 9.81,
+    playerSpawnHeightM: 3.5,
     rootAuraRadius: 3.0,
     webgpuEnabled: true,
     webgpuMaxPlants: 10000,
@@ -689,5 +995,111 @@ export async function loadRootSightConfig(serverOrigin: string): Promise<RootSig
     rivalRootHighlightColor: '#FF5722',
     substrateMultiplier: 0.5,
     cameraTarget: 'own_plant',
+  });
+}
+
+export async function loadNetworkConfig(serverOrigin: string): Promise<NetworkConfig> {
+  const raw = await fetchFlat<Record<string, unknown>>(serverOrigin, '/config/network', {});
+  const positive = (key: string, fallback: number): number => {
+    const value = Number(raw[key]);
+    return Number.isFinite(value) && value > 0 ? value : fallback;
+  };
+  return {
+    slowRttMs: positive('client_slow_rtt_ms', 1200),
+    stallMs: positive('client_stall_ms', 12000),
+  };
+}
+
+export async function loadChatConfig(serverOrigin: string): Promise<ChatConfig> {
+  return fetchFlat<ChatConfig>(serverOrigin, '/config/chat', {
+    proximityRangePx: 150,
+    worldRateMsgPerMin: 12,
+    logSize: 200,
+  });
+}
+
+export interface DayNightConfig {
+  /** Full day + night cycle, in seconds (config/daynight.json cycle_length_s). */
+  cycleLengthS: number;
+  /** Fraction of the cycle spent in daylight. */
+  dayFraction: number;
+}
+
+/**
+ * Day/night length, loaded so the client clock matches the server's cycle
+ * instead of advancing at its own private speed.
+ */
+export async function loadDayNightConfig(serverOrigin: string): Promise<DayNightConfig> {
+  try {
+    const response = await fetch(`${serverOrigin}/config/daynight`, { cache: 'no-store' });
+    if (response.ok) {
+      const data = (await response.json()) as {
+        cycle_length_s?: number;
+        cycleLengthS?: number;
+        day_fraction?: number;
+        dayFraction?: number;
+      };
+      return {
+        cycleLengthS: data.cycle_length_s ?? data.cycleLengthS ?? 3600,
+        dayFraction: data.day_fraction ?? data.dayFraction ?? 0.5,
+      };
+    }
+  } catch {
+    // Fall through to the default: a 60 minute day/night cycle.
+  }
+  return { cycleLengthS: 3600, dayFraction: 0.5 };
+}
+
+export interface ResourceTileConfig {
+  /** Tile light that reads as full daylight (config/resources.json). */
+  tileLightBase: number;
+  maxLight: number;
+  maxMoisture: number;
+  maxMinerals: number;
+}
+
+/**
+ * Tile resource ranges, so the ground shader normalises by the real maxima
+ * rather than a compiled-in 255.
+ */
+export async function loadResourceTileConfig(serverOrigin: string): Promise<ResourceTileConfig> {
+  try {
+    const response = await fetch(`${serverOrigin}/config/resources`, { cache: 'no-store' });
+    if (response.ok) {
+      const data = (await response.json()) as {
+        tile_light_base?: number;
+        tileLightBase?: number;
+        max_light?: number;
+        maxLight?: number;
+        max_moisture?: number;
+        maxMoisture?: number;
+        max_minerals?: number;
+        maxMinerals?: number;
+      };
+      return {
+        tileLightBase: data.tile_light_base ?? data.tileLightBase ?? 80,
+        maxLight: data.max_light ?? data.maxLight ?? 500,
+        maxMoisture: data.max_moisture ?? data.maxMoisture ?? 500,
+        maxMinerals: data.max_minerals ?? data.maxMinerals ?? 500,
+      };
+    }
+  } catch {
+    // Fall through to the documented defaults.
+  }
+  return { tileLightBase: 80, maxLight: 500, maxMoisture: 500, maxMinerals: 500 };
+}
+
+export async function loadReportsConfig(serverOrigin: string): Promise<ReportsConfig> {
+  return fetchFlat<ReportsConfig>(serverOrigin, '/config/reports', {
+    reportReasons: [
+      { id: 'child_safety', label: 'Child safety', category: 'illegal' },
+      { id: 'credible_threat', label: 'Credible threat', category: 'illegal' },
+      { id: 'doxxing', label: 'Doxxing / personal information', category: 'illegal' },
+      { id: 'other_illegal_activity', label: 'Other illegal activity', category: 'illegal' },
+      { id: 'other', label: 'Other', category: 'other' },
+    ],
+    contextLineCount: 20,
+    reportFreeTextMax: 500,
+    reportRateLimitPerMin: 5,
   });
 }

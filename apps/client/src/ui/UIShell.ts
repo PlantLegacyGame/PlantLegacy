@@ -119,17 +119,19 @@ export class UIShell {
       left: 50%;
       bottom: calc(24px + env(safe-area-inset-bottom));
       transform: translateX(-50%) translateY(20px);
-      background: var(--loam-900, #14180f);
-      border: 1px solid var(--bark-700, #2a281f);
-      border-radius: 8px;
-      padding: 10px 16px;
-      color: var(--bone-100, #efe9d8);
-      font-size: calc(14px * var(--text-scale, 1));
+      background: rgba(22, 27, 18, 0.92);
+      border: 1px solid rgba(94, 122, 53, 0.25);
+      border-radius: var(--hud-radius, 14px);
+      padding: 9px 14px;
+      color: var(--warm-ink, #efe9d8);
+      font-family: inherit;
+      font-size: 0.75rem;
       z-index: ${this.config.layers.toast};
       opacity: 0;
       transition: opacity 200ms ease, transform 200ms ease;
       pointer-events: auto;
       max-width: 90vw;
+      box-shadow: var(--hud-shadow);
     `;
     this.root.appendChild(el);
     requestAnimationFrame(() => {

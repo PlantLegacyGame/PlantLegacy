@@ -10,7 +10,7 @@
   "values": {
     "cutaway_radius": {
       "type": "number",
-      "value": 50,
+      "value": 7,
       "range": [5, 500],
       "notes": "Radius of the underground cutaway sphere around the camera target"
     },
@@ -22,7 +22,7 @@
     },
     "soil_opacity": {
       "type": "number",
-      "value": 0.3,
+      "value": 0.45,
       "range": [0, 0.9],
       "notes": "Opacity of soil inside the cutaway (0 = invisible, 0.9 = nearly opaque)"
     },

@@ -1,11 +1,8 @@
 import type {
   GrowthConfig,
   GrowthIntent,
-  GrowthOption,
   GrowthOptionsResult,
   GrowthResult,
-  Layer,
-  NodeType,
   NodeTypeDefinition,
   Plant,
   PlantNode,
@@ -16,228 +13,62 @@ import {
   getAvailableGrowthTypes,
   getLayerForNodeType,
   getNodeTypeDefinition,
-  NODE_GROWTH_CONSTRAINTS,
+  nodeRenderRadius,
+  placeSegment,
+  resolveAttachFraction,
 } from '@plant-legacy/shared/growth';
 import { newId } from '@plant-legacy/shared/ids';
-import { clamp } from '@plant-legacy/shared/math';
 import { validatePlantGraph } from '@plant-legacy/shared/plantGraphValidator';
 import { eventBus, GAME_EVENTS } from './eventBus.ts';
+import { NodeSpatialIndex } from './growth/nodeSpatialIndex.ts';
+import { buildGrowthOptions } from './growth/options.ts';
+import {
+  attachmentPart,
+  canGrow,
+  computeGrowthCostQuote,
+  computeNodeRadii,
+  getGrowthSpeed,
+  maxCotyledonsForPlant,
+  nodeName,
+  normalizeDirection,
+  validateGrowthDirection,
+} from './growth/rules.ts';
+import { clampPlantStorage, computePlantCapacity } from './plantCapacity.ts';
 import {
   createPlantTierConfigs,
   createPlantTierStateMachine,
   type PlantTierStateMachine,
   plantTierStateMachineGetPlantsByTier,
-  plantTierStateMachineGetTickRate,
   plantTierStateMachineGetTierStats,
   plantTierStateMachineUpdate,
 } from './plantTierStateMachine.ts';
 import type { ResourcesConfig, TileResources } from './resourceWorld.ts';
 
-function getGrowthSpeed(config: GrowthConfig, layer: Layer): number {
-  return layer === 'root' ? config.rootGrowthSpeed : config.canopyGrowthSpeed;
-}
-
-export interface GrowthCostQuote {
-  energyCost: number;
-  biomassGain: number;
-  growthTimeSeconds: number;
-  waterCost: number;
-  mineralCost: number;
-  nutrientCost: number;
-}
+// Re-exported from the rules module so existing callers keep one import site.
+export { computeGrowthCostQuote, type GrowthCostQuote } from './growth/rules.ts';
 
 /**
- * Single source of truth for growth energy and resource costs (INV-GR-13).
- * Ensures getGrowthOptions quotes exactly what tryGrow and step charge.
+ * Every pure rule this class used to carry now lives in ./growth/rules.ts and
+ * ./growth/options.ts; the class keeps storage, ticking and broadcasting.
  */
-export function computeGrowthCostQuote(
-  config: GrowthConfig,
-  nodeDef: NodeTypeDefinition,
-): GrowthCostQuote {
-  const energyCost = Math.ceil(nodeDef.biomass_cost);
-  const biomassGain = nodeDef.biomass_cost;
-  const growthTimeSeconds = nodeDef.growth_time_seconds ?? 5;
-  const waterCost = growthTimeSeconds * config.growthWaterConsumptionRate * nodeDef.biomass_cost;
-  const mineralCost =
-    growthTimeSeconds * config.growthMineralConsumptionRate * nodeDef.biomass_cost;
-  const nutrientCost =
-    growthTimeSeconds * config.growthNutrientConsumptionRate * nodeDef.biomass_cost;
-  return {
-    energyCost,
-    biomassGain,
-    growthTimeSeconds,
-    waterCost,
-    mineralCost,
-    nutrientCost,
-  };
-}
-
-function normalizeDirection(dir: { x: number; y: number; z: number }): {
-  x: number;
-  y: number;
-  z: number;
-} {
-  const len = Math.sqrt(dir.x * dir.x + dir.y * dir.y + dir.z * dir.z);
-  if (len === 0) return { x: 0, y: -1, z: 0 };
-  return { x: dir.x / len, y: dir.y / len, z: dir.z / len };
-}
-
-function distance3d(
-  a: { x: number; y: number; z: number },
-  b: { x: number; y: number; z: number },
-): number {
-  const dx = a.x - b.x;
-  const dy = a.y - b.y;
-  const dz = a.z - b.z;
-  return Math.sqrt(dx * dx + dy * dy + dz * dz);
-}
-
-/**
- * Compute Murray's law radii for all nodes in a plant.
- * Works bottom-up from leaves: r_parent^3 = sum(r_child_i^3)
- * For binary branching: r_child ≈ 0.79 * r_parent
- * Leaf nodes use their biomass to determine base radius.
- */
-function computeMurrayRadii(plant: Plant): void {
-  const childrenMap = new Map<string, PlantNode[]>();
-  for (const node of plant.nodes.values()) {
-    if (node.parentId) {
-      if (!childrenMap.has(node.parentId)) {
-        childrenMap.set(node.parentId, []);
-      }
-      childrenMap.get(node.parentId)?.push(node);
-    }
-  }
-
-  // Base radius from biomass (similar to client's nodeRadius function)
-  function baseRadiusFromBiomass(biomass: number, isRoot: boolean): number {
-    // Biomass ~ volume ~ r^3 * length, so r ~ (biomass)^(1/3)
-    const r = Math.cbrt(Math.max(0.01, biomass)) * 0.5;
-    return isRoot ? Math.max(0.05, r * 1.5) : Math.max(0.01, r);
-  }
-
-  function computeRadius(node: PlantNode): number {
-    const children = childrenMap.get(node.id) || [];
-    const isRoot = node.layer === 'root';
-
-    if (children.length === 0) {
-      // Leaf node - base radius from biomass
-      return baseRadiusFromBiomass(node.biomass, isRoot);
-    }
-
-    // Parent radius from Murray's law: r_parent^3 = sum(r_child_i^3)
-    let sumCubed = 0;
-    for (const child of children) {
-      const childRadius = computeRadius(child);
-      sumCubed += childRadius ** 3;
-    }
-    const murrayRadius = Math.cbrt(sumCubed);
-    // Use max of base radius and Murray's law radius so parent never shrinks below base
-    const baseRadius = baseRadiusFromBiomass(node.biomass, isRoot);
-    return Math.max(baseRadius, murrayRadius);
-  }
-
-  // Compute and assign radii for all nodes
-  for (const node of plant.nodes.values()) {
-    node.radius = computeRadius(node);
-  }
-}
-
-function canGrow(plant: Plant, config: GrowthConfig): { ok: boolean; reason?: string } {
-  // Check plant's internal resource storage for growth requirements
-  if (plant.storedWater < config.growthMinWater) {
-    return {
-      ok: false,
-      reason: `Insufficient stored water (${plant.storedWater.toFixed(1)} < ${config.growthMinWater})`,
-    };
-  }
-  if (plant.storedMinerals < config.growthMinNutrients) {
-    return {
-      ok: false,
-      reason: `Insufficient stored minerals (${plant.storedMinerals.toFixed(1)} < ${config.growthMinNutrients})`,
-    };
-  }
-  // Minerals are used for both nutrients and structural minerals
-  if (plant.storedMinerals < config.growthMinMinerals) {
-    return {
-      ok: false,
-      reason: `Insufficient stored minerals (${plant.storedMinerals.toFixed(1)} < ${config.growthMinMinerals})`,
-    };
-  }
-  return { ok: true };
-}
-
-/**
- * Validates that the growth direction is realistic for the given node type.
- * Returns { ok: true } if valid, or { ok: false, reason } if invalid.
- * Uses NODE_GROWTH_CONSTRAINTS for authoritative bounds.
- */
-function validateGrowthDirection(
-  _parentNode: PlantNode,
-  targetType: NodeType,
-  dir: { x: number; y: number; z: number },
-  config: GrowthConfig,
-  _isAttack = false,
-): { ok: boolean; reason?: string } {
-  // Get the node definition for growth bias
-  const targetDef = getNodeTypeDefinition(config, targetType);
-  const growthBias = targetDef.growth_direction_bias;
-
-  // Get authoritative constraints from shared config
-  const constraints = NODE_GROWTH_CONSTRAINTS[targetType] ?? NODE_GROWTH_CONSTRAINTS.stem;
-
-  // Calculate horizontal distance
-  const horizontalDist = Math.sqrt(dir.x * dir.x + dir.z * dir.z);
-
-  // Validate Y bounds from constraints (authoritative)
-  if (dir.y < constraints.minY || dir.y > constraints.maxY) {
-    return {
-      ok: false,
-      reason: `Direction Y (${dir.y.toFixed(2)}) outside allowed range [${constraints.minY}, ${constraints.maxY}] for ${targetType}`,
-    };
-  }
-
-  // Validate horizontal bounds from constraints
-  if (horizontalDist < constraints.minHorizontal || horizontalDist > constraints.maxHorizontal) {
-    return {
-      ok: false,
-      reason: `Horizontal distance (${horizontalDist.toFixed(2)}) outside allowed range [${constraints.minHorizontal}, ${constraints.maxHorizontal}] for ${targetType}`,
-    };
-  }
-
-  // Check if direction aligns with growth bias (lenient, skip for attacks)
-  if (!_isAttack) {
-    let biasAlignment = 0;
-    switch (growthBias) {
-      case 'downward':
-        biasAlignment = -dir.y; // positive when growing down
-        break;
-      case 'upward':
-        biasAlignment = dir.y; // positive when growing up
-        break;
-      case 'outward':
-        biasAlignment = Math.sqrt(dir.x * dir.x + dir.z * dir.z); // horizontal distance
-        break;
-      case 'horizontal':
-        biasAlignment = Math.sqrt(dir.x * dir.x + dir.z * dir.z);
-        break;
-    }
-
-    // Direction should align with bias (cosine similarity > 0.1 - very lenient)
-    if (biasAlignment < 0.1) {
-      return { ok: false, reason: `Direction does not match ${targetType} growth pattern` };
-    }
-  }
-
-  return { ok: true };
-}
 
 export type PlantDeathCause =
   | 'starvation'
   | 'damage'
   | 'germination_failed'
   | 'removed'
-  | 'reconnect_timeout';
+  | 'reconnect_timeout'
+  /** The season ended: the calamity takes every plant still standing. */
+  | 'calamity';
+
+export interface ResourceSink {
+  takeResources(
+    worldX: number,
+    worldZ: number,
+    waterDemand: number,
+    mineralDemand: number,
+  ): { water: number; minerals: number };
+}
 
 export interface PlantDeathRecord {
   id: string;
@@ -253,9 +84,9 @@ export interface PlantDeathRecord {
 export class PlantWorld {
   private plants = new Map<string, Plant>();
   private plantByOwner = new Map<string, Set<string>>();
-  private nodeSpatialIndex = new Map<string, Set<string>>();
+  private readonly nodeSpatialIndex = new NodeSpatialIndex();
   private pendingDeaths: PlantDeathRecord[] = [];
-  private readonly cellSize = 10;
+  private pendingGrowthResults: GrowthResult[] = [];
   private readonly config: GrowthConfig;
   private readonly worldBounds: {
     minX: number;
@@ -267,17 +98,29 @@ export class PlantWorld {
   };
 
   private resourceProvider: ((x: number, z: number) => TileResources) | null = null;
+  private resourceSink: ResourceSink | null = null;
+  /**
+   * Photosynthesis for one plant over a span of seconds.
+   *
+   * Near and dormant plants are stepped here rather than in the online loop, so
+   * without this hook an offline plant paid upkeep and never fixed carbon: it
+   * starved in the dark even at noon. The world supplies the routine, keeping the
+   * light/moisture formula in one place.
+   */
+  private photosynthesisHook: ((plant: Plant, seconds: number) => void) | null = null;
 
-  private readonly activeTickRateHz: number;
-  private offlineDamageMultiplier: number;
+  private activeTickRateHz: number;
+  /** Elapsed wall time banked for a tier that runs below the active rate. */
+  private nearAccumulatorMs = 0;
+  private dormantAccumulatorMs = 0;
 
   private tierMachine: PlantTierStateMachine;
 
   private readonly tickBudgetActiveShare: number;
   private readonly tickBudgetWarnThresholdMs: number;
   private readonly resourceConfig: ResourcesConfig;
-  private readonly nearTickRateHz: number;
-  private readonly dormantTickRateHz: number;
+  private nearTickRateHz: number;
+  private dormantTickRateHz: number;
 
   constructor(
     config: GrowthConfig,
@@ -293,7 +136,6 @@ export class PlantWorld {
       activeTickRateHz?: number;
       nearTickRateHz?: number;
       dormantStepIntervalSec?: number;
-      offlineDamageMultiplier?: number;
       tickBudgetActiveShare?: number;
       tickBudgetWarnThresholdMs?: number;
       nearDistance?: number;
@@ -325,6 +167,11 @@ export class PlantWorld {
       fertilizerDeposit: 50,
       photosynthesisRate: 1,
       photosynthesisEnergyPerSecond: 1,
+      photosynthesisWaterPerEnergy: 0.03,
+      photosynthesisMineralPerEnergy: 0.006,
+      waterStatusFullFraction: 0.25,
+      mineralStatusFullFraction: 0.25,
+      nightTranspirationMultiplier: 0.15,
       lightFactorCurve: [
         [0, 0],
         [1, 1],
@@ -352,7 +199,6 @@ export class PlantWorld {
     this.nearTickRateHz = tierConfig?.nearTickRateHz ?? 5;
     const dormantStepIntervalSec = tierConfig?.dormantStepIntervalSec ?? 30;
     this.dormantTickRateHz = 1 / dormantStepIntervalSec;
-    this.offlineDamageMultiplier = tierConfig?.offlineDamageMultiplier ?? 1.0;
     this.tickBudgetActiveShare = tierConfig?.tickBudgetActiveShare ?? 0.7;
     this.tickBudgetWarnThresholdMs = tierConfig?.tickBudgetWarnThresholdMs ?? 40;
 
@@ -371,10 +217,6 @@ export class PlantWorld {
 
   getConfig(): GrowthConfig {
     return this.config;
-  }
-
-  setAutoGrowth(enabled: boolean): void {
-    this.config.autoGrowth = enabled;
   }
 
   setGerminationGate(enabled: boolean): void {
@@ -397,6 +239,19 @@ export class PlantWorld {
     this.resourceProvider = provider;
   }
 
+  /**
+   * Wire the world's tile store so uptake debits the tile as well as crediting
+   * the plant. Without it, absorption is free and resources are infinite.
+   */
+  setResourceSink(sink: ResourceSink): void {
+    this.resourceSink = sink;
+  }
+
+  /** Wire photosynthesis so near and dormant tiers are fed by the sun too. */
+  setPhotosynthesis(hook: (plant: Plant, seconds: number) => void): void {
+    this.photosynthesisHook = hook;
+  }
+
   getGrowthOptions(plantId: string, nodeId: string): GrowthOptionsResult | null {
     const plant = this.plants.get(plantId);
     if (!plant) return null;
@@ -404,318 +259,13 @@ export class PlantWorld {
     const node = plant.nodes.get(nodeId);
     if (!node) return null;
 
-    const resources = this.resourceProvider
-      ? this.resourceProvider(node.x, node.z)
-      : { light: 100, moisture: 100, minerals: 100 };
-
-    const safeMoisture =
-      typeof resources.moisture === 'number' && Number.isFinite(resources.moisture)
-        ? resources.moisture
-        : 40;
-    const safeLight =
-      typeof resources.light === 'number' && Number.isFinite(resources.light)
-        ? resources.light
-        : 80;
-
-    // For germination: check tile light/moisture (respects dev germinationGate)
-    // For growth: check plant's stored water/minerals
-    const germinationOk =
-      this.config.germinationGate === false ||
-      (safeLight >= this.config.germinationMinLight &&
-        safeMoisture >= this.config.germinationMinMoisture);
-
-    // Check if plant has enough stored resources for growth
-    const hasStoredWater = plant.storedWater >= this.config.growthMinWater;
-    const hasStoredMinerals = plant.storedMinerals >= this.config.growthMinNutrients;
-
-    const conditions = {
-      light: safeLight,
-      moisture: safeMoisture,
-      storedWater: plant.storedWater,
-      storedMinerals: plant.storedMinerals,
-      minLight: this.config.germinationMinLight,
-      minMoisture: this.config.germinationMinMoisture,
-      growthMinWater: this.config.growthMinWater,
-      growthMinMinerals: this.config.growthMinMinerals,
-      ok: germinationOk, // For germination check
-      growthOk: hasStoredWater && hasStoredMinerals, // For growth check
-    };
-
-    const options: GrowthOption[] = [];
-
-    const parentType = node.type;
-
-    const addOption = (
-      type: NodeType,
-      label: string,
-      energyCost: number,
-      biomassGain: number,
-      expectedSeconds: number,
-      available: boolean,
-      reason?: string,
-      risk?: string,
-      waterCost?: number,
-      nutrientCost?: number,
-      mineralCost?: number,
-    ) => {
-      options.push({
-        type,
-        label,
-        energyCost,
-        biomassGain,
-        expectedSeconds,
-        available,
-        reason,
-        risk,
-        waterCost,
-        nutrientCost,
-        mineralCost,
-      });
-    };
-
-    if (node.type === 'seed' && node.isSeed) {
-      const radicleDef = this.config.radicleNode;
-      const cotyledonDef = this.config.cotyledonNode;
-      const hasRadicle = node.children.some((id) => {
-        const child = plant.nodes.get(id);
-        return child && (child.type === 'radicle' || child.type === 'root');
-      });
-      const cotyledonCount = node.children.filter(
-        (id) => plant.nodes.get(id)?.type === 'cotyledon',
-      ).length;
-      const maxCotyledons = 2;
-
-      if (!hasRadicle) {
-        const costs = computeGrowthCostQuote(this.config, radicleDef);
-        addOption(
-          'radicle',
-          'Sprout Radicle (drag direction)',
-          costs.energyCost,
-          costs.biomassGain,
-          costs.growthTimeSeconds,
-          germinationOk && plant.totalEnergy >= costs.energyCost,
-          germinationOk
-            ? plant.totalEnergy < costs.energyCost
-              ? 'Insufficient energy'
-              : undefined
-            : 'Insufficient moisture or light for germination',
-          germinationOk ? 'Failure can destroy the seed if conditions are not met' : undefined,
-          costs.waterCost,
-          costs.nutrientCost,
-          costs.mineralCost,
-        );
-        return {
-          nodeId,
-          nodeType: node.type,
-          isSeed: node.isSeed,
-          energy: plant.totalEnergy,
-          biomass: plant.totalBiomass,
-          options,
-          conditions,
-        };
-      }
-
-      if (cotyledonCount < maxCotyledons) {
-        const costs = computeGrowthCostQuote(this.config, cotyledonDef);
-        addOption(
-          'cotyledon',
-          `Add Cotyledon ${cotyledonCount + 1}/${maxCotyledons} (drag direction)`,
-          costs.energyCost,
-          costs.biomassGain,
-          costs.growthTimeSeconds,
-          plant.totalEnergy >= costs.energyCost,
-          plant.totalEnergy < costs.energyCost ? 'Insufficient energy' : undefined,
-          undefined,
-          costs.waterCost,
-          costs.nutrientCost,
-          costs.mineralCost,
-        );
-        return {
-          nodeId,
-          nodeType: node.type,
-          isSeed: node.isSeed,
-          energy: plant.totalEnergy,
-          biomass: plant.totalBiomass,
-          options,
-          conditions,
-        };
-      }
-      // Established crown (2 cotyledons): offer stem. isSeed may still be true; tryGrow allows stem from seed crown.
-      {
-        const stemDef = this.config.stemNode;
-        const costs = computeGrowthCostQuote(this.config, stemDef);
-        addOption(
-          'stem',
-          'Grow Stem',
-          costs.energyCost,
-          costs.biomassGain,
-          costs.growthTimeSeconds,
-          plant.totalEnergy >= costs.energyCost &&
-            plant.storedWater >= costs.waterCost &&
-            plant.storedMinerals >= costs.mineralCost,
-          plant.totalEnergy < costs.energyCost
-            ? 'Insufficient energy'
-            : plant.storedWater < costs.waterCost
-              ? 'Insufficient stored water'
-              : plant.storedMinerals < costs.mineralCost
-                ? 'Insufficient stored minerals'
-                : undefined,
-          undefined,
-          costs.waterCost,
-          0,
-          costs.mineralCost,
-        );
-        return {
-          nodeId,
-          nodeType: node.type,
-          isSeed: !!node.isSeed,
-          energy: plant.totalEnergy,
-          biomass: plant.totalBiomass,
-          options,
-          conditions,
-        };
-      }
-    }
-
-    // Return stem option for established seed crown (stepwise germination complete).
-    if (node.type === 'seed' && !node.isSeed) {
-      const stemDef = this.config.stemNode;
-      const costs = computeGrowthCostQuote(this.config, stemDef);
-      addOption(
-        'stem',
-        'Grow Stem',
-        costs.energyCost,
-        costs.biomassGain,
-        costs.growthTimeSeconds,
-        plant.totalEnergy >= costs.energyCost &&
-          plant.storedWater >= costs.waterCost &&
-          plant.storedMinerals >= costs.mineralCost,
-        plant.totalEnergy < costs.energyCost
-          ? 'Insufficient energy'
-          : plant.storedWater < costs.waterCost
-            ? 'Insufficient stored water'
-            : plant.storedMinerals < costs.mineralCost
-              ? 'Insufficient stored minerals'
-              : undefined,
-        undefined,
-        costs.waterCost,
-        0,
-        costs.mineralCost,
-      );
-      return {
-        nodeId,
-        nodeType: node.type,
-        isSeed: false,
-        energy: plant.totalEnergy,
-        biomass: plant.totalBiomass,
-        options,
-        conditions,
-      };
-    }
-
-    const availableTypes = getAvailableGrowthTypes(parentType, this.config);
-
-    for (const targetType of availableTypes) {
-      const nodeDef = getNodeTypeDefinition(this.config, targetType);
-      const costs = computeGrowthCostQuote(this.config, nodeDef);
-
-      const hasEnergy = plant.totalEnergy >= costs.energyCost;
-      const hasWater = plant.storedWater >= costs.waterCost;
-      const hasMinerals = plant.storedMinerals >= costs.mineralCost;
-      const available = hasEnergy && hasWater && hasMinerals;
-
-      let reason: string | undefined;
-      if (!hasEnergy) reason = 'Insufficient energy';
-      else if (!hasWater) reason = 'Insufficient stored water';
-      else if (!hasMinerals) reason = 'Insufficient stored minerals';
-
-      addOption(
-        targetType,
-        `Grow ${targetType.replace('_', ' ')}`,
-        costs.energyCost,
-        costs.biomassGain,
-        costs.growthTimeSeconds,
-        available,
-        reason,
-        undefined,
-        costs.waterCost,
-        0, // nutrientCost - using minerals for both
-        costs.mineralCost,
-      );
-    }
-
-    return {
-      nodeId,
-      nodeType: node.type,
-      isSeed: node.isSeed,
-      energy: plant.totalEnergy,
-      biomass: plant.totalBiomass,
-      options,
-      conditions,
-    };
-  }
-
-  private getCellKey(x: number, y: number, z: number): string {
-    const cx = Math.floor(x / this.cellSize);
-    const cy = Math.floor(y / this.cellSize);
-    const cz = Math.floor(z / this.cellSize);
-    return `${cx},${cy},${cz}`;
-  }
-
-  private getCellKeysForRadius(x: number, y: number, z: number, radius: number): string[] {
-    const minCx = Math.floor((x - radius) / this.cellSize);
-    const maxCx = Math.floor((x + radius) / this.cellSize);
-    const minCy = Math.floor((y - radius) / this.cellSize);
-    const maxCy = Math.floor((y + radius) / this.cellSize);
-    const minCz = Math.floor((z - radius) / this.cellSize);
-    const maxCz = Math.floor((z + radius) / this.cellSize);
-    const keys: string[] = [];
-    for (let cx = minCx; cx <= maxCx; cx++) {
-      for (let cy = minCy; cy <= maxCy; cy++) {
-        for (let cz = minCz; cz <= maxCz; cz++) {
-          keys.push(`${cx},${cy},${cz}`);
-        }
-      }
-    }
-    return keys;
-  }
-
-  private addNodeToSpatialIndex(node: PlantNode): void {
-    const key = this.getCellKey(node.x, node.y, node.z);
-    if (!this.nodeSpatialIndex.has(key)) {
-      this.nodeSpatialIndex.set(key, new Set());
-    }
-    this.nodeSpatialIndex.get(key)?.add(node.id);
-  }
-
-  private removeNodeFromSpatialIndex(node: PlantNode): void {
-    const key = this.getCellKey(node.x, node.y, node.z);
-    const set = this.nodeSpatialIndex.get(key);
-    if (set) {
-      set.delete(node.id);
-      if (set.size === 0) {
-        this.nodeSpatialIndex.delete(key);
-      }
-    }
-  }
-
-  private getNearbyNodeIds(x: number, y: number, z: number, radius: number): string[] {
-    const keys = this.getCellKeysForRadius(x, y, z, radius);
-    const ids = new Set<string>();
-    for (const key of keys) {
-      const set = this.nodeSpatialIndex.get(key);
-      if (set) {
-        for (const id of set) {
-          ids.add(id);
-        }
-      }
-    }
-    return Array.from(ids);
+    const tile = this.resourceProvider ? this.resourceProvider(node.x, node.z) : undefined;
+    return buildGrowthOptions(this.config, plant, node, tile);
   }
 
   createPlant(ownerId: string, worldId: string, startX: number, startZ: number): Plant {
     const plantId = newId('plant');
-    const seedNodeId = newId('node');
+    const seedNodeId = nodeName(plantId, null, 'seed', () => false);
 
     const seedDef = this.config.seedNode;
     const seedNode: PlantNode = {
@@ -742,7 +292,6 @@ export class PlantWorld {
     };
 
     const initialBiomass = seedDef.biomass_cost;
-    const initialEnergy = this.config.maxEnergyPerPlant * 0.5;
 
     const plant: Plant = {
       id: plantId,
@@ -751,7 +300,7 @@ export class PlantWorld {
       nodes: new Map([[seedNodeId, seedNode]]),
       rootNodeId: seedNodeId,
       totalBiomass: initialBiomass,
-      totalEnergy: initialEnergy,
+      totalEnergy: 0,
       totalUpkeep: seedDef.upkeep_biomass_per_second,
       storedWater: 0,
       storedMinerals: 0,
@@ -765,10 +314,14 @@ export class PlantWorld {
       this.plantByOwner.set(ownerId, new Set());
     }
     this.plantByOwner.get(ownerId)?.add(plantId);
-    this.addNodeToSpatialIndex(seedNode);
+    this.nodeSpatialIndex.add(seedNode);
 
     // Compute initial Murray's law radii for the seed
-    computeMurrayRadii(plant);
+    computeNodeRadii(plant);
+
+    // Starting energy is a fraction of what this plant itself can hold.
+    plant.totalEnergy =
+      computePlantCapacity(plant, this.config).energy * this.config.initialEnergyFraction;
 
     return plant;
   }
@@ -777,12 +330,72 @@ export class PlantWorld {
     return this.plants.get(plantId);
   }
 
+  /** Active simulation rate, for converting seconds to ticks at the edge. */
+  getTickRateHz(): number {
+    return this.activeTickRateHz;
+  }
+
+  /**
+   * D01: retune the tier rates at runtime.
+   *
+   * The rates were read only into readonly fields at construction, so the dev
+   * panel's tick-rate controls were silently no-ops. Rebuilding the tier config
+   * and clearing the accumulators makes a retune take effect on the next step
+   * instead of half a second later under the old rate.
+   */
+  setTierRates(rates: {
+    activeTickRateHz?: number;
+    nearTickRateHz?: number;
+    dormantStepIntervalSec?: number;
+  }): void {
+    const positive = (value: number | undefined, fallback: number): number =>
+      value !== undefined && Number.isFinite(value) && value > 0 ? value : fallback;
+
+    this.activeTickRateHz = positive(rates.activeTickRateHz, this.activeTickRateHz);
+    this.nearTickRateHz = positive(rates.nearTickRateHz, this.nearTickRateHz);
+    const dormantIntervalSec = positive(rates.dormantStepIntervalSec, 1 / this.dormantTickRateHz);
+    this.dormantTickRateHz = 1 / dormantIntervalSec;
+
+    this.tierMachine.tierConfigs = createPlantTierConfigs(
+      this.activeTickRateHz,
+      this.nearTickRateHz,
+      this.dormantTickRateHz,
+    );
+    this.nearAccumulatorMs = 0;
+    this.dormantAccumulatorMs = 0;
+  }
+
   getPlantsByOwner(ownerId: string): Plant[] {
     const ids = this.plantByOwner.get(ownerId);
     if (!ids) return [];
     return Array.from(ids)
       .map((id) => this.plants.get(id))
       .filter((p): p is Plant => p !== undefined);
+  }
+
+  /**
+   * Move a plant to another owner (guest -> account adoption).
+   *
+   * The owner index, not the field, is what `getPlantsByOwner` and the
+   * one-plant-per-owner rule read, so the two must change together. Moving the
+   * field alone leaves the plant invisible to its new owner and still listed
+   * under the old one.
+   */
+  reassignOwner(plantId: string, ownerId: string): boolean {
+    const plant = this.plants.get(plantId);
+    if (!plant || plant.ownerId === ownerId) return false;
+    this.plantByOwner.get(plant.ownerId)?.delete(plantId);
+    if (!this.plantByOwner.has(ownerId)) this.plantByOwner.set(ownerId, new Set());
+    this.plantByOwner.get(ownerId)?.add(plantId);
+    plant.ownerId = ownerId;
+    return true;
+  }
+
+  /** Growth produced outside the intent queue (dev auto-growth), for broadcasting. */
+  drainGrowthResults(): GrowthResult[] {
+    const results = this.pendingGrowthResults;
+    this.pendingGrowthResults = [];
+    return results;
   }
 
   getAllPlants(): Plant[] {
@@ -798,9 +411,12 @@ export class PlantWorld {
   }
 
   /**
-   * Root absorption: roots absorb water and minerals from tiles into plant's
-   * internal storage. This replaces the old behavior where roots directly
-   * reduced tile values.
+   * Root uptake: living root tissue captures water and minerals from the tile it
+   * sits in and adds them to the plant's own stores. Trust is not assumed — the
+   * sink reports what the tile actually held, so a dry tile yields nothing and a
+   * busy tile is contested. The seed counts as absorbing tissue: imbibition is
+   * how a seed takes up the water it needs before it has any roots, and growth
+   * (including germination) is gated on stored water and minerals.
    */
   absorbResourcesFromTiles(
     dt: number,
@@ -809,54 +425,38 @@ export class PlantWorld {
     for (const plant of this.plants.values()) {
       if (!plant.rootNodeId) continue;
 
-      // Find all root nodes and their tiles
-      const rootTiles = new Map<string, { tileX: number; tileZ: number }>();
+      let gainedWater = 0;
+      let gainedMinerals = 0;
+
       for (const node of plant.nodes.values()) {
         if (node.layer !== 'root') continue;
-        const tileX = Math.floor(node.x / this.resourceConfig.tileSize);
-        const tileZ = Math.floor(node.z / this.resourceConfig.tileSize);
-        const key = `${tileX},${tileZ}`;
-        if (!rootTiles.has(key)) {
-          rootTiles.set(key, { tileX, tileZ });
-        }
+
+        const waterDemand = Math.min(
+          this.resourceConfig.maxAbsorptionPerTick,
+          this.resourceConfig.absorptionPerS * node.resourceDrawWater * dt,
+        );
+        const mineralDemand = Math.min(
+          this.resourceConfig.maxAbsorptionPerTick,
+          this.resourceConfig.absorptionPerS * node.resourceDrawMinerals * dt,
+        );
+        if (waterDemand <= 0 && mineralDemand <= 0) continue;
+
+        const tile = resourceProvider(node.x, node.z);
+        const availableWater = Math.min(waterDemand, Math.max(0, tile?.moisture ?? 0));
+        const availableMinerals = Math.min(mineralDemand, Math.max(0, tile?.minerals ?? 0));
+        if (availableWater <= 0 && availableMinerals <= 0) continue;
+
+        const taken = this.resourceSink
+          ? this.resourceSink.takeResources(node.x, node.z, availableWater, availableMinerals)
+          : { water: availableWater, minerals: availableMinerals };
+        gainedWater += taken.water;
+        gainedMinerals += taken.minerals;
       }
 
-      // Absorb from each tile the roots occupy
-      for (const { tileX, tileZ } of rootTiles.values()) {
-        const resources = resourceProvider(tileX, tileZ);
-        if (!resources) continue;
-
-        // Find root nodes in this tile
-        let totalWaterDraw = 0;
-        let totalMineralDraw = 0;
-        for (const node of plant.nodes.values()) {
-          if (node.layer !== 'root') continue;
-          const nodeTileX = Math.floor(node.x / this.resourceConfig.tileSize);
-          const nodeTileZ = Math.floor(node.z / this.resourceConfig.tileSize);
-          if (nodeTileX === tileX && nodeTileZ === tileZ) {
-            totalWaterDraw += node.resourceDrawWater;
-            totalMineralDraw += node.resourceDrawMinerals;
-          }
-        }
-
-        if (totalWaterDraw > 0) {
-          const absorption = this.resourceConfig.absorptionPerS * totalWaterDraw * dt;
-          const actualAbsorption = Math.min(absorption, this.resourceConfig.maxAbsorptionPerTick);
-          // Add to plant storage, tile value unchanged
-          plant.storedWater = Math.min(
-            this.resourceConfig.maxMoisture * 10, // Cap at 10x max tile moisture
-            plant.storedWater + actualAbsorption,
-          );
-        }
-
-        if (totalMineralDraw > 0) {
-          const absorption = this.resourceConfig.absorptionPerS * totalMineralDraw * dt;
-          const actualAbsorption = Math.min(absorption, this.resourceConfig.maxAbsorptionPerTick);
-          plant.storedMinerals = Math.min(
-            this.resourceConfig.maxMinerals * 10, // Cap at 10x max tile minerals
-            plant.storedMinerals + actualAbsorption,
-          );
-        }
+      if (gainedWater > 0) plant.storedWater += gainedWater;
+      if (gainedMinerals > 0) plant.storedMinerals += gainedMinerals;
+      if (gainedWater > 0 || gainedMinerals > 0) {
+        clampPlantStorage(plant, this.config);
       }
     }
   }
@@ -895,24 +495,26 @@ export class PlantWorld {
     this.processTier('active', dt, currentTick);
     const activeMs = performance.now() - activeStart;
 
+    // Slower tiers are scheduled, not rescaled. Multiplying dt by the rate ratio
+    // every tick (the old behaviour) ran near plants at 4x upkeep and 4x growth,
+    // and would have run dormant plants 600x. Banking elapsed time and stepping
+    // the tier once per interval keeps every rate at exactly what config says.
+    const nearIntervalMs = 1000 / this.nearTickRateHz;
     const nearStart = performance.now();
-    this.processTier(
-      'near',
-      dt *
-        (plantTierStateMachineGetTickRate(this.tierMachine, 'active') /
-          plantTierStateMachineGetTickRate(this.tierMachine, 'near')),
-      currentTick,
-    );
+    this.nearAccumulatorMs += dt * 1000;
+    if (this.nearAccumulatorMs >= nearIntervalMs) {
+      this.processTier('near', this.nearAccumulatorMs / 1000, currentTick);
+      this.nearAccumulatorMs = 0;
+    }
     const nearMs = performance.now() - nearStart;
 
+    const dormantIntervalMs = 1000 / this.dormantTickRateHz;
     const dormantStart = performance.now();
-    this.processTier(
-      'dormant',
-      dt *
-        (plantTierStateMachineGetTickRate(this.tierMachine, 'active') /
-          plantTierStateMachineGetTickRate(this.tierMachine, 'dormant')),
-      currentTick,
-    );
+    this.dormantAccumulatorMs += dt * 1000;
+    if (this.dormantAccumulatorMs >= dormantIntervalMs) {
+      this.processTier('dormant', this.dormantAccumulatorMs / 1000, currentTick);
+      this.dormantAccumulatorMs = 0;
+    }
     const dormantMs = performance.now() - dormantStart;
 
     const totalMs = performance.now() - startTime;
@@ -937,41 +539,42 @@ export class PlantWorld {
         this.processDormantPlant(plant, dt, currentTick);
       } else {
         this.processPlantUpkeep(plant, dt);
+        // Sunlight follows the plant, not the player: a near plant integrates at
+        // its own cadence and must earn the energy it spends. Active plants are
+        // excluded on purpose - the online loop credits them with the resource
+        // view it already built, and crediting here as well would double-count
+        // every plant whose owner is logged in.
+        if (tier === 'near') this.photosynthesisHook?.(plant, dt);
+        // Growth only ever advances nodes a player already committed to:
+        // `processGrowthProgress` finishes in-flight parts (including while the
+        // owner is offline) and nothing here starts new growth on its own. A
+        // plant left overnight finishes exactly the node it was told to grow and
+        // gains nothing else.
         this.processGrowthProgress(plant, dt);
-        // Dev switch: auto-growth automatically triggers germination for seed
-        if (this.config.autoGrowth && plant.nodes.size === 1) {
-          const rootNode = plant.nodes.get(plant.rootNodeId ?? '');
-          if (
-            rootNode &&
-            rootNode.type === 'seed' &&
-            rootNode.isSeed &&
-            rootNode.children.length === 0
-          ) {
-            this.tryGrow(
-              {
-                plantId: plant.id,
-                nodeId: rootNode.id,
-                direction: { x: 0, y: -1, z: 0 },
-                nodeType: 'radicle',
-                isAttack: false,
-                tick: currentTick,
-              },
-              currentTick,
-            );
-          }
-        }
-        // Only active-tier (online) plants deal root overlap damage.
-        // Near-tier plants are offline players' plants; they should not deal damage.
-        if (tier === 'active') {
-          this.processRootOverlapDamage(plant, tier, dt);
-        }
+        // Mark the time this plant has been simulated up to, so the dormant
+        // catch-up below charges only the time it actually skipped instead of
+        // the whole session (or, when the mark is missing, nothing at all).
+        plant.lastTick = currentTick;
       }
     }
   }
 
   private processDormantPlant(plant: Plant, _dt: number, currentTick: number): void {
-    const ticksSinceLastUpdate = currentTick - (plant.lastTick ?? currentTick);
-    if (ticksSinceLastUpdate <= 0) return;
+    // A plant that has never been simulated has no backlog to settle; record
+    // the mark and let the next dormant step measure from here.
+    if (plant.lastTick === undefined || plant.lastTick === null) {
+      plant.lastTick = currentTick;
+      return;
+    }
+    const ticksSinceLastUpdate = currentTick - plant.lastTick;
+    if (ticksSinceLastUpdate <= 0) {
+      // The mark can sit ahead of the counter after a restart that reloaded a
+      // saved tick. Returning without re-anchoring left the plant exempt from
+      // upkeep (and from forgetting the stale mark) until ticks caught up, which
+      // could take days.
+      plant.lastTick = currentTick;
+      return;
+    }
 
     const elapsedSeconds = ticksSinceLastUpdate / this.activeTickRateHz;
 
@@ -980,20 +583,37 @@ export class PlantWorld {
       nodeUpkeep += node.upkeepBiomassPerSecond;
     }
     plant.totalUpkeep = nodeUpkeep;
-    const biomassChange = -nodeUpkeep * elapsedSeconds;
+
+    // Income before expense. The span being settled is time the plant spent in
+    // the sun, so the carbon it fixed over that span is available to pay the
+    // upkeep for the same span. Charging upkeep first used a plant's energy at
+    // the start of the span, which killed a dormant plant at 0 energy even when
+    // the sunlight over that same span would have covered it.
+    this.photosynthesisHook?.(plant, elapsedSeconds);
 
     const rootNode = plant.rootNodeId ? plant.nodes.get(plant.rootNodeId) : undefined;
-    if (rootNode && !(rootNode.type === 'seed' && rootNode.isSeed)) {
+    const isDormantSeed =
+      rootNode?.type === 'seed' && rootNode.isSeed === true && plant.nodes.size <= 1;
+    if (rootNode && !isDormantSeed) {
       const energyUpkeepCost =
         plant.totalBiomass * this.config.energyUpkeepPerBiomass * elapsedSeconds;
+      const canPayUpkeep = plant.totalEnergy >= energyUpkeepCost;
       plant.totalEnergy = Math.max(0, plant.totalEnergy - energyUpkeepCost);
+      if (!canPayUpkeep) {
+        plant.totalBiomass = Math.max(0, plant.totalBiomass - energyUpkeepCost);
+        if (plant.totalBiomass <= 0) {
+          this.killPlant(plant.id, 'starvation');
+          return;
+        }
+      }
     }
 
-    plant.totalBiomass = Math.max(0, plant.totalBiomass + biomassChange);
-
-    if (plant.totalBiomass <= 0) {
-      this.killPlant(plant.id, 'starvation');
-    }
+    // Offline plants still finish a node the player had already started: growth
+    // progress is purely time-based, and skipping it here froze every in-flight
+    // part until the owner came back, so a dormant plant could never complete
+    // the growth it was told to do. This only advances growth already committed
+    // to; processGrowthProgress never starts a new part.
+    this.processGrowthProgress(plant, elapsedSeconds);
 
     plant.lastTick = currentTick;
   }
@@ -1021,19 +641,18 @@ export class PlantWorld {
 
   private processPlantUpkeep(plant: Plant, dt: number): void {
     // First, shed cotyledons if threshold reached
-    const COTYLEDON_SHED_THRESHOLD = 4;
     let trueLeafCount = 0;
     for (const node of plant.nodes.values()) {
       if (node.layer !== 'canopy' || node.type !== 'leaf') continue;
       trueLeafCount++;
     }
 
-    if (trueLeafCount >= COTYLEDON_SHED_THRESHOLD) {
+    if (trueLeafCount >= this.config.cotyledonShedLeafCount) {
       for (const [nodeId, node] of plant.nodes.entries()) {
         if (node.type === 'cotyledon') {
           plant.totalBiomass -= node.biomass;
           plant.nodes.delete(nodeId);
-          this.removeNodeFromSpatialIndex(node);
+          this.nodeSpatialIndex.remove(node);
           if (node.parentId) {
             const parent = plant.nodes.get(node.parentId);
             if (parent) {
@@ -1051,18 +670,93 @@ export class PlantWorld {
       nodeUpkeep += node.upkeepBiomassPerSecond;
     }
     plant.totalUpkeep = nodeUpkeep;
-    const biomassChange = -nodeUpkeep * dt;
 
+    // Respiration burns stored energy, not structure. A plant only loses
+    // structural mass once it has no energy left to maintain it, which is what
+    // makes "withered" mean something instead of a slow invisible shrink.
+    // Only a lone, ungerminated seed is exempt from respiration. As soon as it
+    // has any tissue, the seedling respires like every other living plant.
     const rootNode = plant.rootNodeId ? plant.nodes.get(plant.rootNodeId) : undefined;
-    if (rootNode && !(rootNode.type === 'seed' && rootNode.isSeed)) {
+    const isDormantSeed =
+      rootNode?.type === 'seed' && rootNode.isSeed === true && plant.nodes.size <= 1;
+    if (rootNode && !isDormantSeed) {
       const energyUpkeepCost = plant.totalBiomass * this.config.energyUpkeepPerBiomass * dt;
+      const canPayUpkeep = plant.totalEnergy >= energyUpkeepCost;
       plant.totalEnergy = Math.max(0, plant.totalEnergy - energyUpkeepCost);
-    }
 
-    plant.totalBiomass = Math.max(0, plant.totalBiomass + biomassChange);
-    if (plant.totalBiomass <= 0) {
-      this.killPlant(plant.id, 'starvation');
+      if (!canPayUpkeep) {
+        plant.totalBiomass = Math.max(0, plant.totalBiomass - energyUpkeepCost);
+        if (plant.totalBiomass <= 0) {
+          this.killPlant(plant.id, 'starvation');
+        }
+      }
     }
+  }
+
+  /**
+   * Re-place any node that does not sit exactly one segment from its parent.
+   *
+   * Placement is constructive: `tryGrow` and `handleGermination` build every
+   * node with `placeSegment`, and nothing in the simulation moves a stored
+   * position afterwards - growth is a render-time scale from 0 to 1, not a walk
+   * across the world. The one boundary that can still hand this process a node
+   * from outside is a saved payload, so the repair runs on load instead of on
+   * every tick: a legacy save (whose shoots were placed from the seed base
+   * rather than its coat) or a hand-edited node is snapped onto its step once,
+   * and the live simulation never silently moves a node the client has already
+   * been told about.
+   *
+   * Returns the number of nodes that needed repair.
+   */
+  private repairSegmentLengths(plant: Plant): number {
+    let repaired = 0;
+    for (const node of plant.nodes.values()) {
+      if (!node.parentId) continue;
+      const parent = plant.nodes.get(node.parentId);
+      if (!parent) continue;
+
+      const nodeDef = getNodeTypeDefinition(this.config, node.type);
+      const limit = nodeDef.segment_length;
+      // A seed is an anchor, not a step; without a configured length the node
+      // keeps whatever the save gave it.
+      if (!limit || limit <= 0 || node.type === 'seed') continue;
+
+      // Repair with the fraction the node was grown with: a branch grown from
+      // part-way along its parent must be measured from the same point.
+      const placement = placeSegment(
+        attachmentPart(parent),
+        { x: node.x - parent.x, y: node.y - parent.y, z: node.z - parent.z },
+        limit,
+        node.attachFraction ?? 1,
+      );
+      const step = Math.hypot(
+        node.x - placement.start.x,
+        node.y - placement.start.y,
+        node.z - placement.start.z,
+      );
+      // A correct node sits exactly on its step, so loading a healthy save never
+      // rewrites a coordinate.
+      if (Math.abs(step - limit) <= limit * 1e-6) continue;
+
+      this.nodeSpatialIndex.remove(node);
+      node.x = placement.end.x;
+      node.y = placement.end.y;
+      node.z = placement.end.z;
+      // Keep the drawn segment in step with the repaired position: the renderer
+      // draws start + (target - start) * progress.
+      node.growthStartX = placement.start.x;
+      node.growthStartY = placement.start.y;
+      node.growthStartZ = placement.start.z;
+      node.targetX = placement.end.x;
+      node.targetY = placement.end.y;
+      node.targetZ = placement.end.z;
+      node.parentAttachX = placement.start.x;
+      node.parentAttachY = placement.start.y;
+      node.parentAttachZ = placement.start.z;
+      this.nodeSpatialIndex.add(node);
+      repaired += 1;
+    }
+    return repaired;
   }
 
   private processGrowthProgress(plant: Plant, dt: number): void {
@@ -1075,17 +769,22 @@ export class PlantWorld {
         continue;
       }
 
-      const canGrowResult = canGrow(plant, this.config);
-      if (!canGrowResult.ok) {
-        // Still allow visual/positional progress for nodes already started (germination/radicle/cotyledon/early growth),
-        // otherwise zero starting storage permanently freezes growth after energy was spent.
-        // Resource consumption below is clamped to available storage.
-      }
-
       const nodeDef = getNodeTypeDefinition(this.config, node.type);
-      const growthTimeSeconds = node.growthTimeRemaining;
+      // The quoted duration, not the shrinking remainder: dividing by the
+      // remainder accelerates as the node nears completion, so a 14 s stem used
+      // to finish in ~8.8 s and spend ~63% of its quoted water. A node restored
+      // from a save that predates growth_time_seconds falls back to its
+      // remainder, which is the best estimate available.
+      const growthTimeSeconds = node.growthTimeSeconds ?? node.growthTimeRemaining;
       const progressPerSecond = 1.0 / growthTimeSeconds;
       const progressThisTick = progressPerSecond * dt;
+
+      // Accrue biomass proportionally as the node grows so totalBiomass reflects
+      // live growth progress instead of flatlining until completion. Upkeep still
+      // drains in processUpkeep, so net biomass = growth accrual minus upkeep.
+      const biomassThisTick = nodeDef.biomass_cost * progressThisTick;
+      plant.totalBiomass += biomassThisTick;
+      node.biomass = (node.biomass ?? 0) + biomassThisTick;
 
       const waterCostPerSecond = this.config.growthWaterConsumptionRate * nodeDef.biomass_cost;
       const mineralCostPerSecond = this.config.growthMineralConsumptionRate * nodeDef.biomass_cost;
@@ -1096,80 +795,37 @@ export class PlantWorld {
       plant.storedWater = Math.max(0, plant.storedWater - waterCost);
       plant.storedMinerals = Math.max(0, plant.storedMinerals - mineralCost);
 
-      if (node.targetX !== undefined && node.targetY !== undefined && node.targetZ !== undefined) {
-        const prev = Math.max(0, Math.min(0.999999, node.growthProgress));
-        node.growthProgress = Math.min(1.0, node.growthProgress + progressThisTick);
-        node.growthTimeRemaining = Math.max(0, node.growthTimeRemaining - dt);
-        const t = Math.max(prev, node.growthProgress);
-        this.removeNodeFromSpatialIndex(node);
-        const denom = Math.max(1e-6, 1 - prev);
-        const startX = (node.x - node.targetX * prev) / denom;
-        const startY = (node.y - node.targetY * prev) / denom;
-        const startZ = (node.z - node.targetZ * prev) / denom;
-        node.x = startX + (node.targetX - startX) * t;
-        node.y = startY + (node.targetY - startY) * t;
-        node.z = startZ + (node.targetZ - startZ) * t;
-        this.addNodeToSpatialIndex(node);
-      } else {
-        node.growthProgress = Math.min(1.0, node.growthProgress + progressThisTick);
-        node.growthTimeRemaining = Math.max(0, (node.growthTimeRemaining ?? 0) - dt);
-      }
+      // Positions are final the moment a node is created: the skeleton is fixed
+      // geometry (parent + direction * segment_length), exactly like the lab
+      // generator. Growth is a render-time scale from 0 to 1, not a simulation
+      // that walks the node across the world - animating the stored position
+      // here is what let nodes overshoot, drift away from their parent and end
+      // up as poles floating in the air.
+      node.growthProgress = Math.min(1.0, node.growthProgress + progressThisTick);
+      node.growthTimeRemaining = Math.max(0, (node.growthTimeRemaining ?? 0) - dt);
 
       if (node.growthProgress >= 1.0) {
+        // Snap to exact final biomass to prevent accumulation drift beyond cost
+        const overage = Math.max(0, node.biomass - nodeDef.biomass_cost);
+        plant.totalBiomass -= overage;
         node.biomass = nodeDef.biomass_cost;
         node.upkeepBiomassPerSecond = nodeDef.upkeep_biomass_per_second;
-        plant.totalBiomass += nodeDef.biomass_cost;
         plant.totalUpkeep += nodeDef.upkeep_biomass_per_second;
         node.targetX = node.targetY = node.targetZ = undefined;
         node.growthTimeRemaining = 0;
       }
+
+      // Radius follows the part's own biomass so a growing segment thickens in
+      // step with the drawn geometry (one shared table, no client clamps).
+      node.radius = nodeRenderRadius(node.type, node.biomass);
     }
   }
 
   addPhotosynthesisEnergy(plantId: string, energyGain: number): void {
     const plant = this.plants.get(plantId);
     if (!plant) return;
-    plant.totalEnergy = Math.min(this.config.maxEnergyPerPlant, plant.totalEnergy + energyGain);
-  }
-
-  private processRootOverlapDamage(plant: Plant, tier: 'active' | 'near', dt: number): void {
-    const damageMultiplier = tier === 'near' ? this.offlineDamageMultiplier : 1.0;
-
-    for (const node of plant.nodes.values()) {
-      if (node.layer !== 'root') continue;
-      // Seeds are not roots yet: they must never damage or be damaged by
-      // root competition, otherwise two seeds at a spawn point kill each other.
-      if (node.isSeed || node.type === 'seed') continue;
-      const nearbyIds = this.getNearbyNodeIds(node.x, node.y, node.z, 2.0);
-      for (const nearbyId of nearbyIds) {
-        if (nearbyId === node.id) continue;
-        const nearbyPlant = this.findPlantByNodeId(nearbyId);
-        if (!nearbyPlant || nearbyPlant.id === plant.id) continue;
-        const nearbyNode = nearbyPlant.nodes.get(nearbyId);
-        if (nearbyNode?.layer !== 'root') continue;
-        if (nearbyNode.isSeed || nearbyNode.type === 'seed') continue;
-        const dist = distance3d(node, nearbyNode);
-        if (dist < 1.5) {
-          // Config is HP/s; multiply by dt so a per-second rate means per second.
-          const damage = this.config.rootOverlapPressureDamage * damageMultiplier * dt;
-          this.applyDamageToPlant(nearbyPlant, damage);
-        }
-      }
-    }
-  }
-
-  private findPlantByNodeId(nodeId: string): Plant | undefined {
-    for (const plant of this.plants.values()) {
-      if (plant.nodes.has(nodeId)) return plant;
-    }
-    return undefined;
-  }
-
-  private applyDamageToPlant(plant: Plant, damage: number): void {
-    plant.totalBiomass = Math.max(0, plant.totalBiomass - damage);
-    if (plant.totalBiomass <= 0) {
-      this.killPlant(plant.id, 'damage');
-    }
+    plant.totalEnergy += energyGain;
+    clampPlantStorage(plant, this.config);
   }
 
   tryGrow(intent: GrowthIntent, currentTick: number): GrowthResult {
@@ -1185,9 +841,24 @@ export class PlantWorld {
     const targetType = intent.nodeType;
     const targetLayer = getLayerForNodeType(targetType);
 
+    // A stem/canopy part must come from the crown, never from a buried root.
+    if (
+      targetLayer === 'canopy' &&
+      parentNode.layer === 'root' &&
+      parentNode.id !== plant.rootNodeId
+    ) {
+      return { success: false, reason: 'canopy_from_crown_only' };
+    }
+
     const isSeedCrown = parentNode.type === 'seed' && parentNode.isSeed;
     if (targetType === 'cotyledon') {
-      if (!isSeedCrown) return { success: false, reason: 'invalid_parent_for_cotyledon' };
+      // A cotyledon sprouts from the seed crown, and after germination the crown
+      // is the plant's root node (the seed's isSeed flag is cleared). Requiring
+      // `isSeed` here rejected every cotyledon after the radicle, which stalled
+      // growth at two nodes forever; the later validation already accepts the
+      // root crown, so this early check must agree with it.
+      const isCrown = isSeedCrown || parentNode.id === plant.rootNodeId;
+      if (!isCrown) return { success: false, reason: 'invalid_parent_for_cotyledon' };
       const hasRadicle = parentNode.children.some((id) => {
         const c = plant.nodes.get(id);
         return c && (c.type === 'radicle' || c.type === 'root');
@@ -1204,7 +875,7 @@ export class PlantWorld {
       const cotyledonCount = parentNode.children.filter(
         (id) => plant.nodes.get(id)?.type === 'cotyledon',
       ).length;
-      if (!hasRadicle || cotyledonCount < 2)
+      if (!hasRadicle || cotyledonCount < maxCotyledonsForPlant(this.config))
         return { success: false, reason: 'establish_seed_before_stem' };
     } else if (!canCrossLayer(parentNode.type, targetType)) {
       return { success: false, reason: 'cannot_cross_layer' };
@@ -1217,28 +888,6 @@ export class PlantWorld {
 
     const clampedDir = clampGrowthDirectionByGene(targetType, intent.direction);
     const dir = normalizeDirection(clampedDir);
-    const speed = getGrowthSpeed(this.config, targetLayer);
-    const newX = parentNode.x + dir.x * speed;
-    const newY = parentNode.y + dir.y * speed;
-    const newZ = parentNode.z + dir.z * speed;
-
-    // Bounds check first
-    if (!this.isInBounds(newX, newY, newZ)) {
-      return { success: false, reason: 'out_of_bounds' };
-    }
-
-    // Validate the drawn direction against realistic growth rules (lenient)
-    const directionValidation = validateGrowthDirection(
-      parentNode,
-      targetType,
-      dir,
-      this.config,
-      intent.isAttack,
-    );
-    if (!directionValidation.ok) {
-      return { success: false, reason: directionValidation.reason ?? 'invalid_direction' };
-    }
-
     // Calculate energy cost - stepwise germination: radicle/cotyledon are separate actions (INV-GR-13).
     let nodeDef: NodeTypeDefinition;
     if (parentNode.type === 'seed' && parentNode.isSeed && targetType === 'radicle') {
@@ -1248,11 +897,47 @@ export class PlantWorld {
     } else {
       nodeDef = getNodeTypeDefinition(this.config, targetType);
     }
+    // One growth action moves the new node by the type's own segment length, not
+    // the layer speed (a cotyledon is a seed leaf, not a 95 cm canopy branch).
+    const speed = nodeDef.segment_length ?? getGrowthSpeed(this.config, targetLayer);
+    // Lateral roots, branches and vines are buds on an existing organ, so they
+    // leave the parent part-way along its segment; everything else continues
+    // from its end. An intent may override the fraction explicitly.
+    const attachFraction = resolveAttachFraction(targetType, intent.attachFraction);
+    // A seed's stored position is its ground contact point, but the drawn seed
+    // body sits above it. `placeSegment` starts the step on the coat so the
+    // skeleton the server sends is the skeleton the renderer draws.
+    const placement = placeSegment(attachmentPart(parentNode), dir, speed, attachFraction);
+    const attach = placement.start;
+    const { x: newX, y: newY, z: newZ } = placement.end;
+
+    // Bounds check first
+    if (!this.isInBounds(newX, newY, newZ)) {
+      return { success: false, reason: 'out_of_bounds' };
+    }
+
+    // Validate the drawn direction against realistic growth rules (lenient)
+    const directionValidation = validateGrowthDirection(parentNode, targetType, dir, this.config);
+    if (!directionValidation.ok) {
+      return { success: false, reason: directionValidation.reason ?? 'invalid_direction' };
+    }
+
     const costs = computeGrowthCostQuote(this.config, nodeDef);
     const energyCost = costs.energyCost;
 
     if (plant.totalEnergy < energyCost) {
       return { success: false, reason: 'insufficient_energy' };
+    }
+
+    // Establishment runs on seed reserves (plus the soil moisture gate inside
+    // handleGermination). Everything after that must be paid for from the
+    // plant's own captured water and minerals, not merely from its energy.
+    const isEstablishment = targetType === 'radicle' || targetType === 'cotyledon';
+    if (!isEstablishment) {
+      const storedGate = canGrow(plant, this.config);
+      if (!storedGate.ok) {
+        return { success: false, reason: 'insufficient_stored_resources' };
+      }
     }
 
     if (parentNode.type === 'seed' && parentNode.isSeed && targetType === 'radicle') {
@@ -1262,7 +947,10 @@ export class PlantWorld {
       const cotyledonCount = Array.from(plant.nodes.values()).filter(
         (n) => n.type === 'cotyledon',
       ).length;
-      if (cotyledonCount >= 2) return { success: false, reason: 'max_cotyledons_reached' };
+      const maxCotyledons = maxCotyledonsForPlant(this.config);
+      if (cotyledonCount >= maxCotyledons) {
+        return { success: false, reason: 'max_cotyledons_reached' };
+      }
       // Allow cotyledon from seed (legacy/early) or from the post-radicle root crown.
       if (
         !(parentNode.type === 'seed' && parentNode.isSeed) &&
@@ -1276,16 +964,18 @@ export class PlantWorld {
       return { success: false, reason: 'max_nodes_reached' };
     }
 
-    const newNodeId = newId('node');
+    const newNodeId = nodeName(plant.id, parentNode, targetType, (id) => plant.nodes.has(id));
     const growthTimeSeconds = costs.growthTimeSeconds;
     const newNode: PlantNode = {
       id: newNodeId,
       plantId: plant.id,
       type: targetType,
       layer: targetLayer,
-      x: parentNode.x,
-      y: parentNode.y,
-      z: parentNode.z,
+      // Final position immediately: the segment is one step of its own length
+      // from the parent, and it never moves again.
+      x: newX,
+      y: newY,
+      z: newZ,
       biomass: 0,
       age: 0,
       parentId: intent.nodeId,
@@ -1301,6 +991,12 @@ export class PlantWorld {
       targetX: newX,
       targetY: newY,
       targetZ: newZ,
+      // The segment is drawn as start + (target - start) * progress. Storing
+      // the start keeps that exact; recomputing it from the current position
+      // drifted once progress approached 1.
+      growthStartX: attach.x,
+      growthStartY: attach.y,
+      growthStartZ: attach.z,
       growthTimeRemaining: growthTimeSeconds,
       growthWaterConsumed: 0,
       growthNutrientsConsumed: 0,
@@ -1309,9 +1005,10 @@ export class PlantWorld {
       growthTimeSeconds,
       growthStartTick: currentTick,
       // Parent attachment position for client sync
-      parentAttachX: parentNode.x,
-      parentAttachY: parentNode.y,
-      parentAttachZ: parentNode.z,
+      parentAttachX: attach.x,
+      parentAttachY: attach.y,
+      parentAttachZ: attach.z,
+      attachFraction,
     };
 
     plant.nodes.set(newNodeId, newNode);
@@ -1321,10 +1018,10 @@ export class PlantWorld {
       currentTick + Math.ceil(this.config.growthCooldown * this.activeTickRateHz);
 
     parentNode.children.push(newNodeId);
-    this.addNodeToSpatialIndex(newNode);
+    this.nodeSpatialIndex.add(newNode);
 
     // Recompute Murray's law radii for the whole plant after structure change
-    computeMurrayRadii(plant);
+    computeNodeRadii(plant);
 
     plant.growthSeq++;
 
@@ -1334,13 +1031,13 @@ export class PlantWorld {
       ).length;
       const established: PlantNode = {
         ...parentNode,
-        isSeed: cotyledonCount < 2, // keep seed-like until second cotyledon placed
+        isSeed: cotyledonCount < maxCotyledonsForPlant(this.config),
       };
       plant.nodes.set(parentNode.id, established);
       if (!plant.rootNodeId) plant.rootNodeId = parentNode.id;
       plant.growthSeq++;
       // Recompute radii after parent update
-      computeMurrayRadii(plant);
+      computeNodeRadii(plant);
       return {
         success: true,
         newNode,
@@ -1393,20 +1090,23 @@ export class PlantWorld {
 
     const radicleDef = this.config.radicleNode;
     const normDir = normalizeDirection(dir);
-    const radicleSpeed = getGrowthSpeed(this.config, 'root');
-    const targetX = seedNode.x + normDir.x * radicleSpeed;
-    const targetY = seedNode.y + normDir.y * radicleSpeed;
-    const targetZ = seedNode.z + normDir.z * radicleSpeed;
-    const growthTimeSeconds = radicleDef.growth_time_seconds ?? 3;
-    const radicleId = newId('node');
+    const radicleSpeed = radicleDef.segment_length ?? getGrowthSpeed(this.config, 'root');
+    // The radicle is the seed's first continuation, not a bud: it leaves the
+    // coat whole, so the attach fraction is always 1 here.
+    const placement = placeSegment(seedNode, normDir, radicleSpeed, 1);
+    const attach = placement.start;
+    const { x: targetX, y: targetY, z: targetZ } = placement.end;
+    const growthTimeSeconds =
+      radicleDef.growth_time_seconds ?? this.config.defaultGrowthTimeSeconds;
+    const radicleId = nodeName(plant.id, seedNode, 'radicle', (id) => plant.nodes.has(id));
     const radicleNode: PlantNode = {
       id: radicleId,
       plantId: plant.id,
       type: 'radicle',
       layer: 'root',
-      x: seedNode.x,
-      y: seedNode.y,
-      z: seedNode.z,
+      x: targetX,
+      y: targetY,
+      z: targetZ,
       biomass: 0,
       age: 0,
       parentId: seedNode.id,
@@ -1422,6 +1122,9 @@ export class PlantWorld {
       targetX,
       targetY,
       targetZ,
+      growthStartX: attach.x,
+      growthStartY: attach.y,
+      growthStartZ: attach.z,
       growthTimeRemaining: growthTimeSeconds,
       growthWaterConsumed: 0,
       growthNutrientsConsumed: 0,
@@ -1429,10 +1132,11 @@ export class PlantWorld {
       isSeed: false,
       growthTimeSeconds,
       growthStartTick: currentTick,
-      // Parent attachment position for client sync (seed position)
-      parentAttachX: seedNode.x,
-      parentAttachY: seedNode.y,
-      parentAttachZ: seedNode.z,
+      // Parent attachment position for client sync (seed coat)
+      parentAttachX: attach.x,
+      parentAttachY: attach.y,
+      parentAttachZ: attach.z,
+      attachFraction: 1,
     };
 
     // Stepwise germination: keep the node as a seed/root-crown (isSeed) so the
@@ -1457,10 +1161,10 @@ export class PlantWorld {
     plant.lastGrowthTick = currentTick;
     plant.growthCooldownUntil =
       currentTick + Math.ceil(this.config.growthCooldown * this.activeTickRateHz);
-    this.addNodeToSpatialIndex(radicleNode);
+    this.nodeSpatialIndex.add(radicleNode);
 
     // Recompute Murray's law radii for the whole plant after structure change
-    computeMurrayRadii(plant);
+    computeNodeRadii(plant);
 
     plant.growthSeq++;
     return {
@@ -1482,14 +1186,11 @@ export class PlantWorld {
     );
   }
 
-  /** D01: Dev action - set offline damage multiplier */
-  setOfflineDamageMultiplier(multiplier: number): void {
-    this.offlineDamageMultiplier = multiplier;
-  }
-
   /** D01: Dev action - create random plant for stress testing */
   createRandomPlant(): string {
-    const worldId = 'world_1';
+    // Dev stress plants belong to the same world as everything else; a literal
+    // here used to write these plants to a different world id than the server.
+    const worldId = this.plants.values().next().value?.worldId ?? 'world_0';
     const ownerId = `dev_stress_${Math.random().toString(36).slice(2, 8)}`;
     const x = (Math.random() - 0.5) * (this.worldBounds.maxX - this.worldBounds.minX) * 0.8;
     const z = (Math.random() - 0.5) * (this.worldBounds.maxZ - this.worldBounds.minZ) * 0.8;
@@ -1502,7 +1203,7 @@ export class PlantWorld {
     if (!plant) return null;
 
     for (const node of plant.nodes.values()) {
-      this.removeNodeFromSpatialIndex(node);
+      this.nodeSpatialIndex.remove(node);
     }
 
     this.plants.delete(plantId);
@@ -1552,7 +1253,8 @@ export class PlantWorld {
 
   loadPlant(plant: Plant): void {
     if (plant.totalEnergy === undefined || plant.totalEnergy === null) {
-      plant.totalEnergy = this.config.maxEnergyPerPlant * 0.5;
+      plant.totalEnergy =
+        computePlantCapacity(plant, this.config).energy * this.config.initialEnergyFraction;
     }
     if (plant.storedWater === undefined || plant.storedWater === null) {
       plant.storedWater = 0;
@@ -1571,6 +1273,15 @@ export class PlantWorld {
         node.isSeed = node.type === 'seed';
       }
     }
+    // Restored geometry is the one thing that can predate the current placement
+    // rule, so it is repaired before it is validated or drawn.
+    const repaired = this.repairSegmentLengths(plant);
+    if (repaired > 0) {
+      console.debug(`[plant-load] repaired ${repaired} segment step(s) on ${plant.id}`);
+    }
+    // Snapshots do not store radius; derive it from the shared table so a loaded
+    // plant is drawn identically to the plant that produced the save.
+    computeNodeRadii(plant);
     const plantIssues = validatePlantGraph(plant, this.worldBounds);
     const loadErrors = plantIssues.issues.filter((issue) => issue.severity === 'error');
     if (loadErrors.length > 0) {
@@ -1586,42 +1297,7 @@ export class PlantWorld {
     }
     this.plantByOwner.get(plant.ownerId)?.add(plant.id);
     for (const node of plant.nodes.values()) {
-      this.addNodeToSpatialIndex(node);
+      this.nodeSpatialIndex.add(node);
     }
-  }
-
-  validateAllPlants(): Array<{
-    plantId: string;
-    result: ReturnType<typeof validatePlantGraph>;
-  }> {
-    const flagged: Array<{
-      plantId: string;
-      result: ReturnType<typeof validatePlantGraph>;
-    }> = [];
-    for (const [plantId, plant] of this.plants) {
-      const result = validatePlantGraph(plant, this.worldBounds);
-      if (!result.ok) flagged.push({ plantId, result });
-    }
-    return flagged;
-  }
-
-  getCanopyShadingAt(x: number, z: number): number {
-    let totalShading = 0;
-    for (const plant of this.plants.values()) {
-      for (const node of plant.nodes.values()) {
-        if (node.layer !== 'canopy') continue;
-        const dx = node.x - x;
-        const dz = node.z - z;
-        const distSq = dx * dx + dz * dz;
-        if (distSq < 16) {
-          totalShading += this.config.lightBlockingPerNode * (1 - distSq / 16);
-        }
-      }
-    }
-    return clamp(totalShading, 0, 100);
-  }
-
-  getPlantStateForClient(plantId: string): Plant | undefined {
-    return this.plants.get(plantId);
   }
 }

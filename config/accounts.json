@@ -99,11 +99,35 @@
       "range": [5, 1440],
       "description": "Lockout duration in minutes"
     },
+    "argon2_memory_kib": {
+      "type": "integer",
+      "value": 19456,
+      "range": [8192, 262144],
+      "description": "Argon2id memory cost in KiB (OWASP baseline is 19456)"
+    },
+    "argon2_time_cost": {
+      "type": "integer",
+      "value": 2,
+      "range": [1, 10],
+      "description": "Argon2id iterations"
+    },
+    "argon2_parallelism": {
+      "type": "integer",
+      "value": 1,
+      "range": [1, 8],
+      "description": "Argon2id lanes"
+    },
     "bcrypt_cost": {
       "type": "integer",
       "value": 12,
       "range": [4, 15],
-      "description": "bcrypt cost factor (work factor)"
+      "description": "Legacy bcrypt work factor; only used to verify pre-Argon2id hashes"
+    },
+    "request_body_max_bytes": {
+      "type": "integer",
+      "value": 16384,
+      "range": [1024, 1048576],
+      "description": "Maximum accepted byte length for an /auth/* request body"
     },
     "jwt_algorithm": {
       "type": "enum",

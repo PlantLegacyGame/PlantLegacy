@@ -213,6 +213,6 @@ fn fs_main(input: VertexOutput, @builtin(front_facing) frontFacing: bool) -> @lo
     lit += glowColor * (emissive * pulse);
   }
 
-  lit = applyRootSight(lit, input.worldPosition, input.nodeType, input.isOwn, frame);
+  lit = applyRootSight(lit, input.worldPosition, input.nodeType, input.isOwn, frame).rgb;
   return vec4f(lit, 1.0);
 }

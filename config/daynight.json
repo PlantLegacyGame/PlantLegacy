@@ -10,9 +10,9 @@
   "values": {
     "cycle_length_s": {
       "type": "integer",
-      "value": 1800,
+      "value": 3600,
       "range": [600, 7200],
-      "notes": "Full day/night planetary cycle length in seconds (30 minutes default)"
+      "notes": "Full day/night planetary cycle length in seconds (60 minutes default). A 30 minute cycle made dusk pass in a few minutes, which read as the sky snapping to night."
     },
     "day_fraction": {
       "type": "number",

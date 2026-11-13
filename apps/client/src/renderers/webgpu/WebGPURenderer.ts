@@ -1,10 +1,11 @@
+import { mulberry32 } from '@plant-legacy/shared/math';
 import * as THREE from 'three';
 import type { PlantNodeData } from '../PlantRenderer.js';
+import { jointMatrixFor } from './jointMatrix.js';
 import { buildPlantMesh, type PlantRenderPlant } from './PlantMeshBuilder.js';
 import {
   billboardShader,
   cullShader,
-  groundShader,
   impostorShader,
   meshShader,
   rainShader,
@@ -44,6 +45,14 @@ const IMPOSTOR_TILE_SIZE = IMPOSTOR_ATLAS_SIZE / IMPOSTOR_VIEWS_HORIZONTAL; // 1
 const GROWTH_ACTIVE_MS = 1100;
 const GROWTH_REBUILD_INTERVAL_MS = 100;
 
+/** Raw sRGB components (display space) for a #rrggbb string. */
+function writeSrgbTriplet(hex: string, out: Float32Array, offset: number): void {
+  const value = Number.parseInt(hex.replace('#', ''), 16);
+  out[offset] = ((value >> 16) & 0xff) / 255;
+  out[offset + 1] = ((value >> 8) & 0xff) / 255;
+  out[offset + 2] = (value & 0xff) / 255;
+}
+
 export interface WebGPURendererConfig {
   maxPlants: number;
   leafSize: number;
@@ -60,13 +69,26 @@ export interface WebGPURendererConfig {
   mutation0Param: number;
   mutation1Param: number;
   mutation2Param: number;
+  /** C02b mutation signature strengths (config/plant_renderer.json). */
+  mutationBioluminescence: number;
+  mutationBarkThicknessScale: number;
+  mutationVariegation: number;
+  /** Radius of the body the world sits on; 0 disables planet occlusion. */
+  planetRadius: number;
   ownRootColor: string;
   rivalRootColor: string;
+  /** Ground palette, mirroring config/render.json soil colours. */
+  soilDryColor: string;
+  soilWetColor: string;
+  soilMineralColor: string;
   pointSizeScale: number;
   // C02b: Rain rendering
   rainStreakLength: number;
   rainStreakWidth: number;
   rainMaxVelocity: number;
+  rainParticleCount: number;
+  rainBoxWidth: number;
+  rainBoxHeight: number;
   // C02b: Impostor baking
   impostorEnabled: boolean;
   impostorUpdateIntervalMs: number;
@@ -78,10 +100,11 @@ export interface WebGPURendererConfig {
 
 export const DEFAULT_WEBGPU_RENDERER_CONFIG: WebGPURendererConfig = {
   maxPlants: 10000,
-  leafSize: 1.2,
+  leafSize: 0.25,
   leafCountPerNode: 1,
   tubeSides: 8,
-  rootSides: 4,
+  // Roots read as faceted spikes below eight sides; they taper to a point.
+  rootSides: 8,
   tierThresholds: [300, 80, 12, 2],
   hysteresisPromote: 1.15,
   hysteresisDemote: 0.85,
@@ -92,13 +115,23 @@ export const DEFAULT_WEBGPU_RENDERER_CONFIG: WebGPURendererConfig = {
   mutation0Param: 0,
   mutation1Param: 1.5,
   mutation2Param: 0.3,
+  mutationBioluminescence: 0.55,
+  mutationBarkThicknessScale: 1.35,
+  mutationVariegation: 0.35,
+  planetRadius: 0,
   ownRootColor: '#4CAF50',
   rivalRootColor: '#FF5722',
+  soilDryColor: '#6B5539',
+  soilWetColor: '#2E2418',
+  soilMineralColor: '#5A8FA8',
   pointSizeScale: 1.0,
   // C02b: Rain rendering
   rainStreakLength: 25.0,
   rainStreakWidth: 0.02,
   rainMaxVelocity: 35.0,
+  rainParticleCount: 1500,
+  rainBoxWidth: 60.0,
+  rainBoxHeight: 35.0,
   // C02b: Impostor baking
   impostorEnabled: true,
   impostorUpdateIntervalMs: 5000,
@@ -191,6 +224,10 @@ export class WebGPURenderer {
   private camera: THREE.PerspectiveCamera | null = null;
 
   private frameUniformBuffer: GPUBuffer | null = null;
+  // Ground palette + moisture: 3 vec4 colours, moisture, padding = 16 floats.
+  private soilUniformBuffer: GPUBuffer | null = null;
+  private readonly soilData = new Float32Array(16);
+  private soilMoisture = 0.2;
   private plantBuffer: GPUBuffer | null = null;
   private renderBuffer: GPUBuffer | null = null;
   private vertexBuffer: GPUBuffer | null = null;
@@ -203,23 +240,16 @@ export class WebGPURenderer {
   private outlinePipeline: GPURenderPipeline | null = null;
   private sharedPipelineLayout: GPUPipelineLayout | null = null;
   private billboardPipeline: GPURenderPipeline | null = null;
-  private groundPipeline: GPURenderPipeline | null = null;
   private rainPipeline: GPURenderPipeline | null = null;
 
   private computeBindGroup: GPUBindGroup | null = null;
   private meshBindGroup: GPUBindGroup | null = null;
   private billboardBindGroup: GPUBindGroup | null = null;
-  private groundBindGroup: GPUBindGroup | null = null;
   private rainBindGroup: GPUBindGroup | null = null;
 
-  private groundVertexBuffer: GPUBuffer | null = null;
   private rainVertexBuffer: GPUBuffer | null = null;
   private rainInstanceBuffer: GPUBuffer | null = null;
   private rainUniformBuffer: GPUBuffer | null = null;
-
-  // Root Sight aura texture (stores up to 64 root positions for per-root highlights)
-  private rootAuraTexture: GPUTexture | null = null;
-  private rootAuraSampler: GPUSampler | null = null;
 
   // C02b: Texture arrays for plant variation
   private textureArrays: Map<PlantTextureType, GPUTexture> | null = null;
@@ -265,12 +295,22 @@ export class WebGPURenderer {
   private readonly rootSightCenter = new THREE.Vector3();
   private readonly ownRootColor = new THREE.Color(DEFAULT_WEBGPU_RENDERER_CONFIG.ownRootColor);
   private readonly rivalRootColor = new THREE.Color(DEFAULT_WEBGPU_RENDERER_CONFIG.rivalRootColor);
+  // Pre-allocated per-frame uniform buffers to avoid GC pressure in the render loop
+  private readonly rainUniformData = new Float32Array(8);
+  private jointData: Float32Array;
 
-  private rootSightEnabled = false;
+  public rootSightEnabled = false;
   private rootSightProgress = 0;
-  private rootSightRadius = 6;
+  public rootSightRadius = 6;
+
+  /** Camera is under the surface with Root Sight open: hide the surface sheet. */
+  public undergroundView = false;
+
+  public setUndergroundView(enabled: boolean): void {
+    this.undergroundView = enabled;
+  }
   private rootSightAuraRadius = 3.0;
-  private rootAuraNodeCount = 0;
+  private rootSightSoilOpacity = 0.45;
   // Shader time base. Vertex spawnTime values come from performance.now()/1000,
   // so anchor frame.time to the same clock instead of starting at zero.
   private time = performance.now() / 1000;
@@ -284,6 +324,24 @@ export class WebGPURenderer {
     this.config = { ...DEFAULT_WEBGPU_RENDERER_CONFIG, ...config };
     this.ownRootColor.set(this.config.ownRootColor);
     this.rivalRootColor.set(this.config.rivalRootColor);
+    this.writeSoilPalette();
+    // Pre-allocate joint matrix buffer to avoid per-frame GC pressure
+    this.jointData = new Float32Array((this.config.maxPlants * JOINT_BUFFER_STRIDE) / 4);
+  }
+
+  /**
+   * Live soil moisture from the weather system (0 = dry, 1 = saturated).
+   * The palette itself comes from config and never changes at runtime.
+   */
+  setSoilMoisture(moisture: number): void {
+    this.soilMoisture = Math.max(0, Math.min(1, moisture));
+  }
+
+  private writeSoilPalette(): void {
+    writeSrgbTriplet(this.config.soilDryColor, this.soilData, 0);
+    writeSrgbTriplet(this.config.soilWetColor, this.soilData, 4);
+    writeSrgbTriplet(this.config.soilMineralColor, this.soilData, 8);
+    this.soilData[12] = this.soilMoisture;
   }
 
   async initialize(): Promise<boolean> {
@@ -303,20 +361,11 @@ export class WebGPURenderer {
         billboardShader,
         'plant-billboard',
       );
-      const groundModule = await this.createShaderModule(device, groundShader, 'ground-plane');
       const rainModule = await this.createShaderModule(device, rainShader, 'rain');
 
       this.createBuffers(device);
-      this.createGroundVertexBuffer(device);
       this.createRainVertexBuffer(device);
-      await this.createPipelines(
-        device,
-        cullModule,
-        meshModule,
-        billboardModule,
-        groundModule,
-        rainModule,
-      );
+      await this.createPipelines(device, cullModule, meshModule, billboardModule, rainModule);
       this.recreateDepthTexture();
 
       this.initialized = true;
@@ -382,6 +431,12 @@ export class WebGPURenderer {
       GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     );
 
+    this.soilUniformBuffer = allocateOrThrow(
+      'WebGPU soil uniforms',
+      64,
+      GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    );
+
     this.plantBuffer = allocateOrThrow(
       'WebGPU plant data',
       this.config.maxPlants * PLANT_STRIDE,
@@ -401,22 +456,6 @@ export class WebGPURenderer {
       RAIN_UNIFORM_BYTES,
       GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     );
-
-    // Root aura texture (64 nodes max, RGBA32Float, 1D texture)
-    this.rootAuraTexture = device.createTexture({
-      label: 'Root aura texture',
-      size: { width: 64, height: 1, depthOrArrayLayers: 1 },
-      format: 'rgba16float',
-      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
-    });
-
-    this.rootAuraSampler = device.createSampler({
-      label: 'Root aura sampler',
-      magFilter: 'linear',
-      minFilter: 'linear',
-      addressModeU: 'clamp-to-edge',
-      addressModeV: 'clamp-to-edge',
-    });
 
     // C02b: Texture arrays for plant variation
     // Create procedural texture arrays for different plant part types
@@ -503,7 +542,6 @@ export class WebGPURenderer {
     cullModule: GPUShaderModule,
     meshModule: GPUShaderModule,
     billboardModule: GPUShaderModule,
-    groundModule: GPUShaderModule,
     rainModule: GPUShaderModule,
   ): Promise<void> {
     const presentationFormat = this.device.getPresentationFormat();
@@ -564,8 +602,6 @@ export class WebGPURenderer {
               texture: { sampleType: 'float', viewDimension: '2d-array' },
             },
             { binding: 8, visibility: GPUShaderStage.FRAGMENT, sampler: { type: 'filtering' } },
-            { binding: 9, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
-            { binding: 10, visibility: GPUShaderStage.FRAGMENT, sampler: { type: 'filtering' } },
           ],
         }),
       ],
@@ -597,7 +633,17 @@ export class WebGPURenderer {
       fragment: {
         module: meshModule,
         entryPoint: 'fs_main',
-        targets: [{ format: presentationFormat }],
+        targets: [
+          {
+            format: presentationFormat,
+            blend: {
+              color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+              // Straight-alpha color blending already stores premultiplied RGB in
+              // the framebuffer, so alpha must accumulate as srcAlpha * 1 + dst * (1-a).
+              alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+            },
+          },
+        ],
       },
       primitive: { topology: 'triangle-list', cullMode: 'none' },
       depthStencil: {
@@ -791,36 +837,6 @@ export class WebGPURenderer {
       },
     });
 
-    // Ground plane pipeline (opaque, renders first so plants depth-test against it)
-    this.groundPipeline = device.createRenderPipeline({
-      label: 'Ground plane pipeline',
-      layout: 'auto',
-      vertex: {
-        module: groundModule,
-        entryPoint: 'vs_main',
-        buffers: [
-          {
-            arrayStride: 20, // position(12) + uv(8)
-            attributes: [
-              { shaderLocation: 0, offset: 0, format: 'float32x3' },
-              { shaderLocation: 1, offset: 12, format: 'float32x2' },
-            ],
-          },
-        ],
-      },
-      fragment: {
-        module: groundModule,
-        entryPoint: 'fs_main',
-        targets: [{ format: presentationFormat }],
-      },
-      primitive: { topology: 'triangle-list', cullMode: 'none' },
-      depthStencil: {
-        format: 'depth24plus',
-        depthWriteEnabled: true,
-        depthCompare: 'less',
-      },
-    });
-
     // Rain pipeline (transparent, renders after plants)
     this.rainPipeline = device.createRenderPipeline({
       label: 'Rain pipeline',
@@ -971,41 +987,6 @@ export class WebGPURenderer {
               .createView({ dimension: '2d-array' }),
         },
         { binding: 8, resource: this.textureArraySampler ?? device.createSampler() },
-        {
-          binding: 9,
-          resource:
-            this.rootAuraTexture?.createView() ??
-            device
-              .createTexture({
-                size: [1, 1],
-                format: 'rgba16float',
-                usage: GPUTextureUsage.TEXTURE_BINDING,
-              })
-              .createView(),
-        },
-        { binding: 10, resource: this.rootAuraSampler ?? device.createSampler() },
-      ],
-    });
-
-    // Ground pipeline bind group (uses frame uniforms and root aura for organic cutaways)
-    this.groundBindGroup = device.createBindGroup({
-      label: 'Ground plane bind group',
-      layout: this.groundPipeline.getBindGroupLayout(0),
-      entries: [
-        { binding: 0, resource: frameBinding },
-        {
-          binding: 9,
-          resource:
-            this.rootAuraTexture?.createView() ??
-            device
-              .createTexture({
-                size: [1, 1],
-                format: 'rgba16float',
-                usage: GPUTextureUsage.TEXTURE_BINDING,
-              })
-              .createView(),
-        },
-        { binding: 10, resource: this.rootAuraSampler ?? device.createSampler() },
       ],
     });
 
@@ -1239,12 +1220,14 @@ export class WebGPURenderer {
     center: THREE.Vector3,
     radius: number,
     auraRadius = 3.0,
+    soilOpacity = 0.45,
   ): void {
     this.rootSightEnabled = enabled;
     this.rootSightProgress = THREE.MathUtils.clamp(progress, 0, 1);
     this.rootSightCenter.copy(center);
     this.rootSightRadius = Math.max(0.1, radius);
     this.rootSightAuraRadius = Math.max(0.1, auraRadius);
+    this.rootSightSoilOpacity = THREE.MathUtils.clamp(soilOpacity, 0, 1);
   }
 
   /** Set the node ID to highlight with an outline. */
@@ -1253,45 +1236,6 @@ export class WebGPURenderer {
     this.selectedNodeId = nodeId;
     // Force mesh rebuild on next frame to include outline
     this.lastBuildTimeMs = Number.NEGATIVE_INFINITY;
-  }
-
-  /**
-   * Update root aura texture from plant nodes (called from main.ts updateRootSight and updatePlants).
-   * Stores up to 64 subterranean positions for organic cutaways and subterranean visibility.
-   */
-  updateRootAura(nodes: PlantNodeData[]): void {
-    if (!this.rootAuraTexture || !this.initialized) return;
-
-    const device = this.device.getDevice();
-    if (!device) return;
-
-    const subterranean = nodes.filter(
-      (n) =>
-        n.type === 0 ||
-        (n.position && n.position.y < -0.01) ||
-        n.nodeType === 'radicle' ||
-        n.nodeType === 'root' ||
-        n.nodeType === 'lateral_root',
-    );
-    this.rootAuraNodeCount = Math.min(subterranean.length, 64);
-
-    if (this.rootAuraNodeCount === 0) return;
-
-    const auraData = new Float32Array(64 * 4);
-    for (let i = 0; i < this.rootAuraNodeCount; i++) {
-      const r = subterranean[i];
-      auraData[i * 4 + 0] = r.position.x;
-      auraData[i * 4 + 1] = r.position.y;
-      auraData[i * 4 + 2] = r.position.z;
-      auraData[i * 4 + 3] = Math.max(0.25, r.radius || 0.35); // organic bubble radius scale
-    }
-
-    device.queue.writeTexture(
-      { texture: this.rootAuraTexture },
-      auraData,
-      { bytesPerRow: 64 * 16, rowsPerImage: 1 },
-      { width: 64, height: 1, depthOrArrayLayers: 1 },
-    );
   }
 
   /**
@@ -1308,7 +1252,6 @@ export class WebGPURenderer {
 
     this.pendingNodes = nodes;
     this.pendingNowMs = nowMs;
-    this.updateRootAura(nodes);
 
     const countChanged = nodes.length !== this.lastBuildNodeCount;
     let latestSpawn = Number.NEGATIVE_INFINITY;
@@ -1342,6 +1285,7 @@ export class WebGPURenderer {
       now: this.pendingNowMs,
       sunDirection: this.sunDirection,
       selectedNodeId: this.selectedNodeId,
+      mutationBarkThicknessScale: this.config.mutationBarkThicknessScale,
     });
 
     this.uploadVertices(device, built.vertices);
@@ -1562,10 +1506,10 @@ export class WebGPURenderer {
             const uyCentered = (y - size / 2) / (size / 2);
             const dist = Math.sqrt(ux * ux + uyCentered * uyCentered * 1.5);
             const falloff = Math.max(0, 1 - dist * 1.1);
-            const baseR = 0.42 + layer * 0.02;
-            const baseG = 0.28 + layer * 0.015;
-            const baseB = 0.16 + layer * 0.008;
-            const intensity = falloff * 0.9 + 0.1;
+            const baseR = 0.52 + layer * 0.02;
+            const baseG = 0.36 + layer * 0.015;
+            const baseB = 0.21 + layer * 0.008;
+            const intensity = falloff * 0.8 + 0.2;
             data[idx] = Math.floor(255 * baseR * intensity);
             data[idx + 1] = Math.floor(255 * baseG * intensity);
             data[idx + 2] = Math.floor(255 * baseB * intensity);
@@ -1577,63 +1521,10 @@ export class WebGPURenderer {
     }
   }
 
-  private createGroundVertexBuffer(device: GPUDevice): void {
-    // Large ground plane at y = -0.03 (matching Three.js ground plane position)
-    const size = 500;
-    const y = -0.03;
-    const half = size / 2;
-
-    // 2 triangles = 6 vertices
-    // Each vertex: position(3) + uv(2) = 5 floats = 20 bytes
-    const vertices = new Float32Array([
-      // Triangle 1
-      -half,
-      y,
-      -half,
-      0,
-      0,
-      half,
-      y,
-      -half,
-      1,
-      0,
-      -half,
-      y,
-      half,
-      0,
-      1,
-      // Triangle 2
-      half,
-      y,
-      -half,
-      1,
-      0,
-      half,
-      y,
-      half,
-      1,
-      1,
-      -half,
-      y,
-      half,
-      0,
-      1,
-    ]);
-
-    this.groundVertexBuffer = device.createBuffer({
-      label: 'Ground plane vertices',
-      size: vertices.byteLength,
-      usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
-      mappedAtCreation: true,
-    });
-    new Float32Array(this.groundVertexBuffer.getMappedRange()).set(vertices);
-    this.groundVertexBuffer.unmap();
-  }
-
   private createRainVertexBuffer(device: GPUDevice): void {
     // Rain particles: each is a quad (4 vertices) with position + velocity + seed
     // We'll use instancing: base quad geometry + per-instance data
-    const particleCount = 2000;
+    const particleCount = this.config.rainParticleCount;
 
     // Base quad vertices for instancing
     const quadVertices = new Float32Array([
@@ -1659,14 +1550,17 @@ export class WebGPURenderer {
     // Instance data buffer (position, velocity, seed) per particle
     // stride: pos(3) + velocity(1) = 4 floats = 16 bytes per instance
     const instanceData = new Float32Array(particleCount * 4);
-    const boxWidth = 60;
-    const boxHeight = 35;
+    const boxWidth = this.config.rainBoxWidth;
+    const boxHeight = this.config.rainBoxHeight;
+    // Same fixed seed as the WebGL2 rain field, so both paths lay the drops out
+    // identically and a screenshot is reproducible.
+    const rand = mulberry32(0x5eed1234);
     for (let i = 0; i < particleCount; i++) {
       const base = i * 4;
-      instanceData[base] = (Math.random() - 0.5) * boxWidth; // x
-      instanceData[base + 1] = Math.random() * boxHeight; // y
-      instanceData[base + 2] = (Math.random() - 0.5) * boxWidth; // z
-      instanceData[base + 3] = 0.85 + Math.random() * 0.3; // velocity
+      instanceData[base] = (rand() - 0.5) * boxWidth; // x
+      instanceData[base + 1] = rand() * boxHeight; // y
+      instanceData[base + 2] = (rand() - 0.5) * boxWidth; // z
+      instanceData[base + 3] = 0.85 + rand() * 0.3; // velocity
     }
 
     this.rainInstanceBuffer = device.createBuffer({
@@ -1704,7 +1598,8 @@ export class WebGPURenderer {
       dataU32[offset + 8] = 4;
       data[offset + 9] = 1;
       data[offset + 10] = plant.nodeCount;
-      dataU32[offset + 11] = 0;
+      // Spare PlantData word carries the plant's mutation mask to billboards.
+      dataU32[offset + 11] = plant.mutationMask & 0x7;
     }
 
     device.queue.writeBuffer(this.plantBuffer, 0, data);
@@ -1865,7 +1760,7 @@ export class WebGPURenderer {
         const v = Math.floor(viewIdx / IMPOSTOR_VIEWS_HORIZONTAL);
 
         const angle = (h / IMPOSTOR_VIEWS_HORIZONTAL) * Math.PI * 2;
-        const elevation = v === 0 ? Math.PI / 4 : Math.PI / 6; // 45Â° top, 30Â° side
+        const elevation = v === 0 ? Math.PI / 4 : Math.PI / 6; // 45 deg top, 30 deg side
         const distance = Math.max(5, plantRenderInfo.radius * 2);
 
         const eye = new THREE.Vector3(
@@ -1888,7 +1783,7 @@ export class WebGPURenderer {
             ) => THREE.Matrix4;
           }
         ).makePerspective(
-          Math.PI / 4, // 90Â° FOV
+          Math.PI / 4, // 90 deg FOV
           1, // aspect
           0.1,
           100,
@@ -2027,14 +1922,8 @@ export class WebGPURenderer {
       },
     });
 
-    // 1. Ground plane (opaque, renders first so plants depth-test against it)
-    if (this.groundPipeline && this.groundVertexBuffer && this.groundBindGroup) {
-      renderPass.setPipeline(this.groundPipeline);
-      renderPass.setBindGroup(0, this.groundBindGroup);
-      renderPass.setVertexBuffer(0, this.groundVertexBuffer);
-      renderPass.draw(6); // 2 triangles = 6 vertices
-    }
-
+    // 1. Plant mesh (tier 0/1) - opaque. Drawn before the ground so the ground's
+    //    translucent bubble can reveal the roots underneath it.
     // 2. Plant mesh (tier 0/1) - opaque
     if (
       this.meshPipeline &&
@@ -2093,7 +1982,19 @@ export class WebGPURenderer {
       renderPass.drawIndexed(this.outlineIndexCount, 1, this.outlineIndexOffset);
     }
 
-    // 5. Rain (transparent, renders last on top)
+    // 5. No soil dome. It was a second sphere under the surface whose rings
+    //    read as radial bands and which hid the roots from every angle except
+    //    straight above. Root Sight now cuts a corridor through the terrain
+    //    along the view line instead, so the background shows through.
+
+    // 6. No ground plane here. The environment renderer owns the ground and
+    //    now draws the planet's curved cap; this layer used to stamp a flat
+    //    500 m sheet at y = 0 on top of it, which hid the curvature and hung a
+    //    grey slab under the dirt wherever the cap fell away. The cap's soil
+    //    shader runs the same Root Sight cutaway, so the bubble still reveals
+    //    the roots.
+
+    // 7. Rain (transparent, renders last on top)
     if (
       this.rainPipeline &&
       this.rainVertexBuffer &&
@@ -2102,14 +2003,14 @@ export class WebGPURenderer {
       this.rainUniformBuffer &&
       this.rainParticleCount > 0
     ) {
-      // Update rain uniforms from config
-      const rainData = new Float32Array(8);
+      // Update rain uniforms from config (pre-allocated buffer to avoid GC pressure)
+      const rainData = this.rainUniformData;
       rainData[0] = this.config.rainStreakLength;
       rainData[1] = this.config.rainStreakWidth;
       rainData[2] = this.config.rainMaxVelocity;
       rainData[3] = this.rainParticleCount;
-      rainData[4] = 60.0; // boxWidth
-      rainData[5] = 35.0; // boxHeight
+      rainData[4] = this.config.rainBoxWidth;
+      rainData[5] = this.config.rainBoxHeight;
       // pad
       device.queue.writeBuffer(this.rainUniformBuffer, 0, rainData);
 
@@ -2220,15 +2121,14 @@ export class WebGPURenderer {
     data[65] = this.config.windStrength;
     data[66] = this.config.windSpeed;
     data[67] = this.config.healthTintStrength;
-    data[68] = this.config.mutation0Param;
-    data[69] = this.config.mutation1Param;
-    data[70] = this.config.mutation2Param;
+    data[68] = this.config.mutationBioluminescence;
+    data[69] = this.config.mutationBarkThicknessScale;
+    data[70] = this.config.mutationVariegation;
     data[71] = viewportHeight;
     this.frameU32[72] = this.rootSightEnabled ? 1 : 0;
     data[73] = this.rootSightProgress;
     data[74] = this.rootSightRadius;
     data[75] = this.rootSightAuraRadius;
-    this.frameU32[76] = this.rootAuraNodeCount;
     data[77] = this.config.tierThresholds[0];
     data[78] = this.config.tierThresholds[1];
     data[79] = this.config.tierThresholds[2];
@@ -2239,13 +2139,21 @@ export class WebGPURenderer {
     data[84] = this.config.pointSizeScale;
     data[85] = camera.projectionMatrix.elements[5];
     data[86] = this.deltaTime;
-    data[87] = 0;
+    data[87] = this.rootSightSoilOpacity;
+    // Planet body for the cull pass: centre is one radius below the pole.
+    const planetRadius = Math.max(0, this.config.planetRadius);
     data[88] = 0;
-    data[89] = 0;
+    data[89] = -planetRadius;
     data[90] = 0;
-    data[91] = 0;
+    data[91] = planetRadius;
 
     device.queue.writeBuffer(this.frameUniformBuffer, 0, data);
+
+    // Soil palette + moisture for the WebGPU ground pass (config-driven).
+    if (this.soilUniformBuffer) {
+      this.soilData[12] = this.soilMoisture;
+      device.queue.writeBuffer(this.soilUniformBuffer, 0, this.soilData);
+    }
 
     // C02b: GPU skinning - compute and upload joint matrices for each plant
     this.writeJointMatrices(device);
@@ -2260,7 +2168,7 @@ export class WebGPURenderer {
     // Group nodes by plant (same logic as PlantMeshBuilder)
     const plantGroups = this.groupNodesByPlant(this.pendingNodes);
 
-    const jointData = new Float32Array((this.config.maxPlants * JOINT_BUFFER_STRIDE) / 4);
+    const jointData = this.jointData;
 
     for (let plantIdx = 0; plantIdx < this.plantCount; plantIdx++) {
       const plantNodes = plantGroups[plantIdx];
@@ -2272,13 +2180,6 @@ export class WebGPURenderer {
       }
 
       const baseOffset = plantIdx * MAX_JOINTS_PER_PLANT * 16;
-      const now = this.pendingNowMs;
-
-      // Build node map for parent lookup
-      const nodeMap = new Map<string, PlantNodeData>();
-      for (const node of plantNodes) {
-        nodeMap.set(node.id, node);
-      }
 
       // Compute joint matrices for each node in this plant
       for (let jointIdx = 0; jointIdx < MAX_JOINTS_PER_PLANT; jointIdx++) {
@@ -2286,7 +2187,7 @@ export class WebGPURenderer {
 
         if (jointIdx < plantNodes.length) {
           const node = plantNodes[jointIdx];
-          const matrix = this.computeJointMatrix(node, nodeMap, now);
+          const matrix = jointMatrixFor(node);
 
           // Write column-major matrix
           jointData[matrixOffset + 0] = matrix.elements[0];
@@ -2327,7 +2228,11 @@ export class WebGPURenderer {
       }
     }
 
-    device.queue.writeBuffer(this.jointBuffer, 0, jointData);
+    device.queue.writeBuffer(
+      this.jointBuffer,
+      0,
+      jointData as unknown as GPUAllowSharedBufferSource,
+    );
   }
 
   /** Group nodes by plant root (copied from PlantMeshBuilder logic) */
@@ -2383,62 +2288,6 @@ export class WebGPURenderer {
     }
   }
 
-  /** Compute joint matrix for a node based on its animated growthProgress.
-   *  The `_now` parameter is kept for API stability but no longer used —
-   *  the caller (writeJointMatrices) passes pendingNowMs which is still
-   *  forwarded in case future code needs it.
-   */
-  private computeJointMatrix(
-    node: PlantNodeData,
-    nodeMap: Map<string, PlantNodeData>,
-    _now: number,
-  ): THREE.Matrix4 {
-    const matrix = new THREE.Matrix4();
-
-    // Get parent attachment position (where this joint connects to parent)
-    let parentAttachPos = new THREE.Vector3(node.position.x, node.position.y, node.position.z);
-    if (node.parentId) {
-      const parent = nodeMap.get(node.parentId);
-      if (parent) {
-        // Use server-authoritative parent attachment position
-        if (
-          parent.parentAttachX !== undefined &&
-          parent.parentAttachY !== undefined &&
-          parent.parentAttachZ !== undefined
-        ) {
-          parentAttachPos = new THREE.Vector3(
-            parent.parentAttachX,
-            parent.parentAttachY,
-            parent.parentAttachZ,
-          );
-        } else {
-          // Legacy heuristic
-          parentAttachPos =
-            parent.isSeed || parent.nodeType === 'seed'
-              ? new THREE.Vector3(parent.position.x, 0, parent.position.z)
-              : new THREE.Vector3(parent.position.x, parent.position.y, parent.position.z);
-        }
-      }
-    }
-
-    // Use the client-animated growthProgress directly — same value used by PlantMeshBuilder.
-    // The main.ts growth loop back-dates startTime so that growthProgress tracks the
-    // server-authoritative elapsed fraction.  The old spawnTime / 900 ms heuristic
-    // finished the joint animation instantly for slow-growing nodes (e.g. 10 s stems)
-    // because spawnTime was set to now - progress*totalMs → elapsed already ≥ 900 ms.
-    const growthEase = node.growthProgress ?? 1.0;
-
-    // Joint matrix translates from parent attachment to current animated position
-    const animatedPosition = parentAttachPos
-      .clone()
-      .lerp(new THREE.Vector3(node.position.x, node.position.y, node.position.z), growthEase);
-
-    // Translation component of the joint transform
-    matrix.setPosition(animatedPosition.sub(parentAttachPos));
-
-    return matrix;
-  }
-
   /**
    * Read the compute pass's per-plant LOD output. Intended for development
    * diagnostics and automated renderer checks.
@@ -2469,7 +2318,7 @@ export class WebGPURenderer {
 
     try {
       await staging.mapAsync(GPUMapMode.READ);
-    } catch (err) {
+    } catch {
       // AbortError: device was destroyed before the mapping resolved.
       // Silently discard the readback; the renderer is being torn down.
       staging.destroy();
@@ -2591,15 +2440,12 @@ export class WebGPURenderer {
     this.depthTexture?.destroy();
     this.impostorDepthTexture?.destroy();
 
-    this.rootAuraTexture?.destroy();
-    this.impostorAtlasTexture?.destroy();
     // C02b: Destroy texture arrays
     if (this.textureArrays) {
       for (const texture of this.textureArrays.values()) {
         texture.destroy();
       }
     }
-    this.groundVertexBuffer?.destroy();
     this.rainVertexBuffer?.destroy();
     this.rainInstanceBuffer?.destroy();
     this.rainUniformBuffer?.destroy();
@@ -2612,13 +2458,10 @@ export class WebGPURenderer {
     this.indexBuffer = null;
     this.jointBuffer = null;
     this.depthTexture = null;
-    this.rootAuraTexture = null;
-    this.rootAuraSampler = null;
     this.impostorAtlasTexture = null;
     this.impostorAtlasSampler = null;
     this.textureArrays = null;
     this.textureArraySampler = null;
-    this.groundVertexBuffer = null;
     this.rainVertexBuffer = null;
     this.rainInstanceBuffer = null;
     this.rainUniformBuffer = null;
@@ -2627,13 +2470,11 @@ export class WebGPURenderer {
     this.meshPipeline = null;
     this.billboardPipeline = null;
     this.outlinePipeline = null;
-    this.groundPipeline = null;
     this.rainPipeline = null;
     this.impostorPipeline = null;
     this.computeBindGroup = null;
     this.meshBindGroup = null;
     this.billboardBindGroup = null;
-    this.groundBindGroup = null;
     this.rainBindGroup = null;
     this.impostorBindGroup = null;
     this.sharedPipelineLayout = null;

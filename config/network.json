@@ -65,6 +65,18 @@
       "range": [8, 16],
       "description": "Angle quantization bits"
     },
+    "client_slow_rtt_ms": {
+      "type": "integer",
+      "value": 1200,
+      "range": [200, 10000],
+      "description": "Client ping round-trip above which the chat connection dot turns red"
+    },
+    "client_stall_ms": {
+      "type": "integer",
+      "value": 12000,
+      "range": [3000, 120000],
+      "description": "Age of an unanswered ping after which the client marks the connection unstable"
+    },
     "rate_limit_per_type": {
       "type": "schema_array",
       "value": [

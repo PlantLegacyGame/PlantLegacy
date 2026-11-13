@@ -1,11 +1,36 @@
 {
   "_meta": {
     "system": "chat",
-    "version": "0.1.0",
+    "version": "1.0.0",
     "schema": "extended-1",
     "owner_task": "T05",
-    "status": "stub",
-    "notes": "Declared by T00. Populated by T05 per DESIGN.md Part 5."
+    "status": "active",
+    "notes": "T05 Communication: proximity text chat (range-limited) and world chat (global), both in MVP. Rate limits and log size configured here."
   },
-  "values": {}
+  "values": {
+    "proximity_range_px": {
+      "type": "number",
+      "value": 150,
+      "range": [5, 500],
+      "notes": "Proximity chat range in world units; players outside range don't receive the message."
+    },
+    "world_rate_msg_per_min": {
+      "type": "integer",
+      "value": 12,
+      "range": [1, 60],
+      "notes": "World chat rate limit per player in messages per minute."
+    },
+    "log_size": {
+      "type": "integer",
+      "value": 200,
+      "range": [100, 10000],
+      "notes": "Maximum number of chat log entries kept per session before dropping oldest."
+    },
+    "message_max_chars": {
+      "type": "integer",
+      "value": 500,
+      "range": [40, 2000],
+      "notes": "Longest chat message the server accepts from one player, in characters."
+    }
+  }
 }

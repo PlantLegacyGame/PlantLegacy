@@ -1,5 +1,5 @@
 -- T08C: Accounts and Sessions schema
--- Argon2id password hashing, JWT tokens, rate limits, lockout
+-- bcrypt password hashing, JWT tokens, rate limits, lockout
 
 CREATE TABLE IF NOT EXISTS accounts (
     id TEXT PRIMARY KEY,

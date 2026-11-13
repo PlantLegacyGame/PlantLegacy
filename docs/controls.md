@@ -25,19 +25,21 @@
 | Inventory slot 1–10 | `1`–`9`, `0` | Selects inventory slot |
 | Cancel growth / Close panel | `Escape` / Right-click (context) | Cancels growth drawing, hides panels |
 | Dev panel toggle | `` ` `` (backtick) | Opens dev panel with admin commands (only with `?dev=1`) |
+| Planet orbit view | Dev panel → Camera → Orbit Planet / Local View | No key binding by request; the action is `planet_view_toggle` but it is not bound |
 | Debug overlay toggle | `Shift` | Toggles debug metrics overlay |
 | Hint card toggle | `H` | Shows/hides first-spawn hint card |
 | Regenerate plant (dev) | `R` (dev context) | Generates test plant at origin |
 
-Input is sampled and sent to the server at 20 Hz. The server validates every
-move (velocity, world bounds, quantization) and returns `REJECT` plus
-authoritative state when an intent is invalid. The client never moves its own
-cube.
+Input is sampled and sent to the server at 20 Hz. The camera is client-side and
+server-unvalidated: `INPUT` frames are stored but not consumed, and
+`validateMovement` in `apps/server/src/ops/net.ts` has no call sites (verified
+2026-11-12). `REJECT` is returned for invalid growth intents, not for movement.
+The client never moves its own cube.
 
 The first-spawn hint card auto-hides after
-`onboarding.show_hint_card_duration_ms`; there is no manual dismiss control yet.
-The light/water/minerals readout and its tooltips exist, but the numbers are
-placeholders until the server sends resource data.
+`onboarding.show_hint_card_duration_ms`; `H` toggles it back on.
+The light/water/minerals readout and its tooltips exist and show real tile
+readings once the server sends `RESOURCE_UPDATE` data.
 
 ## Grow Mode vs Normal Mode
 
@@ -46,6 +48,13 @@ placeholders until the server sends resource data.
 
 Mode state is shown in the UI (top-left indicator).
 
+## Chat (T05)
+
+- **Chat panel** (`T` key): proximity and world tabs, send on Enter, auto-shows briefly on new messages, scrollback capped at 50 messages.
+- **Rate limiting:** world chat limited to `chat.world_rate_msg_per_min` (default 12/min).
+- **Block:** right-click any chat message → Block player. Blocked players' chat and emotes are hidden from you. Block persists for the session.
+- **Report:** right-click any chat message → Report. Opens a modal dialog with pre-filled target, reason dropdown (RULE_6 categories), free-text additional info, and optional block checkbox. Reports are sent server-side with a context snapshot of recent chat lines. Rate-limited to `reports.report_rate_limit_per_min` (default 5/min).
+
 ## Implemented by C01
 
 - Named-action input abstraction (`move_forward`, `interact`, …) and device producers for keyboard, mouse.
@@ -53,15 +62,15 @@ Mode state is shown in the UI (top-left indicator).
 - Context rules: modal > text input > context actions > camera.
 - Gameplay code reads action state via `isActive(actionId)`, never raw keys.
 - `InputBus` with `isActive`, `wasPressed`, `getAxis` for 2D movement axes.
+- **Emote wheel UI** (`E` key): circular emote selector with center close button, click-outside to close, Escape to close. Sends `/emote <id>` via chat message type.
+- **Inventory/Overview panel** (`I` key): centered panel with plant stats and inventory slot grid (visual stub; slot logic not yet wired).
 
 ## Not built yet
 
 - Touch producers for mobile (desktop only currently).
 - Rebinding UI and persistence.
 - Camera recenter and game actions beyond movement.
-- Emote wheel UI (action bound, UI not built).
-- Inventory/Overview panel UI (action bound, UI not built).
-- Inventory slot selection UI (actions bound, UI not built).
+- Inventory slot selection logic (actions bound, grid rendered, selection not wired).
 
 ## Contract C01 satisfies
 

@@ -15,7 +15,7 @@ export interface DevPanelAPI {
       minerals: number;
       storedWater?: number;
       storedMinerals?: number;
-      rootTileCount?: number;
+      coveredTileCount?: number;
     },
   ) => void;
   /** Load dev config from server and update UI */
@@ -27,6 +27,10 @@ export interface DevPanelAPI {
 export interface DevPanelConfig {
   environmentRenderer: {
     setTimeOfDay: (t: number) => void;
+    setTimeFrozen: (frozen: boolean) => void;
+    getTimeFrozen: () => boolean;
+    setTimeScale: (scale: number) => void;
+    getTimeScale: () => number;
     setWeatherState: (state: string) => void;
     getTimeOfDay: () => number;
     getWeatherState: () => string;
@@ -63,6 +67,7 @@ export interface DevPanelConfig {
     regeneratePlant: () => void;
   };
   camera: {
+    setPlanetView: (enabled: boolean) => void;
     setDistance: (dist: number) => void;
     setSmoothing: (s: number) => void;
     setBounds: (min: number, max: number) => void;
@@ -82,7 +87,6 @@ type TabId = 'time-weather' | 'resources' | 'plant' | 'render' | 'camera' | 'sim
 interface Tab {
   id: TabId;
   label: string;
-  icon: string;
   build: (container: HTMLElement, config: DevPanelConfig) => void;
 }
 
@@ -132,10 +136,10 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
       border-radius: 10px 10px 0 0;
       cursor: grab;
     ">
-      <span style="font-weight:600;color:var(--leaf-300);font-size:11px;text-transform:uppercase;letter-spacing:0.5px">⚙️ Dev Panel</span>
+      <span style="font-weight:600;color:var(--leaf-300);font-size:11px;text-transform:uppercase;letter-spacing:0.5px">Dev Panel</span>
       <div style="display:flex;gap:4px">
-        <button class="dp-min-btn" title="Minimize" style="width:24px;height:24px;border-radius:4px;background:var(--bark-700);border:1px solid var(--bark-500);color:var(--bark-300);cursor:pointer;display:flex;align-items:center;justify-content:center">−</button>
-        <button class="dp-close-btn" title="Close (Backtick)" style="width:24px;height:24px;border-radius:4px;background:var(--bark-700);border:1px solid var(--bark-500);color:var(--bark-300);cursor:pointer;display:flex;align-items:center;justify-content:center">×</button>
+        <button class="dp-min-btn" title="Minimize" style="width:24px;height:24px;border-radius:4px;background:var(--bark-700);border:1px solid var(--bark-500);color:var(--bark-300);cursor:pointer;display:flex;align-items:center;justify-content:center">-</button>
+        <button class="dp-close-btn" title="Close (Backtick)" style="width:24px;height:24px;border-radius:4px;background:var(--bark-700);border:1px solid var(--bark-500);color:var(--bark-300);cursor:pointer;display:flex;align-items:center;justify-content:center">x</button>
       </div>
     </div>
     <div class="dp-tabs" style="
@@ -190,7 +194,6 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
     {
       id: 'time-weather',
       label: 'Time & Weather',
-      icon: '🌤️',
       build: (container, cfg) => {
         const env = cfg.environmentRenderer;
         addSection(container, 'Time of Day', [
@@ -203,7 +206,7 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
             0,
             0.999,
             0.001,
-            '0–1',
+            '0-1',
           ),
           createButtonGroup('Presets', [
             { label: 'Dawn', action: () => env.setTimeOfDay(0.25) },
@@ -213,17 +216,17 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
           ]),
           createNumberInput(
             'Time Speed',
-            () => 1,
-            (_v) => {},
+            () => env.getTimeScale(),
+            (v) => env.setTimeScale(v),
             0,
             100,
             1,
-            '×',
+            'x',
           ),
           createToggle(
             'Freeze Time',
-            () => false,
-            (_v) => {},
+            () => env.getTimeFrozen(),
+            (v) => env.setTimeFrozen(v),
           ),
         ]);
         addSection(container, 'Weather', [
@@ -232,11 +235,11 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
             () => env.getWeatherState(),
             (v) => env.setWeatherState(v),
             [
-              { value: 'clear', label: '☀️ Clear' },
-              { value: 'rain', label: '🌧️ Rain' },
-              { value: 'thunderstorm_telegraph', label: '⛈️ Storm Telegraph' },
-              { value: 'thunderstorm_active', label: '⚡ Storm Active' },
-              { value: 'thunderstorm_aftermath', label: '🌫️ Storm Aftermath' },
+              { value: 'clear', label: 'Clear' },
+              { value: 'rain', label: 'Rain' },
+              { value: 'thunderstorm_telegraph', label: 'Storm Telegraph' },
+              { value: 'thunderstorm_active', label: 'Storm Active' },
+              { value: 'thunderstorm_aftermath', label: 'Storm Aftermath' },
             ],
           ),
           createNumberInput(
@@ -246,7 +249,7 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
             0,
             2,
             0.01,
-            '×',
+            'x',
           ),
         ]);
       },
@@ -254,7 +257,6 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
     {
       id: 'resources',
       label: 'Resources',
-      icon: '🌱',
       build: (container, cfg) => {
         const rw = cfg.resourceWorld;
         const send = cfg.sendToServer;
@@ -263,7 +265,7 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
             if (!state.currentTile) return 'No plant selected';
             const res = rw.getTileResources(state.currentTile.x, state.currentTile.z);
             if (!res) return 'Out of bounds';
-            return `Light: ${res.light.toFixed(1)} · Moisture: ${res.moisture.toFixed(1)} · Minerals: ${res.minerals.toFixed(1)}`;
+            return `Light: ${res.light.toFixed(1)} | Moisture: ${res.moisture.toFixed(1)} | Minerals: ${res.minerals.toFixed(1)}`;
           }),
         ]);
         addSection(container, 'Global Config', [
@@ -388,7 +390,7 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
         addSection(container, 'Tile Actions (at plant)', [
           createButtonGroup('Actions', [
             {
-              label: '💧 Fill Moisture',
+              label: 'Fill Moisture',
               action: () => {
                 if (state.currentTile) {
                   rw.setTileResources(state.currentTile.x, state.currentTile.z, { moisture: 500 });
@@ -402,7 +404,7 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
               },
             },
             {
-              label: '⛏️ Fill Minerals',
+              label: 'Fill Minerals',
               action: () => {
                 if (state.currentTile) {
                   rw.setTileResources(state.currentTile.x, state.currentTile.z, { minerals: 500 });
@@ -416,7 +418,7 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
               },
             },
             {
-              label: '✨ Fill All',
+              label: 'Fill All',
               action: () => {
                 if (state.currentTile) {
                   rw.setTileResources(state.currentTile.x, state.currentTile.z, {
@@ -436,7 +438,7 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
               },
             },
             {
-              label: '💀 Drain All',
+              label: 'Drain All',
               action: () => {
                 if (state.currentTile) {
                   rw.setTileResources(state.currentTile.x, state.currentTile.z, {
@@ -462,7 +464,6 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
     {
       id: 'plant',
       label: 'Plant',
-      icon: '🌿',
       build: (container, cfg) => {
         const pw = cfg.plantWorld;
         const send = cfg.sendToServer;
@@ -474,7 +475,7 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
             0.1,
             10,
             0.01,
-            '×',
+            'x',
           ),
           createNumberInput(
             'Canopy Speed',
@@ -483,7 +484,7 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
             0.1,
             10,
             0.01,
-            '×',
+            'x',
           ),
           createNumberInput(
             'Cooldown',
@@ -493,15 +494,6 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
             10,
             0.1,
             's',
-          ),
-          createNumberInput(
-            'Root Attack ×',
-            () => 2.0,
-            (v) => send(8, { type: 'dev_set_growth', root_attack_damage_multiplier: v }),
-            0.5,
-            10,
-            0.1,
-            '×',
           ),
         ]);
         addSection(container, 'Energy', [
@@ -550,11 +542,11 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
         ]);
         addSection(container, 'Actions', [
           createButtonGroup('Instant', [
-            { label: '🌱 Regenerate', action: () => pw.regeneratePlant(), primary: true },
-            { label: '⚡ Fill Energy', action: () => send(8, { type: 'dev_fill_energy' }) },
-            { label: '🌿 Fill Biomass', action: () => send(8, { type: 'dev_fill_biomass' }) },
+            { label: 'Regenerate', action: () => pw.regeneratePlant(), primary: true },
+            { label: 'Fill Energy', action: () => send(8, { type: 'dev_fill_energy' }) },
+            { label: 'Fill Biomass', action: () => send(8, { type: 'dev_fill_biomass' }) },
             {
-              label: '💀 Kill Plant',
+              label: 'Kill Plant',
               action: () => {
                 if (confirm('Kill plant?')) send(8, { type: 'dev_kill_plant' });
               },
@@ -567,7 +559,6 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
     {
       id: 'render',
       label: 'Render',
-      icon: '🎨',
       build: (container, cfg) => {
         const pr = cfg.plantRenderer;
         addSection(container, 'Quality', [
@@ -678,7 +669,7 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
             0,
             2,
             0.01,
-            '×',
+            'x',
           ),
           createNumberInput(
             'Wind Speed',
@@ -690,7 +681,7 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
             0.1,
             5,
             0.01,
-            '×',
+            'x',
           ),
           createNumberInput(
             'Health Tint',
@@ -702,7 +693,7 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
             0,
             1,
             0.01,
-            '×',
+            'x',
           ),
           createButtonGroup('Apply', [
             {
@@ -738,7 +729,6 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
     {
       id: 'camera',
       label: 'Camera',
-      icon: '📷',
       build: (container, cfg) => {
         const cam = cfg.camera;
         addSection(container, 'Settings', [
@@ -784,6 +774,10 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
             { label: 'Close Up', action: () => cam.setDistance(20) },
             { label: 'Far View', action: () => cam.setDistance(300) },
           ]),
+          createButtonGroup('Planet', [
+            { label: 'Orbit Planet', action: () => cam.setPlanetView(true) },
+            { label: 'Local View', action: () => cam.setPlanetView(false) },
+          ]),
           createButtonGroup('Reset', [
             {
               label: 'Reset Defaults',
@@ -799,7 +793,6 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
     {
       id: 'simulation',
       label: 'Simulation',
-      icon: '⚙️',
       build: (container, cfg) => {
         const send = cfg.sendToServer;
         addSection(container, 'Control', [
@@ -812,9 +805,9 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
             1,
           ),
           createButtonGroup('Control', [
-            { label: '⏸ Pause', action: () => send(8, { type: 'dev_pause_simulation' }) },
-            { label: '▶ Resume', action: () => send(8, { type: 'dev_resume_simulation' }) },
-            { label: '⏭ Step Once', action: () => send(8, { type: 'dev_step_simulation' }) },
+            { label: 'Pause', action: () => send(8, { type: 'dev_pause_simulation' }) },
+            { label: 'Resume', action: () => send(8, { type: 'dev_resume_simulation' }) },
+            { label: 'Step Once', action: () => send(8, { type: 'dev_step_simulation' }) },
           ]),
         ]);
         addSection(container, 'Interest', [
@@ -859,14 +852,6 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
             300,
             10,
           ),
-          createNumberInput(
-            'Offline Damage ×',
-            () => 1.0,
-            (v) => send(8, { type: 'dev_set_simulation', offline_damage_multiplier: v }),
-            0,
-            1,
-            0.01,
-          ),
           createButtonGroup('Apply', [
             {
               label: 'Apply',
@@ -885,9 +870,6 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
                   dormant_step_interval_sec: (
                     document.getElementById('dev-dormant-interval') as HTMLInputElement
                   )?.value,
-                  offline_damage_multiplier: (
-                    document.getElementById('dev-offline-damage') as HTMLInputElement
-                  )?.value,
                 });
               },
               primary: true,
@@ -896,9 +878,9 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
         ]);
         addSection(container, 'Persistence', [
           createButtonGroup('Data', [
-            { label: '💾 Force Save', action: () => send(8, { type: 'dev_force_save' }) },
+            { label: 'Force Save', action: () => send(8, { type: 'dev_force_save' }) },
             {
-              label: '🗑️ Clear All',
+              label: 'Clear All',
               action: () => {
                 if (confirm('Clear ALL persistence?')) send(8, { type: 'dev_clear_persistence' });
               },
@@ -906,13 +888,20 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
             },
           ]),
         ]);
+        addSection(container, 'Season', [
+          createButtonGroup('Calendar', [
+            {
+              label: 'End Season',
+              action: () => {
+                if (confirm('End the season now? Every plant in the world dies.')) {
+                  send(8, { type: 'dev_end_season' });
+                }
+              },
+              danger: true,
+            },
+          ]),
+        ]);
         addSection(container, 'Game Switches', [
-          createToggle(
-            'Auto Growth',
-            () => false, // Will be updated by loadConfig
-            (v) => send(8, { type: 'dev_set_config', key: 'auto_growth', value: v }),
-            'auto_growth',
-          ),
           createToggle(
             'Germination Gate',
             () => false,
@@ -938,8 +927,8 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
             (v) => send(8, { type: 'dev_set_config', key: 'seed_size_class', value: v }),
             [
               { value: 'normal', label: 'Normal' },
-              { value: 'large', label: 'Large (2×)' },
-              { value: 'giant', label: 'Giant (4×)' },
+              { value: 'large', label: 'Large (2x)' },
+              { value: 'giant', label: 'Giant (4x)' },
             ],
             'seed_size_class',
           ),
@@ -949,7 +938,6 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
     {
       id: 'debug',
       label: 'Debug',
-      icon: '🐛',
       build: (container, cfg) => {
         const send = cfg.sendToServer;
         const ps = config.plantState;
@@ -960,17 +948,17 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
         addSection(container, 'Logging', [
           createButtonGroup('Log', [
             {
-              label: '📊 Client State',
+              label: 'Client State',
               action: () => {
                 console.log('Plant:', getPlant());
               },
             },
-            { label: '🌿 Server Plants', action: () => send(8, { type: 'dev_log_plants' }) },
-            { label: '📦 Resources', action: () => send(8, { type: 'dev_log_resources' }) },
-            { label: '📡 Network', action: () => send(8, { type: 'dev_log_network' }) },
-            { label: '🧹 Clear Console', action: () => console.clear() },
+            { label: 'Server Plants', action: () => send(8, { type: 'dev_log_plants' }) },
+            { label: 'Resources', action: () => send(8, { type: 'dev_log_resources' }) },
+            { label: 'Network', action: () => send(8, { type: 'dev_log_network' }) },
+            { label: 'Clear Console', action: () => console.clear() },
             {
-              label: '📤 Export JSON',
+              label: 'Export JSON',
               action: () => {
                 const plant = {
                   plantId: config.plantState.getPlantId(),
@@ -992,12 +980,12 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
         ]);
         addSection(container, 'Renderer', [
           createButtonGroup('GPU', [
-            { label: '🔄 Toggle WebGPU', action: () => send(8, { type: 'dev_toggle_webgpu' }) },
+            { label: 'Toggle WebGPU', action: () => send(8, { type: 'dev_toggle_webgpu' }) },
             {
-              label: '🔧 Reinit Renderer',
+              label: 'Reinit Renderer',
               action: () => send(8, { type: 'dev_reinit_renderer' }),
             },
-            { label: '📝 Dump Shaders', action: () => send(8, { type: 'dev_dump_shaders' }) },
+            { label: 'Dump Shaders', action: () => send(8, { type: 'dev_dump_shaders' }) },
           ]),
         ]);
         addSection(container, 'Stress Test', [
@@ -1135,15 +1123,26 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
     thumb.style.cssText =
       'position:absolute;top:2px;left:2px;width:18px;height:18px;background:var(--bone-100);border-radius:50%;transition:transform 0.15s;box-shadow:0 1px 3px rgba(0,0,0,0.3)';
     toggle.appendChild(thumb);
+    // The panel does not re-read server config after every click, so a toggle
+    // whose state came from `getter()` alone never moved: the request was sent
+    // but the thumb stayed put, which read as a dead control.
+    let state = Boolean(getter());
     const update = () => {
-      const active = getter();
+      const active = state;
       toggle.classList.toggle('dp-toggle-active', active);
       toggle.style.background = active ? 'var(--leaf-500)' : 'var(--bark-700)';
       toggle.style.borderColor = active ? 'var(--leaf-400)' : 'var(--bark-600)';
       thumb.style.transform = active ? 'translateX(20px)' : 'translateX(0)';
     };
     update();
-    toggle.onclick = () => setter(!getter());
+    toggle.onclick = () => {
+      // Start from the live value: something else may have changed it (jumping
+      // Time freezes the clock), and a stale local state left the thumb one
+      // click out of step with the setting it controls.
+      state = !Boolean(getter());
+      update();
+      setter(state);
+    };
     toggle.style.cssText +=
       ';display:flex;align-items:center;justify-content:flex-start;padding:0 2px';
     const togWrapperRow = document.createElement('div');
@@ -1215,7 +1214,7 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
     tabs.forEach((tab) => {
       const btn = document.createElement('button');
       btn.className = `dp-tab${tab.id === activeTab ? ' active' : ''}`;
-      btn.innerHTML = `${tab.icon} ${tab.label}`;
+      btn.textContent = tab.label;
       btn.dataset.tab = tab.id;
       btn.style.cssText = `
         padding:8px 14px;
@@ -1311,7 +1310,7 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
   minimizeBtn.onclick = () => {
     isMinimized = !isMinimized;
     panel.classList.toggle('dp-minimized', isMinimized);
-    minimizeBtn.textContent = isMinimized ? '+' : '−';
+    minimizeBtn.textContent = isMinimized ? '+' : '-';
   };
 
   closeBtn.onclick = hide;

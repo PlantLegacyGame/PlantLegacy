@@ -77,6 +77,11 @@
       "value": "/ready",
       "max_length": 64
     },
+    "trust_proxy": {
+      "type": "boolean",
+      "value": false,
+      "notes": "Trust X-Forwarded-For for the client IP. Enable only behind a proxy that overwrites the header (e.g. the staging tunnel); otherwise rate limits can be spoofed."
+    },
     "readiness_requires_db": {
       "type": "boolean",
       "value": true,

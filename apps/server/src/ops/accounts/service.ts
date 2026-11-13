@@ -1,8 +1,9 @@
 import { createHash } from 'node:crypto';
+import { hash as argon2Hash, verify as argon2Verify } from '@node-rs/argon2';
 import { newId } from '@plant-legacy/shared/ids';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
-import type { Pool } from 'pg';
+import type { Pool, PoolClient } from 'pg';
 import type { AccountsConfig } from './config.ts';
 
 export interface Account {
@@ -69,16 +70,31 @@ export class AccountsService {
   }
 
   async hashPassword(password: string): Promise<string> {
-    const salt = await bcrypt.genSalt(this.config.bcryptCost);
-    return bcrypt.hash(password, salt);
+    // `@node-rs/argon2` defaults to Argon2id, which is what DESIGN.md requires.
+    return argon2Hash(password, {
+      memoryCost: this.config.argon2MemoryKib,
+      timeCost: this.config.argon2TimeCost,
+      parallelism: this.config.argon2Parallelism,
+    });
   }
 
+  /** Verifies Argon2id hashes and the older bcrypt hashes they replaced. */
   async verifyPassword(password: string, hash: string): Promise<boolean> {
     try {
-      return await bcrypt.compare(password, hash);
+      if (hash.startsWith('$argon2')) return await argon2Verify(hash, password);
+      if (hash.startsWith('$2')) return await bcrypt.compare(password, hash);
+      return false;
     } catch {
       return false;
     }
+  }
+
+  /**
+   * True when a stored hash predates Argon2id. Login re-hashes these with the
+   * supplied password, so no separate migration job is needed.
+   */
+  needsRehash(hash: string): boolean {
+    return !hash.startsWith('$argon2id$');
   }
 
   validatePassword(password: string): PasswordValidationResult {
@@ -365,6 +381,16 @@ export class AccountsService {
         [account.id],
       );
 
+      // Transparent upgrade path from the legacy bcrypt hashes.
+      if (this.needsRehash(account.passwordHash)) {
+        const upgradedHash = await this.hashPassword(password);
+        await client.query(
+          `UPDATE accounts SET password_hash = $1, updated_at = NOW() WHERE id = $2`,
+          [upgradedHash, account.id],
+        );
+        account.passwordHash = upgradedHash;
+      }
+
       const tokens = this.generateTokenPair(account.id, account.role);
 
       const sessionId = newId('session');
@@ -389,7 +415,7 @@ export class AccountsService {
         ],
       );
 
-      await this.enforceSessionLimit(account.id);
+      await this.enforceSessionLimit(account.id, client);
 
       await client.query('COMMIT');
 
@@ -499,7 +525,7 @@ export class AccountsService {
 
       await client.query(`UPDATE sessions SET revoked_at = NOW() WHERE id = $1`, [session.id]);
 
-      await this.enforceSessionLimit(session.account_id);
+      await this.enforceSessionLimit(session.account_id, client);
 
       await client.query('COMMIT');
 
@@ -520,7 +546,11 @@ export class AccountsService {
         issuer: this.config.jwtIssuer,
         audience: this.config.jwtAudience,
         algorithms: [this.config.jwtAlgorithm],
-      }) as { sub: string; role: string };
+      }) as { sub: string; role: string; type?: string };
+
+      if (decoded.type !== 'access' || typeof decoded.role !== 'string') {
+        return { error: 'Invalid or expired access token' };
+      }
 
       return { accountId: decoded.sub, role: decoded.role };
     } catch (_error) {
@@ -584,7 +614,9 @@ export class AccountsService {
     const refreshTokenExpiresAt =
       Date.now() + this.config.refreshTokenLifetimeDays * 24 * 60 * 60 * 1000;
 
-    const accessToken = jwt.sign({ sub: accountId, role }, this.getJwtSecret(), {
+    // `type` keeps the two token kinds apart: without it a 30-day refresh token
+    // verifies as a 15-minute access token.
+    const accessToken = jwt.sign({ sub: accountId, role, type: 'access' }, this.getJwtSecret(), {
       algorithm: this.config.jwtAlgorithm,
       issuer: this.config.jwtIssuer,
       audience: this.config.jwtAudience,
@@ -625,8 +657,13 @@ export class AccountsService {
     return createHash('sha256').update(token).digest('hex');
   }
 
-  private async enforceSessionLimit(accountId: string): Promise<void> {
-    const result = await this.pool.query(
+  /**
+   * Must run on the caller's transaction client. Using the pool here checked out
+   * a second connection while the first was mid-transaction, so it could not see
+   * the row just inserted and could exhaust the pool.
+   */
+  private async enforceSessionLimit(accountId: string, client: PoolClient): Promise<void> {
+    const result = await client.query(
       `SELECT id FROM sessions WHERE account_id = $1 AND revoked_at IS NULL AND expires_at > NOW() ORDER BY created_at ASC`,
       [accountId],
     );
@@ -634,7 +671,7 @@ export class AccountsService {
     if (result.rows.length > this.config.sessionMaxPerAccount) {
       const toRevoke = result.rows.length - this.config.sessionMaxPerAccount;
       const idsToRevoke = result.rows.slice(0, toRevoke).map((r) => r.id);
-      await this.pool.query(`UPDATE sessions SET revoked_at = NOW() WHERE id = ANY($1)`, [
+      await client.query(`UPDATE sessions SET revoked_at = NOW() WHERE id = ANY($1)`, [
         idsToRevoke,
       ]);
     }

@@ -36,17 +36,17 @@ amended by ADR-026 through ADR-029:
 |---|---|---|---|
 | T00 | Foundation | `[x]` | [T00.md](./T00.md) |
 | O01 | Repo and deploy pipeline | `[x]` | [O01.md](./O01.md) |
-| T03P | Networking gate (Gate 0) | `[x]` transport and 20 Hz loop work; velocity/bounds rejection effective and tested | [T03P.md](./T03P.md) |
+| T03P | Networking gate (Gate 0) | `[x]` transport and 20 Hz loop work; movement is camera-only (see the correction in T03P.md) | [T03P.md](./T03P.md) |
 | C01 | Client foundation | `[x]` input abstraction, UI shell, quality tiers, debug overlay, pause-on-hidden, config routes | [C01.md](./C01.md) |
 | T00A | Resource model + onboarding | `[x]` server and client resource model complete | [T00A.md](./T00A.md) |
 | T01 | Growth (renderer prototype committed under this label) | `[x]` server-authoritative typed-node growth implemented; client sends GROWTH_INTENT, receives GROWTH_EVENT, renders growing plant via C02 renderer | [T01.md](./T01.md) |
 | T03 | The Multiplayer World | `[x]` persistence, offline tiers (Active/Near/Dormant), interest management, event bus, tick-budget metrics, binary snapshot + event log | [T03.md](./T03.md) |
-| T08C | Accounts and Sessions | `[x]` argon2id, JWT access/refresh, rate limits, lockout, WebSocket auth | [T08C.md](./T08C.md) |
+| T08C | Accounts and Sessions | `[x]` Argon2id, JWT access/refresh, rate limits, lockout, WebSocket auth | [T08C.md](./T08C.md) |
 | C02 | Procedural Plant Renderer v1 | `[x]` Raymarched Signed Distance Fields (SDF) with polynomial smooth minimum (smin) organic fusion inside local bounding volumes; primitives fuse into a single continuous anatomical membrane | [C02.md](./C02.md) |
 | T02 | Root Sight | `[x]` Two-mode camera and volumetric ground cutaway integrated with continuous SDF organism renderer; subterranean roots highlight in green/orange through cutaway | [T02.md](./T02.md) |
 | T07 | Weather and Day/Night | `[x]` Server-authoritative day/night cycle, clear/rain/storm state machine with 3-phase thunderstorm cycle, forecast and soil moisture integration | [T07.md](./T07.md) |
 | C03 | Environment Rendering | `[x]` Sky dome, sun/moon arcs, atmospheric fog, rain particles, storm lightning flashes, soil moisture/mineral tinting, and Root Sight cutaway refinement | [C03.md](./C03.md) |
-| C02b | WebGPU Compute-Driven Plant Renderer | `[ ]` | v1 slice + impostor baking (readRenderData-driven, 16-view texture array + atlas copy) + VRAM pool budgeting (256MB default, allocateOrThrow); missing: GPU skinning, texture arrays, cross-fade, L2/L3 mutations, shared depth | [C02b.md](./C02b.md) |
+| C02b | WebGPU Compute-Driven Plant Renderer | `[ ]` | v1 slice + impostor baking (readRenderData-driven, 16-view texture array + atlas copy) + VRAM pool budgeting (256MB default, allocateOrThrow) + GPU skinning for 0.9s emergence + texture arrays (Bark/Leaf/Flower/SporeSac/Seed) + cross-fade between tiers 1↔2 (blendFactor in PlantRenderData, mesh fades out, billboard fades in); mutation signatures (per-node mask, three documented signatures); planet-body occlusion in the cull pass; missing: shared depth between the WebGPU plant pass and the WebGL environment pass (separate canvases; no browser exposes WebGL depth to WebGPU without a readback) | [C02b.md](./C02b.md) |
 | D01 | Dev settings engine | `[x]` | `?dev=1` gate, server `/dev/config` endpoints, `config/dev.json`, DevPanel wired to server, persistence switch wired to disconnect logic, key binding added | [D01.md](./D01.md) |
 
 ## Approved V5.4 tasks (not started)

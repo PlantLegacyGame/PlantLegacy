@@ -20,6 +20,47 @@ fn thresholdForTier(tier: u32) -> f32 {
   return 0.0;
 }
 
+// The environment is drawn by WebGL and the plants by WebGPU on a second
+// canvas, so the two passes cannot share a depth buffer. The only surface that
+// can hide a plant is the planet itself, and that test is analytic: if the
+// segment from the camera to the plant crosses the body first, the plant is
+// behind the horizon.
+fn hiddenByPlanet(center: vec3f, radius: f32) -> bool {
+  let planetRadius = frame.planetRadius;
+  if (planetRadius <= 0.0) {
+    return false;
+  }
+
+  let origin = vec3f(frame.planetCenterX, frame.planetCenterY, frame.planetCenterZ);
+  let toCamera = frame.cameraPos.xyz - origin;
+  // Inside the body (for example an underground root) is Root Sight's job.
+  if (dot(toCamera, toCamera) <= planetRadius * planetRadius) {
+    return false;
+  }
+
+  let toPlant = center - origin;
+  if (dot(toPlant, toPlant) <= planetRadius * planetRadius) {
+    return false;
+  }
+
+  let delta = toPlant - toCamera;
+  let distance = length(delta);
+  if (distance < 1e-4) {
+    return false;
+  }
+
+  let direction = delta / distance;
+  let b = dot(toCamera, direction);
+  let c = dot(toCamera, toCamera) - planetRadius * planetRadius;
+  let discriminant = b * b - c;
+  if (discriminant <= 0.0) {
+    return false;
+  }
+
+  let firstHit = -b - sqrt(discriminant);
+  return firstHit > 0.0 && firstHit < distance - radius;
+}
+
 fn tierForSize(sizePx: f32) -> u32 {
   if (sizePx >= frame.tierThreshold0) {
     return 0u;
@@ -66,6 +107,11 @@ fn main(@builtin(global_invocation_id) globalId: vec3u) {
     return;
   }
 
+  if (hiddenByPlanet(center, radius)) {
+    renderData[index] = PlantRenderData(4u, 0u, 0.0, 0.0);
+    return;
+  }
+
   let sizePx = radiusNdc * 2.0 * frame.viewportHeight;
   var tier = tierForSize(sizePx);
   let previousTier = plant.lastTier;
@@ -80,18 +126,39 @@ fn main(@builtin(global_invocation_id) globalId: vec3u) {
     tier = min(tier, tierForSize(sizePx / frame.hysteresisDemote));
   }
 
-  // Force own plant to never use billboard (tier >= 2) - use color.w as isOwn flag
+  // The player's own plant is the subject of the game. Pinning it to the
+  // full-detail mesh tier means it never swaps between mesh and billboard
+  // while growing, which is what produced the bright flashing/pop-in look.
   let isOwn = plant.color.w;
   if (isOwn > 0.5) {
-    tier = min(tier, 1u);
+    tier = 0u;
   }
 
-  if (tier != previousTier && plant.dwellTime < frame.minDwellTime) {
-    tier = previousTier;
+  let stableTier = select(tier, 0u, isOwn > 0.5);
+
+  // Cross-fade blend factor: 0.0 = pure mesh, 1.0 = pure billboard. Only the
+  // mesh/billboard boundary (tiers 1 <-> 2) cross-fades; other tiers are
+  // single-LOD, and the own plant never fades at all.
+  let crossesBoundary =
+    previousTier < 4u &&
+    ((previousTier < 2u && stableTier >= 2u && stableTier < 4u) ||
+      (previousTier >= 2u && previousTier < 4u && stableTier < 2u));
+  let isTransitioning = crossesBoundary && isOwn <= 0.5;
+  // Dwell has to accumulate across frames for the fade to ramp; resetting it
+  // to zero every frame while transitioning made blend snap from 0 to 1 (a pop).
+  var dwellTime = 0.0;
+  if (isTransitioning) {
+    dwellTime = plant.dwellTime + frame.deltaTime;
   }
 
-  let dwellTime = select(plant.dwellTime + frame.deltaTime, 0.0, tier != previousTier);
-  plants[index].lastTier = tier;
+  var blend = 0.0;
+  if (isTransitioning) {
+    blend = clamp(dwellTime / max(frame.minDwellTime, 0.001), 0.0, 1.0);
+  } else if (stableTier >= 2u) {
+    blend = 1.0;
+  }
+
+  plants[index].lastTier = stableTier;
   plants[index].dwellTime = dwellTime;
-  renderData[index] = PlantRenderData(tier, 1u, sizePx, 0.0);
+  renderData[index] = PlantRenderData(stableTier, 1u, sizePx, blend);
 }

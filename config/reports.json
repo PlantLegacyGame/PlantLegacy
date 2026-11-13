@@ -1,11 +1,52 @@
 {
   "_meta": {
     "system": "reports",
-    "version": "0.1.0",
+    "version": "1.0.0",
     "schema": "extended-1",
     "owner_task": "T05",
-    "status": "stub",
-    "notes": "Declared by T00. Populated by T05 per DESIGN.md Part 5."
+    "status": "active",
+    "notes": "T05 Communication: Roblox-style report/block controls. Report reasons match RULE_6 categories; no actionable category for mere offensiveness/toxicity."
   },
-  "values": {}
+  "values": {
+    "report_reasons": {
+      "type": "schema_array",
+      "schema": {
+        "id": "string",
+        "label": "string",
+        "category": "enum"
+      },
+      "value": [
+        { "id": "child_safety", "label": "Child safety", "category": "illegal" },
+        { "id": "credible_threat", "label": "Credible threat", "category": "illegal" },
+        { "id": "doxxing", "label": "Doxxing / personal information", "category": "illegal" },
+        { "id": "other_illegal_activity", "label": "Other illegal activity", "category": "illegal" },
+        { "id": "other", "label": "Other", "category": "other" }
+      ]
+    },
+    "context_line_count": {
+      "type": "integer",
+      "value": 20,
+      "range": [5, 100],
+      "notes": "Number of surrounding chat lines captured in a report context snapshot."
+    },
+    "report_free_text_max": {
+      "type": "integer",
+      "value": 500,
+      "range": [50, 2000],
+      "notes": "Maximum length of the free-text additional-info field in a report."
+    },
+    "report_rate_limit_per_min": {
+      "type": "integer",
+      "value": 5,
+      "range": [1, 30],
+      "notes": "Maximum reports a single player can file per minute to prevent report spam."
+    },
+    "reports_in_memory_max": {
+      "type": "integer",
+      "value": 200,
+      "range": [10, 5000],
+      "description": "Newest reports kept in memory for moderation review"
+    }
+
+  }
 }

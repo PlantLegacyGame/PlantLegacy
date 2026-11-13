@@ -138,6 +138,18 @@
       "range": [0.0, 2.0],
       "notes": "Mutation visualization parameter 2"
     },
+    "leaf_size": {
+      "type": "number",
+      "value": 0.25,
+      "range": [0.02, 1.5],
+      "notes": "Leaf blade length in METRES for the WebGPU mesh builder (not an SDF unit): a 0.5 m seedling carrying a 1.2 m blade drew leaves wider than the plant. The SDF renderer does not read this key."
+    },
+    "leaf_count_per_node": {
+      "type": "integer",
+      "value": 1,
+      "range": [0, 3],
+      "notes": "Leaf blades instance per canopy node in the WebGPU mesh builder (0 disables foliage)"
+    },
     "photosynthesis_viz": {
       "type": "boolean",
       "value": true,
@@ -158,6 +170,73 @@
       "value": 0.9,
       "range": [0.1, 5.0],
       "notes": "Duration of emergence animation in seconds"
+    }
+,
+    "mesh_tube_radial_segments": {
+      "type": "integer",
+      "value": 12,
+      "range": [4, 32],
+      "notes": "Radial segments around a mesh tube (C02b/MeshPlantRenderer)."
+    },
+    "mesh_tube_length_segments": {
+      "type": "integer",
+      "value": 6,
+      "range": [1, 24],
+      "notes": "Length subdivisions along a mesh tube."
+    },
+    "mesh_leaf_segments": {
+      "type": "integer",
+      "value": 4,
+      "range": [2, 12],
+      "notes": "Segments used to draw one leaf blade."
+    },
+    "mesh_joint_width_segments": {
+      "type": "integer",
+      "value": 12,
+      "range": [4, 32],
+      "notes": "Width segments of the joint sphere that fuses two tubes."
+    },
+    "mesh_joint_height_segments": {
+      "type": "integer",
+      "value": 10,
+      "range": [4, 32],
+      "notes": "Height segments of the joint sphere that fuses two tubes."
+    },
+    "mesh_max_leaves_per_node": {
+      "type": "integer",
+      "value": 6,
+      "range": [1, 24],
+      "notes": "Ceiling on leaf blades drawn per node, so a dense crown stays affordable."
+    },
+    "mesh_joint_scale": {
+      "type": "number",
+      "value": 0.55,
+      "range": [0.1, 1.0],
+      "notes": "Joint sphere radius as a fraction of the tube radius it fuses."
+    },
+    "mesh_max_leaf_size": {
+      "type": "number",
+      "value": 0.45,
+      "range": [0.05, 2.0],
+      "notes": "Largest drawn leaf, in metres, regardless of node biomass."
+    },
+    "mutation_bioluminescence_strength": {
+      "type": "number",
+      "value": 0.55,
+      "range": [0.0, 2.0],
+      "notes": "Glow strength for the bioluminescent mutation signature (0 disables it)."
+    },
+    "mutation_bark_thickness_scale": {
+      "type": "number",
+      "value": 1.35,
+      "range": [1.0, 2.0],
+      "notes": "Radius multiplier for the thickened-bark mutation signature."
+    },
+    "mutation_variegation_strength": {
+      "type": "number",
+      "value": 0.35,
+      "range": [0.0, 1.0],
+      "notes": "How strongly the variegated-foliage mutation mottles leaf colour."
     }
   }
 }

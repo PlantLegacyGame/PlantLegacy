@@ -1,6 +1,8 @@
+import { randomBytes } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { createServer } from 'node:http';
 import process from 'node:process';
+import { readNumber } from '@plant-legacy/shared/config';
 import { validateMessage } from '@plant-legacy/shared/protocol/messageSchemas';
 import { loadDayNightConfig, loadWeatherConfig, WeatherSystem } from '@plant-legacy/weather';
 import { WebSocket, WebSocketServer } from 'ws';
@@ -9,6 +11,13 @@ import { SERVICE_VERSION } from './core/version.ts';
 import { loadAccountsConfig } from './ops/accounts/config.ts';
 import { createAccountsHandlers, createAuthMiddleware } from './ops/accounts/http.ts';
 import { AccountsService } from './ops/accounts/service.ts';
+import {
+  type ChatConfig,
+  loadChatConfig,
+  loadReportConfig,
+  type ReportConfig,
+} from './ops/chat.ts';
+import { readFlatConfig } from './ops/configRoutes.ts';
 import {
   type ConnectionRegistry,
   connectionRegistryClearHelloTimer,
@@ -21,7 +30,7 @@ import {
   createConnectionRegistry,
 } from './ops/connectionRegistry.ts';
 import { DatabaseProbe } from './ops/db.ts';
-import { handleGetDevConfig, handlePostDevConfig } from './ops/dev.ts';
+import { devToolsAllowed, handleGetDevConfig, handlePostDevConfig } from './ops/dev.ts';
 import { loadGrowthConfig } from './ops/growth.ts';
 import {
   createGrowthIntentStateMachine,
@@ -38,30 +47,74 @@ import { createLogger } from './ops/log.ts';
 import {
   type ErrorPayload,
   type HelloPayload,
-  type KeyframePayload,
   loadNetProtoConfig,
   MESSAGE_TYPE,
   type PlantSyncPayload,
   type PlayerInput,
   type RejectPayload,
   type ResourceQueryPayload,
-  type StatePayload,
+  type SeasonUpdatePayload,
   type WelcomePayload,
 } from './ops/net.ts';
 import { PlantPersistence } from './ops/persistence/plantPersistence.ts';
+import { clampPlantStorage, computePlantCapacity } from './ops/plantCapacity.ts';
+import { canAdoptGuestPlant, isAnonymousOwner } from './ops/plantOwnership.ts';
+import { selectVisiblePlants } from './ops/plantVisibility.ts';
 import { PlantWorld } from './ops/plantWorld.ts';
+import { createTokenBucket, tokenBucketAllow } from './ops/rateLimiter.ts';
 import {
   createReconnectStateMachine,
+  makeReclaimKey,
   type ReconnectStateMachine,
   reconnectStateMachineCancelPending,
+  reconnectStateMachineOnDisconnect,
   reconnectStateMachineReclaimByAccount,
   reconnectStateMachineReclaimByPlantId,
 } from './ops/reconnectStateMachine.ts';
 import { loadResourcesConfig, ResourceWorld } from './ops/resourceWorld.ts';
+import {
+  createSeasonClock,
+  restoreSeasonClock,
+  type SeasonClock,
+  type SeasonSnapshot,
+  seasonClockAdvance,
+  seasonSnapshot,
+  seasonUpdatePayload,
+} from './ops/seasonClock.ts';
 import { createTickClock, type TickClock, tickClockStart, tickClockStop } from './ops/tickClock.ts';
 import { loadWorldConfig } from './ops/world.ts';
 
 const STARTED_AT = Date.now();
+
+/**
+ * Dirty-tile broadcasts above this size are sent as a compact quantised grid.
+ *
+ * A weather/time-of-day change marks every tile dirty, and 65 536 tile objects
+ * serialise to several megabytes of JSON (~21 MB/s at 20 Hz). The compact form
+ * is a base64 buffer of three 0-255 channels per tile: ~262 KB, no per-tile
+ * objects to parse on the client.
+ */
+const COMPACT_GRID_TILE_THRESHOLD = 2048;
+const COMPACT_GRID_LIGHT_BASE = 80;
+
+function encodeResourceGridBase64(
+  width: number,
+  height: number,
+  tiles: Array<{ tileX: number; tileZ: number; light: number; moisture: number; minerals: number }>,
+): string {
+  const bytes = new Uint8Array(width * height * 3);
+  for (const tile of tiles) {
+    if (tile.tileX < 0 || tile.tileX >= width || tile.tileZ < 0 || tile.tileZ >= height) continue;
+    const offset = (tile.tileZ * width + tile.tileX) * 3;
+    bytes[offset] = Math.max(
+      0,
+      Math.min(255, Math.round((tile.light / COMPACT_GRID_LIGHT_BASE) * 255)),
+    );
+    bytes[offset + 1] = Math.max(0, Math.min(255, Math.round(tile.moisture)));
+    bytes[offset + 2] = Math.max(0, Math.min(255, Math.round(tile.minerals)));
+  }
+  return Buffer.from(bytes).toString('base64');
+}
 
 function sendJson(response: ServerResponse, status: number, body: unknown): void {
   const payload = JSON.stringify(body);
@@ -115,10 +168,109 @@ interface ConnectedPlayer {
   lastInputTick: number;
   pendingInputs: Map<number, PlayerInput>;
   inventory: Inventory;
+  /** Players whose chat this player has muted. */
+  blocked: Set<string>;
+  /** Timestamps of recent chat messages, for the per-minute rate limit. */
+  chatTimestamps: number[];
+}
+
+/**
+ * Everything the per-tick root-resource update tells a player.
+ *
+ * Constant size, however large the plant: the averages cover every tile any of
+ * the plant's parts occupy, and one sample tile keeps the dev readout anchored
+ * to a real tile.
+ */
+interface RootResourceSnapshot {
+  totalEnergy: number;
+  totalBiomass: number;
+  storedWater: number;
+  storedMinerals: number;
+  waterCapacity: number;
+  mineralCapacity: number;
+  coveredTileCount: number;
+  tileAvgLight: number;
+  tileAvgMoisture: number;
+  tileAvgMinerals: number;
+  coverageTileX: number;
+  coverageTileZ: number;
+}
+
+/**
+ * Persist every plant, one row at a time.
+ *
+ * A failure is logged and skipped so one unreadable plant cannot stop the rest
+ * from being written, and the caller learns how many actually landed. Shared by
+ * the periodic save and the dev "force save" action.
+ */
+async function saveAllPlants(
+  plantWorld: PlantWorld,
+  plantPersistence: PlantPersistence,
+  log: ReturnType<typeof createLogger>,
+  context: string,
+): Promise<{ saved: number; total: number }> {
+  const plants = plantWorld.getAllPlants();
+  let saved = 0;
+  for (const plant of plants) {
+    try {
+      await plantPersistence.savePlant(plant);
+      saved += 1;
+    } catch (error) {
+      log.error('plant save failed', {
+        context,
+        plantId: plant.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+  return { saved, total: plants.length };
 }
 
 class World {
   private players = new Map<string, ConnectedPlayer>();
+  // Last time a whole-grid (compact) resource broadcast went out. Weather and
+  // daylight re-tint every tile at once; the client only needs that a couple of
+  // times a second, and the skipped state is naturally resent by the next
+  // whole-grid event because it dirties every tile again.
+  private lastCompactGridBroadcastAt = 0;
+  private static readonly COMPACT_GRID_MIN_INTERVAL_MS = 1000;
+  /** Messages dropped because their socket was over the backlog limit. */
+  private skippedSends = 0;
+  /**
+   * Per-plant secret handed to the owning client. A plant id is public (it is in
+   * every broadcast), so it cannot authorise a reclaim on its own.
+   */
+  private readonly plantReconnectTokens = new Map<string, string>();
+  /**
+   * Stores captured at disconnect, keyed by plant id. Used to tell a returning
+   * player what changed while they were away. In-memory on purpose: after a
+   * restart there is no meaningful "before" to compare against, and inventing
+   * one would be worse than reporting nothing.
+   */
+  /** Last death per owner, so a returning player learns what happened. */
+  private readonly lostPlantReports = new Map<
+    string,
+    { cause: string; plantId: string; at: number }
+  >();
+  /**
+   * The same deaths keyed by plant id. An anonymous owner id is the id of a
+   * connection that no longer exists, so a guest who comes back with a dead
+   * plant's token has nothing stable to look the loss up by. The plant id is
+   * that stable key.
+   */
+  private readonly lostPlantReportsByPlant = new Map<string, { cause: string; at: number }>();
+  private readonly awaySnapshots = new Map<
+    string,
+    {
+      at: number;
+      nodes: number;
+      biomass: number;
+      energy: number;
+      water: number;
+      minerals: number;
+    }
+  >();
+  private readonly lastRootResourceUpdate = new Map<string, RootResourceSnapshot>();
   private config: ReturnType<typeof loadNetProtoConfig>;
   private log: ReturnType<typeof createLogger>;
   private plantWorld: PlantWorld;
@@ -132,11 +284,25 @@ class World {
   private plantPersistence: PlantPersistence | null;
   private maxFrameTimeMs: number;
   private persistenceEnabled: boolean;
+  private seasonClock: SeasonClock;
+  private seasonLengthDays: number;
+  private lastCalamityAt: number | null = null;
+  private onSeasonEnded: ((state: SeasonSnapshot) => void) | null = null;
   private itemsConfig: ReturnType<typeof loadItemsConfig>;
-  private readonly maxMinerals: number;
-  private readonly maxMoisture: number;
-  private readonly maxEnergyPerPlant: number;
-  private onAllPlayersLeft?: () => void;
+  private chatConfig: ChatConfig;
+  private reportConfig: ReportConfig;
+  private recentReports = new Map<string, number[]>();
+  private reports: Array<{
+    reporterId: string;
+    reporterName: string;
+    targetPlayerId: string;
+    targetPlayerName: string;
+    reason: string;
+    freeText: string;
+    block: boolean;
+    contextSnapshot: Array<{ playerName: string; message: string; timestamp: number }>;
+    timestamp: number;
+  }> = [];
 
   getPlayers(): Map<string, ConnectedPlayer> {
     return this.players;
@@ -154,10 +320,6 @@ class World {
     return this.players.get(playerId);
   }
 
-  setOnAllPlayersLeft(callback: () => void): void {
-    this.onAllPlayersLeft = callback;
-  }
-
   getInterestManager(): InterestManager {
     return this.interestManager;
   }
@@ -165,16 +327,118 @@ class World {
   broadcast(type: number, payload: unknown): void {
     const message = JSON.stringify({ type, payload });
     for (const player of this.players.values()) {
-      if (player.ws.readyState === WebSocket.OPEN) {
-        player.ws.send(message);
-      }
+      this.writeIfHealthy(player.ws, message, type);
     }
   }
 
-  send(ws: WebSocket, type: number, payload: unknown): void {
-    if (ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type, payload }));
+  /**
+   * Send to every player whose interest cells contain (x, z), plus the plant's
+   * owner. Compliance with interest management matters most for the large
+   * per-plant payloads: a growth event carries every node of the plant, and
+   * broadcasting it to the whole world leaked every plant's geometry and cost
+   * bandwidth for players who could not see it.
+   */
+  /**
+   * Send every plant that is inside this player's interest cells right now.
+   *
+   * `PLANT_CREATED` is only broadcast at creation, so a plant that appeared while
+   * a player was elsewhere never reached them and stayed invisible after they
+   * moved into view. Repeating the payload is safe: the client upserts by plant id.
+   */
+  private announcePlantsInRange(player: ConnectedPlayer): void {
+    // Iterate the world, not the player list. A plant whose owner has gone
+    // offline (or was restored from a save) is still simulated, still occupies
+    // tiles and can still be grown into - walking past an invisible one is a
+    // blind spot, not a feature. Building this list from `players` hid every
+    // offline plant for the whole session.
+    const visible = selectVisiblePlants({
+      plants: this.plantWorld.getAllPlants(),
+      playerId: player.playerId,
+      ownPlantId: player.plantId,
+      isInRange: (playerId, x, z) => this.interestManager.isPositionInRange(playerId, x, z),
+      includeOwn: false,
+    });
+    for (const plant of visible) {
+      this.send(player.ws, MESSAGE_TYPE.PLANT_CREATED, this.plantCreatedPayload(plant));
     }
+  }
+
+  /** Full plant snapshot for PLANT_CREATED, mirroring the WELCOME node shape. */
+  private plantCreatedPayload(plant: import('@plant-legacy/shared/growth').Plant) {
+    return {
+      plant: {
+        id: plant.id,
+        ownerId: plant.ownerId,
+        rootNodeId: plant.rootNodeId,
+        totalBiomass: plant.totalBiomass,
+        totalEnergy: plant.totalEnergy,
+        totalUpkeep: plant.totalUpkeep,
+        nodes: Array.from(plant.nodes.values()).map((n) => ({
+          id: n.id,
+          plantId: n.plantId,
+          type: n.type,
+          layer: n.layer,
+          x: n.x,
+          y: n.y,
+          z: n.z,
+          biomass: n.biomass,
+          age: n.age,
+          parentId: n.parentId,
+          children: n.children,
+          statModifiers: n.statModifiers,
+          resourceDrawWater: n.resourceDrawWater,
+          resourceDrawNutrients: n.resourceDrawNutrients,
+          upkeepBiomassPerSecond: n.upkeepBiomassPerSecond,
+          growthDirectionBias: n.growthDirectionBias,
+          lastGrowthTick: n.lastGrowthTick,
+          isSeed: n.isSeed ?? false,
+          radius: n.radius,
+          growthProgress: n.growthProgress ?? 1.0,
+          growthTimeSeconds: n.growthTimeSeconds,
+        })),
+      },
+    };
+  }
+
+  private broadcastNear(type: number, payload: unknown, x: number, z: number, ownerId?: string) {
+    const message = JSON.stringify({ type, payload });
+    for (const player of this.players.values()) {
+      if (
+        player.playerId !== ownerId &&
+        !this.interestManager.isPositionInRange(player.playerId, x, z)
+      ) {
+        continue;
+      }
+      this.writeIfHealthy(player.ws, message, type);
+    }
+  }
+
+  /**
+   * Refuse to queue into a socket that is already behind. Without this check a
+   * slow client accumulates an unbounded ws buffer while the tick keeps
+   * producing updates; dropping a tick message is safe because the next state
+   * or keyframe supersedes it.
+   */
+  private writeIfHealthy(ws: WebSocket, message: string, type: number): boolean {
+    if (ws.readyState !== WebSocket.OPEN) return false;
+    if (ws.bufferedAmount > this.config.maxBufferedBytes) {
+      this.skippedSends += 1;
+      if (this.skippedSends % 100 === 1) {
+        this.log.warn('skipping send: socket backlog above limit', {
+          bufferedAmount: ws.bufferedAmount,
+          maxBufferedBytes: this.config.maxBufferedBytes,
+          type,
+          skippedSends: this.skippedSends,
+        });
+      }
+      return false;
+    }
+    ws.send(message);
+    return true;
+  }
+
+  send(ws: WebSocket, type: number, payload: unknown): void {
+    this.writeIfHealthy(ws, JSON.stringify({ type, payload }), type);
   }
 
   /**
@@ -182,12 +446,69 @@ class World {
    * exactly once. This covers simulation deaths (starvation, damage,
    * germination failure) as well as explicit removals.
    */
+  /**
+   * Announce growth that did not come through the intent queue (dev auto-growth).
+   * Without this the client only learns about those nodes on a full sync, so a
+   * seedling could sit at seed + radicle while the server had a whole plant.
+   */
+  processPlantGrowthEvents(): void {
+    for (const result of this.plantWorld.drainGrowthResults()) {
+      const plantId = result.newNode?.plantId ?? result.newNodes?.[0]?.plantId;
+      if (!plantId) continue;
+      const plant = this.plantWorld.getPlant(plantId);
+      const growthPayload = {
+        plantId,
+        newNode: result.newNode,
+        newNodes: result.newNodes,
+        updatedParentNode: result.updatedParentNode,
+        totalBiomass: plant?.totalBiomass ?? 0,
+        totalEnergy: plant?.totalEnergy ?? 0,
+        growthSeq: plant?.growthSeq ?? 0,
+      };
+      const nodes = result.newNodes ?? (result.newNode ? [result.newNode] : []);
+      const anchor = nodes[0];
+      if (anchor) {
+        this.broadcastNear(MESSAGE_TYPE.GROWTH_EVENT, growthPayload, anchor.x, anchor.z);
+      }
+      for (const node of nodes) {
+        this.interestManager.addEntityToCell(node.id, node.x, node.z);
+      }
+    }
+  }
+
   processPlantDeaths(): void {
     const deaths = this.plantWorld.drainDeaths();
     for (const death of deaths) {
       reconnectStateMachineCancelPending(this.reconnectMachine, death.id, death.ownerId);
+      this.plantReconnectTokens.delete(death.id);
+      this.awaySnapshots.delete(death.id);
+      // `removed` is administrative (persistence off), not something that
+      // happened to the plant in the world, so it is not reported as a death.
+      if (death.cause !== 'removed') {
+        this.lostPlantReports.set(death.ownerId, {
+          cause: death.cause,
+          plantId: death.id,
+          at: Date.now(),
+        });
+        this.lostPlantReportsByPlant.set(death.id, { cause: death.cause, at: Date.now() });
+        // Bounded: owners who never come back must not leak an entry each.
+        if (this.lostPlantReports.size > 1000) {
+          const oldest = this.lostPlantReports.keys().next().value;
+          if (oldest !== undefined) this.lostPlantReports.delete(oldest);
+        }
+        if (this.lostPlantReportsByPlant.size > 1000) {
+          const oldest = this.lostPlantReportsByPlant.keys().next().value;
+          if (oldest !== undefined) this.lostPlantReportsByPlant.delete(oldest);
+        }
+      }
       try {
-        this.resourceWorld.onPlantDeath({ ...death, rootNodeId: death.rootNodeId ?? '' });
+        // Pass the plant's real stores through: the zeroed fields here looked
+        // deliberate but onPlantDeath never reads them, so the only effect was
+        // to make the caller look like it was discarding resources.
+        this.resourceWorld.onPlantDeath({
+          ...death,
+          rootNodeId: death.rootNodeId ?? '',
+        });
       } catch (e) {
         this.log.error('resourceWorld.onPlantDeath failed', {
           plantId: death.id,
@@ -195,10 +516,13 @@ class World {
         });
       }
       for (const player of this.players.values()) {
-        if (player.plantId === death.id) player.plantId = null;
+        if (player.plantId === death.id) {
+          player.plantId = null;
+          this.lastRootResourceUpdate.delete(player.playerId);
+        }
       }
       try {
-        this.broadcast(MESSAGE_TYPE.PLANT_REMOVED, { plantId: death.id });
+        this.broadcast(MESSAGE_TYPE.PLANT_REMOVED, { plantId: death.id, cause: death.cause });
       } catch (e) {
         this.log.error('PLANT_REMOVED broadcast failed', { plantId: death.id, error: String(e) });
       }
@@ -214,6 +538,16 @@ class World {
         if (node.id !== death.rootNodeId) {
           this.interestManager.removeEntityFromCell(node.id, node.x, node.z);
         }
+      }
+      // A dead plant must not come back from its snapshot on the next restart.
+      // `removed` is administrative (persistence off, dev removal), not death.
+      if (this.plantPersistence && death.cause !== 'removed') {
+        void this.plantPersistence.deletePlant(death.id).catch((error: unknown) => {
+          this.log.error('deleting dead plant from persistence failed', {
+            plantId: death.id,
+            error: String(error),
+          });
+        });
       }
       this.log.info('plant died', {
         plantId: death.id,
@@ -235,6 +569,9 @@ class World {
     plantPersistence: PlantPersistence | null = null,
     maxFrameTimeMs = 100,
     itemsConfig: ReturnType<typeof loadItemsConfig>,
+    chatConfig: ChatConfig,
+    reportConfig: ReportConfig,
+    seasonLengthDays = 36,
   ) {
     this.config = config;
     this.log = log;
@@ -246,9 +583,12 @@ class World {
     this.maxFrameTimeMs = maxFrameTimeMs;
     this.persistenceEnabled = persistenceEnabled;
     this.itemsConfig = itemsConfig;
-    this.maxMinerals = itemsConfig.itemDefinitions.size > 0 ? 500 : 0;
-    this.maxMoisture = itemsConfig.itemDefinitions.size > 0 ? 500 : 0;
-    this.maxEnergyPerPlant = 10000;
+    this.chatConfig = chatConfig;
+    this.reportConfig = reportConfig;
+    // One clock per world: the season is world state, not per-plant state, so a
+    // plant that dies and is replanted does not reset the calendar.
+    this.seasonLengthDays = seasonLengthDays;
+    this.seasonClock = createSeasonClock(seasonLengthDays, config.tickRateHz);
     this.reconnectMachine = createReconnectStateMachine(reconnectWindowMs, persistenceEnabled);
     this.growthIntentMachine = createGrowthIntentStateMachine(100);
     this.connectionRegistry = createConnectionRegistry(config.helloTimeoutMs);
@@ -261,70 +601,158 @@ class World {
   }
 
   setPersistenceEnabled(enabled: boolean): void {
+    const previous = this.reconnectMachine;
+    const pending = Array.from(previous.pendingRemovals.values());
     this.persistenceEnabled = enabled;
     // Recreate reconnect state machine with new setting
     this.reconnectMachine = createReconnectStateMachine(
       this.config.reconnectWindowMs ?? 300000,
       enabled,
     );
+
+    // Replacing the machine used to orphan its pending entries: their timers kept
+    // firing against the discarded map, and a reconnect looked in the new, empty
+    // one, so a plant waiting for its owner could never be reclaimed. Re-arm each
+    // entry in the new machine, or drop the plant now when persistence just went
+    // off - that is what "no reconnect window" means.
+    for (const entry of pending) {
+      clearTimeout(entry.timeout);
+      previous.pendingRemovals.delete(makeReclaimKey(entry.accountId, entry.plantId));
+      const plant = this.plantWorld.getPlant(entry.plantId);
+      if (!plant) continue;
+      if (enabled) {
+        reconnectStateMachineOnDisconnect(
+          this.reconnectMachine,
+          plant,
+          entry.accountId,
+          (plantId) => {
+            this.plantWorld.removePlant(plantId);
+            this.processPlantDeaths();
+          },
+          (msg, meta) => this.log.info(msg, meta),
+        );
+      } else {
+        this.plantWorld.removePlant(entry.plantId);
+        this.processPlantDeaths();
+      }
+    }
+    if (pending.length > 0) {
+      this.log.info('persistence toggle re-armed pending plants', {
+        enabled,
+        count: pending.length,
+      });
+    }
   }
 
   getPersistenceEnabled(): boolean {
     return this.persistenceEnabled;
   }
 
-  addPlayer(
-    ws: WebSocket,
-    playerId: string,
-    accountId?: string,
-  ): { plantId: string; welcome: WelcomePayload } {
-    const ownerId = accountId ?? playerId;
-    let plant: import('@plant-legacy/shared/growth').Plant;
+  getSeasonClock(): SeasonClock {
+    return this.seasonClock;
+  }
 
-    // INV-ID-01: One active plant per owner/account. If this owner already has an active plant, reuse it.
-    const existingPlants = this.plantWorld.getPlantsByOwner(ownerId);
-    if (existingPlants.length > 0) {
-      plant = existingPlants[0];
-    } else {
-      const spawn = this.findSpawnPosition();
-      plant = this.plantWorld.createPlant(ownerId, 'world_0', spawn.x, spawn.z);
+  /**
+   * Adopt the saved calendar at boot. Remaining ticks are kept, so restarting
+   * the server neither skips nor stretches a season.
+   */
+  restoreSeasonState(snapshot: SeasonSnapshot): void {
+    this.seasonClock = restoreSeasonClock(this.seasonLengthDays, this.config.tickRateHz, snapshot);
+    this.lastCalamityAt = snapshot.lastCalamityAt;
+  }
+
+  /** The calendar as persistence should store it. */
+  getSeasonState(): SeasonSnapshot {
+    return seasonSnapshot(this.seasonClock, this.getTick(), this.lastCalamityAt);
+  }
+
+  /**
+   * Persistence lives outside the simulation, so a rollover hands its state to a
+   * hook. A failed save must not stop the season from ending.
+   */
+  setSeasonEndedHook(hook: (state: SeasonSnapshot) => void): void {
+    this.onSeasonEnded = hook;
+  }
+
+  /**
+   * Current season state for a joining client. `calamity` is set only on the
+   * update that announces a rollover, so a late joiner never sees one fired.
+   */
+  getSeasonUpdate(calamity = false): SeasonUpdatePayload {
+    return seasonUpdatePayload(this.seasonClock, this.getTick(), this.config.tickRateHz, calamity);
+  }
+
+  /** Consume the death notice for a plant id, if it died in the world. */
+  takeLostPlantReport(plantId: string): { cause: string; at: number } | null {
+    const report = this.lostPlantReportsByPlant.get(plantId);
+    if (!report) return null;
+    this.lostPlantReportsByPlant.delete(plantId);
+    return report;
+  }
+
+  private updateSeason(tick: number): void {
+    const advance = seasonClockAdvance(this.seasonClock, tick);
+    // A dormant world can cross several boundaries while nobody watches; the
+    // clock reports all of them at once rather than one per tick.
+    if (advance.seasonsPassed === 0) return;
+    this.seasonClock = advance.clock;
+    this.endSeason(advance.seasonsPassed);
+  }
+
+  /**
+   * The calamity: at a season boundary every plant still standing dies and the
+   * next season starts from bare soil. It is the only death that is not the
+   * player's fault, so the removal carries its cause for the loss screen.
+   */
+  private endSeason(seasonsPassed: number): void {
+    let killed = 0;
+    for (const plant of this.plantWorld.getAllPlants()) {
+      if (this.plantWorld.killPlant(plant.id, 'calamity')) killed += 1;
     }
-    const plantId = plant.id;
-
-    this.registerClientAtPlant(playerId, plant);
-
-    connectionRegistryRegister(this.connectionRegistry, ws, playerId, accountId, (pid) => {
-      this.log.warn('HELLO timeout, closing connection', { playerId: pid });
-      ws.close(4008, 'HELLO timeout');
+    this.processPlantDeaths();
+    this.log.info('season ended', {
+      season: this.seasonClock.season,
+      seasonsPassed,
+      killed,
     });
-    connectionRegistrySetPlant(this.connectionRegistry, playerId, plantId);
-    connectionRegistryClearHelloTimer(this.connectionRegistry, playerId);
-    connectionRegistryInstallHandler(this.connectionRegistry, playerId, (data: Buffer) => {
-      this.handlePostHelloMessage(playerId, data);
-    });
+    this.broadcast(MESSAGE_TYPE.SEASON_UPDATE, this.getSeasonUpdate(true));
+    this.lastCalamityAt = Date.now();
+    try {
+      this.onSeasonEnded?.(this.getSeasonState());
+    } catch (error) {
+      this.log.error('season-state save failed', { error: String(error) });
+    }
+  }
 
-    const player: ConnectedPlayer = {
-      ws,
-      playerId,
-      plantId,
-      accountId,
-      displayName: 'Player',
-      lastInputTick: 0,
-      pendingInputs: new Map(),
-      inventory: createInventory(this.itemsConfig.inventorySlots),
+  /** Dev action: end the season now without waiting out its days. */
+  forceSeasonEnd(tick: number): SeasonClock {
+    this.seasonClock = {
+      ...this.seasonClock,
+      season: this.seasonClock.season + 1,
+      startedTick: tick,
     };
-    // Give starting inventory
-    for (const item of this.itemsConfig.startingInventory) {
-      addItem(player.inventory, item.itemId, item.count, this.itemsConfig.itemDefinitions);
-    }
-    this.players.set(playerId, player);
+    this.endSeason(1);
+    return this.seasonClock;
+  }
 
+  /**
+   * WELCOME payload for a player now attached to `plant`.
+   *
+   * Shared by joins and by the dev "Regenerate" action: a client adopts a plant
+   * from WELCOME, so a replacement created only server-side leaves the removed
+   * plant on screen until the page is reloaded.
+   */
+  buildWelcome(
+    playerId: string,
+    plant: import('@plant-legacy/shared/growth').Plant,
+  ): WelcomePayload {
+    const plantId = plant.id;
     const rootNodeId = plant.rootNodeId;
     const rootNode = rootNodeId != null ? plant.nodes.get(rootNodeId) : undefined;
-
-    const welcome: WelcomePayload = {
+    return {
       playerId,
       plantId,
+      reconnectToken: this.issueReconnectToken(plantId),
       tick: this.getTick(),
       rootNode: rootNode
         ? {
@@ -364,9 +792,77 @@ class World {
         parentAttachX: n.parentAttachX,
         parentAttachY: n.parentAttachY,
         parentAttachZ: n.parentAttachZ,
+        growthTimeSeconds: n.growthTimeSeconds,
+        growthStartTick: n.growthStartTick,
       })),
     };
+  }
 
+  addPlayer(
+    ws: WebSocket,
+    playerId: string,
+    accountId?: string,
+  ): { plantId: string; welcome: WelcomePayload } {
+    const ownerId = accountId ?? playerId;
+    let plant: import('@plant-legacy/shared/growth').Plant;
+
+    // INV-ID-01: One active plant per owner/account. If this owner already has an active plant, reuse it.
+    const existingPlants = this.plantWorld.getPlantsByOwner(ownerId);
+    const reusedPlant = existingPlants.length > 0;
+    if (reusedPlant) {
+      plant = existingPlants[0];
+    } else {
+      const spawn = this.findSpawnPosition();
+      plant = this.plantWorld.createPlant(ownerId, 'world_0', spawn.x, spawn.z);
+    }
+    const plantId = plant.id;
+
+    this.registerClientAtPlant(playerId, plant);
+
+    connectionRegistryRegister(this.connectionRegistry, ws, playerId, accountId, (pid) => {
+      this.log.warn('HELLO timeout, closing connection', { playerId: pid });
+      ws.close(4008, 'HELLO timeout');
+    });
+    connectionRegistrySetPlant(this.connectionRegistry, playerId, plantId);
+    connectionRegistryClearHelloTimer(this.connectionRegistry, playerId);
+    connectionRegistryInstallHandler(this.connectionRegistry, playerId, (data: Buffer) => {
+      this.handlePostHelloMessage(playerId, data);
+    });
+
+    const player: ConnectedPlayer = {
+      ws,
+      playerId,
+      plantId,
+      accountId,
+      displayName: 'Player',
+      lastInputTick: 0,
+      pendingInputs: new Map(),
+      inventory: createInventory(this.itemsConfig.inventorySlots),
+      blocked: new Set<string>(),
+      chatTimestamps: [],
+    };
+    // Give starting inventory
+    for (const item of this.itemsConfig.startingInventory) {
+      addItem(player.inventory, item.itemId, item.count, this.itemsConfig.itemDefinitions);
+    }
+    this.players.set(playerId, player);
+
+    const welcome = this.buildWelcome(playerId, plant);
+    const rootNode = plant.rootNodeId != null ? plant.nodes.get(plant.rootNodeId) : undefined;
+
+    this.attachAwaySummary(welcome, plant);
+    if (!reusedPlant && accountId) {
+      // The account's last plant died while they were away; this new seed is a
+      // replacement, not a continuation, and the player should be told.
+      const loss = this.lostPlantReports.get(accountId);
+      if (loss) {
+        this.lostPlantReports.delete(accountId);
+        welcome.previousPlantDied = {
+          cause: loss.cause,
+          secondsAgo: Math.max(0, Math.round((Date.now() - loss.at) / 1000)),
+        };
+      }
+    }
     this.log.info('player joined', {
       playerId,
       plantId,
@@ -375,21 +871,20 @@ class World {
     });
 
     // Broadcast new plant to all other connected players (multiplayer visibility)
-    const plantCreatedPayload = {
-      plant: {
-        id: plant.id,
-        ownerId: plant.ownerId,
-        rootNodeId: plant.rootNodeId,
-        totalBiomass: plant.totalBiomass,
-        totalEnergy: plant.totalEnergy,
-        totalUpkeep: plant.totalUpkeep,
-        nodes: welcome.nodes ?? [],
-      },
-    };
+    const plantCreatedPayload = this.plantCreatedPayload(plant);
     for (const otherPlayer of this.players.values()) {
-      if (otherPlayer.playerId !== playerId) {
-        this.send(otherPlayer.ws, MESSAGE_TYPE.PLANT_CREATED, plantCreatedPayload);
+      if (otherPlayer.playerId === playerId) continue;
+      // Only players who can actually see the new plant need its full node set.
+      if (
+        !this.interestManager.isPositionInRange(
+          otherPlayer.playerId,
+          rootNode?.x ?? 0,
+          rootNode?.z ?? 0,
+        )
+      ) {
+        continue;
       }
+      this.send(otherPlayer.ws, MESSAGE_TYPE.PLANT_CREATED, plantCreatedPayload);
     }
 
     // Register plant root node as entity in InterestManager
@@ -401,30 +896,69 @@ class World {
   }
 
   removePlayer(playerId: string): void {
+    const disconnectedPlantId = this.players.get(playerId)?.plantId ?? null;
+
+    if (disconnectedPlantId) {
+      const plant = this.plantWorld.getPlant(disconnectedPlantId);
+      if (plant) {
+        this.awaySnapshots.set(disconnectedPlantId, {
+          at: Date.now(),
+          nodes: plant.nodes.size,
+          biomass: plant.totalBiomass,
+          energy: plant.totalEnergy,
+          water: plant.storedWater ?? 0,
+          minerals: plant.storedMinerals ?? 0,
+        });
+      }
+    }
+
     connectionRegistryRemove(
       this.connectionRegistry,
       playerId,
       this.reconnectMachine,
       (plantId) => {
+        // With persistence, the plant stays in the world after the reconnect
+        // window. Removing it here is what made logging out a death sentence:
+        // the plant was killed as `removed`, broadcast as PLANT_REMOVED to
+        // everyone, and its tiles released, while the saved row survived - so a
+        // restart resurrected a plant every client had watched die. Without
+        // persistence there is nothing to return to, so removal is correct.
+        if (this.persistenceEnabled) {
+          this.log.info('reconnect window expired, plant stays in the world', { plantId });
+          return;
+        }
         this.plantWorld.removePlant(plantId);
         this.processPlantDeaths();
       },
       (msg, meta) => this.log.info(msg, meta),
     );
 
+    // Persist at the one moment the periodic loop is least likely to cover: a
+    // disconnect (or the crash right after it) would otherwise cost up to
+    // `world.plant_save_interval_s` of growth. Only saved when the plant survived
+    // the reconnect decision above.
+    if (disconnectedPlantId && this.plantPersistence) {
+      const disconnectedPlant = this.plantWorld.getPlant(disconnectedPlantId);
+      if (disconnectedPlant) {
+        this.plantPersistence.savePlant(disconnectedPlant).catch((error: unknown) => {
+          this.log.error('plant save on disconnect failed', {
+            plantId: disconnectedPlantId,
+            error: String(error),
+          });
+        });
+      }
+    }
+
     this.interestManager.unregisterClient(playerId);
     this.players.delete(playerId);
+    this.lastRootResourceUpdate.delete(playerId);
+    // Otherwise every player who ever reported leaves a permanent entry behind.
+    this.recentReports.delete(playerId);
     growthIntentStateMachineClear(this.growthIntentMachine, playerId);
     this.log.info('player left', {
       playerId,
       totalPlayers: this.players.size,
     });
-
-    // Auto-shutdown when all clients disconnect and persistence is off
-    if (!this.persistenceEnabled && this.players.size === 0) {
-      this.log.info('all clients disconnected, shutting down');
-      this.onAllPlayersLeft?.();
-    }
   }
 
   reclaimPlant(
@@ -441,9 +975,24 @@ class World {
 
     const oldPlayerId = this.findPlayerByAccountId(accountId);
     if (oldPlayerId) {
+      const oldPlayer = this.players.get(oldPlayerId);
+      if (oldPlayer) {
+        // The old tab used to lose its socket silently and reconnect as a guest,
+        // which looked like a normal network drop.
+        try {
+          this.send(oldPlayer.ws, MESSAGE_TYPE.ERROR, {
+            code: 'SESSION_REPLACED',
+            message: 'This account signed in elsewhere.',
+          });
+          oldPlayer.ws.close(4002, 'Session replaced');
+        } catch {
+          // Socket already gone between lookup and send.
+        }
+      }
       connectionRegistryTransferPlant(this.connectionRegistry, oldPlayerId, newPlayerId);
       this.interestManager.unregisterClient(oldPlayerId);
       this.players.delete(oldPlayerId);
+      this.lastRootResourceUpdate.delete(oldPlayerId);
       growthIntentStateMachineClear(this.growthIntentMachine, oldPlayerId);
       this.log.info('removed old player connection on reclaim', {
         oldPlayerId,
@@ -476,6 +1025,8 @@ class World {
       lastInputTick: 0,
       pendingInputs: new Map(),
       inventory: createInventory(this.itemsConfig.inventorySlots),
+      blocked: new Set<string>(),
+      chatTimestamps: [],
     };
     this.players.set(newPlayerId, player);
 
@@ -485,6 +1036,7 @@ class World {
     const welcome: WelcomePayload = {
       playerId: newPlayerId,
       plantId: plant.id,
+      reconnectToken: this.issueReconnectToken(plant.id),
       tick: this.getTick(),
       rootNode: rootNode
         ? {
@@ -524,9 +1076,12 @@ class World {
         parentAttachX: n.parentAttachX,
         parentAttachY: n.parentAttachY,
         parentAttachZ: n.parentAttachZ,
+        growthTimeSeconds: n.growthTimeSeconds,
+        growthStartTick: n.growthStartTick,
       })),
     };
 
+    this.attachAwaySummary(welcome, plant);
     this.log.info('player reconnected, plant reclaimed', {
       newPlayerId,
       oldPlantId: reclaimed.plantId,
@@ -535,6 +1090,72 @@ class World {
     });
 
     return { plantId: plant.id, welcome };
+  }
+
+  /** Rotates and returns the one-time reclaim secret for a plant. */
+  private issueReconnectToken(plantId: string): string {
+    const token = randomBytes(24).toString('hex');
+    this.plantReconnectTokens.set(plantId, token);
+    return token;
+  }
+
+  private isReconnectTokenValid(plantId: string, token: string | undefined): boolean {
+    if (!token) return false;
+    const expected = this.plantReconnectTokens.get(plantId);
+    return expected !== undefined && expected === token;
+  }
+
+  private findPlayerByPlantId(plantId: string): string | null {
+    for (const [playerId, player] of this.players.entries()) {
+      if (player.plantId === plantId) return playerId;
+    }
+    return null;
+  }
+
+  /**
+   * Attach the away report a returning player sees. Consumed once: a stale
+   * report would otherwise reappear on every later reconnect.
+   */
+  private attachAwaySummary(
+    welcome: WelcomePayload,
+    plant: import('@plant-legacy/shared/growth').Plant,
+  ): void {
+    const snapshot = this.awaySnapshots.get(plant.id);
+    if (!snapshot) return;
+    this.awaySnapshots.delete(plant.id);
+    welcome.away = {
+      seconds: Math.max(0, Math.round((Date.now() - snapshot.at) / 1000)),
+      nodesBefore: snapshot.nodes,
+      nodesAfter: plant.nodes.size,
+      biomass: plant.totalBiomass - snapshot.biomass,
+      energy: plant.totalEnergy - snapshot.energy,
+      water: (plant.storedWater ?? 0) - snapshot.water,
+      minerals: (plant.storedMinerals ?? 0) - snapshot.minerals,
+    };
+  }
+
+  /**
+   * Hand a guest plant to the account that just signed in. Without this, signing
+   * up created a second plant and abandoned the guest one, which contradicts
+   * what the entry screen promises.
+   */
+  adoptGuestPlant(accountId: string, plantId: string, reconnectToken: string | undefined): boolean {
+    const plant = this.plantWorld.getPlant(plantId);
+    if (!plant) return false;
+    const adoptable = canAdoptGuestPlant({
+      plantOwnerId: plant.ownerId,
+      tokenValid: this.isReconnectTokenValid(plantId, reconnectToken),
+      ownerAttached: this.findPlayerByPlantId(plantId) !== null,
+    });
+    if (!adoptable) return false;
+    const previousOwner = plant.ownerId;
+    this.plantWorld.reassignOwner(plantId, accountId);
+    this.log.info('guest plant adopted by account', {
+      accountId,
+      plantId,
+      previousOwner,
+    });
+    return true;
   }
 
   private findPlayerByAccountId(accountId: string): string | null {
@@ -548,19 +1169,43 @@ class World {
     plantId: string,
     newPlayerId: string,
     ws: WebSocket,
+    reconnectToken: string | undefined,
   ): { plantId: string; welcome: WelcomePayload } | null {
+    // A plant id is public - it is in every broadcast - so it cannot authorise a
+    // reclaim. Only the client that was handed this plant's secret may take it
+    // back; otherwise any player could claim someone else's dropped plant.
+    if (!this.isReconnectTokenValid(plantId, reconnectToken)) {
+      this.log.warn('anonymous reclaim rejected: missing or invalid reconnect token', {
+        plantId,
+        newPlayerId,
+      });
+      return null;
+    }
+
     const reclaimed = reconnectStateMachineReclaimByPlantId(
       this.reconnectMachine,
       plantId,
       (msg, meta) => this.log.info(msg, meta),
     );
-    if (!reclaimed) return null;
+    // The reconnect window now governs only the quick-reclaim bookkeeping. With
+    // persistence the plant stays resident, so a guest may take their own plant
+    // back long after the window, as long as they still hold its token and
+    // nobody is tending it. Without this the guest silently started a second
+    // plant and abandoned the first.
+    const resident = this.plantWorld.getPlant(plantId);
+    if (!reclaimed) {
+      if (!resident || this.findPlayerByPlantId(plantId) !== null) return null;
+      // The long-lived token must never pull an account plant back into the
+      // anonymous pool, even though the client that adopted it still holds it.
+      if (!isAnonymousOwner(resident.ownerId)) return null;
+      this.plantWorld.reassignOwner(plantId, newPlayerId);
+    }
 
     connectionRegistryRegister(this.connectionRegistry, ws, newPlayerId, undefined, (pid) => {
       this.log.warn('HELLO timeout on reclaimed connection', { playerId: pid });
       ws.close(4008, 'HELLO timeout');
     });
-    connectionRegistrySetPlant(this.connectionRegistry, newPlayerId, reclaimed.plantId);
+    connectionRegistrySetPlant(this.connectionRegistry, newPlayerId, plantId);
     connectionRegistryClearHelloTimer(this.connectionRegistry, newPlayerId);
     connectionRegistryInstallHandler(this.connectionRegistry, newPlayerId, (data: Buffer) => {
       this.handlePostHelloMessage(newPlayerId, data);
@@ -580,6 +1225,8 @@ class World {
       lastInputTick: 0,
       pendingInputs: new Map(),
       inventory: createInventory(this.itemsConfig.inventorySlots),
+      blocked: new Set<string>(),
+      chatTimestamps: [],
     };
     this.players.set(newPlayerId, player);
 
@@ -589,6 +1236,7 @@ class World {
     const welcome: WelcomePayload = {
       playerId: newPlayerId,
       plantId: plant.id,
+      reconnectToken: this.issueReconnectToken(plant.id),
       tick: this.getTick(),
       rootNode: rootNode
         ? {
@@ -628,9 +1276,12 @@ class World {
         parentAttachX: n.parentAttachX,
         parentAttachY: n.parentAttachY,
         parentAttachZ: n.parentAttachZ,
+        growthTimeSeconds: n.growthTimeSeconds,
+        growthStartTick: n.growthStartTick,
       })),
     };
 
+    this.attachAwaySummary(welcome, plant);
     this.log.info('anonymous player reconnected, plant reclaimed', {
       newPlayerId,
       plantId,
@@ -643,6 +1294,12 @@ class World {
   handleInput(playerId: string, input: PlayerInput): void {
     const player = this.players.get(playerId);
     if (!player) return;
+    // INPUT is stateless held-direction state and its tick comes from the client,
+    // so the old append-only map was an unbounded queue: one tick's drain would
+    // apply every entry, and a client that never advanced `tick` could grow it
+    // without limit. Only the newest input carries information, so keep one.
+    if (!Number.isFinite(input.tick) || input.tick <= player.lastInputTick) return;
+    player.pendingInputs.clear();
     player.pendingInputs.set(input.tick, input);
   }
 
@@ -729,10 +1386,23 @@ class World {
       if (!plant) return;
 
       if (itemDef.category === 'fertilizer') {
-        plant.storedMinerals = Math.min(this.maxMinerals, plant.storedMinerals + 50);
+        plant.storedMinerals += this.itemsConfig.effects.fertilizerMineralsGain;
       } else if (itemDef.category === 'dung') {
-        plant.storedWater = Math.min(this.maxMoisture, plant.storedWater + 30);
-        plant.storedMinerals = Math.min(this.maxMinerals, plant.storedMinerals + 20);
+        plant.storedWater += this.itemsConfig.effects.dungWaterGain;
+        plant.storedMinerals += this.itemsConfig.effects.dungMineralsGain;
+      }
+      clampPlantStorage(plant, this.plantWorld.getConfig());
+
+      // Enrich the soil under the root too: `dung_deposit` and
+      // `fertilizer_deposit` were configured but never applied, because nothing
+      // ever called these two methods.
+      const rootNode = plant.rootNodeId != null ? plant.nodes.get(plant.rootNodeId) : undefined;
+      if (rootNode) {
+        if (itemDef.category === 'fertilizer') {
+          this.resourceWorld.onFertilizerApplied(rootNode.x, rootNode.z);
+        } else {
+          this.resourceWorld.onDungApplied(rootNode.x, rootNode.z);
+        }
       }
 
       // Remove one from inventory
@@ -750,7 +1420,8 @@ class World {
       const plant = this.plantWorld.getPlant(player.plantId);
       if (!plant) return;
 
-      plant.totalEnergy = Math.min(this.maxEnergyPerPlant, plant.totalEnergy + 500);
+      plant.totalEnergy += this.itemsConfig.effects.essenceEnergyGain;
+      clampPlantStorage(plant, this.plantWorld.getConfig());
 
       this.removeItemFromInventory(player, slotIndex, 1);
       this.sendInventorySlotUpdate(player, slotIndex);
@@ -831,14 +1502,19 @@ class World {
 
           // Support full grid request for ground rendering
           if (query.fullGrid) {
-            const allTiles = this.resourceWorld.getAllTiles();
             const player = this.players.get(playerId);
             if (player?.plantId) {
               const plant = this.plantWorld.getPlant(player.plantId);
               if (plant) {
+                const gridWidth = this.resourceWorld.getWidth();
+                const gridHeight = this.resourceWorld.getHeight();
                 this.send(player.ws, MESSAGE_TYPE.RESOURCE_UPDATE, {
                   tick: this.getTick(),
-                  tiles: allTiles,
+                  gridBase64: encodeResourceGridBase64(
+                    gridWidth,
+                    gridHeight,
+                    this.resourceWorld.getAllTiles(),
+                  ),
                   width: this.resourceWorld.getWidth(),
                   height: this.resourceWorld.getHeight(),
                   tileSize: this.resourceWorld.getTileSize(),
@@ -846,9 +1522,10 @@ class World {
                   totalBiomass: plant.totalBiomass,
                   storedWater: plant.storedWater,
                   storedMinerals: plant.storedMinerals,
-                  rootTileCount: this.resourceWorld.getRootTileCount(
-                    plant as unknown as import('./ops/resourceWorld.ts').PlantForResource,
-                  ),
+                  waterCapacity: computePlantCapacity(plant, this.plantWorld.getConfig()).water,
+                  mineralCapacity: computePlantCapacity(plant, this.plantWorld.getConfig())
+                    .minerals,
+                  coveredTileCount: this.resourceWorld.getCoveredTileCount(plant),
                   fullGrid: true,
                 });
               }
@@ -882,9 +1559,10 @@ class World {
                   totalBiomass: plant.totalBiomass,
                   storedWater: plant.storedWater,
                   storedMinerals: plant.storedMinerals,
-                  rootTileCount: this.resourceWorld.getRootTileCount(
-                    plant as unknown as import('./ops/resourceWorld.ts').PlantForResource,
-                  ),
+                  waterCapacity: computePlantCapacity(plant, this.plantWorld.getConfig()).water,
+                  mineralCapacity: computePlantCapacity(plant, this.plantWorld.getConfig())
+                    .minerals,
+                  coveredTileCount: this.resourceWorld.getCoveredTileCount(plant),
                 });
               }
             }
@@ -892,12 +1570,18 @@ class World {
           break;
         }
         case MESSAGE_TYPE.PLANT_SYNC_REQUEST: {
-          const activePlantIds = new Set<string>();
-          for (const p of this.players.values()) {
-            if (p.plantId) activePlantIds.add(p.plantId);
-          }
-          const allPlants = this.plantWorld.getAllPlants();
-          const syncPlants = allPlants.filter((p) => activePlantIds.has(p.id));
+          const player = this.players.get(playerId);
+          // Interest range, not connectivity: filtering by connected players left
+          // every saved or offline plant out of the world for anyone who joined
+          // after its owner left, even when it stood right beside them.
+          const syncPlants = player
+            ? selectVisiblePlants({
+                plants: this.plantWorld.getAllPlants(),
+                playerId,
+                ownPlantId: player.plantId,
+                isInRange: (pid, x, z) => this.interestManager.isPositionInRange(pid, x, z),
+              })
+            : [];
           const syncPayload: PlantSyncPayload = {
             plants: syncPlants.map((p) => ({
               id: p.id,
@@ -932,11 +1616,13 @@ class World {
                 parentAttachX: n.parentAttachX,
                 parentAttachY: n.parentAttachY,
                 parentAttachZ: n.parentAttachZ,
+                attachFraction: n.attachFraction,
+                growthTimeSeconds: n.growthTimeSeconds,
+                growthStartTick: n.growthStartTick,
               })),
             })),
           };
 
-          const player = this.players.get(playerId);
           if (player) this.send(player.ws, MESSAGE_TYPE.PLANT_SYNC, syncPayload);
           break;
         }
@@ -998,9 +1684,9 @@ class World {
           break;
         }
         case MESSAGE_TYPE.DEV_ACTION: {
-          // D01: Handle dev panel actions (non-production only)
-          if (process.env.NODE_ENV === 'production') {
-            this.log.warn('Dev action rejected in production', {
+          // D01: Handle dev panel actions (local runs only)
+          if (!devToolsAllowed()) {
+            this.log.warn('Dev action rejected outside a local run', {
               type: (payload as Record<string, unknown>)?.type,
             });
             break;
@@ -1013,54 +1699,124 @@ class World {
           break;
         }
         case MESSAGE_TYPE.CHAT_MESSAGE: {
-          const chatPayload = payload as { message: string };
+          const chatPayload = payload as { message: string; mode?: string };
           const player = this.players.get(playerId);
           if (!player || !chatPayload?.message) break;
 
-          // Sanitize and limit message length
-          const message = chatPayload.message.trim().slice(0, 500);
+          const message = chatPayload.message.trim().slice(0, this.chatConfig.messageMaxChars);
           if (message.length === 0) break;
 
-          // Check for emote command
+          if (!this.consumeChatBudget(player)) {
+            this.send(player.ws, MESSAGE_TYPE.ERROR, {
+              code: 'chat_rate_limit',
+              message: 'Chat rate limit reached. Slow down.',
+            });
+            break;
+          }
+
+          const mode: 'world' | 'proximity' =
+            chatPayload.mode === 'proximity' ? 'proximity' : 'world';
+
           const emoteMatch = message.match(/^\/emote\s+(\w+)$/i);
           if (emoteMatch) {
             const emoteId = emoteMatch[1].toLowerCase();
-            const validEmotes = [
-              'wave',
-              'cheer',
-              'thumbs_up',
-              'heart',
-              'think',
-              'sleep',
-              'dance',
-              'sad',
-            ];
-            if (validEmotes.includes(emoteId)) {
-              // Broadcast emote to all players
-              const emotePayload = {
+            if (this.chatConfig.emoteIds.includes(emoteId)) {
+              this.deliverChat(playerId, mode, {
                 playerId,
                 playerName: player.displayName ?? 'Player',
                 emoteId,
                 timestamp: Date.now(),
-              };
-              for (const [_, p] of this.players) {
-                this.send(p.ws, MESSAGE_TYPE.CHAT_BROADCAST, { ...emotePayload, type: 'emote' });
-              }
+                type: 'emote',
+              });
               break;
             }
           }
 
-          // Regular chat message
-          const broadcastPayload = {
+          this.deliverChat(playerId, mode, {
             playerId,
             playerName: player.displayName ?? 'Player',
             message,
             timestamp: Date.now(),
-          };
-
-          for (const [_, p] of this.players) {
-            this.send(p.ws, MESSAGE_TYPE.CHAT_BROADCAST, broadcastPayload);
+          });
+          break;
+        }
+        case MESSAGE_TYPE.BLOCK: {
+          const blockPayload = payload as { targetPlayerId: string; blocked: boolean };
+          const player = this.players.get(playerId);
+          if (!player || !blockPayload?.targetPlayerId) break;
+          if (blockPayload.targetPlayerId === playerId) break;
+          if (blockPayload.blocked) {
+            player.blocked.add(blockPayload.targetPlayerId);
+          } else {
+            player.blocked.delete(blockPayload.targetPlayerId);
           }
+          break;
+        }
+        case MESSAGE_TYPE.REPORT: {
+          const reportPayload = payload as {
+            targetPlayerId: string;
+            targetPlayerName?: string;
+            reason: string;
+            freeText?: string;
+            block?: boolean;
+            contextSnapshot?: Array<{ playerName: string; message: string; timestamp: number }>;
+            timestamp: number;
+          };
+          const reporter = this.players.get(playerId);
+          if (!reporter || !reportPayload?.targetPlayerId) break;
+
+          // T05: rate limit reports per reporter (server-side enforcement)
+          const now = Date.now();
+          const reporterReports = this.recentReports.get(reporter.playerId) ?? [];
+          const windowStart = now - 60000;
+          const recent = reporterReports.filter((t) => t > windowStart);
+          const reportRateLimit = this.reportConfig.reportRateLimitPerMin;
+          if (recent.length >= reportRateLimit) {
+            this.send(reporter.ws, MESSAGE_TYPE.ERROR, {
+              code: 'report_rate_limit',
+              message: 'Report rate limit reached. Try again later.',
+            });
+            break;
+          }
+          this.recentReports.set(reporter.playerId, [...recent, now]);
+
+          // T05: store report with context snapshot. These two bounds are
+          // configured but were never applied, so a single message could carry an
+          // arbitrarily long free-text note and transcript.
+          const freeText = String(reportPayload.freeText ?? '').slice(
+            0,
+            this.reportConfig.reportFreeTextMax,
+          );
+          const contextSnapshot = Array.isArray(reportPayload.contextSnapshot)
+            ? reportPayload.contextSnapshot.slice(0, this.reportConfig.contextLineCount)
+            : [];
+          const reportRecord = {
+            reporterId: reporter.playerId,
+            reporterName: reporter.displayName ?? 'Player',
+            targetPlayerId: reportPayload.targetPlayerId,
+            targetPlayerName: reportPayload.targetPlayerName ?? 'Unknown',
+            reason: reportPayload.reason,
+            freeText,
+            block: reportPayload.block ?? false,
+            contextSnapshot,
+            timestamp: now,
+          };
+          this.reports.push(reportRecord);
+          // Nothing drains this list, so bound it and keep the newest reports.
+          if (this.reports.length > this.reportConfig.maxStoredReports) {
+            this.reports.splice(0, this.reports.length - this.reportConfig.maxStoredReports);
+          }
+
+          // T05: blocking is per reporter, so only this player stops seeing the target.
+          if (reportPayload.block) {
+            reporter.blocked.add(reportPayload.targetPlayerId);
+          }
+
+          // Plain confirmation - never tell reporter what action was taken
+          this.send(reporter.ws, MESSAGE_TYPE.ERROR, {
+            code: 'report_received',
+            message: 'Report submitted',
+          });
           break;
         }
         case MESSAGE_TYPE.INVENTORY_REQUEST: {
@@ -1102,7 +1858,13 @@ class World {
         if (plant?.rootNodeId) {
           const rootNode = plant.nodes.get(plant.rootNodeId);
           if (rootNode) {
-            this.interestManager.updateClientPosition(player.playerId, rootNode.x, rootNode.z);
+            // A cell crossing reveals plants that appeared while this player was
+            // elsewhere; PLANT_CREATED is only sent when a plant is created.
+            if (
+              this.interestManager.updateClientPosition(player.playerId, rootNode.x, rootNode.z)
+            ) {
+              this.announcePlantsInRange(player);
+            }
           }
         }
       }
@@ -1115,8 +1877,14 @@ class World {
       }
     }
 
+    // Root uptake first: capture is what makes photosynthesis possible.
+    this.plantWorld.absorbResourcesFromTiles(dt, (x, z) =>
+      this.resourceWorld.getTileResources(x, z),
+    );
+
     this.plantWorld.step(dt, onlinePlantIds, tick);
 
+    this.processPlantGrowthEvents();
     this.processPlantDeaths();
 
     const plantsForResource = new Map<string, import('./ops/resourceWorld.ts').PlantForResource>();
@@ -1124,15 +1892,7 @@ class World {
       if (player.plantId) {
         const plant = this.plantWorld.getPlant(player.plantId);
         if (plant) {
-          plantsForResource.set(plant.id, {
-            id: plant.id,
-            ownerId: plant.ownerId,
-            worldId: plant.worldId,
-            nodes: plant.nodes,
-            totalBiomass: plant.totalBiomass,
-            totalUpkeep: plant.totalUpkeep,
-            rootNodeId: plant.rootNodeId ?? '',
-          });
+          plantsForResource.set(plant.id, this.plantResourceView(plant));
         }
       }
     }
@@ -1148,16 +1908,9 @@ class World {
     );
 
     for (const plant of plantsForResource.values()) {
-      const result = this.resourceWorld.calculatePhotosynthesis(plant);
-      if (result.biomassGain > 0) {
-        const realPlant = this.plantWorld.getPlant(plant.id);
-        if (realPlant) {
-          realPlant.totalBiomass += result.biomassGain * dt;
-        }
-      }
-      if (result.energyGain > 0) {
-        this.plantWorld.addPhotosynthesisEnergy(plant.id, result.energyGain * dt);
-      }
+      const realPlant = this.plantWorld.getPlant(plant.id);
+      if (!realPlant) continue;
+      this.applyPhotosynthesis(plant, realPlant, dt);
     }
 
     const isKeyframe = tick % this.config.keyframeIntervalTicks === 0;
@@ -1181,35 +1934,72 @@ class World {
       }
     }
 
-    if (isKeyframe) {
-      const keyframePayload: KeyframePayload = {
-        tick,
-        plants: plantStates,
-        worldBounds: this.config.worldBounds,
-        tileSize: this.resourceWorld.getTileSize(),
-      };
-      this.broadcast(MESSAGE_TYPE.KEYFRAME, keyframePayload);
-    } else {
-      const statePayload: StatePayload = {
-        tick,
-        plants: plantStates,
-        worldBounds: this.config.worldBounds,
-        tileSize: this.resourceWorld.getTileSize(),
-      };
-      this.broadcast(MESSAGE_TYPE.STATE, statePayload);
+    // Per-player, by interest cell. The payload is small but it went to every
+    // connection 20 times a second, including players whose cells contain none of
+    // these plants. The owner's own plant is always included so a client never
+    // loses sight of itself.
+    const plantPositions = new Map<string, { x: number; z: number }>();
+    for (const state of plantStates) {
+      const plant = this.plantWorld.getPlant(state.id);
+      const root = plant?.rootNodeId ? plant.nodes.get(plant.rootNodeId) : undefined;
+      if (root) plantPositions.set(state.id, { x: root.x, z: root.z });
+    }
+    const stateType = isKeyframe ? MESSAGE_TYPE.KEYFRAME : MESSAGE_TYPE.STATE;
+    const payloadFor = (playerId: string, ownPlantId: string | null) => ({
+      tick,
+      plants: plantStates.filter((state) => {
+        if (state.id === ownPlantId) return true;
+        const position = plantPositions.get(state.id);
+        return position
+          ? this.interestManager.isPositionInRange(playerId, position.x, position.z)
+          : false;
+      }),
+      worldBounds: this.config.worldBounds,
+      tileSize: this.resourceWorld.getTileSize(),
+    });
+    for (const player of this.players.values()) {
+      this.writeIfHealthy(
+        player.ws,
+        JSON.stringify({ type: stateType, payload: payloadFor(player.playerId, player.plantId) }),
+        stateType,
+      );
     }
 
-    // Broadcast only dirty (changed) tiles - delta compression for bandwidth efficiency
-    const dirtyTiles = this.resourceWorld.getDirtyTiles();
-    if (dirtyTiles.length > 0) {
-      this.broadcast(MESSAGE_TYPE.RESOURCE_UPDATE, {
-        tick,
-        tiles: dirtyTiles,
-        width: this.resourceWorld.getWidth(),
-        height: this.resourceWorld.getHeight(),
-        tileSize: this.resourceWorld.getTileSize(),
-        delta: true,
-      });
+    // Broadcast only dirty (changed) tiles - delta compression for bandwidth efficiency.
+    // Count first: building the tile array for a whole-grid update allocates ~65k
+    // objects and touches three maps, which at 20 Hz cost more than the broadcast.
+    const gridWidth = this.resourceWorld.getWidth();
+    const gridHeight = this.resourceWorld.getHeight();
+    const nowMs = Date.now();
+    const dirtyCount = this.resourceWorld.getDirtyTileCount();
+    const isWholeGrid = dirtyCount > COMPACT_GRID_TILE_THRESHOLD;
+    // Whole-grid updates (daylight / weather re-tinting every tile) are capped at
+    // one per second; skipping one is harmless because the next event dirties
+    // every tile again. Small deltas are never delayed.
+    const wholeGridThrottled =
+      isWholeGrid && nowMs - this.lastCompactGridBroadcastAt < World.COMPACT_GRID_MIN_INTERVAL_MS;
+    if (dirtyCount > 0 && !wholeGridThrottled) {
+      const dirtyTiles = this.resourceWorld.getDirtyTiles();
+      if (isWholeGrid) {
+        this.lastCompactGridBroadcastAt = nowMs;
+        this.broadcast(MESSAGE_TYPE.RESOURCE_UPDATE, {
+          tick,
+          width: gridWidth,
+          height: gridHeight,
+          tileSize: this.resourceWorld.getTileSize(),
+          delta: true,
+          gridBase64: encodeResourceGridBase64(gridWidth, gridHeight, dirtyTiles),
+        });
+      } else {
+        this.broadcast(MESSAGE_TYPE.RESOURCE_UPDATE, {
+          tick,
+          tiles: dirtyTiles,
+          width: gridWidth,
+          height: gridHeight,
+          tileSize: this.resourceWorld.getTileSize(),
+          delta: true,
+        });
+      }
     }
 
     for (const player of this.players.values()) {
@@ -1217,29 +2007,128 @@ class World {
       const plant = this.plantWorld.getPlant(player.plantId);
       if (!plant) continue;
 
-      const rootTiles = this.resourceWorld.getRootTilesForPlant(
-        plant as unknown as import('./ops/resourceWorld.ts').PlantForResource,
-      );
-      if (rootTiles.length === 0) continue;
+      // Every tile any part of the plant overlaps, summarised. A node touching a
+      // tile by even a sliver counts that tile in the average, whether it sits
+      // below the soil or over it.
+      const coverage = this.resourceWorld.getPlantTileCoverage(plant);
+      if (coverage.count === 0) continue;
 
-      this.send(player.ws, MESSAGE_TYPE.RESOURCE_UPDATE, {
-        tick,
-        tiles: rootTiles,
-        width: this.resourceWorld.getWidth(),
-        height: this.resourceWorld.getHeight(),
-        tileSize: this.resourceWorld.getTileSize(),
+      const capacity = computePlantCapacity(plant, this.plantWorld.getConfig());
+      const snapshot: RootResourceSnapshot = {
         totalEnergy: plant.totalEnergy,
         totalBiomass: plant.totalBiomass,
         storedWater: plant.storedWater,
         storedMinerals: plant.storedMinerals,
-        rootTileCount: rootTiles.length,
-      });
+        waterCapacity: capacity.water,
+        mineralCapacity: capacity.minerals,
+        coveredTileCount: coverage.count,
+        tileAvgLight: coverage.avgLight,
+        tileAvgMoisture: coverage.avgMoisture,
+        tileAvgMinerals: coverage.avgMinerals,
+        coverageTileX: coverage.sample?.tileX ?? 0,
+        coverageTileZ: coverage.sample?.tileZ ?? 0,
+      };
+
+      // Skip a repeat only. The comparison is exact, so a payload is dropped only
+      // when the client already holds every one of these values; nothing is
+      // quantised or suppressed. The cache is updated only after the write
+      // succeeds, so a backpressure skip is retried on the next tick instead of
+      // being remembered as delivered.
+      if (this.rootResourcesUnchanged(player.playerId, snapshot)) continue;
+      const sent = this.writeIfHealthy(
+        player.ws,
+        JSON.stringify({
+          type: MESSAGE_TYPE.RESOURCE_UPDATE,
+          payload: {
+            tick,
+            ...snapshot,
+            width: this.resourceWorld.getWidth(),
+            height: this.resourceWorld.getHeight(),
+            tileSize: this.resourceWorld.getTileSize(),
+          },
+        }),
+        MESSAGE_TYPE.RESOURCE_UPDATE,
+      );
+      if (sent) this.lastRootResourceUpdate.set(player.playerId, snapshot);
     }
 
     this.broadcast(MESSAGE_TYPE.WEATHER_UPDATE, {
       tick,
       ...weatherBroadcast,
     });
+
+    this.updateSeason(tick);
+  }
+
+  /**
+   * True when this player already holds exactly these root resources.
+   *
+   * The per-tick root update is the largest per-player message on the hot path
+   * (one entry per distinct root tile, plus plant stores and capacities). It is
+   * skipped only when every field is bit-identical to the payload last written,
+   * so the client never loses a value - it just stops receiving the same one.
+   */
+  private rootResourcesUnchanged(playerId: string, next: RootResourceSnapshot): boolean {
+    const prev = this.lastRootResourceUpdate.get(playerId);
+    if (!prev) return false;
+    return (
+      prev.totalEnergy === next.totalEnergy &&
+      prev.totalBiomass === next.totalBiomass &&
+      prev.storedWater === next.storedWater &&
+      prev.storedMinerals === next.storedMinerals &&
+      prev.waterCapacity === next.waterCapacity &&
+      prev.mineralCapacity === next.mineralCapacity &&
+      prev.coveredTileCount === next.coveredTileCount &&
+      prev.tileAvgLight === next.tileAvgLight &&
+      prev.tileAvgMoisture === next.tileAvgMoisture &&
+      prev.tileAvgMinerals === next.tileAvgMinerals &&
+      prev.coverageTileX === next.coverageTileX &&
+      prev.coverageTileZ === next.coverageTileZ
+    );
+  }
+
+  /** Root position used for proximity chat range checks. */
+  private plantPosition(player: ConnectedPlayer): { x: number; z: number } | null {
+    if (!player.plantId) return null;
+    const plant = this.plantWorld.getPlant(player.plantId);
+    const root = plant?.rootNodeId ? plant.nodes.get(plant.rootNodeId) : undefined;
+    return root ? { x: root.x, z: root.z } : null;
+  }
+
+  /** Per-minute chat budget from config/chat.json. */
+  private consumeChatBudget(player: ConnectedPlayer): boolean {
+    const now = Date.now();
+    const windowStart = now - 60_000;
+    player.chatTimestamps = player.chatTimestamps.filter((t) => t > windowStart);
+    if (player.chatTimestamps.length >= this.chatConfig.worldRateMsgPerMin) return false;
+    player.chatTimestamps.push(now);
+    return true;
+  }
+
+  /**
+   * Delivers chat to everyone in range who has not muted the sender. The sender
+   * receives their own message too, so both tabs stay in sync.
+   */
+  private deliverChat(
+    senderId: string,
+    mode: 'world' | 'proximity',
+    payload: Record<string, unknown>,
+  ): void {
+    const sender = this.players.get(senderId);
+    if (!sender) return;
+    const from = this.plantPosition(sender);
+
+    for (const recipient of this.players.values()) {
+      if (recipient.blocked.has(senderId)) continue;
+      if (mode === 'proximity') {
+        const to = this.plantPosition(recipient);
+        if (!from || !to) continue;
+        if (Math.hypot(to.x - from.x, to.z - from.z) > this.chatConfig.proximityRangePx) {
+          continue;
+        }
+      }
+      this.send(recipient.ws, MESSAGE_TYPE.CHAT_BROADCAST, payload);
+    }
   }
 
   private processInputs(): void {
@@ -1259,24 +2148,12 @@ class World {
         }
         player.pendingInputs.delete(inputTick);
 
-        const maxVelocity = this.config.maxVelocityUnitsPerTick;
-        let moveX = 0;
-        let moveZ = 0;
-        if (input.moveForward) moveZ -= 1;
-        if (input.moveBackward) moveZ += 1;
-        if (input.moveLeft) moveX -= 1;
-        if (input.moveRight) moveX += 1;
-        const velocity = Math.sqrt(moveX * moveX + moveZ * moveZ);
-
-        if (velocity > maxVelocity) {
-          const reject: RejectPayload = {
-            reason: 'exceeds_max_velocity',
-            originalType: MESSAGE_TYPE.INPUT,
-          };
-          this.send(player.ws, MESSAGE_TYPE.REJECT, reject);
-        } else {
-          player.lastInputTick = inputTick;
-        }
+        // INPUT carries only the four held-direction booleans (max magnitude
+        // sqrt(2)), so the old `velocity > maxVelocity` rejection compared 1.41
+        // against a configured 5 and could never fire. The ack is the whole work:
+        // camera movement is client-side and the server keeps no avatar position.
+        void input;
+        player.lastInputTick = inputTick;
       }
     }
   }
@@ -1305,12 +2182,17 @@ class World {
             newNode: result.newNode,
             newNodes: result.newNodes,
             updatedParentNode: result.updatedParentNode,
-            damageDealt: result.damageDealt,
             totalBiomass: plant?.totalBiomass ?? 0,
             totalEnergy: plant?.totalEnergy ?? 0,
             growthSeq: plant?.growthSeq ?? 0,
           };
-          this.broadcast(MESSAGE_TYPE.GROWTH_EVENT, growthPayload);
+          // A growth that only updates the parent (germination finishing, for
+          // instance) has no new node, and the old anchor check then broadcast
+          // nothing, so the client never saw the update. Fall back to the parent.
+          const anchor = result.newNode ?? result.newNodes?.[0] ?? result.updatedParentNode;
+          if (anchor) {
+            this.broadcastNear(MESSAGE_TYPE.GROWTH_EVENT, growthPayload, anchor.x, anchor.z);
+          }
 
           // Register new nodes as entities in InterestManager
           if (result.newNode) {
@@ -1458,11 +2340,11 @@ class World {
         }
         case 'dev_set_growth': {
           if (action.growth_cooldown !== undefined) {
-            plant.growthCooldownUntil = Date.now() + (action.growth_cooldown as number) * 1000;
-          }
-          if (action.root_attack_damage_multiplier !== undefined) {
-            this.plantWorld.getConfig().rootAttackDamageMultiplier =
-              action.root_attack_damage_multiplier as number;
+            // Ticks, not milliseconds: tryGrow compares this field against the
+            // tick counter, so a Date.now() value locked the plant out for good.
+            plant.growthCooldownUntil =
+              this.getTick() +
+              Math.ceil((action.growth_cooldown as number) * this.plantWorld.getTickRateHz());
           }
           if (action.germination_min_moisture !== undefined) {
             this.plantWorld.getConfig().germinationMinMoisture =
@@ -1476,7 +2358,7 @@ class World {
           break;
         }
         case 'dev_fill_energy': {
-          plant.totalEnergy = this.plantWorld.getConfig().maxEnergyPerPlant;
+          plant.totalEnergy = computePlantCapacity(plant, this.plantWorld.getConfig()).energy;
           this.sendDevResponse(ws, action.type, { ok: true });
           break;
         }
@@ -1490,14 +2372,38 @@ class World {
         }
         case 'dev_kill_plant': {
           this.plantWorld.killPlant(player.plantId, 'damage');
+          // Settle the death now: the broadcast normally waits for the next tick,
+          // so with the simulation paused the client never heard about it.
+          this.processPlantDeaths();
           this.sendDevResponse(ws, action.type, { ok: true });
           break;
         }
+        case 'dev_end_season': {
+          const clock = this.forceSeasonEnd(this.getTick());
+          this.sendDevResponse(ws, action.type, { ok: true, season: clock.season });
+          break;
+        }
         case 'dev_regenerate_plant': {
+          // Keep the old plant's world id: a literal here would put the new plant
+          // in a different world from every other plant and from persistence.
+          const worldId = plant.worldId;
           this.plantWorld.removePlant(player.plantId);
-          const newPlant = this.plantWorld.createPlant(player.accountId ?? 'anon', 'world_1', 0, 0);
-          const playerData = this.players.get(playerId);
-          if (playerData) playerData.plantId = newPlant.id;
+          // Same owner identity and world as addPlayer, otherwise the plant is
+          // invisible to reclaim/persistence and every anonymous player shares
+          // the literal owner id 'anon'.
+          const newPlant = this.plantWorld.createPlant(player.accountId ?? playerId, worldId, 0, 0);
+          player.plantId = newPlant.id;
+          connectionRegistrySetPlant(this.connectionRegistry, playerId, newPlant.id);
+          this.registerClientAtPlant(playerId, newPlant);
+          // WELCOME first: PLANT_REMOVED for the old plant must arrive after the
+          // client has adopted the new one, or it reads as its own death.
+          ws.send(
+            JSON.stringify({
+              type: MESSAGE_TYPE.WELCOME,
+              payload: this.buildWelcome(playerId, newPlant),
+            }),
+          );
+          this.processPlantDeaths();
           this.sendDevResponse(ws, action.type, { ok: true, newPlantId: newPlant.id });
           break;
         }
@@ -1528,25 +2434,44 @@ class World {
             this.interestManager.setCellSize(action.cell_size as number);
           if (action.interest_ring_radius !== undefined)
             this.interestManager.setRingRadius(action.interest_ring_radius as number);
-          if (action.active_tick_rate_hz !== undefined)
-            this.interestManager.setActiveTickRate(action.active_tick_rate_hz as number);
-          if (action.near_tick_rate_hz !== undefined)
-            this.interestManager.setNearTickRate(action.near_tick_rate_hz as number);
-          if (action.dormant_step_interval_sec !== undefined)
-            this.interestManager.setDormantInterval(action.dormant_step_interval_sec as number);
-          if (action.offline_damage_multiplier !== undefined)
-            this.plantWorld.setOfflineDamageMultiplier(action.offline_damage_multiplier as number);
+          // These three used to call InterestManager no-ops, so the controls did
+          // nothing. The active rate drives the tick clock and the plant tier
+          // rates; near/dormant only exist inside PlantWorld.
+          if (action.active_tick_rate_hz !== undefined) {
+            const hz = Number(action.active_tick_rate_hz);
+            if (Number.isFinite(hz) && hz > 0) {
+              this.setTickRate(hz);
+              this.plantWorld.setTierRates({ activeTickRateHz: hz });
+            }
+          }
+          if (action.near_tick_rate_hz !== undefined) {
+            this.plantWorld.setTierRates({ nearTickRateHz: Number(action.near_tick_rate_hz) });
+          }
+          if (action.dormant_step_interval_sec !== undefined) {
+            this.plantWorld.setTierRates({
+              dormantStepIntervalSec: Number(action.dormant_step_interval_sec),
+            });
+          }
           this.sendDevResponse(ws, action.type, { ok: true });
           break;
         }
         case 'dev_force_save': {
-          this.getPlantPersistence().saveAll();
-          this.sendDevResponse(ws, action.type, { ok: true });
+          // This used to call a placeholder that saved nothing, and it ignored the
+          // returned promise. Save for real, and report what actually landed.
+          saveAllPlants(this.plantWorld, this.getPlantPersistence(), this.log, 'dev_force_save')
+            .then((result) => this.sendDevResponse(ws, action.type, { ok: true, ...result }))
+            .catch((error: unknown) =>
+              this.sendDevResponse(ws, action.type, { ok: false, error: String(error) }),
+            );
           break;
         }
         case 'dev_clear_persistence': {
-          this.getPlantPersistence().clearAll();
-          this.sendDevResponse(ws, action.type, { ok: true });
+          this.getPlantPersistence()
+            .clearAll()
+            .then(() => this.sendDevResponse(ws, action.type, { ok: true }))
+            .catch((error: unknown) =>
+              this.sendDevResponse(ws, action.type, { ok: false, error: String(error) }),
+            );
           break;
         }
         case 'dev_log_plants': {
@@ -1579,7 +2504,12 @@ class World {
           break;
         }
         case 'dev_stress_test': {
-          const count = (action.count as number) ?? 100;
+          // Clamp: the count arrives from the client and an unbounded value would
+          // create plants until the server runs out of memory.
+          const requested = Number(action.count);
+          const count = Number.isFinite(requested)
+            ? Math.max(1, Math.min(500, Math.floor(requested)))
+            : 100;
           for (let i = 0; i < count; i++) {
             this.plantWorld.createRandomPlant();
           }
@@ -1587,46 +2517,15 @@ class World {
           break;
         }
         case 'dev_set_config': {
-          // Update dev config values
           const key = action.key as string;
           const value = action.value;
           if (!key || value === undefined) {
             this.sendDevResponse(ws, action.type, { ok: false, error: 'missing_key_or_value' });
             break;
           }
-          // Apply to in-memory config (runtime only)
-          // Note: In production, this would also persist to disk
-          try {
-            // These would need corresponding setters in the world/resource/plant objects
-            switch (key) {
-              case 'auto_growth':
-                this.plantWorld.setAutoGrowth(value as boolean);
-                break;
-              case 'germination_gate':
-                this.plantWorld.setGerminationGate(value as boolean);
-                break;
-              case 'germination_failure_kills_seed':
-                this.plantWorld.setGerminationFailureKillsSeed(value as boolean);
-                break;
-              case 'persistence_enabled':
-                this.setPersistenceEnabled(value as boolean);
-                break;
-              case 'seed_size_class':
-                // Camera framing handled client-side
-                this.sendDevResponse(ws, action.type, { ok: true, note: 'client_side_only' });
-                break;
-              default:
-                this.sendDevResponse(ws, action.type, {
-                  ok: false,
-                  error: `unknown_config_key: ${key}`,
-                });
-                break;
-            }
-            this.sendDevResponse(ws, action.type, { ok: true, key, value });
-          } catch (error) {
-            this.log.error('Failed to set config', { key, error: String(error) });
-            this.sendDevResponse(ws, action.type, { ok: false, error: 'internal_error' });
-          }
+          // Exactly one response per request. The previous version sent a
+          // success after the error branch too, so failures looked successful.
+          this.sendDevResponse(ws, action.type, this.applyDevConfig(key, value));
           break;
         }
         default: {
@@ -1637,6 +2536,31 @@ class World {
     } catch (error) {
       this.log.error('Dev action failed', { type: action.type, error: String(error) });
       this.sendDevResponse(ws, action.type, { ok: false, error: 'internal_error' });
+    }
+  }
+
+  /** Applies one dev config change and returns the single response payload. */
+  applyDevConfig(key: string, value: unknown): Record<string, unknown> {
+    try {
+      switch (key) {
+        case 'germination_gate':
+          this.plantWorld.setGerminationGate(value as boolean);
+          return { ok: true, key, value };
+        case 'germination_failure_kills_seed':
+          this.plantWorld.setGerminationFailureKillsSeed(value as boolean);
+          return { ok: true, key, value };
+        case 'persistence_enabled':
+          this.setPersistenceEnabled(value as boolean);
+          return { ok: true, key, value };
+        case 'seed_size_class':
+          // Camera framing is applied client-side from the same key.
+          return { ok: true, key, value, note: 'client_side_only' };
+        default:
+          return { ok: false, error: `unknown_config_key: ${key}` };
+      }
+    } catch (error) {
+      this.log.error('Failed to set config', { key, error: String(error) });
+      return { ok: false, error: 'internal_error' };
     }
   }
 
@@ -1663,6 +2587,66 @@ class World {
     tickClockStop(this.tickClock);
   }
 
+  /** The resource-facing view of a plant, carrying its current capacities. */
+  private plantResourceView(
+    plant: import('@plant-legacy/shared/growth').Plant,
+  ): import('./ops/resourceWorld.ts').PlantForResource {
+    const capacity = computePlantCapacity(plant, this.plantWorld.getConfig());
+    return {
+      id: plant.id,
+      ownerId: plant.ownerId,
+      worldId: plant.worldId,
+      nodes: plant.nodes,
+      totalBiomass: plant.totalBiomass,
+      totalUpkeep: plant.totalUpkeep,
+      rootNodeId: plant.rootNodeId ?? '',
+      storedWater: plant.storedWater,
+      storedMinerals: plant.storedMinerals,
+      waterCapacity: capacity.water,
+      mineralCapacity: capacity.minerals,
+    };
+  }
+
+  /**
+   * The single spend/credit path for photosynthesis, for every tier. The online
+   * loop passes the view it already built for the same tick; the near/dormant
+   * hook passes a fresh one. Both go through `photosynthesisOverSpan`, which
+   * bounds the catch-up by the plant's own stores, and the energy is credited
+   * through `addPhotosynthesisEnergy`, which clamps to the plant's capacity.
+   */
+  private applyPhotosynthesis(
+    view: import('./ops/resourceWorld.ts').PlantForResource,
+    plant: import('@plant-legacy/shared/growth').Plant,
+    seconds: number,
+  ): void {
+    const result = this.resourceWorld.photosynthesisOverSpan(view, seconds);
+    if (result.energyGain > 0) {
+      this.plantWorld.addPhotosynthesisEnergy(plant.id, result.energyGain);
+    }
+    // Photosynthesis and transpiration spend the plant's own captured water
+    // and minerals; structural biomass only ever comes from node growth.
+    const waterSpent = result.waterCost + result.transpiration;
+    if (waterSpent > 0) {
+      plant.storedWater = Math.max(0, plant.storedWater - waterSpent);
+    }
+    if (result.mineralCost > 0) {
+      plant.storedMinerals = Math.max(0, plant.storedMinerals - result.mineralCost);
+    }
+  }
+
+  /**
+   * Photosynthesis for one plant over `seconds` of simulated time.
+   *
+   * Sunlight is not a privilege of being logged in: the near and dormant tiers
+   * call this for the time they integrate, so an unattended plant fixes carbon
+   * by day exactly like one somebody is watching. Growth is the only thing that
+   * needs a player - nothing here starts a new node.
+   */
+  photosynthesizePlant(plant: import('@plant-legacy/shared/growth').Plant, seconds: number): void {
+    if (!(seconds > 0)) return;
+    this.applyPhotosynthesis(this.plantResourceView(plant), plant, seconds);
+  }
+
   getTick(): number {
     return this.tickClock.tick;
   }
@@ -1680,16 +2664,25 @@ class World {
 
   /** D01: Dev action - set tick rate */
   setTickRate(hz: number): void {
-    // Update tick clock and active tier rate
+    // A zero or negative rate would make the clock divide by zero; an absurd
+    // rate would starve the event loop. This is a dev knob, not a gameplay one.
+    if (!Number.isFinite(hz) || hz <= 0) return;
+    hz = Math.min(240, Math.max(1, hz));
+    const wasRunning = this.tickClock.running;
+    const previousTick = this.tickClock.tick;
+    // Stop the old clock first: replacing the object while its timer is live
+    // leaves a second loop ticking the same world.
+    tickClockStop(this.tickClock);
     this.config.tickRateHz = hz;
     this.tickClock = createTickClock({
       tickRateHz: hz,
       maxFrameTimeMs: this.maxFrameTimeMs,
-      onTick: this.onTick.bind(this),
+      onTick: (tick: number, dt: number) => this.onTick(tick, dt),
+      onError: (error: Error) => this.log.error('tick error', { error: String(error) }),
     });
-    if (this.tickClock.running) {
-      tickClockStart(this.tickClock);
-    }
+    // Keep monotonic tick numbers so clients do not see time run backwards.
+    this.tickClock.tick = previousTick;
+    if (wasRunning) tickClockStart(this.tickClock);
   }
 
   /** D01: Dev action - pause simulation */
@@ -1704,7 +2697,11 @@ class World {
 
   /** D01: Dev action - step simulation once */
   stepSimulationOnce(): void {
-    const tick = this.tickClock.tick;
+    // Advance the counter: stepping used to re-run the current tick number, so
+    // everything keyed on ticks (growth cooldowns, intent drain, plant
+    // lastTick) stood still and a single step appeared to do nothing.
+    const tick = this.tickClock.tick + 1;
+    this.tickClock.tick = tick;
     this.onTick(tick, 1 / this.config.tickRateHz);
   }
 
@@ -1734,6 +2731,8 @@ async function main(): Promise<void> {
   const worldConfig = loadWorldConfig(configs);
   const resourcesConfig = loadResourcesConfig(configs);
   const itemsConfig = loadItemsConfig(configs);
+  const chatConfig = loadChatConfig(configs);
+  const reportConfig = loadReportConfig(configs);
 
   // Plant growth world (T01) with T03 tier support
   const plantWorld = new PlantWorld(
@@ -1750,7 +2749,6 @@ async function main(): Promise<void> {
       activeTickRateHz: worldConfig.activeTickRateHz,
       nearTickRateHz: worldConfig.nearTickRateHz,
       dormantStepIntervalSec: worldConfig.dormantStepIntervalSec,
-      offlineDamageMultiplier: worldConfig.offlineDamageMultiplier,
       tickBudgetActiveShare: worldConfig.tickBudgetActiveShare,
       tickBudgetWarnThresholdMs: worldConfig.tickBudgetWarnThresholdMs,
     },
@@ -1758,20 +2756,39 @@ async function main(): Promise<void> {
   );
 
   // Resource world (T00A)
-  const resourceWorld = new ResourceWorld(resourcesConfig, {
-    minX: netProtoConfig.worldBounds.minX,
-    maxX: netProtoConfig.worldBounds.maxX,
-    minZ: netProtoConfig.worldBounds.minZ,
-    maxZ: netProtoConfig.worldBounds.maxZ,
+  // The plant radius is what makes the resource cells the planet's lat/lon
+  // cells: their neighbours then wrap around the world instead of stopping at
+  // the edge of the 256x256 patch. A radius of 0 is the old flat grid.
+  const resourceWorld = new ResourceWorld(
+    resourcesConfig,
+    {
+      minX: netProtoConfig.worldBounds.minX,
+      maxX: netProtoConfig.worldBounds.maxX,
+      minZ: netProtoConfig.worldBounds.minZ,
+      maxZ: netProtoConfig.worldBounds.maxZ,
+    },
+    readNumber(configs, 'render', 'planet_radius_m'),
+  );
+
+  // PlantWorld checks ambient tiles for germination/growth and debits them on
+  // uptake, so tile supply and plant-owned stores stay one connected system.
+  plantWorld.setResourceProvider((x, z) => resourceWorld.getTileResources(x, z));
+  plantWorld.setResourceSink({
+    takeResources: (x, z, water, minerals) => resourceWorld.takeFromTile(x, z, water, minerals),
   });
 
   // Persistence layer (T03)
   const worldId = 'world_0';
   let plantPersistence: PlantPersistence | null = null;
   if (database.pool) {
-    plantPersistence = new PlantPersistence(database.pool, worldId);
+    plantPersistence = new PlantPersistence(database.pool, worldId, (error) => {
+      log.error('skipping unreadable plant snapshot', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
     // Load existing plants
     const loadedPlants = await plantPersistence.loadAllPlants();
+    let skippedPlants = 0;
     for (const loaded of loadedPlants) {
       // Reconstruct Plant from snapshot
       const plant = {
@@ -1791,9 +2808,23 @@ async function main(): Promise<void> {
         lastTick: loaded.lastTick,
         growthSeq: loaded.growthSeq ?? 0,
       };
-      plantWorld.loadPlant(plant);
+      // One unreadable snapshot must not stop the world from booting. A single
+      // corrupt row used to throw out of module init, which is why the server
+      // sometimes refused to start with no useful message.
+      try {
+        plantWorld.loadPlant(plant);
+      } catch (error) {
+        skippedPlants += 1;
+        log.error('skipping unreadable plant snapshot', {
+          plantId: plant.id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
     }
-    log.info('loaded plants from database', { count: loadedPlants.length });
+    log.info('loaded plants from database', {
+      count: loadedPlants.length - skippedPlants,
+      skipped: skippedPlants,
+    });
   }
 
   // Interest management (T03)
@@ -1812,7 +2843,10 @@ async function main(): Promise<void> {
   if (database.pool) {
     const service = new AccountsService(database.pool, accountsConfig);
     accountsService = service;
-    const handlers = createAccountsHandlers(service);
+    const handlers = createAccountsHandlers(service, {
+      trustProxy: runtime.trustProxy,
+      maxBodyBytes: accountsConfig.requestBodyMaxBytes,
+    });
     handleSignup = handlers.handleSignup;
     handleLogin = handlers.handleLogin;
     handleRefresh = handlers.handleRefresh;
@@ -1851,23 +2885,77 @@ async function main(): Promise<void> {
     plantPersistence,
     worldConfig.maxFrameTimeMs,
     itemsConfig,
+    chatConfig,
+    reportConfig,
+    worldConfig.seasonLengthDays,
   );
 
-  // Periodic plant persistence (T03)
-  let saveInterval: NodeJS.Timeout | null = null;
+  // Near and dormant plants are stepped inside PlantWorld, not in the online
+  // loop, so they need the same photosynthesis the online loop applies. Without
+  // this an offline plant only ever paid upkeep and starved in broad daylight.
+  plantWorld.setPhotosynthesis((plant, seconds) => world.photosynthesizePlant(plant, seconds));
+
+  // The calendar is world state, so it is restored once per boot rather than per
+  // plant, and stopped seasons do not resume from season 1 after a deploy.
   if (plantPersistence) {
-    const saveIntervalMs = 30000; // 30 seconds
-    saveInterval = setInterval(async () => {
-      try {
-        const plants = plantWorld.getAllPlants();
-        for (const plant of plants) {
-          await plantPersistence.savePlant(plant);
-        }
-        log.debug('periodic plant save', { count: plants.length });
-      } catch (error) {
-        log.error('periodic plant save failed', {
+    const persistence = plantPersistence;
+    try {
+      const savedSeason = await persistence.loadSeasonState();
+      if (savedSeason) {
+        world.restoreSeasonState(savedSeason);
+        log.info('restored season', {
+          season: savedSeason.season,
+          remainingTicks: Math.round(savedSeason.remainingTicks),
+        });
+      }
+    } catch (error) {
+      // A database that predates the world_state table must not stop the world
+      // from starting; it simply has no calendar to restore.
+      log.warn('season state load failed; starting from season 1', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    world.setSeasonEndedHook((state) => {
+      void persistence.saveSeasonState(state).catch((error: unknown) => {
+        log.error('season-state save failed', {
           error: error instanceof Error ? error.message : String(error),
         });
+      });
+    });
+  }
+
+  // Periodic plant persistence (T03). The cadence comes from
+  // `world.plant_save_interval_s`; each plant saves independently so one bad row cannot skip
+  // every plant after it, and an in-flight guard stops a slow pass from
+  // overlapping the next one.
+  let saveInterval: NodeJS.Timeout | null = null;
+  if (plantPersistence) {
+    // Its own tunable, not `snapshot_interval_ticks`: that key means the
+    // full-state snapshot cadence (6000 ticks = 5 min) and would have made
+    // saves ten times rarer than the 30 s they had been.
+    const saveIntervalMs = Math.max(1000, worldConfig.plantSaveIntervalSec * 1000);
+    let saveInFlight = false;
+    saveInterval = setInterval(async () => {
+      if (saveInFlight) {
+        log.warn('periodic plant save still running; skipping this interval');
+        return;
+      }
+      saveInFlight = true;
+      try {
+        const result = await saveAllPlants(plantWorld, plantPersistence, log, 'periodic');
+        // The calendar is cheap and must survive a crash between rollovers, so
+        // it rides the same cadence as the plants. A failure here must not take
+        // the plant-save loop down with it.
+        try {
+          await plantPersistence.saveSeasonState(world.getSeasonState());
+        } catch (error) {
+          log.error('periodic season-state save failed', {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+        log.debug('periodic plant save', { count: result.saved, total: result.total });
+      } finally {
+        saveInFlight = false;
       }
     }, saveIntervalMs);
     saveInterval.unref();
@@ -2051,7 +3139,7 @@ async function main(): Promise<void> {
           tube_ring_count: values.tube_ring_count?.value ?? 8,
           tube_length_segments: values.tube_length_segments?.value ?? 8,
           leaf_count_per_node: values.leaf_count_per_node?.value ?? 1,
-          leaf_size: values.leaf_size?.value ?? 1.2,
+          leaf_size: values.leaf_size?.value ?? 0.25,
           leaf_length_width_ratio: values.leaf_length_width_ratio?.value ?? 2.5,
           petiole_length: values.petiole_length?.value ?? 0.25,
           petiole_thickness: values.petiole_thickness?.value ?? 0.015,
@@ -2093,7 +3181,7 @@ async function main(): Promise<void> {
           tube_ring_count: 8,
           tube_length_segments: 8,
           leaf_count_per_node: 1,
-          leaf_size: 1.2,
+          leaf_size: 0.25,
           leaf_length_width_ratio: 2.5,
           petiole_length: 0.25,
           petiole_thickness: 0.015,
@@ -2115,6 +3203,72 @@ async function main(): Promise<void> {
         });
         return;
       }
+    }
+
+    if (url.pathname === '/config/growth') {
+      // Growth step distances, so the aim arrow can preview exactly one real
+      // segment instead of an invented length.
+      const fs = await import('node:fs/promises');
+      const path = await import('node:path');
+      try {
+        const raw = await fs.readFile(path.resolve(runtime.configDir, 'growth.json'), 'utf8');
+        const parsed = JSON.parse(raw) as { values?: Record<string, { value?: unknown }> };
+        const values = (parsed.values ?? {}) as Record<
+          string,
+          {
+            value?: {
+              segment_length?: number;
+              biomass_cost?: number;
+              growth_time_seconds?: number;
+            };
+          }
+        >;
+        // Per-type step distances, so the aim preview is the segment that will
+        // actually be grown (a cotyledon is 0.1 m, not a 0.95 m canopy step).
+        // Costs and growth times ride along for Plant Lab's economy readout.
+        const nodeLengths: Record<string, number> = {};
+        const nodeCosts: Record<string, number> = {};
+        const nodeGrowthSeconds: Record<string, number> = {};
+        for (const [key, entry] of Object.entries(values)) {
+          if (!key.endsWith('_node')) continue;
+          const type = key.replace(/_node$/, '');
+          const length = entry?.value?.segment_length;
+          const cost = entry?.value?.biomass_cost;
+          const seconds = entry?.value?.growth_time_seconds;
+          if (typeof length === 'number') nodeLengths[type] = length;
+          if (typeof cost === 'number') nodeCosts[type] = cost;
+          if (typeof seconds === 'number') nodeGrowthSeconds[type] = seconds;
+        }
+        // Organism geometry rides along: the seed aspect, radius table and
+        // branch attach fraction are the numbers the client needs to draw and
+        // aim the same plant the server grows.
+        const geometryNumber = (key: string, fallback: number): number => {
+          const value = parsed.values?.[key]?.value;
+          return typeof value === 'number' ? value : fallback;
+        };
+        sendJson(response, 200, {
+          root_growth_speed: values.root_growth_speed?.value ?? 0.85,
+          canopy_growth_speed: values.canopy_growth_speed?.value ?? 0.95,
+          node_lengths: nodeLengths,
+          node_costs: nodeCosts,
+          node_growth_seconds: nodeGrowthSeconds,
+          seed_body_height_ratio: geometryNumber('seed_body_height_ratio', 1.35),
+          branch_attach_fraction: geometryNumber('branch_attach_fraction', 0.6),
+          node_radius_profiles: parsed.values?.node_radius_profiles?.value ?? {},
+        });
+      } catch {
+        sendJson(response, 200, {
+          root_growth_speed: 0.85,
+          canopy_growth_speed: 0.95,
+          node_lengths: {},
+          node_costs: {},
+          node_growth_seconds: {},
+          seed_body_height_ratio: 1.35,
+          branch_attach_fraction: 0.6,
+          node_radius_profiles: {},
+        });
+      }
+      return;
     }
 
     if (url.pathname === '/config/render') {
@@ -2180,6 +3334,15 @@ async function main(): Promise<void> {
         });
         return;
       }
+    }
+
+    // Systems the client reads verbatim: day/night timing and tile ranges.
+    // Anything else with a dedicated route below keeps its own handler.
+    if (url.pathname === '/config/daynight' || url.pathname === '/config/resources') {
+      const system = url.pathname.slice('/config/'.length);
+      const flat = await readFlatConfig(runtime.configDir, system);
+      sendJson(response, 200, flat ?? {});
+      return;
     }
 
     if (url.pathname === '/config/controls') {
@@ -2422,6 +3585,35 @@ async function main(): Promise<void> {
       }
     }
 
+    if (
+      url.pathname === '/config/chat' ||
+      url.pathname === '/config/reports' ||
+      url.pathname === '/config/network'
+    ) {
+      // T05: Serve chat/report tunables so client-side limits mirror server
+      // enforcement; the network file also carries the client ping thresholds.
+      const fs = await import('node:fs/promises');
+      const path = await import('node:path');
+      const configName = url.pathname.slice('/config/'.length);
+
+      try {
+        const raw = await fs.readFile(
+          path.resolve(runtime.configDir, `${configName}.json`),
+          'utf8',
+        );
+        const values = JSON.parse(raw).values ?? {};
+        const flat: Record<string, unknown> = {};
+        for (const [key, entry] of Object.entries(values)) {
+          flat[key] = (entry as { value?: unknown }).value;
+        }
+        sendJson(response, 200, flat);
+        return;
+      } catch {
+        sendJson(response, 200, {});
+        return;
+      }
+    }
+
     if (url.pathname === '/config/root_sight') {
       // T02: Serve Root Sight config
       const fs = await import('node:fs/promises');
@@ -2530,7 +3722,11 @@ async function main(): Promise<void> {
       return;
     }
     if (url.pathname === '/dev/config' && request.method === 'POST') {
-      await handlePostDevConfig(request, response);
+      const applied = await handlePostDevConfig(request, response);
+      // Push accepted switches into the live simulation, not just the config map.
+      for (const change of applied ?? []) {
+        world.applyDevConfig(change.key, change.value);
+      }
       return;
     }
 
@@ -2563,6 +3759,12 @@ async function main(): Promise<void> {
     let helloTimeout: NodeJS.Timeout;
     let playerId: string | null = null;
 
+    // One inbound budget per socket. Every type-specific limit (chat, reports,
+    // growth intents) sits behind this, so a connection cannot flood unknown or
+    // malformed messages and burn the tick budget from one socket.
+    const inboundBudget = createTokenBucket(netProtoConfig.messageBurst, Date.now());
+    let droppedMessages = 0;
+
     const cleanupConnection = () => {
       if (helloTimeout) {
         clearTimeout(helloTimeout);
@@ -2573,6 +3775,24 @@ async function main(): Promise<void> {
     };
 
     ws.on('message', (data: Buffer) => {
+      if (
+        !tokenBucketAllow(
+          inboundBudget,
+          Date.now(),
+          netProtoConfig.maxMessagesPerSecond,
+          netProtoConfig.messageBurst,
+        )
+      ) {
+        droppedMessages += 1;
+        if (droppedMessages === 1 || droppedMessages % 100 === 0) {
+          log.warn('inbound message rate limit reached', {
+            playerId,
+            dropped: droppedMessages,
+          });
+        }
+        return;
+      }
+
       try {
         const message = JSON.parse(data.toString());
         const { type, payload } = message;
@@ -2672,6 +3892,11 @@ async function main(): Promise<void> {
       // Check if this account has a plant pending reclaim (reconnect window)
       let welcome: WelcomePayload;
       if (accountId) {
+        // A guest who signs in keeps the plant they were growing, instead of the
+        // account silently creating a second one.
+        if (hello.plantId) {
+          world.adoptGuestPlant(accountId, hello.plantId, hello.reconnectToken);
+        }
         const reclaimed = world.reclaimPlant(
           accountId,
           `player_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
@@ -2693,6 +3918,7 @@ async function main(): Promise<void> {
             hello.plantId,
             `player_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
             ws,
+            hello.reconnectToken,
           );
           if (reclaimed) {
             welcome = reclaimed.welcome;
@@ -2711,22 +3937,40 @@ async function main(): Promise<void> {
         }
       }
 
+      // A guest's owner id dies with the connection, so the plant id they asked
+      // to reclaim is the only stable key for a loss. If that plant is gone and
+      // it died, report it instead of handing over a replacement seed silently.
+      const requestedPlantId = hello.plantId;
+      if (requestedPlantId && welcome.plantId !== requestedPlantId && !welcome.previousPlantDied) {
+        const loss = world.takeLostPlantReport(requestedPlantId);
+        if (loss) {
+          welcome.previousPlantDied = {
+            cause: loss.cause,
+            secondsAgo: Math.max(0, Math.round((Date.now() - loss.at) / 1000)),
+          };
+        }
+      }
+
       // Send welcome message with plant info
       const welcomeMsg = JSON.stringify({
         type: MESSAGE_TYPE.WELCOME,
         payload: { ...welcome, plantId: welcome.plantId },
       });
       ws.send(welcomeMsg);
+      ws.send(
+        JSON.stringify({ type: MESSAGE_TYPE.SEASON_UPDATE, payload: world.getSeasonUpdate() }),
+      );
 
-      // Send full resource grid immediately so ground renders with correct lighting
+      // Send full resource grid immediately so ground renders with correct
+      // lighting. Sent as the compact quantised buffer (~262 KB) rather than
+      // 65 536 tile objects (~4.2 MB).
       const rw = world.getResourceWorld();
-      const allTiles = rw.getAllTiles();
       ws.send(
         JSON.stringify({
           type: MESSAGE_TYPE.RESOURCE_UPDATE,
           payload: {
             tick: world.getTick(),
-            tiles: allTiles,
+            gridBase64: encodeResourceGridBase64(rw.getWidth(), rw.getHeight(), rw.getAllTiles()),
             width: rw.getWidth(),
             height: rw.getHeight(),
             tileSize: rw.getTileSize(),
@@ -2766,6 +4010,11 @@ async function main(): Promise<void> {
         }
       }
       log.info('saved plants on shutdown', { count: plants.length });
+      await plantPersistence.saveSeasonState(world.getSeasonState()).catch((error: unknown) =>
+        log.error('shutdown season-state save failed', {
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      );
     }
 
     const forceExit = setTimeout(() => {
@@ -2784,11 +4033,22 @@ async function main(): Promise<void> {
     });
   };
 
+  process.on('uncaughtException', (error: unknown) => {
+    log.error('uncaught exception', {
+      error: error instanceof Error ? (error.stack ?? error.message) : String(error),
+    });
+    shutdown('uncaught exception');
+  });
+
+  process.on('unhandledRejection', (reason: unknown) => {
+    log.error('unhandled rejection', {
+      reason: reason instanceof Error ? (reason.stack ?? reason.message) : String(reason),
+    });
+    shutdown('unhandled rejection');
+  });
+
   process.on('SIGINT', () => shutdown('SIGINT'));
   process.on('SIGTERM', () => shutdown('SIGTERM'));
-
-  // Auto-shutdown when all clients disconnect (persistence off)
-  world.setOnAllPlayersLeft(() => shutdown('all clients disconnected'));
 
   server.listen(runtime.port, runtime.host, () => {
     log.info('listening', {

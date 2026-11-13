@@ -4,7 +4,7 @@ Current context for any human or AI session working in this repository. Keep it
 current at the end of every task (DESIGN.md, Session Protocol). `DESIGN.md` wins
 over this file whenever they disagree.
 
-**Phase:** 1 — The Living Sprout (in progress). **Implemented:** T00, O01, T03P, C01, **T00A** (resource model + onboarding), T01 (growth simulation), **T03** (persistence, offline tiers, interest management, event bus), **T08C** (accounts + sessions), **C02** (Raymarched SDF procedural organism renderer with `smin` organic fusion, Murray's law allometric tapering, thin-lamina foliage, and 0.9s real-time emergence animation), **T02** (Root Sight unified organism integration), **T07** (Weather state machine, day/night cycle, forecast broadcast, ResourceWorld integration), **C03** (Environment rendering: sky dome gradient, sun/moon arcs, atmospheric fog, rain particle system, storm lightning flashes, soil moisture tinting, Root Sight cutaway refinement), **C02b slice** (WebGPU v1 compute-driven plant renderer: transparent overlay canvas, merged mesh tiers 0/1, billboard tiers 2–4, per-plant culling/LOD with hysteresis, Root Sight highlight, WebGL2 fallback; impostor baking, GPU skinning, texture arrays), **D01** (dev settings engine: `?dev=1` gate, server `/dev/config` endpoints, `config/dev.json`, DevPanel wired to server, persistence switch wired to disconnect logic, key binding added). **Added:** config/resources.json, config/world.json, config/network.json, config/accounts.json, config/plant_renderer.json, config/root_sight.json, config/weather.json, config/daynight.json, config/render.json (expanded), config/dev.json, server resource model, PlantPersistence (versioned binary snapshot + event log with CRC32), PlantWorld tiers, InterestManager, EventBus, AccountsService (argon2id, JWT rotation, atomic rate limits, lockout), WeatherSystem, EnvironmentRenderer, WebGPU renderer (`apps/client/src/renderers/webgpu/`), seeded RNG (`hash32`, `hash01`, `mulberry32`). **Approved 2026-11-09 (not built): v5.4 extension program** — T54 reactive non-sapient fauna, T55 material simulation, T56 volumetric terrain, C10 terrain/material rendering, T57 parametric terrain features, T58 world-object streaming and behaviour, T59 ecological succession, C11 fauna rendering, O04 cloud-native World orchestration. Rule amendments (RULE_2, RULE_8, RULE_19, RULE_22) and task specs are in `DESIGN.md` Part 11 and Part 16; the index is [`docs/v5.4-extension-plan.md`](./docs/v5.4-extension-plan.md). **Last updated:** 2026-11-10.
+**Phase:** 1 — The Living Sprout (in progress). **Implemented:** T00, O01, T03P, C01, **T00A** (resource model + onboarding), T01 (growth simulation), **T03** (persistence, offline tiers, interest management, event bus), **T08C** (accounts + sessions), **C02** (Raymarched SDF procedural organism renderer with `smin` organic fusion, Murray's law allometric tapering, thin-lamina foliage, and 0.9s real-time emergence animation), **T02** (Root Sight unified organism integration), **T07** (Weather state machine, day/night cycle, forecast broadcast, ResourceWorld integration), **C03** (Environment rendering: sky dome gradient, sun/moon arcs, atmospheric fog, rain particle system, storm lightning flashes, soil moisture tinting, Root Sight cutaway refinement), **C02b slice** (WebGPU v1 compute-driven plant renderer: transparent overlay canvas, merged mesh tiers 0/1, billboard tiers 2–4, per-plant culling/LOD with hysteresis, Root Sight highlight, WebGL2 fallback; impostor baking, GPU skinning, texture arrays), **D01** (dev settings engine: `?dev=1` gate, server `/dev/config` endpoints, `config/dev.json`, DevPanel wired to server, persistence switch wired to disconnect logic, key binding added). **Added:** config/resources.json, config/world.json, config/network.json, config/accounts.json, config/plant_renderer.json, config/root_sight.json, config/weather.json, config/daynight.json, config/render.json (expanded), config/dev.json, server resource model, PlantPersistence (versioned binary snapshot + event log with CRC32), PlantWorld tiers, InterestManager, EventBus, AccountsService (Argon2id, JWT rotation, atomic rate limits, lockout), WeatherSystem, EnvironmentRenderer, WebGPU renderer (`apps/client/src/renderers/webgpu/`), seeded RNG (`hash32`, `hash01`, `mulberry32`). **Approved 2026-11-09 (not built): v5.4 extension program** — T54 reactive non-sapient fauna, T55 material simulation, T56 volumetric terrain, C10 terrain/material rendering, T57 parametric terrain features, T58 world-object streaming and behaviour, T59 ecological succession, C11 fauna rendering, O04 cloud-native World orchestration. Rule amendments (RULE_2, RULE_8, RULE_19, RULE_22) and task specs are in `DESIGN.md` Part 11 and Part 16; the index is [`docs/v5.4-extension-plan.md`](./docs/v5.4-extension-plan.md). **Last updated:** 2026-11-10.
 
 ## 1. Stack
 
@@ -61,10 +61,13 @@ committed; CI installs with `--frozen-lockfile`.
 │   │   ├── src/main.ts        # Three.js scene, WebSocket client, input, hint card
 │   │   ├── src/config/clientConfig.ts    # C01 config loaders
 │   │   ├── src/config/plantRendererConfig.ts
-│   │   ├── src/input/InputBus.ts         # C01 named actions + producers
+│   │   ├── src/ui/DevPanel.ts            # D01 dev settings panel
 │   │   ├── src/render/QualityController.ts  # C01 dynamic resolution
-│   │   ├── src/renderers/PlantRenderer.ts  # C02 Raymarched SDF plant renderer
-│   │   ├── src/renderers/EnvironmentRenderer.ts  # C03 sky, fog, rain, lightning, terrain
+│   │   ├── src/renderers/PlantRenderer.ts  # C02 Raymarched SDF plant renderer (GL state, uniforms)
+│   │   ├── src/renderers/plant/          # C02 node visuals, GPU packing, GLSL
+│   │   ├── src/renderers/EnvironmentRenderer.ts  # C03 update order + public API
+│   │   ├── src/renderers/environment/    # C03 sky, rain, ground, resource grid, celestial, weather presets
+│   │   ├── src/renderers/rootSight/      # T02 cutaway uniforms and sizing
 │   │   ├── src/renderers/webgpu/         # C02b WebGPU compute LOD + mesh/billboard passes
 │   │   │   ├── WebGPURenderer.ts
 │   │   │   ├── WebGPUDevice.ts
@@ -94,16 +97,20 @@ committed; CI installs with `--frozen-lockfile`.
 │       │   ├── migrate.ts
 │       │   └── plantPersistence.ts
 │       ├── src/ops/plantWorld.ts    # T01 growth + T03 offline tiers
+│       ├── src/ops/growth/          # T01 pure rules (rules.ts) + growth menu (options.ts)
 │       ├── src/ops/accounts/        # T08C accounts + sessions
 │       │   ├── config.ts            # config loader
-│       │   ├── service.ts           # argon2id, JWT, rate limits, lockout
+│       │   ├── service.ts           # Argon2id, JWT, rate limits, lockout
 │       │   └── http.ts              # /auth/* endpoints
 │       └── tsconfig.json
+├── packages/input/             # C01 InputBus + action state machine
+├── packages/weather/           # T07 weather + day/night state machine
 ├── packages/shared/
 │   └── src/
 │       ├── config/{types,validate,loader,index}.ts
 │       ├── config/validate.test.ts
 │       ├── events/index.ts    # GAME_EVENTS vocabulary (Appendix E)
+│       ├── growth/           # growth types, gene constraints, geometry, node types
 │       ├── ids/index.ts       # prefixed opaque ids
 │       ├── math/index.ts      # clamp, lerp, hash32, hash01, mulberry32
 │       ├── protocol/index.ts  # PROTOCOL_VERSION, frame header
@@ -112,11 +119,12 @@ committed; CI installs with `--frozen-lockfile`.
 ├── tools/
 │   ├── config-validator/src/cli.ts
 │   ├── dev.mjs                # one-command local stack
+│   ├── watch-server.mjs       # content-aware server restart (pnpm dev:server)
 │   ├── sim-bots/              # placeholder (T26)
 │   ├── load-test/             # placeholder (O03)
 │   ├── seed-data/             # placeholder (T03)
 │   └── backup/                # placeholder (O02)
-├── config/                    # 75 tunable files + _meta
+├── config/                    # 77 tunable files + _meta
 ├── docs/                      # tunables, tasks, checklists, design notes
 ├── ops/
 │   ├── compose.yml            # server + postgres:17-alpine
@@ -183,6 +191,8 @@ preflight. Other methods are `405`. Responses carry
 | GET | `/config/controls` | 200 | flat `controls` values (bindings, text scale, …) |
 | GET | `/config/ui` | 200 | flat `ui` values (theme tokens, z-indexes, …) |
 | GET | `/config/root_sight` | 200 | flat `root_sight` values (`cutaway_radius`, `soil_opacity`, …) |
+| GET | `/config/daynight` | 200 | flat `daynight` values (`cycle_length_s` = 3600, i.e. a 60-minute day/night) |
+| GET | `/config/resources` | 200 | flat `resources` values (`tile_light_base`, `max_light/moisture/minerals`) |
 | * | anything else | 404 | `{ error: "not_found" }` |
 
 The `/config/*` routes read the file from `CONFIG_DIR` on each request and fall
@@ -196,7 +206,7 @@ interface HealthReport {
   uptime_s: number;           // floor(seconds since start)
   checks: {
     config: 'ok';
-    config_files: number;     // 75
+    config_files: number;     // 77
     database: 'ok' | 'down' | 'skipped';
   };
 }
@@ -304,11 +314,11 @@ migrations in `apps/server/src/ops/persistence/001_create_plants_table.sql`.
 
 WebSocket at `/ws`, JSON messages `{ type: number, payload: object }`.
 `PROTOCOL_VERSION = 1`; the client sends `HELLO { clientVersion: 1 }` and the
-server answers with `WELCOME`. Client → server: `HELLO`, `INPUT`, `PING`, `GROWTH_INTENT`, `RESOURCE_QUERY`, `PLANT_SYNC_REQUEST`.
-Server → client: `WELCOME`, `STATE`, `KEYFRAME`, `REJECT`, `PONG`, `ERROR`, `GROWTH_EVENT`, `RESOURCE_UPDATE`, `PLANT_SYNC`, `PLANT_CREATED`.
+server answers with `WELCOME`. Client → server: `HELLO`, `INPUT`, `PING`, `GROWTH_INTENT`, `RESOURCE_QUERY`, `PLANT_SYNC_REQUEST`, `GROWTH_OPTIONS_REQUEST`, `DEV_ACTION`, `CHAT_MESSAGE`, `INVENTORY_REQUEST`, `INVENTORY_SLOT_USE`, `INVENTORY_SLOT_SWAP`, `REPORT`, `BLOCK`.
+Server → client: `WELCOME`, `STATE`, `KEYFRAME`, `REJECT`, `PONG`, `ERROR`, `GROWTH_EVENT`, `RESOURCE_UPDATE`, `PLANT_SYNC`, `PLANT_CREATED`, `PLANT_REMOVED`, `WEATHER_UPDATE`, `GROWTH_OPTIONS_RESULT`, `CHAT_BROADCAST`, `INVENTORY_SYNC`, `INVENTORY_SLOT_UPDATE`, `DEV_RESPONSE`.
 The server validates movement (velocity, world bounds, quantization) and sends
-`REJECT` plus authoritative state. Unit tests confirm both velocity and bounds
-rejection fire. Full table, payload schemas:
+`REJECT` plus authoritative state. Only the velocity check is exercised; a bounds
+check is not implemented. Full table, payload schemas:
 [`docs/protocol.md`](./docs/protocol.md).
 
 ### 5.7 Events and ids
@@ -394,7 +404,8 @@ enforcement changes.
 
 ## 8. Not built yet
 
-Chat, economy, damage pipeline, inventory, admin/compliance tooling.
+Economy, marketplace/mail/trade, admin/compliance tooling, and the full damage
+pipeline. Chat, emotes, player reports and inventory are implemented.
 
 **V5.4 extension program (approved 2026-11-09, not built):** T54 reactive fauna, T55 material simulation, T56 volumetric terrain, C10 terrain/material rendering, T57 parametric terrain features, T58 world-object streaming, T59 ecological succession, C11 fauna rendering, O04 cloud-native orchestration. Nothing in this list exists in code. See [`docs/v5.4-extension-plan.md`](./docs/v5.4-extension-plan.md).
 
@@ -412,6 +423,67 @@ photosynthesis, absorption, deposits, consumption triggers, diffusion, broadcast
 client readout connected). **T03 complete** (binary snapshot + event log persistence,
 Active/Near/Dormant offline tiers, interest management, event bus, tick-budget metrics,
 PLANT_SYNC/PLANT_CREATED/PLANT_SYNC_REQUEST).
+
+## 10. Planet world (stage 1)
+
+The play area is the surface of a sphere, not a plane. `config/render.json`
+`planet_radius_m` (100000) sets the radius; `0` restores the flat plane.
+`apps/client/src/renderers/environment/planetSurface.ts` owns the surface math
+(drop from the pole plane, surface point/normal, cap geometry, `planetUp()`,
+`planetGravity()`), with tests. Server nodes stay in the flat simulation frame and
+are placed by `surfacePosition()`; the simulation itself is still planar.
+
+The terrain is the circular piece of that sphere the player walks on, sized by
+`render.json` `terrain_radius` (620 m, past the ~565 m horizon at eye height). The rest of the body is a sphere just
+under it that shares the soil material, so the same tiles continue around the
+globe. The soil shader converts fragments to arc-length surface coordinates from
+the pole (`uPlanetCenter`/`uPlanetRadius`/`uPlanetEnabled`) before sampling the
+256x256 resource grid, and the grid texture repeats; this is a surface
+projection, not a geodesic tile topology. Root Sight keeps the terrain visible,
+so the cutaway reads as a window into soil rather than a dome in the sky.
+
+Planet orbit view is a dev-panel Camera action (Orbit Planet / Local View), with
+no key binding. Its near, far, minimum distance and framing distance are all
+`planet_radius_m` times a `planet_view_*_multiplier` tunable.
+
+Root Sight no longer draws a soil dome. It cuts a cone out of the terrain from
+the camera through the inspected node (`ground.ts` cone discard driven by
+`uRootSightCamera`/`uRootSightCenter`/`uRootSightRadius`), so the opening follows
+the view, stays round at any angle and shows the background through it. The rim
+is a dither fade (interleaved gradient noise) rather than a hard discard. The
+WebGL `soilDome`, the WebGPU `dome.wgsl` bowl and the unused WebGPU
+`ground.wgsl` bubble cutaway were the source of the concentric rings and were
+deleted. The dirt backdrop the dome used to give now comes from blending the sky
+and fog to an earth gradient while Root Sight is open, so there is no dome
+geometry that can ring or warp.
+
+The camera's up vector follows the surface normal at the orbit target in the
+local view and stays world up in planet view. OrbitControls reads `object.up`
+when it is constructed and keeps that frame for the instance, and its cached
+frame is private. `applyCameraUp()` therefore rebuilds the controls through the
+public constructor when the normal moves more than 1.1 degrees, carrying the
+target and settings over, instead of writing to `_quat`/`_quatInverse`. The dev
+handle exposes `controls` as a getter so it follows the rebuilt instance.
+
+Spherical tile addressing lives in `packages/shared/src/world/sphericalGrid.ts`
+(exported as `@plant-legacy/shared/world`). It uses equal-angle latitude rings
+with a per-ring cell count, and returns true neighbours (east/west wrap, poles
+clamp, ring changes keep longitude) plus stable `ring:index` keys.
+
+`ResourceWorld` stores resources per addressed cell through
+`apps/server/src/ops/tileAddressing.ts`. The addressing is flat by default and
+spherical when `render.json` `planet_radius_m` is positive; `main.ts` passes it
+in. Cells come from the 1 m lattice points, so the simulated region is still the
+configured bounds, but diffusion, canopy shading and uptake ask the addressing
+who a cell's neighbours are. On a sphere that means the pole ring wraps, and
+diagonal-looking tiles can be true neighbours. The 256x256 lattice survives as a
+sampling view (`tileCells`, `tilesByCell`) so `getAllTiles`, the compact grid
+buffer and the client's soil texture keep their contract. A planet-wide dense
+grid is not built: at 100 km and 1 m cells that would be ~1.3e11 cells.
+
+Still flat: physics and persistence treat the pole as a plane, and plant nodes
+stay in the pole-local coordinate frame. Spherical physics is planned stage 2
+(see the decisions in this session's record).
 
 ## 9. Keeping this file current
 

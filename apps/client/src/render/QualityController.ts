@@ -87,9 +87,12 @@ export class QualityController {
     const target = this.targetFps * this.warningThreshold;
 
     if (fps > 0 && fps < target) {
-      // Under budget: drop resolution toward the floor (minimum 0.8 to prevent pixelated soup).
-      const effectiveFloor = Math.max(0.8, this.floor);
-      const next = this.currentPixelRatio - 0.05;
+      // Under budget: drop resolution toward the configured floor. Far below
+      // target it steps twice as fast, so a struggling device reaches its
+      // playable resolution in a couple of seconds instead of ten.
+      const effectiveFloor = Math.max(0.4, this.floor);
+      const step = fps < this.targetFps * 0.6 ? 0.1 : 0.05;
+      const next = this.currentPixelRatio - step;
       this.currentPixelRatio = this.clampPixelRatio(Math.max(next, effectiveFloor));
       return;
     }

@@ -1,6 +1,12 @@
 export interface NetProtoConfig {
   protocolVersion: number;
   maxMessageSizeBytes: number;
+  /** Unsent-socket backlog above which tick broadcasts are skipped. */
+  maxBufferedBytes: number;
+  /** Sustained inbound messages allowed per connection per second. */
+  maxMessagesPerSecond: number;
+  /** Short inbound burst a connection may spend before the sustained rate applies. */
+  messageBurst: number;
   tickRateHz: number;
   positionQuantization: number;
   angleQuantizationBits: number;
@@ -32,6 +38,9 @@ export function loadNetProtoConfig(configs: Map<string, ConfigFile>): NetProtoCo
   return {
     protocolVersion: readInteger(configs, 'net_proto', 'protocol_version'),
     maxMessageSizeBytes: readInteger(configs, 'net_proto', 'max_message_size_bytes'),
+    maxBufferedBytes: readInteger(configs, 'net_proto', 'max_buffered_bytes'),
+    maxMessagesPerSecond: readInteger(configs, 'net_proto', 'max_messages_per_second'),
+    messageBurst: readInteger(configs, 'net_proto', 'message_burst'),
     tickRateHz: readInteger(configs, 'net_proto', 'tick_rate_hz'),
     positionQuantization: readInteger(configs, 'net_proto', 'position_quantization'),
     angleQuantizationBits: readInteger(configs, 'net_proto', 'angle_quantization_bits'),
@@ -60,6 +69,11 @@ export const MESSAGE_TYPE = {
   GROWTH_OPTIONS_REQUEST: 7,
   DEV_ACTION: 8, // Client -> Server: dev panel actions
   CHAT_MESSAGE: 9, // Client -> Server: chat message
+  // 10 is reserved for WELCOME (server -> client). REPORT used to share it,
+  // which made validateMessage(10, reportPayload) check the WELCOME schema and
+  // silently drop every report.
+  REPORT: 29, // Client -> Server: report a player/message
+  BLOCK: 30, // Client -> Server: mute or unmute a player's chat
   INVENTORY_REQUEST: 24, // Client -> Server: request full inventory sync
   INVENTORY_SLOT_USE: 25, // Client -> Server: use item from slot
   INVENTORY_SLOT_SWAP: 26, // Client -> Server: swap inventory slots
@@ -77,6 +91,7 @@ export const MESSAGE_TYPE = {
   PLANT_CREATED: 19,
   PLANT_REMOVED: 20,
   WEATHER_UPDATE: 21,
+  SEASON_UPDATE: 31, // Server -> Client: current season and time left before the calamity
   GROWTH_OPTIONS_RESULT: 22,
   CHAT_BROADCAST: 23, // Server -> Client: chat message from another player
   INVENTORY_SYNC: 27, // Server -> Client: full inventory state
@@ -100,15 +115,45 @@ export interface HelloPayload {
   clientVersion: number;
   accessToken?: string;
   plantId?: string;
+  reconnectToken?: string;
+}
+
+export interface SeasonUpdatePayload {
+  season: number;
+  /** Whole seconds left before the calamity, as of the sending tick. */
+  remainingSeconds: number;
+  lengthTicks: number;
+  /** True only on the update that announces a rollover. */
+  calamity: boolean;
 }
 
 export interface WelcomePayload {
   playerId: string;
   plantId: string;
+  /** Secret that authorises reclaiming this plant after a disconnect. */
+  reconnectToken: string;
   tick: number;
   rootNode: { id: string; x: number; y: number; z: number; type: string; biomass: number };
   totalBiomass: number;
   totalEnergy: number;
+  /**
+   * What changed while the player was away, filled on a reconnect or reclaim.
+   * Deltas are after-minus-before over the time the plant spent offline.
+   */
+  away?: {
+    seconds: number;
+    nodesBefore: number;
+    nodesAfter: number;
+    biomass: number;
+    energy: number;
+    water: number;
+    minerals: number;
+  };
+  /**
+   * Set when this player's previous plant died while they were away and the
+   * server has just handed them a replacement seed.
+   */
+  previousPlantDied?: { cause: string; secondsAgo: number };
   // Full node set for immediate client render (ADR-021)
   nodes?: Array<{
     id: string;
@@ -138,6 +183,8 @@ export interface WelcomePayload {
     parentAttachX?: number;
     parentAttachY?: number;
     parentAttachZ?: number;
+    /** Where along the parent's segment this node leaves it (1 = its end). */
+    attachFraction?: number;
   }>;
 }
 
@@ -157,6 +204,16 @@ export interface KeyframePayload {
   plants: Array<{ id: string; totalBiomass: number; totalUpkeep: number }>;
   worldBounds: { minX: number; maxX: number; minZ: number; maxZ: number };
   tileSize: number;
+}
+
+export interface ReportPayload {
+  targetPlayerId: string;
+  targetPlayerName?: string;
+  reason: string;
+  freeText?: string;
+  block?: boolean;
+  contextSnapshot?: Array<{ playerName: string; message: string; timestamp: number }>;
+  timestamp: number;
 }
 
 export interface RejectPayload {
@@ -241,7 +298,6 @@ export interface GrowthEventPayload {
   newNodes?: GrowthEventNode[];
   /** Replaced node (germination: the seed becomes the root). */
   updatedParentNode?: GrowthEventNode;
-  damageDealt?: number;
   totalBiomass?: number;
   totalEnergy?: number;
 }

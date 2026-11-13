@@ -29,13 +29,25 @@ export type WeatherState = WeatherStateName;
 
 export class WeatherSystem {
   private machine: WeatherStateMachine;
+  /** Ease time for the light multiplier, from daynight.json dawn_dusk_transition_s. */
+  private readonly lightTransitionS: number;
+  private smoothedLightMultiplier: number;
 
   constructor(weatherConfig: WeatherConfig, dayNightConfig: DayNightConfig) {
     this.machine = createWeatherStateMachine(weatherConfig, dayNightConfig);
+    this.lightTransitionS = Math.max(1, dayNightConfig.dawnDuskTransitionS);
+    this.smoothedLightMultiplier = weatherStateMachineGetLightMultiplier(this.machine);
   }
 
   update(dtSeconds: number): void {
     weatherStateMachineUpdate(this.machine, dtSeconds);
+    // Per-state light multipliers are step values, so feeding them straight to
+    // the resource grid dropped daylight from 80 to 52 in a single tick when
+    // rain started. Ease toward the new multiplier instead, so sky and light
+    // readings change gradually over the same window as a dawn/dusk.
+    const target = weatherStateMachineGetLightMultiplier(this.machine);
+    const blend = 1 - Math.exp(-dtSeconds / this.lightTransitionS);
+    this.smoothedLightMultiplier += (target - this.smoothedLightMultiplier) * blend;
   }
 
   getBroadcast() {
@@ -47,7 +59,7 @@ export class WeatherSystem {
   }
 
   getWeatherLightMultiplier(): number {
-    return weatherStateMachineGetLightMultiplier(this.machine);
+    return this.smoothedLightMultiplier;
   }
 
   getTimeOfDay(): number {

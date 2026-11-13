@@ -90,14 +90,18 @@ function checkGerminationConditions(
   const moistureOk = resources.moisture >= config.minMoisture;
   const lightOk = resources.light >= config.minLight;
 
+  // Name the failing resources with the values being compared: "insufficient
+  // moisture" alone left players unable to tell how short they were.
+  const moistureText = `tile moisture ${resources.moisture.toFixed(1)} (needs ${config.minMoisture})`;
+  const lightText = `tile light ${resources.light.toFixed(1)} (needs ${config.minLight})`;
   if (!moistureOk && !lightOk) {
-    return { ok: false, reason: 'Insufficient moisture and light for germination' };
+    return { ok: false, reason: `Cannot germinate yet: ${moistureText}, ${lightText}` };
   }
   if (!moistureOk) {
-    return { ok: false, reason: 'Insufficient moisture for germination' };
+    return { ok: false, reason: `Cannot germinate yet: ${moistureText}` };
   }
   if (!lightOk) {
-    return { ok: false, reason: 'Insufficient light for germination' };
+    return { ok: false, reason: `Cannot germinate yet: ${lightText}` };
   }
   return { ok: true };
 }

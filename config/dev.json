@@ -24,11 +24,6 @@
             "range": [30, 86400],
             "notes": "How long a plant waits for its owner to reconnect before being removed (persistence must be enabled)."
         },
-        "auto_growth": {
-            "type": "boolean",
-            "value": false,
-            "notes": "When true, seeds can auto-germinate and plants can grow without player commits. When false (default), all growth requires player action."
-        },
         "germination_gate": {
             "type": "boolean",
             "value": true,

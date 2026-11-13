@@ -23,6 +23,9 @@ function makeTestConfig(
     values: {
       protocol_version: { type: 'integer', value: 1, range: [1, 255] },
       max_message_size_bytes: { type: 'integer', value: 16384, range: [1024, 1048576] },
+      max_buffered_bytes: { type: 'integer', value: 4194304, range: [65536, 67108864] },
+      max_messages_per_second: { type: 'integer', value: 120, range: [1, 1000] },
+      message_burst: { type: 'integer', value: 240, range: [1, 5000] },
       tick_rate_hz: { type: 'integer', value: overrides.tickRateHz ?? 20, range: [10, 60] },
       position_quantization: {
         type: 'integer',
@@ -59,6 +62,8 @@ describe('loadNetProtoConfig', () => {
     const config = makeTestConfig();
     assert.equal(config.protocolVersion, 1);
     assert.equal(config.maxMessageSizeBytes, 16384);
+    assert.equal(config.maxMessagesPerSecond, 120);
+    assert.equal(config.messageBurst, 240);
     assert.equal(config.tickRateHz, 20);
     assert.equal(config.positionQuantization, 64);
     assert.equal(config.angleQuantizationBits, 16);
@@ -81,6 +86,9 @@ describe('loadNetProtoConfig', () => {
       values: {
         protocol_version: { type: 'integer', value: 1, range: [1, 255] },
         max_message_size_bytes: { type: 'integer', value: 16384, range: [1024, 1048576] },
+        max_buffered_bytes: { type: 'integer', value: 4194304, range: [65536, 67108864] },
+        max_messages_per_second: { type: 'integer', value: 120, range: [1, 1000] },
+        message_burst: { type: 'integer', value: 240, range: [1, 5000] },
         tick_rate_hz: { type: 'integer', value: 20, range: [10, 60] },
         position_quantization: { type: 'integer', value: 64, range: [16, 256] },
         angle_quantization_bits: { type: 'integer', value: 16, range: [8, 32] },

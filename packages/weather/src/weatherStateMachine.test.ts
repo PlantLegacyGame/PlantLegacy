@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import type { DayNightConfig, WeatherConfig } from './weather.ts';
+import type { DayNightConfig, WeatherConfig } from './weatherStateMachine.ts';
 import {
   createWeatherStateMachine,
   weatherStateMachineGetBroadcast,
@@ -54,20 +54,44 @@ describe('T07 WeatherStateMachine', () => {
     assert.equal(weatherStateMachineGetWeatherState(machine), 'clear');
     const initialTime = weatherStateMachineGetTimeOfDay(machine);
 
-    // Advance 100 seconds (0.1 of 1000s cycle)
     weatherStateMachineUpdate(machine, 100);
     const updatedTime = weatherStateMachineGetTimeOfDay(machine);
     assert.ok(updatedTime > initialTime);
   });
 
-  it('correctly reports day and night according to dayFraction', () => {
+  it('reports day only while the sun is above the horizon', () => {
     const machine = createWeatherStateMachine(weatherConfig, dayNightConfig);
-    // At 0.25 (morning), it should be day
+    // 0.25 is sunrise exactly, so step into the morning first.
+    weatherStateMachineUpdate(machine, 50);
     assert.equal(weatherStateMachineIsDay(machine), true);
 
-    // Fast forward to night (e.g. 500s = +0.5 time of day -> 0.75 > 0.66)
-    weatherStateMachineUpdate(machine, 500);
+    // 0.85 is well after the 0.75 sunset.
+    weatherStateMachineUpdate(machine, 550);
     assert.equal(weatherStateMachineIsDay(machine), false);
+  });
+
+  it('keeps the afternoon lit and calls midnight night', () => {
+    const broadcastAt = (timeOfDay: number) => {
+      const machine = createWeatherStateMachine(weatherConfig, dayNightConfig);
+      const delta = (timeOfDay - weatherStateMachineGetTimeOfDay(machine) + 1) % 1;
+      weatherStateMachineUpdate(machine, delta * dayNightConfig.cycleLengthS);
+      return weatherStateMachineGetBroadcast(machine);
+    };
+
+    const midday = broadcastAt(0.5);
+    const afternoon = broadcastAt(0.7);
+    const midnight = broadcastAt(0);
+
+    assert.equal(midday.isDay, true);
+    assert.equal(afternoon.isDay, true, '17:00 is still daylight');
+    assert.equal(midnight.isDay, false, '00:00 is night');
+    assert.ok(midday.sunIntensity > 0.3, `midday sun ${midday.sunIntensity}`);
+    assert.ok(
+      afternoon.sunIntensity > 0,
+      `afternoon sun ${afternoon.sunIntensity} was extinguished`,
+    );
+    assert.ok(afternoon.sunIntensity < midday.sunIntensity);
+    assert.equal(midnight.sunIntensity, 0);
   });
 
   it('adjusts light multiplier and moisture deposit by weather state', () => {
@@ -75,11 +99,9 @@ describe('T07 WeatherStateMachine', () => {
     assert.equal(weatherStateMachineGetLightMultiplier(machine), 1.0);
     assert.equal(weatherStateMachineGetMoistureGainPerS(machine), 0.0);
 
-    // Force updates to advance state
     for (let i = 0; i < 50; i++) {
       weatherStateMachineUpdate(machine, 100);
     }
-    // Broadcast must provide full forecast payload
     const broadcast = weatherStateMachineGetBroadcast(machine);
     assert.ok(typeof broadcast.timeOfDay === 'number');
     assert.ok(typeof broadcast.sunIntensity === 'number');
@@ -89,8 +111,6 @@ describe('T07 WeatherStateMachine', () => {
 
   it('keeps clear weather for its configured minimum duration', () => {
     const machine = createWeatherStateMachine(weatherConfig, dayNightConfig);
-
-    // The clear minimum is 100s; a shorter step must not transition.
     weatherStateMachineUpdate(machine, 99);
     assert.equal(weatherStateMachineGetWeatherState(machine), 'clear');
   });
@@ -116,7 +136,6 @@ describe('T07 WeatherStateMachine', () => {
     const machine = createWeatherStateMachine(weatherConfig, dayNightConfig);
     const forecast = weatherStateMachineGetNextState(machine);
 
-    // Advance past any possible clear duration.
     weatherStateMachineUpdate(machine, 201);
 
     assert.equal(weatherStateMachineGetWeatherState(machine), forecast);

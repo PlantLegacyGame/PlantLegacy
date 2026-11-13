@@ -109,6 +109,30 @@
       "value": 10,
       "range": [5, 50],
       "notes": "Number of inventory slots per player."
+    },
+    "fertilizer_minerals_gain": {
+      "type": "number",
+      "value": 50,
+      "range": [1, 1000],
+      "notes": "Minerals added to the plant when a fertilizer item is used (clamped to capacity)."
+    },
+    "dung_water_gain": {
+      "type": "number",
+      "value": 30,
+      "range": [1, 1000],
+      "notes": "Water added to the plant when a dung item is used (clamped to capacity)."
+    },
+    "dung_minerals_gain": {
+      "type": "number",
+      "value": 20,
+      "range": [1, 1000],
+      "notes": "Minerals added to the plant when a dung item is used (clamped to capacity)."
+    },
+    "essence_energy_gain": {
+      "type": "number",
+      "value": 500,
+      "range": [1, 10000],
+      "notes": "Energy restored when an essence item is used (clamped to capacity)."
     }
   }
 }

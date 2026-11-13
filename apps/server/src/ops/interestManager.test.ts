@@ -11,8 +11,9 @@ const testConfig: WorldConfig = {
   maxPlayersPerWorld: 10000,
   reconnectWindowMin: 5,
   persistenceEnabled: true,
+  plantSaveIntervalSec: 30,
+  seasonLengthDays: 36,
   detailedPlantBudget: 100,
-  offlineDamageMultiplier: 1.0,
   activeTickRateHz: 20,
   nearTickRateHz: 5,
   dormantStepIntervalSec: 300,
@@ -95,6 +96,27 @@ describe('InterestManager - Client registration', () => {
     manager.updateClientPosition('player_1', 20, 20);
     // Should not cause any errors
     assert.equal(manager.getSubscribedCellCount('player_1'), 9);
+  });
+
+  it('reports a cell crossing so newly visible plants can be announced', () => {
+    const fresh = createManager();
+    fresh.registerClient('player_1', 10, 10);
+
+    assert.equal(
+      fresh.updateClientPosition('player_1', 20, 20),
+      false,
+      'a move inside the same cell is not a crossing',
+    );
+    assert.equal(
+      fresh.updateClientPosition('player_1', 100, 100),
+      true,
+      'entering another cell changes what the player can see',
+    );
+    assert.equal(
+      fresh.updateClientPosition('unknown_player', 0, 0),
+      false,
+      'an unregistered client has no window to change',
+    );
   });
 });
 

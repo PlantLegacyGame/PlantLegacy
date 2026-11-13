@@ -1,13 +1,69 @@
+/**
+ * C03 Environment Renderer
+ *
+ * The day/night and weather view of the world. This class owns the per-frame
+ * update order and the public API; each piece of scenery lives in
+ * `renderers/environment/`:
+ *
+ * - `skyDome.ts`           gradient dome, stars, clouds, sun and moon discs
+ * - `rainSystem.ts`        instanced rain streaks
+ * - `ground.ts`            terrain plane, soil shader, earth dome
+ * - `resourceGrid.ts`      per-tile light/moisture/mineral texture
+ * - `celestial.ts`         sun/moon path and lighting grade
+ * - `weatherPresets.ts`    what each weather state looks like
+ * - `rootSightUniforms.ts` the cutaway values shared with the plant renderer
+ */
 import * as THREE from 'three';
 import type { RenderConfig } from '../config/clientConfig.js';
+import type { ClientWeatherState, ClientWeatherStateMachine } from './ClientWeatherStateMachine.js';
+import { createCavityBowl, updateCavityBowl } from './environment/cavityBowl.js';
 import {
-  type ClientWeatherState,
-  type ClientWeatherStateMachine,
-  createClientWeatherStateMachine,
-} from './ClientWeatherStateMachine.js';
+  applyCelestialLighting,
+  type CelestialBodies,
+  updateCelestialBodies,
+} from './environment/celestial.js';
+import {
+  createGround,
+  getGroundShader,
+  setGroundMoisture,
+  updateGroundSun,
+} from './environment/ground.js';
+import { createSubsoil } from './environment/planetSurface.js';
+import { createRainSystem, type RainSystem } from './environment/rainSystem.js';
+import {
+  createResourceGrid,
+  DEFAULT_TILE_NORMALIZATION,
+  type ResourceGrid,
+  type ResourceTile,
+  type TileNormalization,
+} from './environment/resourceGrid.js';
+import {
+  createRootSightUniforms,
+  type RootSightUniforms,
+} from './environment/rootSightUniforms.js';
+import { createSkyDome, type SkyDome } from './environment/skyDome.js';
+import { createEnvironmentWeatherMachine } from './environment/weatherPresets.js';
 
-/** Light value that maps to full daylight (config/resources.json tile_light_base). */
-const TILE_LIGHT_BASE = 80;
+export type { RootSightUniforms as EnvironmentUniforms } from './environment/rootSightUniforms.js';
+export { createRootSightUniforms } from './environment/rootSightUniforms.js';
+
+/** Fallback day/night cycle when the server value could not be loaded. */
+const DEFAULT_DAY_LENGTH_SECONDS = 3600;
+
+/**
+ * Everything the environment needs from config that is not in `render.json`.
+ *
+ * Grouped instead of added as more positional constructor arguments: the owner
+ * (main.ts) loads these from their own config files.
+ */
+export interface EnvironmentTuning {
+  showGround?: boolean;
+  showRain?: boolean;
+  /** Full day + night cycle in seconds (config/daynight.json cycle_length_s). */
+  dayLengthSeconds?: number;
+  /** Tile ranges the soil shader normalises against (config/resources.json). */
+  tiles?: TileNormalization;
+}
 
 export interface WeatherPayload {
   timeOfDay: number;
@@ -22,58 +78,60 @@ export interface WeatherPayload {
   };
 }
 
-export interface EnvironmentUniforms {
-  uRootSightProgress: { value: number };
-  uRootSightCenter: { value: THREE.Vector3 };
-  uRootSightRadius: { value: number };
-  uRootSightSoilOpacity: { value: number };
-}
-
-/**
- * C03 Environment Renderer
- *
- * Implements:
- * 1. Continuous day/night sky dome with zenith/horizon atmospheric gradient & celestial arcs
- * 2. Sun & Moon orbital lighting grading dynamically responding to T07 weather states
- * 3. Atmospheric distance fog continuously blending with horizon colors and weather density
- * 4. Lightweight instanced/points rain particle system respecting phone budget
- * 5. Thunderstorm lightning flashes, telegraph ominous tint, and aftermath clearing
- * 6. Soil moisture and mineral tinting reusing & refining the T02 Root Sight cutaway shader
- */
 export class EnvironmentRenderer {
   private scene: THREE.Scene;
   private camera: THREE.Camera;
   private config: RenderConfig;
 
-  // Weather state machine (Phase 1.6: explicit transitions)
+  // Weather state machine (explicit transitions)
   private weatherMachine: ClientWeatherStateMachine;
 
-  // Sky dome
-  private skyMesh: THREE.Mesh;
-  private skyMaterial: THREE.ShaderMaterial;
-  private currentZenithColor: THREE.Color = new THREE.Color();
-  private currentHorizonColor: THREE.Color = new THREE.Color();
+  // Sky, rain, ground
+  private readonly sky: SkyDome;
+  private readonly rain: RainSystem;
+  private readonly groundMaterial: THREE.MeshStandardMaterial;
+  private groundMesh: THREE.Mesh | null;
+  // Dirt layer under the surface, shown only while Root Sight opens the ground.
+  private subsoil: THREE.Mesh | null = null;
+  /** Metre-scale ground patch, exposed so physics can collide with the relief. */
+  terrainPatch: THREE.Mesh | null = null;
+  // The cavity as real geometry: a dug bowl of earth under the opening.
+  private cavityBowl: THREE.Mesh | null = null;
+  private planetRadiusM = 0;
+  private readonly planetCenter = new THREE.Vector3();
+  private readonly resourceGrid: ResourceGrid;
+  private readonly tiles: TileNormalization;
+  private readonly dayLengthSeconds: number;
+  /** Dev control: stop the clock so a set time stays put. */
+  private timeFrozen = false;
+  /** Dev control: multiplier on how fast the clock runs. */
+  private timeScale = 1;
+
+  private soilMoisture = 0.2;
+
+  /** Current soil moisture (0 dry .. 1 saturated) for passes that tint the ground. */
+  getSoilMoisture(): number {
+    return this.soilMoisture;
+  }
+
+  // Root Sight: a camera-facing corridor cut through the soil.
+  private readonly soilUniforms: RootSightUniforms;
+
+  private readonly undergroundColor = new THREE.Color('#241d16');
+  // Dug-earth colour for the Root Sight cavity wall and rim. The cavity itself
+  // is drawn by the soil shader, so this is the only cavity state left here.
+  private readonly cavityWallColor = new THREE.Color();
 
   // Celestial lighting
-  private sunLight: THREE.DirectionalLight;
-  private ambientLight: THREE.AmbientLight;
-  private hemisphereLight: THREE.HemisphereLight;
-  private sunDir: THREE.Vector3 = new THREE.Vector3();
-  private moonDir: THREE.Vector3 = new THREE.Vector3();
+  private readonly sunLight: THREE.DirectionalLight;
+  private readonly ambientLight: THREE.AmbientLight;
+  private readonly hemisphereLight: THREE.HemisphereLight;
+  private readonly bodies: CelestialBodies = {
+    sunDir: new THREE.Vector3(),
+    moonDir: new THREE.Vector3(),
+  };
 
-  // Terrain / Ground mesh
-  private groundMesh: THREE.Mesh | null;
-  private groundMaterial: THREE.MeshStandardMaterial;
-  private soilMoisture = 0.2;
-  private targetSoilMoisture = 0.2;
-
-  // Rain particle system
-  private rainPoints: THREE.Points;
-  private rainGeometry: THREE.BufferGeometry;
-  private rainPositions: Float32Array;
-  private rainVelocities: Float32Array;
-
-  // Lightning system for thunderstorm
+  // Lightning bookkeeping for the storm
   private lightningTimer = 0;
 
   // Time of day and sun intensity (client-side interpolation)
@@ -93,404 +151,103 @@ export class EnvironmentRenderer {
     sunLight: THREE.DirectionalLight,
     ambientLight: THREE.AmbientLight,
     hemisphereLight: THREE.HemisphereLight,
-    soilUniforms: EnvironmentUniforms,
-    showGround: boolean = true,
-    showRain: boolean = true,
+    soilUniforms: RootSightUniforms = createRootSightUniforms(),
+    tuning: EnvironmentTuning = {},
   ) {
     this.scene = scene;
     this.camera = camera;
     this.config = config;
+    this.tiles = tuning.tiles ?? DEFAULT_TILE_NORMALIZATION;
+    this.dayLengthSeconds = tuning.dayLengthSeconds ?? DEFAULT_DAY_LENGTH_SECONDS;
+    this.undergroundColor.set(config.undergroundViewColor);
+    this.soilUniforms = soilUniforms;
     this.sunLight = sunLight;
     this.ambientLight = ambientLight;
     this.hemisphereLight = hemisphereLight;
 
-    // Initialize client weather state machine (Phase 1.6)
-    this.weatherMachine = createClientWeatherStateMachine({
-      clear: {
-        zenithColor: config.skyZenithDay,
-        horizonColor: config.skyHorizonDay,
-        fogNear: config.fogNearClear,
-        fogFar: config.fogFarClear,
-        soilMoisture: 0.25,
-      },
-      rain: {
-        zenithColor: config.skyZenithRain,
-        horizonColor: config.skyHorizonRain,
-        fogNear: config.fogNearRain,
-        fogFar: config.fogFarRain,
-        soilMoisture: 0.85,
-      },
-      thunderstorm_telegraph: {
-        zenithColor: config.skyZenithTelegraph,
-        horizonColor: config.skyHorizonTelegraph,
-        fogNear: (config.fogNearClear + config.fogNearRain) * 0.5,
-        fogFar: (config.fogFarClear + config.fogFarRain) * 0.5,
-        soilMoisture: 0.4,
-      },
-      thunderstorm_active: {
-        zenithColor: config.skyZenithStorm,
-        horizonColor: config.skyHorizonStorm,
-        fogNear: config.fogNearStorm,
-        fogFar: config.fogFarStorm,
-        soilMoisture: 1.0,
-      },
-      thunderstorm_aftermath: {
-        zenithColor: config.skyZenithRain,
-        horizonColor: config.skyHorizonDay,
-        fogNear: config.fogNearRain * 1.5,
-        fogFar: config.fogFarRain * 1.6,
-        soilMoisture: 0.7,
-      },
-      transitionDuration: 2000, // 2 second transitions
-      lightning: {
-        minDelay: 3.0,
-        maxDelay: 8.0,
-        flashDuration: 0.15,
-        maxIntensity: 1.0,
-      },
-    });
+    this.weatherMachine = createEnvironmentWeatherMachine(config);
 
-    // 1. Sky Dome Geometry & Shader
-    const skyRadius = Math.max(300, config.terrainRadius * 1.5);
-    const skyGeo = new THREE.SphereGeometry(skyRadius, 32, 16);
-    this.currentZenithColor.set(config.skyZenithDay);
-    this.currentHorizonColor.set(config.skyHorizonDay);
+    // 1. Sky dome, centred on the camera so it reads as infinite sky.
+    this.sky = createSkyDome(scene, camera, config, this.bodies.sunDir, this.bodies.moonDir);
 
-    this.skyMaterial = new THREE.ShaderMaterial({
-      uniforms: {
-        uZenithColor: { value: this.currentZenithColor },
-        uHorizonColor: { value: this.currentHorizonColor },
-        uSunDir: { value: this.sunDir },
-        uSunColor: { value: new THREE.Color(config.sunColorDay) },
-        uSunIntensity: { value: config.sunIntensityDay },
-        uMoonDir: { value: this.moonDir },
-        uMoonColor: { value: new THREE.Color(config.sunColorNight) },
-      },
-      vertexShader: `
-        varying vec3 vWorldPosition;
-        void main() {
-          vec4 worldPos = modelMatrix * vec4(position, 1.0);
-          vWorldPosition = worldPos.xyz;
-          gl_Position = projectionMatrix * viewMatrix * worldPos;
-        }
-      `,
-      fragmentShader: `
-        varying vec3 vWorldPosition;
-        uniform vec3 uZenithColor;
-        uniform vec3 uHorizonColor;
-        uniform vec3 uSunDir;
-        uniform vec3 uSunColor;
-        uniform float uSunIntensity;
-        uniform vec3 uMoonDir;
-        uniform vec3 uMoonColor;
+    // 1b. Root Sight: the cavity is drawn by the soil shader itself (marching
+    //     the fused node bubbles), so all this layer keeps is the dug-earth
+    //     colour it shades the interior wall and rim with.
+    this.cavityWallColor.set(config.undergroundViewColor).multiplyScalar(1.9);
+    this.soilUniforms.uRootSightWallColor.value.copy(this.cavityWallColor);
 
-        void main() {
-          vec3 dir = normalize(vWorldPosition);
-          float h = clamp(dir.y, 0.0, 1.0);
-          float grad = pow(1.0 - h, 2.2);
-          vec3 sky = mix(uZenithColor, uHorizonColor, grad);
+    // 2. Terrain and the Root Sight cutaway.
+    const ground = createGround(scene, config, soilUniforms, tuning.showGround ?? true);
+    this.groundMaterial = ground.material;
+    this.groundMesh = ground.mesh;
+    this.terrainPatch = (ground.mesh?.getObjectByName('planet-terrain') as THREE.Mesh) ?? null;
 
-          // Solar disc and corona
-          if (uSunDir.y > -0.1) {
-            float sunDot = max(0.0, dot(dir, normalize(uSunDir)));
-            float sunCore = pow(sunDot, 512.0) * 1.8;
-            float sunHalo = pow(sunDot, 24.0) * 0.35;
-            sky += uSunColor * (sunCore + sunHalo) * clamp(uSunIntensity, 0.0, 1.5);
-          }
-
-          // Lunar disc and soft glow
-          if (uMoonDir.y > -0.1) {
-            float moonDot = max(0.0, dot(dir, normalize(uMoonDir)));
-            float moonCore = pow(moonDot, 384.0) * 0.9;
-            float moonHalo = pow(moonDot, 20.0) * 0.15;
-            sky += uMoonColor * (moonCore + moonHalo);
-          }
-
-          gl_FragColor = vec4(sky, 1.0);
-        }
-      `,
-      side: THREE.BackSide,
-      depthWrite: false,
-      depthTest: true,
-    });
-
-    this.skyMesh = new THREE.Mesh(skyGeo, this.skyMaterial);
-    this.skyMesh.renderOrder = -100;
-    this.scene.add(this.skyMesh);
-
-    // Sky dome follows camera but stays above ground to avoid intersection
-    this.skyMesh.position.set(
-      this.camera.position.x,
-      this.camera.position.y + 50,
-      this.camera.position.z,
-    );
-
-    // 2. Terrain Ground Mesh & Soil Shader (Refines T02 Root Sight Cutaway)
-    // Simple PlaneGeometry - flat, single-sided, opaque. Root Sight cutaway
-    // handled via alphaTest in shader (not transparency) to avoid depth issues.
-    const groundGeo = new THREE.PlaneGeometry(
-      config.terrainRadius * 2,
-      config.terrainRadius * 2,
-      config.terrainMeshSubdivisions,
-      config.terrainMeshSubdivisions,
-    );
-    this.groundMaterial = new THREE.MeshStandardMaterial({
-      color: new THREE.Color(config.soilDryColor),
-      roughness: 0.95,
-      metalness: 0.02,
-      transparent: false,
-      alphaTest: 0.01,
-      depthWrite: true,
-      side: THREE.FrontSide,
-    });
-
-    const soilDry = new THREE.Color(config.soilDryColor);
-    const soilWet = new THREE.Color(config.soilWetColor);
-    const soilMineral = new THREE.Color(config.soilMineralTint);
-
-    this.groundMaterial.onBeforeCompile = (shader) => {
-      this.groundMaterial.userData.shader = shader;
-      shader.uniforms.uRootSightProgress = soilUniforms.uRootSightProgress;
-      shader.uniforms.uRootSightCenter = soilUniforms.uRootSightCenter;
-      shader.uniforms.uRootSightRadius = soilUniforms.uRootSightRadius;
-      shader.uniforms.uRootSightSoilOpacity = soilUniforms.uRootSightSoilOpacity;
-      shader.uniforms.uSoilDryColor = { value: soilDry };
-      shader.uniforms.uSoilWetColor = { value: soilWet };
-      shader.uniforms.uSoilMineralColor = { value: soilMineral };
-      shader.uniforms.uSoilMoisture = { value: this.soilMoisture };
-      shader.uniforms.uSunDir = { value: new THREE.Vector3(0, 1, 0) };
-      shader.uniforms.uSunColor = { value: new THREE.Color(0xffffee) };
-      shader.uniforms.uSunIntensity = { value: 1.0 };
-      // Resource grid uniforms for per-tile ground lighting
-      shader.uniforms.uResourceGrid = { value: null };
-      shader.uniforms.uResourceGridSize = { value: new THREE.Vector2(1, 1) };
-      shader.uniforms.uTileSize = { value: 1.0 };
-      shader.uniforms.uResourceGridAvailable = { value: 0.0 };
-
-      shader.vertexShader = shader.vertexShader
-        .replace('#include <common>', '#include <common>\nvarying vec3 vSoilWorldPos;')
-        .replace(
-          '#include <begin_vertex>',
-          '#include <begin_vertex>\nvSoilWorldPos = (modelMatrix * vec4(position, 1.0)).xyz;',
-        );
-
-      shader.fragmentShader = shader.fragmentShader
-        .replace(
-          '#include <common>',
-          `#include <common>
-varying vec3 vSoilWorldPos;
-uniform float uRootSightProgress;
-uniform vec3 uRootSightCenter;
-uniform float uRootSightRadius;
-uniform float uRootSightSoilOpacity;
-uniform vec3 uSoilDryColor;
-uniform vec3 uSoilWetColor;
-uniform vec3 uSoilMineralColor;
-uniform float uSoilMoisture;
-// Sun uniforms for ground lighting
-uniform vec3 uSunDir;
-uniform vec3 uSunColor;
-uniform float uSunIntensity;
-// Resource grid for per-tile lighting
-uniform sampler2D uResourceGrid;
-uniform vec2 uResourceGridSize;
-uniform float uTileSize;
-uniform float uResourceGridAvailable;
-`,
-        )
-        .replace(
-          '#include <dithering_fragment>',
-          `#include <dithering_fragment>
-  // Root Sight: cut away soil around center to reveal underground roots with smooth dithered edge
-  if (uRootSightProgress > 0.01) {
-    float distToCenter = distance(vSoilWorldPos.xz, uRootSightCenter.xz);
-    float cutRadius = uRootSightRadius * uRootSightProgress;
-    float edgeWidth = 0.22;
-    if (distToCenter < cutRadius) {
-      if (distToCenter < cutRadius - edgeWidth) {
-        discard;
-      }
-      float alpha = (distToCenter - (cutRadius - edgeWidth)) / edgeWidth;
-      float dither = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
-      if (dither < (1.0 - alpha)) {
-        discard;
-      }
+    // 2a. The earth inside the Root Sight opening. Real geometry instead of
+    //     shading faked in the soil shader, so the pit has parallax and looks
+    //     the same from every angle. Built once at unit radius, scaled per frame.
+    if (tuning.showGround ?? true) {
+      this.cavityBowl = createCavityBowl(
+        new THREE.Color(config.soilWetColor).multiplyScalar(0.9),
+        new THREE.Color(config.undergroundViewColor).multiplyScalar(1.6),
+      );
+      scene.add(this.cavityBowl);
     }
-  }
-
-  // C03: Soil moisture darkening & subtle mineral accents
-  vec3 dynamicSoil = mix(uSoilDryColor, uSoilWetColor, clamp(uSoilMoisture, 0.0, 1.0));
-  float mineralNoise = fract(sin(dot(vSoilWorldPos.xz, vec2(12.9898, 78.233))) * 43758.5453);
-  dynamicSoil = mix(dynamicSoil, uSoilMineralColor, mineralNoise * 0.08);
-  
-  // Sample resource grid for per-tile lighting (with fallback)
-  float tileLight = 1.0;
-  float tileMoisture = uSoilMoisture;
-  float tileMinerals = 0.0;
-  
-  // Check if resource grid texture is available (uniform flag)
-  if (uResourceGridAvailable > 0.5) {
-    // Texture is available, sample it
-    vec2 gridUV = (vSoilWorldPos.xz / uTileSize + uResourceGridSize * 0.5) / uResourceGridSize;
-    vec4 resourceData = texture2D(uResourceGrid, gridUV);
-    tileLight = resourceData.r;
-    tileMoisture = resourceData.g;
-    tileMinerals = resourceData.b;
-  }
-  
-  // Use resource grid data for soil coloring
-  dynamicSoil = mix(uSoilDryColor, uSoilWetColor, clamp(tileMoisture, 0.0, 1.0));
-  dynamicSoil = mix(dynamicSoil, uSoilMineralColor, mineralNoise * 0.08 + tileMinerals * 0.12);
-  
-  // Apply lighting to ground (use existing normal from standard material)
-  // Flip normal for back faces when using DoubleSide
-  vec3 groundNormal = normalize(vNormal);
-  if (!gl_FrontFacing) groundNormal = -groundNormal;
-  float NdotL = max(dot(groundNormal, normalize(-uSunDir)), 0.0);
-  vec3 lightColor = uSunColor * uSunIntensity * NdotL;
-  
-  // Modulate light intensity by tile light level
-  lightColor *= mix(0.3, 1.0, tileLight);
-  
-  gl_FragColor.rgb = dynamicSoil * (0.35 + 0.65 * lightColor);
-  gl_FragColor.a = 1.0;`,
-        );
-    };
-    this.groundMaterial.customProgramCacheKey = () => 'c03-environment-ground-v1';
-
-    if (showGround) {
-      this.groundMesh = new THREE.Mesh(groundGeo, this.groundMaterial);
-      this.groundMesh.rotation.x = -Math.PI / 2;
-      this.groundMesh.position.y = 0;
-      this.groundMesh.receiveShadow = true;
-      this.scene.add(this.groundMesh);
-    } else {
-      this.groundMesh = null;
+    // 2b. The dirt under the surface. A real sphere one soil depth down, so an
+    //     opening lands on geometry rather than on a shaded hole; kept hidden
+    //     until Root Sight needs it, which costs nothing while it is closed.
+    if (config.planetRadiusM > 0 && (tuning.showGround ?? true)) {
+      this.planetRadiusM = config.planetRadiusM;
+      this.planetCenter.set(0, -config.planetRadiusM, 0);
+      this.subsoil = createSubsoil(
+        config.planetRadiusM,
+        config.soilDepthM,
+        new THREE.MeshStandardMaterial({
+          color: new THREE.Color(config.soilWetColor).multiplyScalar(0.3),
+          roughness: 1,
+          metalness: 0,
+        }),
+      );
+      scene.add(this.subsoil);
     }
+    this.resourceGrid = createResourceGrid(() => getGroundShader(this.groundMaterial), this.tiles);
 
-    // 3. Rain Particle System (Phone budget friendly: single Points draw call)
-    const count = config.rainParticleCount;
-    this.rainPositions = new Float32Array(count * 3);
-    this.rainVelocities = new Float32Array(count);
+    // 3. Rain.
+    this.rain = createRainSystem(scene, config, tuning.showRain ?? true);
 
-    const h = config.rainBoxHeight;
-    for (let i = 0; i < count; i++) {
-      this.rainPositions[i * 3 + 0] = (Math.random() - 0.5) * config.rainBoxWidth;
-      this.rainPositions[i * 3 + 1] = Math.random() * h;
-      this.rainPositions[i * 3 + 2] = (Math.random() - 0.5) * config.rainBoxWidth;
-      this.rainVelocities[i] = config.rainParticleSpeed * (0.85 + Math.random() * 0.3);
-    }
-
-    this.rainGeometry = new THREE.BufferGeometry();
-    this.rainGeometry.setAttribute('position', new THREE.BufferAttribute(this.rainPositions, 3));
-
-    const rainMat = new THREE.PointsMaterial({
-      color: 0x90b4ce,
-      size: config.rainParticleSize,
-      transparent: true,
-      opacity: 0.65,
-      depthWrite: false,
-    });
-
-    this.rainPoints = new THREE.Points(this.rainGeometry, rainMat);
-    this.rainPoints.visible = false;
-    if (showRain) {
-      this.scene.add(this.rainPoints);
-    }
-
-    // Initial weather state setup
+    // Initial weather state and lighting, before the first render.
     this.weatherMachine.requestStateChange('clear');
-    // Initialize sun position and lighting before first render
     this.updateSunPosition();
   }
 
-  /**
-   * Set full resource grid from server for per-tile ground lighting
-   */
+  /** Set the full resource grid from the server for per-tile ground lighting. */
   public setResourceGrid(
-    tiles: Array<{
-      tileX: number;
-      tileZ: number;
-      light: number;
-      moisture: number;
-      minerals: number;
-    }>,
+    tiles: ResourceTile[],
     width: number,
     height: number,
     tileSize: number,
   ): void {
-    if (!this.groundMesh || !this.groundMaterial.userData.shader) return;
-
-    // Create a data texture for the resource grid
-    const data = new Float32Array(width * height * 4); // RGBA: light, moisture, minerals, unused
-    for (const tile of tiles) {
-      const x = tile.tileX;
-      const z = tile.tileZ;
-      if (x >= 0 && x < width && z >= 0 && z < height) {
-        const idx = (z * width + x) * 4;
-        data[idx] = Math.max(0, Math.min(1, tile.light / TILE_LIGHT_BASE)); // normalize light
-        data[idx + 1] = Math.max(0, Math.min(1, tile.moisture / 255)); // normalize moisture
-        data[idx + 2] = Math.max(0, Math.min(1, tile.minerals / 255)); // normalize minerals
-        data[idx + 3] = 0;
-      }
-    }
-
-    const texture = new THREE.DataTexture(data, width, height, THREE.RGBAFormat, THREE.FloatType);
-    texture.needsUpdate = true;
-    texture.wrapS = THREE.ClampToEdgeWrapping;
-    texture.wrapT = THREE.ClampToEdgeWrapping;
-    texture.minFilter = THREE.LinearFilter;
-    texture.magFilter = THREE.LinearFilter;
-
-    this.resourceGridTexture = texture;
-    this.resourceGridWidth = width;
-    this.resourceGridHeight = height;
-
-    const shader = this.groundMaterial.userData.shader as {
-      uniforms?: Record<string, { value: unknown }>;
-    };
-    if (shader?.uniforms) {
-      shader.uniforms.uResourceGrid = { value: texture };
-      shader.uniforms.uResourceGridSize = { value: new THREE.Vector2(width, height) };
-      shader.uniforms.uTileSize = { value: tileSize };
-      shader.uniforms.uResourceGridAvailable = { value: 1.0 };
-    }
+    if (!this.groundMesh) return;
+    this.resourceGrid.setFull(tiles, width, height, tileSize);
   }
 
-  private resourceGridTexture: THREE.DataTexture | null = null;
-  private resourceGridWidth = 0;
-  private resourceGridHeight = 0;
+  /** Update only changed (dirty) tiles in the resource grid. */
+  public updateResourceGrid(tiles: ResourceTile[]): void {
+    if (!this.groundMesh) return;
+    this.resourceGrid.updateDirty(tiles);
+  }
 
   /**
-   * Update only changed (dirty) tiles in the resource grid
+   * Apply a whole-grid update sent as a base64 buffer of three 0-255 channels
+   * (light, moisture, minerals) per tile, row-major over the grid.
    */
-  public updateResourceGrid(
-    tiles: Array<{
-      tileX: number;
-      tileZ: number;
-      light: number;
-      moisture: number;
-      minerals: number;
-    }>,
+  public updateResourceGridQuantized(
+    base64: string,
+    width: number,
+    height: number,
+    tileSize: number,
   ): void {
-    if (!this.resourceGridTexture || !this.groundMaterial.userData.shader) return;
-
-    const width = this.resourceGridWidth;
-    const height = this.resourceGridHeight;
-    const data = this.resourceGridTexture.image.data as Float32Array;
-
-    for (const tile of tiles) {
-      const x = tile.tileX;
-      const z = tile.tileZ;
-      if (x >= 0 && x < width && z >= 0 && z < height) {
-        const idx = (z * width + x) * 4;
-        data[idx] = Math.max(0, Math.min(1, tile.light / TILE_LIGHT_BASE));
-        data[idx + 1] = Math.max(0, Math.min(1, tile.moisture / 255));
-        data[idx + 2] = Math.max(0, Math.min(1, tile.minerals / 255));
-      }
-    }
-
-    this.resourceGridTexture.needsUpdate = true;
+    if (!this.groundMesh) return;
+    this.resourceGrid.setQuantized(base64, width, height, tileSize);
   }
 
   /**
@@ -502,60 +259,90 @@ uniform float uResourceGridAvailable;
     this.localTileLight = Math.max(0, light);
   }
 
-  /**
-   * Current normalized time of day [0, 1)
-   */
+  /** Apply a server weather update. */
   public handleWeatherUpdate(payload: WeatherPayload): void {
-    this.timeOfDay = payload.timeOfDay;
+    // A held clock must not be dragged back to the server's time on every
+    // broadcast: the dev panel's Time field looked like it did nothing because
+    // the next weather update (about once a second) reverted it immediately.
+    if (!this.timeFrozen) this.timeOfDay = payload.timeOfDay;
     this.sunIntensity = payload.sunIntensity;
 
-    // Request state change in weather machine (Phase 1.6)
     this.weatherMachine.requestStateChange(payload.weatherState as ClientWeatherState);
   }
 
-  /**
-   * Per-frame render loop update
-   */
+  /** Per-frame render loop update. */
   public update(dt: number, devOverrideUntil = 0): void {
     const lerpRate = Math.min(1.0, dt * 2.5);
 
-    // Advance client timeOfDay (server is authority, but client interpolates)
-    // Only advance if not in dev override mode
-    if (Date.now() >= devOverrideUntil) {
-      this.timeOfDay = (this.timeOfDay + dt / 1800) % 1.0; // 1800s cycle
+    // Advance client timeOfDay (server is authority, client interpolates) unless
+    // a dev override is holding the clock.
+    if (!this.timeFrozen && Date.now() >= devOverrideUntil) {
+      this.timeOfDay = (this.timeOfDay + (dt * this.timeScale) / this.dayLengthSeconds) % 1.0;
     }
 
-    // Update weather state machine (Phase 1.6)
     const weatherTargets = this.weatherMachine.update(dt, this.timeOfDay, this.sunIntensity);
 
-    // Update sun/moon position based on current timeOfDay
     this.updateSunPosition();
 
-    // Sky dome follows camera but stays above ground to avoid intersection
-    this.skyMesh.position.set(
-      this.camera.position.x,
-      this.camera.position.y + 50,
-      this.camera.position.z,
-    );
+    // The sky dome is camera-centred, so it never warps as the camera moves.
+    this.sky.mesh.position.copy(this.camera.position);
 
-    // 1. Smoothly interpolate sky dome colors using weather machine targets,
-    //    graded by the light actually reaching the plant's local tiles.
+    // Root Sight is entirely a soil-shader effect: no backdrop sphere, no
+    // separate cavity mesh, nothing to draw behind the terrain. The sky stays
+    // on even under the surface — the ground encloses the camera, so the only
+    // place sky can appear is through the opening, which is exactly what
+    // looking up out of the hole should show.
+    this.sky.mesh.visible = true;
+    if (this.subsoil) {
+      // Drawn whenever the eye is above the floor of the dirt layer, above the
+      // surface or just under it. Measured radially from the planet centre so
+      // it is correct anywhere on the planet, and never while the eye is at or
+      // below the floor itself: from inside, that sphere's own surface would
+      // wrap the whole view and read as a horizon (the dome that kept coming
+      // back).
+      const depthBelowSurface =
+        this.planetRadiusM - this.camera.position.distanceTo(this.planetCenter);
+      const eyeUnder = this.planetRadiusM > 0 && depthBelowSurface > 0.02;
+      // Above the surface only: down there the eye is inside the soil layer and
+      // this sphere is a plane a hand's width below it, which is exactly the
+      // wall-to-wall dirt horizon that must not happen. The sky dome paints
+      // earth below the horizon instead, so the view is enclosed without it.
+      this.subsoil.visible = this.soilUniforms.uRootSightProgress.value > 0.01 && !eyeUnder;
+      const skyUniforms = this.sky.material.uniforms;
+      if (skyUniforms?.uEyeUnderGround) {
+        skyUniforms.uEyeUnderGround.value = eyeUnder ? 1 : 0;
+      }
+    }
+    if (this.cavityBowl) {
+      updateCavityBowl(
+        this.cavityBowl,
+        this.soilUniforms.uRootSightCenter.value,
+        this.soilUniforms.uRootSightRadius.value,
+        this.soilUniforms.uRootSightProgress.value,
+      );
+    }
+    this.soilUniforms.uRootSightCamera.value.copy(this.camera.position);
+
+    // 1. Interpolate sky colours from the weather targets, graded by the light
+    //    actually reaching the plant's local tiles.
     //    0 light = deep shade/night, 80 (tile_light_base) = full daylight.
-    const localLight01 = THREE.MathUtils.clamp(this.localTileLight / TILE_LIGHT_BASE, 0, 1.5);
+    const localLight01 = THREE.MathUtils.clamp(
+      this.localTileLight / this.tiles.tileLightBase,
+      0,
+      1.5,
+    );
     const localBrightness =
       0.55 + 0.45 * Math.min(1, localLight01) + Math.max(0, localLight01 - 1) * 0.25;
     this.localZenithTarget.copy(weatherTargets.zenithColor).multiplyScalar(localBrightness);
     this.localHorizonTarget.copy(weatherTargets.horizonColor).multiplyScalar(localBrightness);
-    this.currentZenithColor.lerp(this.localZenithTarget, lerpRate);
-    this.currentHorizonColor.lerp(this.localHorizonTarget, lerpRate);
-    this.hemisphereLight.color.copy(this.currentZenithColor);
-    this.hemisphereLight.groundColor.copy(this.currentHorizonColor);
+    this.sky.zenithColor.lerp(this.localZenithTarget, lerpRate);
+    this.sky.horizonColor.lerp(this.localHorizonTarget, lerpRate);
+    // The sky shader's zenith/horizon uniforms hold these same Color instances,
+    // so they follow the lerp without a second per-frame copy.
+    this.hemisphereLight.color.copy(this.sky.zenithColor);
+    this.hemisphereLight.groundColor.copy(this.sky.horizonColor);
 
-    // Update sky shader uniforms
-    this.skyMaterial.uniforms.uZenithColor.value.copy(this.currentZenithColor);
-    this.skyMaterial.uniforms.uHorizonColor.value.copy(this.currentHorizonColor);
-
-    // 2. Smoothly adjust atmospheric fog
+    // 2. Atmospheric fog follows the horizon.
     if (this.scene.fog instanceof THREE.Fog) {
       this.scene.fog.near = THREE.MathUtils.lerp(
         this.scene.fog.near,
@@ -567,193 +354,119 @@ uniform float uResourceGridAvailable;
         weatherTargets.fogFar,
         lerpRate,
       );
-      this.scene.fog.color.lerp(this.currentHorizonColor, lerpRate);
+      this.scene.fog.color.lerp(this.sky.horizonColor, lerpRate);
     }
     if (this.scene.background instanceof THREE.Color) {
-      this.scene.background.lerp(this.currentHorizonColor, lerpRate);
+      this.scene.background.lerp(this.sky.horizonColor, lerpRate);
     }
 
-    // 3. Smoothly adjust soil moisture tint
-    this.targetSoilMoisture = weatherTargets.soilMoisture;
-    this.soilMoisture = THREE.MathUtils.lerp(this.soilMoisture, this.targetSoilMoisture, dt * 0.5);
-    const shader = this.groundMaterial.userData.shader as
-      | { uniforms?: Record<string, { value: THREE.Vector3 | THREE.Color | number }> }
-      | undefined;
-    if (shader?.uniforms?.uSoilMoisture) {
-      shader.uniforms.uSoilMoisture.value = this.soilMoisture;
-      (shader.uniforms.uSunDir.value as THREE.Vector3).copy(this.sunDir);
-      (shader.uniforms.uSunColor.value as THREE.Color).copy(this.sunLight.color);
-      shader.uniforms.uSunIntensity.value = this.sunLight.intensity;
-    }
+    // 3. Soil moisture tint and the sun frame fed to the soil shader.
+    this.soilMoisture = THREE.MathUtils.lerp(
+      this.soilMoisture,
+      weatherTargets.soilMoisture,
+      dt * 0.5,
+    );
+    setGroundMoisture(this.groundMaterial, this.soilMoisture);
+    updateGroundSun(
+      this.groundMaterial,
+      this.bodies.sunDir,
+      this.sunLight.color,
+      this.sunLight.intensity,
+    );
 
-    // Update ground material sun uniforms
-    const groundShader = this.groundMaterial.userData.shader as
-      | { uniforms?: Record<string, { value: THREE.Vector3 | THREE.Color | number }> }
-      | undefined;
-    if (groundShader?.uniforms?.uSunDir) {
-      (groundShader.uniforms.uSunDir.value as THREE.Vector3).copy(this.sunDir);
-      (groundShader.uniforms.uSunColor.value as THREE.Color).copy(this.sunLight.color);
-      groundShader.uniforms.uSunIntensity.value = this.sunLight.intensity;
-    }
+    // 4. Root Sight envelope nodes are uploaded by the main loop (it owns the
+    //    plant mirrors); this layer only sizes and places the dirt backdrop.
 
-    // 4. Update Rain Particles (use weather machine's isRaining)
+    // 5. Rain: instance positions come from the vertex shader, so the CPU only
+    //    advances the clock and keeps the field around the viewer.
     if (weatherTargets.isRaining) {
-      this.rainPoints.visible = true;
-      const count = this.config.rainParticleCount;
-      const camPos = this.camera.position;
-      const h = this.config.rainBoxHeight;
-
-      const pos = this.rainPositions;
-      const vel = this.rainVelocities;
-
-      for (let i = 0; i < count; i++) {
-        const i3 = i * 3;
-        pos[i3 + 1] -= vel[i] * dt;
-
-        // Wrap around camera bounding box
-        if (pos[i3 + 1] < camPos.y - 5.0) {
-          pos[i3 + 1] = camPos.y + h - 5.0;
-          pos[i3 + 0] = camPos.x + (Math.random() - 0.5) * this.config.rainBoxWidth;
-          pos[i3 + 2] = camPos.z + (Math.random() - 0.5) * this.config.rainBoxWidth;
-        }
-      }
-      this.rainGeometry.attributes.position.needsUpdate = true;
+      this.rain.setVisible(true);
+      this.rain.follow(this.camera.position);
+      this.rain.advance(dt);
     } else {
-      this.rainPoints.visible = false;
+      this.rain.setVisible(false);
     }
 
-    // 5. Thunderstorm Lightning System (use weather machine's lightning intensity)
+    // 6. Lightning: the weather machine emits intensity, this adds it as a flash.
     const lightningIntensity = weatherTargets.lightningIntensity;
     if (lightningIntensity > 0) {
       this.ambientLight.intensity += lightningIntensity * 0.5;
     }
-
-    // Update lightning timer for next flash scheduling (weather machine handles actual timing)
     if (this.weatherMachine.getState() === 'thunderstorm_active') {
       this.lightningTimer += dt;
     }
   }
 
-  /**
-   * Update sun/moon position and sky colors based on current timeOfDay
-   */
+  /** Position the sun/moon and grade the sky for the current time of day. */
   private updateSunPosition(): void {
-    const cfg = this.config;
-    const sunAngle = this.timeOfDay * Math.PI * 2 - Math.PI / 2;
-    const sunElev = Math.sin(sunAngle);
-
-    this.sunDir.set(Math.cos(sunAngle) * 0.8, sunElev, Math.sin(sunAngle) * 0.4).normalize();
-    this.moonDir.set(-this.sunDir.x, -this.sunDir.y, -this.sunDir.z).normalize();
-
-    // Update sun light position and intensity
-    // For directional light: position = direction FROM light TO origin
-    // Visual sun is at sunDir (origin TO sun), so light position = -sunDir * distance
-    const sunOrbitalDist = 120;
-    if (sunElev >= -0.1) {
-      this.sunLight.position.set(
-        -this.sunDir.x * sunOrbitalDist,
-        -Math.max(8, this.sunDir.y * sunOrbitalDist),
-        -this.sunDir.z * sunOrbitalDist,
-      );
-      const duskFactor = (1.0 - Math.abs(sunElev * 3.0)) * 0.5;
-      const sunBaseColor =
-        duskFactor > 0.2 ? new THREE.Color(cfg.sunColorDusk) : new THREE.Color(cfg.sunColorDay);
-      this.sunLight.color.copy(sunBaseColor);
-      this.sunLight.intensity = Math.max(0.05, cfg.sunIntensityDay * Math.max(0.2, sunElev));
-      this.skyMaterial.uniforms.uSunDir.value.copy(this.sunDir);
-      this.skyMaterial.uniforms.uSunColor.value.copy(sunBaseColor);
-      this.skyMaterial.uniforms.uSunIntensity.value = this.sunLight.intensity;
-      this.skyMaterial.uniforms.uMoonDir.value.set(0, -1, 0);
-    } else {
-      this.sunLight.position.set(
-        -this.moonDir.x * sunOrbitalDist,
-        -Math.max(12, this.moonDir.y * sunOrbitalDist),
-        -this.moonDir.z * sunOrbitalDist,
-      );
-      this.sunLight.color.set(cfg.sunColorNight);
-      this.sunLight.intensity = cfg.sunIntensityNight;
-      this.skyMaterial.uniforms.uSunDir.value.set(0, -1, 0);
-      this.skyMaterial.uniforms.uMoonDir.value.copy(this.moonDir);
-      this.skyMaterial.uniforms.uSunColor.value.set(cfg.sunColorNight);
-      this.skyMaterial.uniforms.uSunIntensity.value = this.sunLight.intensity;
-    }
-
-    // Update day/night factor for sky colors
-    const dayFactor = THREE.MathUtils.smoothstep(sunElev, -0.05, 0.35);
-    const duskFactor = (1.0 - Math.abs(sunElev * 3.0)) * (1.0 - dayFactor);
-
-    const baseZenith = new THREE.Color(cfg.skyZenithNight).lerp(
-      new THREE.Color(cfg.skyZenithDay),
-      dayFactor,
-    );
-    if (duskFactor > 0.05) {
-      baseZenith.lerp(new THREE.Color(cfg.skyZenithDusk), duskFactor * 0.7);
-    }
-
-    const baseHorizon = new THREE.Color(cfg.skyHorizonNight).lerp(
-      new THREE.Color(cfg.skyHorizonDay),
-      dayFactor,
-    );
-    if (duskFactor > 0.05) {
-      baseHorizon.lerp(new THREE.Color(cfg.skyHorizonDusk), duskFactor * 0.85);
-    }
-
-    // Update hemisphere light
-    const ambInt =
-      dayFactor > 0.1 ? cfg.ambientIntensityDay * this.sunIntensity : cfg.ambientIntensityNight;
-    this.ambientLight.intensity = THREE.MathUtils.lerp(
-      this.ambientLight.intensity,
-      Math.max(0.1, ambInt),
-      0.3,
-    );
+    const elevation = updateCelestialBodies(this.bodies, this.timeOfDay);
+    applyCelestialLighting({
+      config: this.config,
+      sunLight: this.sunLight,
+      ambientLight: this.ambientLight,
+      skyMaterial: this.sky.material,
+      bodies: this.bodies,
+      elevation,
+      sunIntensity: this.sunIntensity,
+      sunOrbitalDistance: this.config.sunOrbitalDistance,
+    });
   }
 
-  /**
-   * Current normalized time of day [0, 1)
-   */
+  /** The terrain mesh, or null when the ground is hidden. */
   public getGroundMesh(): THREE.Mesh | null {
     return this.groundMesh;
   }
 
-  /**
-   * Current normalized time of day [0, 1)
-   */
+  /** Current normalized time of day [0, 1). */
   public getTimeOfDay(): number {
     return this.timeOfDay;
   }
 
   /**
-   * Set time of day (for dev controls)
+   * Jump the clock and hold it there. A dev jump is meant to stay put, so it
+   * also freezes the clock; the Freeze Time toggle releases it again.
    */
   public setTimeOfDay(t: number): void {
     this.timeOfDay = t % 1.0;
     if (this.timeOfDay < 0) this.timeOfDay += 1.0;
+    this.timeFrozen = true;
   }
 
-  /**
-   * Current solar/celestial light intensity multiplier
-   */
+  /** Freeze or resume the day/night clock (dev control). */
+  public setTimeFrozen(frozen: boolean): void {
+    this.timeFrozen = frozen;
+  }
+
+  public isTimeFrozen(): boolean {
+    return this.timeFrozen;
+  }
+
+  /** Multiplier on the clock's advance (dev control). */
+  public setTimeScale(scale: number): void {
+    if (!Number.isFinite(scale)) return;
+    this.timeScale = Math.min(100, Math.max(0, scale));
+  }
+
+  public getTimeScale(): number {
+    return this.timeScale;
+  }
+
+  /** Current solar/celestial light intensity multiplier. */
   public getSunIntensity(): number {
     return this.sunIntensity;
   }
 
-  /**
-   * Current sun direction (normalized, pointing FROM sun TO origin)
-   */
+  /** Current sun direction (normalized, pointing FROM the origin TOWARD the sun). */
   public getSunDirection(): THREE.Vector3 {
-    return this.sunDir.clone();
+    return this.bodies.sunDir.clone();
   }
 
-  /**
-   * Current sun color
-   */
+  /** Current sun color. */
   public getSunColor(): THREE.Color {
     return this.sunLight.color.clone();
   }
 
-  /**
-   * Current weather state (for dev controls)
-   */
+  /** Current weather state (for dev controls). */
   public getWeatherState(): string {
     return this.weatherMachine.getState();
   }

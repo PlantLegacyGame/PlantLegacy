@@ -36,7 +36,7 @@ C01's asset loader will fail the build when a file has no entry in this manifest
 ## Notes
 
 The client bundles third-party **code** dependencies through pnpm (Three.js,
-Vite, `@vitejs/plugin-legacy`, `ws`, `pg`, `argon2`, `jsonwebtoken`); their licenses travel with the
+Vite, `@vitejs/plugin-legacy`, `ws`, `pg`, `bcryptjs`, `jsonwebtoken`); their licenses travel with the
 packages in `node_modules`, and none are committed as asset files. The UI still
 uses system fonts and hand-written CSS. No image, model, texture, sound or font
 file is committed, so the asset manifest stays empty.
@@ -45,7 +45,8 @@ file is committed, so the asset manifest stays empty.
 
 | Package | Version | License | Purpose |
 |---|---|---|---|
-| `argon2` | 0.41.1 | Apache-2.0 / BSD-3-Clause | Argon2id password hashing |
+| `@node-rs/argon2` | 2.2.2 | MIT | Argon2id password hashing (`argon2_*` in `config/accounts.json`) |
+| `bcryptjs` | 2.4.3 | MIT | Legacy bcrypt password-hash verification only (`bcrypt_cost` in `config/accounts.json`) |
 | `jsonwebtoken` | 9.0.2 | MIT | JWT access/refresh tokens |
 | `pg` | 8.13.0 | MIT | PostgreSQL client |
 | `ws` | 8.22.1 | MIT | WebSocket server |

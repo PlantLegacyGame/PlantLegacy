@@ -15,7 +15,8 @@
     "./plantGraphValidator": "./src/plantGraphValidator.ts",
     "./physics": "./src/physics/index.ts",
     "./protocol": "./src/protocol/index.ts",
-    "./protocol/messageSchemas": "./src/protocol/messageSchemas.ts"
+    "./protocol/messageSchemas": "./src/protocol/messageSchemas.ts",
+    "./world": "./src/world/index.ts"
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json",

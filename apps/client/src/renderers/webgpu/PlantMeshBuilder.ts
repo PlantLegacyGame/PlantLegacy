@@ -1,6 +1,15 @@
+import {
+  getSeedBodyHeightRatio,
+  nodeAttachmentPoint,
+  nodeRenderRadius,
+  resolveDrawnRadius,
+  seedBodyCentreY,
+  seedBodyHalfHeight,
+} from '@plant-legacy/shared/growth';
 import { hash01 } from '@plant-legacy/shared/math';
 import * as THREE from 'three';
 import type { PlantNodeData } from '../PlantRenderer';
+import { MUTATION_BIT, nodeMutationMask } from '../plant/mutations.js';
 
 /** C02b: GPU skinning configuration */
 export const MAX_JOINTS_PER_VERTEX = 4;
@@ -15,6 +24,32 @@ const MESH_EMERGENCE_GROWTH_PROGRESS = 10;
 const MESH_JOINT_INDICES_START = 11;
 const MESH_JOINT_WEIGHTS_START = 15;
 
+/** One ring of a chain tube: where it sits, how thick it is, and what it belongs to. */
+interface ChainPoint {
+  position: THREE.Vector3;
+  radius: number;
+  packed: number;
+  jointA: number;
+  jointB: number;
+  weight: number;
+  spawnTime: number;
+  growthProgress: number;
+}
+
+/** Everything the chain pass needs to know about one node's segment. */
+interface DrawnSegment {
+  start: THREE.Vector3;
+  position: THREE.Vector3;
+  startRadius: number;
+  radius: number;
+  control: THREE.Vector3;
+  packed: number;
+  jointIndex: number;
+  sides: number;
+  spawnTime: number;
+  growthEase: number;
+}
+
 export interface PlantMeshBuildOptions {
   leafSize: number;
   leafCountPerNode: number;
@@ -23,6 +58,8 @@ export interface PlantMeshBuildOptions {
   now: number;
   sunDirection: THREE.Vector3;
   selectedNodeId?: string | null;
+  /** Radius multiplier applied to nodes with the thickened-bark mutation. */
+  mutationBarkThicknessScale?: number;
 }
 
 export interface PlantRenderPlant {
@@ -31,6 +68,8 @@ export interface PlantRenderPlant {
   color: [number, number, number];
   isOwn: boolean;
   nodeCount: number;
+  /** OR of the mutation masks of every node, for billboard-tier plants. */
+  mutationMask: number;
 }
 
 export interface BuiltPlantMesh {
@@ -50,12 +89,15 @@ function packNode(
   nodeType: number,
   isOwn: boolean,
   variationIndex = 0,
+  mutationMask = 0,
 ): number {
   return (
     (plantIndex & 0xffff) |
     ((nodeType & 0xff) << 16) |
     ((isOwn ? 1 : 0) << 24) |
-    ((variationIndex & 0xf) << 25)
+    ((variationIndex & 0xf) << 25) |
+    // C02b mutation signatures travel in the three spare high bits.
+    ((mutationMask & 0x7) << 29)
   );
 }
 
@@ -87,6 +129,97 @@ function getVariationIndex(node: PlantNodeData, visualType: number): number {
   // Use node ID hash to get deterministic variation
   const hash = hash01(node.id, `variation_${visualType}`);
   return Math.floor(hash * 16);
+}
+
+/**
+ * Drawn radius of a part. The server now stores drawn metres, so its radius is
+ * authoritative; `resolveDrawnRadius` falls back to the shared per-type table
+ * for legacy payloads and aim previews of a node that has not been sent yet.
+ * This is the only radius rule the WebGPU and SDF renderers may use.
+ */
+export function visualRadiusForNode(
+  nodeType: string | undefined,
+  serverRadius: number,
+  biomass?: number,
+): number {
+  return resolveDrawnRadius(nodeType, serverRadius, biomass);
+}
+
+function isRootNodeType(nodeType: string | undefined): boolean {
+  const nt = (nodeType ?? '').toLowerCase();
+  return nt === 'radicle' || nt === 'root' || nt === 'lateral_root';
+}
+
+/** Below this distance a node is treated as sitting exactly on its parent. */
+const COINCIDENT_EPSILON = 0.02;
+
+/**
+ * Where a node is actually drawn. Nodes that sit exactly on their parent (the
+ * crown stem, the cotyledons, siblings sharing one tip) get a short
+ * deterministic stub out of the parent so their segment exists and the chain
+ * stays joined. Picking and camera framing must use this same position: using
+ * the model position while the blade is drawn at the stub made double-clicks
+ * miss the leaf they were aimed at.
+ */
+export function resolveDrawnNodePosition(
+  node: PlantNodeData,
+  parent: PlantNodeData | undefined,
+  siblings?: Iterable<PlantNodeData>,
+): THREE.Vector3 {
+  // A segment that is still growing is drawn from the point it left its parent
+  // toward the target the server gave it. Without this the node stayed on top of
+  // its parent for the whole animation (the sync that carries the final position
+  // often never arrives), so grown parts looked detached from the plant.
+  if (
+    node.parentAttachX !== undefined &&
+    node.parentAttachY !== undefined &&
+    node.parentAttachZ !== undefined &&
+    node.targetX !== undefined &&
+    node.targetY !== undefined &&
+    node.targetZ !== undefined
+  ) {
+    const t = THREE.MathUtils.clamp(node.growthProgress ?? 1, 0, 1);
+    return new THREE.Vector3(
+      node.parentAttachX + (node.targetX - node.parentAttachX) * t,
+      node.parentAttachY + (node.targetY - node.parentAttachY) * t,
+      node.parentAttachZ + (node.targetZ - node.parentAttachZ) * t,
+    );
+  }
+
+  // Clones, never the node's own vector: callers offset the result to build
+  // geometry, and an aliased vector would move the plant in the process.
+  if (!parent) return node.position.clone();
+  if (parent.position.distanceTo(node.position) >= COINCIDENT_EPSILON) return node.position.clone();
+
+  // Every node stacked on the same parent shares one fan, spread evenly around
+  // it. A hash-only angle gave the two cotyledons almost the same direction, so
+  // they were drawn on top of each other and a double-click could pick either.
+  const stack = siblings
+    ? Array.from(siblings)
+        .filter(
+          (other) =>
+            other.parentId === parent.id &&
+            parent.position.distanceTo(other.position) < COINCIDENT_EPSILON,
+        )
+        .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+    : [node];
+  const index = Math.max(
+    0,
+    stack.findIndex((other) => other.id === node.id),
+  );
+  const slotCount = Math.max(1, stack.length);
+  // Even slots, plus a small deterministic wobble that stays inside the slot.
+  const slotAngle = (index / slotCount) * Math.PI * 2;
+  const wobble = (hash01(node.id, 'fan') - 0.5) * (Math.PI / slotCount) * 0.5;
+  const fanAngle = slotAngle + wobble;
+  const fanElevation =
+    (isRootNodeType(node.nodeType) ? -0.6 : 0.55) + (hash01(node.id, 'tilt') - 0.5) * 0.2;
+  const fan = new THREE.Vector3(Math.cos(fanAngle), fanElevation, Math.sin(fanAngle)).normalize();
+  const stubLength = Math.max(
+    0.15,
+    visualRadiusForNode(parent.nodeType, parent.radius, parent.biomass) * 1.6,
+  );
+  return parent.position.clone().addScaledVector(fan, stubLength);
 }
 
 function groupByRoot(nodes: PlantNodeData[]): PlantNodeData[][] {
@@ -372,6 +505,85 @@ class MeshAccumulator {
     }
   }
 
+  /**
+   * One continuous tapered tube through a run of segments, the way the lab
+   * generator builds a plant: each ring is shared by the segments around it, so
+   * a stem, a root or a cotyledon is a single organ instead of a tube plus a
+   * sphere at every node. Frames are parallel-transported along the path so the
+   * tube never pinches or twists where it bends.
+   */
+  addChainTube(points: ChainPoint[], sides: number): void {
+    if (points.length < 2) return;
+
+    const tangents: THREE.Vector3[] = [];
+    for (let i = 0; i < points.length; i += 1) {
+      const previous = points[Math.max(0, i - 1)].position;
+      const next = points[Math.min(points.length - 1, i + 1)].position;
+      const tangent = new THREE.Vector3().subVectors(next, previous);
+      if (tangent.lengthSq() < 1e-10) tangent.set(0, 1, 0);
+      tangents.push(tangent.normalize());
+    }
+
+    const { u, v } = perpendicularBasis(tangents[0]);
+    const ringStarts: number[] = [];
+
+    for (let i = 0; i < points.length; i += 1) {
+      const point = points[i];
+      const tangent = tangents[i];
+      if (i > 0) {
+        const previousTangent = tangents[i - 1];
+        const axis = new THREE.Vector3().crossVectors(previousTangent, tangent);
+        const sin = axis.length();
+        if (sin > 1e-6) {
+          axis.normalize();
+          const angle = Math.atan2(sin, THREE.MathUtils.clamp(previousTangent.dot(tangent), -1, 1));
+          u.applyAxisAngle(axis, angle);
+          v.applyAxisAngle(axis, angle);
+        }
+        // Re-orthogonalise against the new tangent so the frame stays rigid.
+        u.addScaledVector(tangent, -u.dot(tangent)).normalize();
+        v.crossVectors(tangent, u).normalize();
+      }
+
+      const ringStart = this.vertexCount;
+      ringStarts.push(ringStart);
+      const radius = Math.max(0.003, point.radius);
+      for (let side = 0; side <= sides; side += 1) {
+        const angle = (side / sides) * Math.PI * 2;
+        const offset = u
+          .clone()
+          .multiplyScalar(Math.cos(angle))
+          .addScaledVector(v, Math.sin(angle));
+        const position = point.position.clone().addScaledVector(offset, radius);
+        const normal = offset.clone().normalize();
+        this.pushVertex(
+          position,
+          normal,
+          side / sides,
+          i / Math.max(1, points.length - 1),
+          point.packed,
+          point.spawnTime,
+          point.growthProgress,
+          [point.jointA, point.jointB, 0, 0],
+          [1 - point.weight, point.weight, 0, 0],
+        );
+      }
+    }
+
+    for (let i = 1; i < ringStarts.length; i += 1) {
+      const previousStart = ringStarts[i - 1];
+      const ringStart = ringStarts[i];
+      for (let side = 0; side < sides; side += 1) {
+        const a0 = previousStart + side;
+        const a1 = previousStart + side + 1;
+        const b0 = ringStart + side;
+        const b1 = ringStart + side + 1;
+        this.addTriangle(a0, b0, a1);
+        this.addTriangle(a1, b0, b1);
+      }
+    }
+  }
+
   addLeaf(
     base: THREE.Vector3,
     direction: THREE.Vector3,
@@ -407,8 +619,10 @@ class MeshAccumulator {
     );
 
     // Leaf blade
+    // Leaf blade: wide enough to read as a leaf rather than a sliver. The old
+    // 0.22 half-width turned every leaf into a zero-thickness spike.
     const p0 = base.clone().addScaledVector(direction, petioleLength);
-    const p1 = p0.clone().addScaledVector(side, size * 0.22);
+    const p1 = p0.clone().addScaledVector(side, size * 0.45);
     const p2 = p0.clone().addScaledVector(direction, size);
     const p3 = p0.clone().addScaledVector(side, -size * 0.22);
 
@@ -469,8 +683,8 @@ class MeshAccumulator {
     growthProgress = 1,
     jointIndex = 0,
   ): void {
-    const sides = 6;
-    const rings = 4;
+    const sides = 10;
+    const rings = 6;
     const start = this.vertexCount;
     const emergentRadius = radius * growthProgress;
 
@@ -519,23 +733,22 @@ class MeshAccumulator {
     growthProgress = 1,
     jointIndex = 0,
   ): void {
-    const sides = 12;
-    const rings = 8;
+    const sides = 14;
+    const rings = 12;
     const start = this.vertexCount;
     const emergentRadius = radius * growthProgress;
 
-    // Organic botanical seed shape:
-    // Egg-shaped: narrower at top (pointed apex), wider at bottom (rounded base)
-    // This matches a seed sitting on soil with radicle emerging downward
+    // Rounded ovoid seed sitting on the ground: widest around the lower belly,
+    // closing smoothly at both the base and the tip (never a cone).
+    // v = 0 (bottom/base) to 1 (top/tip).
     for (let ring = 0; ring <= rings; ring += 1) {
-      const v = ring / rings; // 0 (top) to 1 (bottom)
+      const v = ring / rings; // 0 (bottom/base) to 1 (top/tip)
       const phi = v * Math.PI;
-      const y = Math.cos(phi); // +1 at top, -1 at bottom
-      // Egg profile: narrow pointed top, wide rounded bottom
-      // Asymmetric: top is pinched, bottom is bulbous
-      const eggTaper = 1.0 - 0.35 * v; // less taper toward bottom
-      const profile = Math.sin(phi) * eggTaper * (1.0 + 0.15 * Math.cos(phi));
-      const yScaled = y * 1.3; // Slightly taller than wide
+      const y = -Math.cos(phi); // -1 at bottom, +1 at top
+      // A fractional-sine profile gives a full, rounded belly that closes
+      // smoothly at both ends instead of a sharp cone.
+      const profile = Math.max(0, Math.sin(phi)) ** 0.7 * (1.0 - 0.18 * v);
+      const yScaled = y * getSeedBodyHeightRatio(); // slightly taller than wide
 
       for (let side = 0; side <= sides; side += 1) {
         const u = side / sides;
@@ -546,7 +759,7 @@ class MeshAccumulator {
 
         const pos = new THREE.Vector3(x, yScaled, z).multiplyScalar(emergentRadius).add(center);
         const normal = new THREE.Vector3(x, y * 0.8, z).normalize();
-        const ringWeight = 1.0 - v;
+        const ringWeight = v;
         this.pushVertex(
           pos,
           normal,
@@ -661,6 +874,223 @@ function leafDirection(
   return { direction, normal };
 }
 
+/** One node's drawn segment, resolved with the renderer's real attachment rules. */
+export interface SegmentFrame {
+  /** Point the tube leaves from (parent's drawn end, seed surface, or stub). */
+  start: THREE.Vector3;
+  /** Where the segment ends (server target, lifted onto the seed surface). */
+  target: THREE.Vector3;
+  /** `start` lerped to `target` by growth progress — what is drawn this frame. */
+  animated: THREE.Vector3;
+  /** `animated - start`; zero-length for stacked/coincident nodes. */
+  branch: THREE.Vector3;
+  startRadius: number;
+  endRadius: number;
+  growthEase: number;
+}
+
+/**
+ * Resolve where one node is drawn, using the exact rules the mesh pass uses.
+ *
+ * Exported so Plant Lab and measurements can consume the same code instead of a
+ * hand-copied model. `parentDrawnEnd` is the parent's `animated` from its own
+ * frame, which is how the chain stays stitched when the parent is still growing.
+ */
+export function resolveSegmentFrame(
+  node: PlantNodeData,
+  parent: PlantNodeData,
+  allById: Iterable<PlantNodeData>,
+  parentDrawnEnd?: THREE.Vector3,
+): SegmentFrame {
+  const growthEase = node.growthProgress ?? 0;
+  const hasTarget =
+    node.targetX !== undefined && node.targetY !== undefined && node.targetZ !== undefined;
+  // Always a fresh vector: the seed-surface anchor below must never mutate the
+  // node's stored position.
+  let target = hasTarget
+    ? new THREE.Vector3(node.targetX, node.targetY, node.targetZ)
+    : node.position.clone();
+
+  // Continue the parent's drawn end, not its raw model position. The seed and
+  // coincident nodes are drawn elsewhere, so starting from the model position
+  // leaves a visible step at every joint.
+  let start = parentDrawnEnd ? parentDrawnEnd.clone() : parent.position.clone();
+
+  // Children leave the seed coat, at the same point the server used to place
+  // them, so their target needs no translation: model and drawing agree.
+  if ((parent.nodeType ?? '').toLowerCase() === 'seed') {
+    const attach = nodeAttachmentPoint(
+      {
+        x: parent.position.x,
+        y: parent.position.y,
+        z: parent.position.z,
+        nodeType: parent.nodeType,
+        radius: parent.radius,
+        biomass: parent.biomass,
+      },
+      target.clone().sub(parent.position),
+    );
+    start.set(attach.x, attach.y, attach.z);
+  }
+
+  // A lateral root or branch leaves part-way along its parent's segment, at the
+  // fraction the server stored. Measure on the parent's drawn segment so the
+  // joint stays stitched while that parent is still growing.
+  const attachFraction = node.attachFraction;
+  if (
+    (parent.nodeType ?? '').toLowerCase() !== 'seed' &&
+    typeof attachFraction === 'number' &&
+    attachFraction < 1
+  ) {
+    const parentStart = new THREE.Vector3(
+      parent.parentAttachX ?? parent.position.x,
+      parent.parentAttachY ?? parent.position.y,
+      parent.parentAttachZ ?? parent.position.z,
+    );
+    start = parentStart.lerp(parentDrawnEnd ?? parent.position, Math.max(0, attachFraction));
+  }
+
+  // Stacked server nodes get a deterministic stub so the chain stays joined.
+  if (parent.position.distanceTo(node.position) < COINCIDENT_EPSILON) {
+    start = parent.position.clone();
+    target = resolveDrawnNodePosition(node, parent, allById);
+  }
+
+  const animated = start.clone().lerp(target, growthEase);
+  const branch = new THREE.Vector3().subVectors(animated, start);
+
+  const parentRadius = visualRadiusForNode(parent.nodeType, parent.radius, parent.biomass);
+  const nodeRadius = visualRadiusForNode(node.nodeType, node.radius, node.biomass);
+
+  // Anything emerging from a seed starts thin so the seed never turns into a
+  // cone with a giant base.
+  let startRadius = parentRadius;
+  if (parent.nodeType === 'seed') {
+    startRadius = Math.min(parentRadius, nodeRadius, isRootNodeType(node.nodeType) ? 0.03 : 0.028);
+  }
+  const endRadius = Math.max(0.004, nodeRadius * Math.max(0.25, growthEase));
+
+  return { start, target, animated, branch, startRadius, endRadius, growthEase };
+}
+
+export interface PlantGeometryMetrics {
+  nodeCount: number;
+  segmentCount: number;
+  /**
+   * Largest distance between a segment's drawn start and the shared attachment
+   * point its parent defines. Zero means model and drawing agree at the joint;
+   * it only grows while a parent is still animating.
+   */
+  maxAnchorGap: number;
+  /** Largest distance between a node's server position and where it is drawn. */
+  maxDrawnOffset: number;
+  /** Largest angle between a segment and its parent segment, in degrees. */
+  maxAngleDiscontinuityDeg: number;
+  /** Largest `node.radius / nodeRenderRadius(type, biomass)`. 1.0 means they agree. */
+  maxRadiusRatio: number;
+  drawnRadiusRange: [number, number];
+}
+
+/**
+ * Measure a plant with the renderer's own placement and radius rules.
+ *
+ * Plant Lab uses this instead of a hand-copied model, so the numbers describe
+ * what the real mesh pass would draw. Run it on any `PlantNodeData[]`.
+ */
+export function measureDrawnPlant(nodes: PlantNodeData[]): PlantGeometryMetrics {
+  const byId = new Map<string, PlantNodeData>();
+  for (const node of nodes) byId.set(node.id, node);
+
+  const children = new Map<string, PlantNodeData[]>();
+  for (const node of nodes) {
+    if (!node.parentId) continue;
+    const siblings = children.get(node.parentId) ?? [];
+    siblings.push(node);
+    children.set(node.parentId, siblings);
+  }
+
+  const metrics: PlantGeometryMetrics = {
+    nodeCount: nodes.length,
+    segmentCount: 0,
+    maxAnchorGap: 0,
+    maxDrawnOffset: 0,
+    maxAngleDiscontinuityDeg: 0,
+    maxRadiusRatio: 0,
+    drawnRadiusRange: [Number.POSITIVE_INFINITY, 0],
+  };
+
+  const walk = (parent: PlantNodeData, parentFrame?: SegmentFrame): void => {
+    for (const node of children.get(parent.id) ?? []) {
+      const frame = resolveSegmentFrame(node, parent, byId.values(), parentFrame?.animated);
+      metrics.segmentCount += 1;
+      const expectedStart = nodeAttachmentPoint(
+        {
+          x: parent.position.x,
+          y: parent.position.y,
+          z: parent.position.z,
+          nodeType: parent.nodeType,
+          radius: parent.radius,
+          biomass: parent.biomass,
+          segmentStart:
+            parent.parentAttachX !== undefined &&
+            parent.parentAttachY !== undefined &&
+            parent.parentAttachZ !== undefined
+              ? {
+                  x: parent.parentAttachX,
+                  y: parent.parentAttachY,
+                  z: parent.parentAttachZ,
+                }
+              : undefined,
+        },
+        frame.target.clone().sub(parent.position),
+        node.attachFraction ?? 1,
+      );
+      metrics.maxAnchorGap = Math.max(
+        metrics.maxAnchorGap,
+        frame.start.distanceTo(
+          new THREE.Vector3(expectedStart.x, expectedStart.y, expectedStart.z),
+        ),
+      );
+      metrics.maxDrawnOffset = Math.max(
+        metrics.maxDrawnOffset,
+        frame.target.distanceTo(node.position),
+      );
+
+      const drawn = visualRadiusForNode(node.nodeType, node.radius, node.biomass);
+      const reference = nodeRenderRadius(node.nodeType, node.biomass);
+      if (reference > 0) {
+        metrics.maxRadiusRatio = Math.max(metrics.maxRadiusRatio, drawn / reference);
+      }
+      metrics.drawnRadiusRange[0] = Math.min(metrics.drawnRadiusRange[0], drawn);
+      metrics.drawnRadiusRange[1] = Math.max(metrics.drawnRadiusRange[1], drawn);
+
+      // Angle to the parent segment, when both have a real direction.
+      if (parentFrame) {
+        const parentDir = parentFrame.target.clone().sub(parentFrame.start);
+        const childDir = frame.target.clone().sub(frame.start);
+        if (parentDir.lengthSq() > 1e-8 && childDir.lengthSq() > 1e-8) {
+          const dot = THREE.MathUtils.clamp(parentDir.normalize().dot(childDir.normalize()), -1, 1);
+          metrics.maxAngleDiscontinuityDeg = Math.max(
+            metrics.maxAngleDiscontinuityDeg,
+            (Math.acos(dot) * 180) / Math.PI,
+          );
+        }
+      }
+
+      walk(node, frame);
+    }
+  };
+
+  for (const node of nodes) {
+    if (node.parentId === null) walk(node);
+  }
+
+  if (!Number.isFinite(metrics.drawnRadiusRange[0])) {
+    metrics.drawnRadiusRange = [0, 0];
+  }
+  return metrics;
+}
+
 export function buildPlantMesh(
   nodes: PlantNodeData[],
   options: PlantMeshBuildOptions,
@@ -671,8 +1101,10 @@ export function buildPlantMesh(
     allById.set(node.id, node);
   }
 
-  const sides = Math.max(3, Math.min(12, Math.round(options.tubeSides)));
-  const rootSides = Math.max(3, Math.min(8, Math.round(options.rootSides)));
+  // Low side counts (3-5) read as stacked square prisms, especially once Root
+  // Sight reveals them, so keep every tube above prism territory.
+  const sides = Math.max(6, Math.min(14, Math.round(options.tubeSides)));
+  const rootSides = Math.max(8, Math.min(12, Math.round(options.rootSides)));
   const mesh = new MeshAccumulator();
   const plantData: PlantRenderPlant[] = [];
 
@@ -691,6 +1123,7 @@ export function buildPlantMesh(
     const color = isOwn ? OWN_PLANT_COLOR : RIVAL_PLANT_COLOR;
     const box = new THREE.Box3();
     let leafCount = 0;
+    let plantMutationMask = 0;
 
     // Build children map and compute Murray's law radii
     const childrenMap = new Map<string, PlantNodeData[]>();
@@ -716,48 +1149,61 @@ export function buildPlantMesh(
       (childrenMap.get(root.id)?.length ?? 0) === 0;
 
     if (isSeedPlant) {
-      // Render botanical teardrop seed sitting fully above the soil surface
-      const seedRadius = Math.max(0.07, Math.min(0.12, root.radius * 1.3));
-      // Position seed center at radius height so it sits on top of the ground
+      // Position seed base contact point on the ground so the rounded base sits
+      // on top of the soil with the pointed tip toward the sky.
+      const seedRadius = visualRadiusForNode('seed', root.radius, root.biomass);
       const seedCenter = new THREE.Vector3(
         root.position.x,
-        root.position.y + seedRadius,
+        seedBodyCentreY(root.position.y, seedRadius),
         root.position.z,
       );
       mesh.addSeed(
         seedCenter,
         seedRadius,
-        packNode(plantIndex, 4, isOwn, getVariationIndex(root, 4)),
+        packNode(plantIndex, 4, isOwn, getVariationIndex(root, 4), nodeMutationMask(root)),
         root.spawnTime ?? now,
         1.0, // Seed crown is fully present from start, not "growing"
         0, // jointIndex
       );
-      box.expandByPoint(seedCenter.clone().add(new THREE.Vector3(0, seedRadius * 1.3, 0)));
-      box.expandByPoint(seedCenter.clone().add(new THREE.Vector3(0, -seedRadius * 1.3, 0)));
+      const seedHalfHeight = seedBodyHalfHeight(seedRadius);
+      box.expandByPoint(seedCenter.clone().add(new THREE.Vector3(0, seedHalfHeight, 0)));
+      box.expandByPoint(seedCenter.clone().add(new THREE.Vector3(0, -seedHalfHeight, 0)));
     } else {
       // Normal plant with root - render seed coat base (crown at surface)
       // Render as seed coat (egg-shaped) via addSeed, NOT as tan sphere via addJoint
-      const seedRadius = Math.max(
-        0.07,
-        Math.min(0.12, computedRadii.get(root.id) ?? root.radius * 1.3),
+      const seedRadius = visualRadiusForNode(
+        'seed',
+        computedRadii.get(root.id) ?? root.radius,
+        root.biomass,
       );
       const seedCenter = new THREE.Vector3(
         root.position.x,
-        root.position.y + seedRadius,
+        seedBodyCentreY(root.position.y, seedRadius),
         root.position.z,
       );
       const crownVisualType = 4; // Seed coat appearance
       mesh.addSeed(
         seedCenter,
         seedRadius,
-        packNode(plantIndex, crownVisualType, isOwn, getVariationIndex(root, crownVisualType)),
+        packNode(
+          plantIndex,
+          crownVisualType,
+          isOwn,
+          getVariationIndex(root, crownVisualType),
+          nodeMutationMask(root),
+        ),
         root.spawnTime ?? now,
         1.0, // Crown is always fully present (not "growing" like new nodes)
         0, // jointIndex
       );
-      box.expandByPoint(seedCenter.clone().add(new THREE.Vector3(0, seedRadius * 1.3, 0)));
-      box.expandByPoint(seedCenter.clone().add(new THREE.Vector3(0, -seedRadius * 1.3, 0)));
+      const seedHalfHeight = seedBodyHalfHeight(seedRadius);
+      box.expandByPoint(seedCenter.clone().add(new THREE.Vector3(0, seedHalfHeight, 0)));
+      box.expandByPoint(seedCenter.clone().add(new THREE.Vector3(0, -seedHalfHeight, 0)));
     }
+
+    // Segment data per node, filled in by the walk below and consumed by the
+    // chain pass so tubes can be stitched segment to segment.
+    const drawnSegments = new Map<string, DrawnSegment>();
 
     // Process all nodes in topological order (roots first, then children)
     const processNode = (node: PlantNodeData, depth = 0, jointIndex = 1): void => {
@@ -772,58 +1218,32 @@ export function buildPlantMesh(
       // NOTE: Do NOT early-return on growthEase < 0.02 — that delays new growth appearance.
       // Geometry is already scaled by growthProgress (zero-radius tubes are invisible by default).
 
-      // Use server-authoritative parent attachment position for growth animation
-      // Fall back to heuristic for older data without parentAttachPos
-      let parentAttachPos: THREE.Vector3;
-      if (
-        parent.parentAttachX !== undefined &&
-        parent.parentAttachY !== undefined &&
-        parent.parentAttachZ !== undefined
-      ) {
-        parentAttachPos = new THREE.Vector3(
-          parent.parentAttachX,
-          parent.parentAttachY,
-          parent.parentAttachZ,
-        );
-      } else {
-        // Legacy heuristic: for seed parents, attach from base at ground level (y = 0)
-        parentAttachPos =
-          parent.isSeed || parent.nodeType === 'seed'
-            ? new THREE.Vector3(parent.position.x, 0, parent.position.z)
-            : parent.position;
-      }
+      // One shared resolver owns attachment, target and thickness, so the mesh
+      // pass and Plant Lab cannot drift apart.
+      const frame = resolveSegmentFrame(
+        node,
+        parent,
+        allById.values(),
+        drawnSegments.get(parent.id)?.position,
+      );
+      const parentAttachPos = frame.start;
+      const targetPosition = frame.target;
+      const animatedPosition = frame.animated;
+      const branch = frame.branch;
+      const mutationMask = nodeMutationMask(node);
+      plantMutationMask |= mutationMask;
+      // Thickened bark is a body change, so it is applied to the drawn radii.
+      const barkScale =
+        (mutationMask & MUTATION_BIT.thick_bark) !== 0
+          ? Math.max(1, options.mutationBarkThicknessScale ?? 1)
+          : 1;
+      const rA = frame.startRadius * barkScale;
+      const rB = frame.endRadius * barkScale;
 
-      // Use server-authoritative target position (where the node is growing to)
-      // for the connector tube end and curve control point. Falls back to the
-      // node's current position for fully-grown nodes that have no target.
-      // This ensures new growth is drawn as a tube extending from the parent
-      // toward the target, not as a zero-length blob at the parent.
-      const hasTarget =
-        node.targetX !== undefined && node.targetY !== undefined && node.targetZ !== undefined;
-      const targetPosition = hasTarget
-        ? new THREE.Vector3(node.targetX, node.targetY, node.targetZ)
-        : node.position;
-
-      const animatedPosition = parentAttachPos.clone().lerp(targetPosition, growthEase);
       box.expandByPoint(animatedPosition);
-      const branch = new THREE.Vector3().subVectors(animatedPosition, parentAttachPos);
 
       if (branch.lengthSq() > 1e-8) {
         branch.normalize();
-
-        // Get Murray's law radii (clamped to prevent giant segments from server radii)
-        const parentRadius = Math.min(computedRadii.get(parent.id) ?? parent.radius, 0.2);
-        const nodeRadius = Math.min(computedRadii.get(node.id) ?? node.radius, 0.2);
-
-        // Apply growth easing to radii for smooth emergence
-        const rA = Math.max(0.015, parentRadius);
-        // Per-part radius scaling: radicles thin, stems sturdy
-        let radiusMult = 1.0;
-        if (node.nodeType === 'radicle') radiusMult = 0.5;
-        else if (node.nodeType === 'root') radiusMult = 0.8;
-        else if (node.nodeType === 'lateral_root') radiusMult = 0.6;
-        else if (node.nodeType === 'stem' || node.nodeType === 'branch') radiusMult = 1.2;
-        const rB = Math.max(0.008, nodeRadius * radiusMult * Math.max(0.25, growthEase));
 
         // Use simpler root geometry (fewer sides) for underground roots
         const isRoot =
@@ -834,20 +1254,8 @@ export function buildPlantMesh(
           node.nodeType === 'lateral_root';
         const tubeSides = isRoot ? rootSides : sides;
 
-        // Root-specific: stronger joint blending for organic fusion
-        const jointMult = isRoot ? 1.3 : 1.1;
-        const jointRadius = Math.max(rA, rB) * jointMult;
-
         const visualNodeType = getVisualNodeType(node);
         const variationIdx = getVariationIndex(node, visualNodeType);
-        mesh.addJoint(
-          parentAttachPos,
-          jointRadius,
-          packNode(plantIndex, visualNodeType, isOwn, variationIdx),
-          spawnTime,
-          growthEase,
-          jointIndex,
-        );
 
         // Organic curvature with botanical gravitropism
         const length = parentAttachPos.distanceTo(targetPosition);
@@ -889,22 +1297,20 @@ export function buildPlantMesh(
           .addScaledVector(bendDir, curvature * (hash01(node.id, 'bend') - 0.5) * 2)
           .addScaledVector(new THREE.Vector3(0, 1, 0), gravityBias * length);
 
-        // Animate along the fixed curve using growthEase
-        const animatedPosition = parentAttachPos.clone().lerp(targetPosition, growthEase);
-
-        mesh.addCurvedTube(
-          parentAttachPos,
-          animatedPosition,
-          controlPoint,
-          rA,
-          rB,
-          tubeSides,
-          packNode(plantIndex, visualNodeType, isOwn, variationIdx),
-          8,
+        // Geometry is emitted per chain after the walk, so consecutive segments
+        // can share their boundary rings instead of meeting sphere-to-tube.
+        drawnSegments.set(node.id, {
+          start: parentAttachPos.clone(),
+          position: animatedPosition,
+          startRadius: rA,
+          radius: Math.max(0.004, rB),
+          control: controlPoint,
+          packed: packNode(plantIndex, visualNodeType, isOwn, variationIdx, mutationMask),
+          jointIndex,
+          sides: tubeSides,
           spawnTime,
           growthEase,
-          jointIndex + 1,
-        );
+        });
       }
 
       // Use target position for bounding box (encompasses full curve)
@@ -913,15 +1319,31 @@ export function buildPlantMesh(
 
       const isLeafNode = node.type === 3;
       const isSeedNode = node.type === 4;
-      const isCotyledon = isLeafNode && parent.type === 0 && parent.parentId === null;
+      // Cotyledons are the seed leaves: the server marks them by type, and their
+      // parent is the seed, so the old "parent is a root" test never matched and
+      // they were placed like ordinary canopy leaves.
+      const isCotyledon =
+        node.nodeType === 'cotyledon' || (isLeafNode && parent.nodeType === 'seed');
       const nodeVisualType = getVisualNodeType(node);
       const isFlower = node.nodeType?.toLowerCase() === 'flower';
       const isSporeSac = node.nodeType?.toLowerCase() === 'spore_sac';
       const nodeTypeNum = typeof node.type === 'number' ? node.type : 0;
+      // A blade can never be much bigger than the part that carries it. At the
+      // shared canopy size a 0.1 m cotyledon drew a metre-wide paddle hanging in
+      // the air beside the stem, and every leaf read as a detached green triangle.
+      // Capping by the node's own segment keeps foliage attached and proportional.
+      const segmentSpan = parentAttachPos.distanceTo(targetPosition);
+      const bladeCap = Number.isFinite(segmentSpan)
+        ? Math.max(0.1, segmentSpan * 2.2)
+        : Number.POSITIVE_INFINITY;
+
+      // Seed leaves sprout a hand's width above the soil (the server places
+      // cotyledons at ~0.23 m), so the canopy height gate cannot apply to them:
+      // they are the plant's first leaves and must always get a blade.
       const canGrowLeaves =
         options.leafCountPerNode > 0 &&
         leafCount < MAX_LEAVES_PER_PLANT &&
-        targetPosition.y > 0.25 &&
+        (isCotyledon || targetPosition.y > 0.25) &&
         nodeTypeNum >= 1 &&
         !isSeedNode &&
         growthEase > 0.15;
@@ -939,13 +1361,15 @@ export function buildPlantMesh(
         // Flower and spore_sac get distinct visual types
         const leafVisualType = isFlower ? 5 : isSporeSac ? 6 : nodeVisualType;
         const leafVariationIdx = getVariationIndex(node, leafVisualType);
-        const leafSizeMult = isCotyledon ? 1.3 : 1.0;
+        // Seed leaves are small relative to the seedling; at 0.6 they rendered
+        // bigger than the whole stem and read as green paddles.
+        const leafSizeMult = isCotyledon ? 0.3 : 0.55;
         mesh.addLeaf(
           animatedPosition,
           direction,
           normal,
-          options.leafSize * 0.9 * growthEase * leafSizeMult,
-          packNode(plantIndex, leafVisualType, isOwn, leafVariationIdx),
+          Math.min(bladeCap, options.leafSize * 0.9 * growthEase * leafSizeMult),
+          packNode(plantIndex, leafVisualType, isOwn, leafVariationIdx, mutationMask),
           spawnTime,
           growthEase,
           jointIndex,
@@ -966,14 +1390,14 @@ export function buildPlantMesh(
           const leafVariationIdx = getVariationIndex(node, 3);
           // Cotyledons use distinct visual type 7 (yellow-green seed leaf)
           const leafVisualType = isCotyledon ? 7 : 3;
-          // Cotyledons are larger than regular leaves initially
-          const leafSizeMult = isCotyledon ? 1.6 : 1.0;
+          // Cotyledons are modestly larger than regular leaves initially
+          const leafSizeMult = isCotyledon ? 0.8 : 1.0;
           mesh.addLeaf(
             animatedPosition,
             leafDir,
             normal,
-            options.leafSize * 0.75 * growthEase * leafSizeMult,
-            packNode(plantIndex, leafVisualType, isOwn, leafVariationIdx),
+            Math.min(bladeCap, options.leafSize * 0.75 * growthEase * leafSizeMult),
+            packNode(plantIndex, leafVisualType, isOwn, leafVariationIdx, mutationMask),
             spawnTime,
             growthEase,
             jointIndex,
@@ -995,6 +1419,86 @@ export function buildPlantMesh(
       processNode(child, 0, 1);
     }
 
+    // Chain pass: walk each run of single-child nodes and emit one tapered tube
+    // through it. Branch points get a single joint sphere, terminal tips none.
+    const consumed = new Set<string>();
+    const pending = rootChildren.map((child) => child.id);
+    const addJointSphere = (id: string, scale: number): void => {
+      const info = drawnSegments.get(id);
+      if (!info) return;
+      mesh.addJoint(
+        info.position,
+        Math.max(0.004, info.radius * scale),
+        info.packed,
+        info.spawnTime,
+        info.growthEase,
+        info.jointIndex,
+      );
+    };
+
+    while (pending.length > 0) {
+      const startId = pending.pop();
+      if (startId === undefined || consumed.has(startId)) continue;
+
+      const points: ChainPoint[] = [];
+      let cursor: string | null = startId;
+      let chainEnd: string | null = null;
+      let first = true;
+
+      while (cursor !== null && !consumed.has(cursor)) {
+        const info = drawnSegments.get(cursor);
+        if (!info) break;
+        consumed.add(cursor);
+
+        // Sample the segment's curve; the first ring of every segment after the
+        // first is the previous segment's last ring, so nothing is duplicated.
+        const length = info.start.distanceTo(info.position);
+        const samples = Math.max(4, Math.min(12, Math.ceil(length / 0.05)));
+        for (let i = first ? 0 : 1; i <= samples; i += 1) {
+          const t = i / samples;
+          const invT = 1 - t;
+          const position = new THREE.Vector3()
+            .addScaledVector(info.start, invT * invT)
+            .addScaledVector(info.control, 2 * invT * t)
+            .addScaledVector(info.position, t * t);
+          points.push({
+            position,
+            radius: info.startRadius * invT + info.radius * t,
+            packed: info.packed,
+            jointA: info.jointIndex,
+            jointB: info.jointIndex + 1,
+            weight: t,
+            spawnTime: info.spawnTime,
+            growthProgress: info.growthEase,
+          });
+        }
+        first = false;
+
+        const nextNodes: PlantNodeData[] = childrenMap.get(cursor) ?? [];
+        if (nextNodes.length !== 1) {
+          chainEnd = cursor;
+          cursor = null;
+        } else {
+          cursor = nextNodes[0].id;
+        }
+      }
+
+      if (points.length >= 2) {
+        const sidesForChain = drawnSegments.get(startId)?.sides ?? sides;
+        mesh.addChainTube(points, sidesForChain);
+      }
+
+      if (chainEnd !== null) {
+        const forkChildren: PlantNodeData[] = childrenMap.get(chainEnd) ?? [];
+        if (forkChildren.length >= 2) {
+          // A fork: one sphere covers the junction, then each branch is its own
+          // chain (this is the only place a sphere is still needed).
+          addJointSphere(chainEnd, 1.15);
+          for (const child of forkChildren) pending.push(child.id);
+        }
+      }
+    }
+
     box.expandByScalar(Math.max(0.2, options.leafSize));
     const center = box.getCenter(new THREE.Vector3());
     const size = box.getSize(new THREE.Vector3());
@@ -1006,6 +1510,7 @@ export function buildPlantMesh(
       color,
       isOwn,
       nodeCount: group.length,
+      mutationMask: plantMutationMask,
     });
 
     // Add outline for selected node in this plant (visual type 8 = gold outline)

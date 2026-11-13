@@ -81,18 +81,25 @@ export class InterestManager {
     this.clientInterests.delete(playerId);
   }
 
-  updateClientPosition(playerId: string, x: number, z: number): void {
+  /**
+   * Move a client's interest window. Returns true only when its cell changed,
+   * which is the moment the caller has to announce plants that just became
+   * visible (a plant created while the player was elsewhere is otherwise never
+   * sent to them).
+   */
+  updateClientPosition(playerId: string, x: number, z: number): boolean {
     const interest = this.clientInterests.get(playerId);
-    if (!interest) return;
+    if (!interest) return false;
 
     const newCell = this.getCellCoord(x, z);
     if (newCell.x === interest.cell.x && newCell.z === interest.cell.z) {
-      return; // Same cell, no change
+      return false; // Same cell, no change
     }
 
     // Update subscribed cells
     interest.cell = newCell;
     interest.subscribedCells = this.getSubscribedCells(newCell);
+    return true;
   }
 
   addEntityToCell(entityId: string, x: number, z: number): void {
@@ -177,6 +184,16 @@ export class InterestManager {
     return 'L2';
   }
 
+  /**
+   * Whether a world position is inside a client's subscribed cells. Used to scope
+   * broadcasts that carry a plant's geometry to the players who can see it.
+   */
+  isPositionInRange(playerId: string, x: number, z: number): boolean {
+    const interest = this.clientInterests.get(playerId);
+    if (!interest) return false;
+    return interest.subscribedCells.has(this.getCellKeyFromWorld(x, z));
+  }
+
   getSubscribedCellCount(playerId: string): number {
     const interest = this.clientInterests.get(playerId);
     return interest?.subscribedCells.size ?? 0;
@@ -219,20 +236,5 @@ export class InterestManager {
     for (const interest of this.clientInterests.values()) {
       interest.subscribedCells = this.getSubscribedCells(interest.cell);
     }
-  }
-
-  /** D01: Dev action - set active tick rate */
-  setActiveTickRate(_hz: number): void {
-    // Handled by World.setTickRate
-  }
-
-  /** D01: Dev action - set near tick rate */
-  setNearTickRate(_hz: number): void {
-    // Handled by World tier config
-  }
-
-  /** D01: Dev action - set dormant interval */
-  setDormantInterval(_sec: number): void {
-    // Handled by World tier config
   }
 }

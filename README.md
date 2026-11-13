@@ -1,9 +1,9 @@
 # Plant Legacy
 
 A multiplayer plant-organism simulation. One server, one world, one Postgres.
-Phase 0 foundation is in place, together with the Gate 0 networking gate and a
+Phase 1 foundation is in place, together with the Gate 0 networking gate and a
 first procedural-rendering prototype. Growth simulation, persistence, accounts,
-weather and day/night are implemented. Economy and chat are not built yet.
+weather and day/night are implemented. Economy is not built yet.
 
 **Source of truth:** [`DESIGN.md`](./DESIGN.md) (Master Build Plan v5.3.1). Every
 task, rule and tunable comes from there. This repository implements **T00, O01,
@@ -65,7 +65,7 @@ apps/server/          HTTP + WebSocket server, health/readiness, Postgres probe
 packages/shared/      Types, config loader/validator, protocol, events, ids
 tools/config-validator/  CLI used by CI and `pnpm config:validate`
 tools/dev.mjs         One-command local stack
-config/               75 tunable files in extended-1 format + _meta
+config/               77 tunable files in extended-1 format + _meta
 docs/                 Design notes, tunables, task records, checklists
 ops/                  Docker compose, staging `.env`, deploy and backup placeholders
 .github/workflows/    CI (verify) and staging static deploy
@@ -93,11 +93,11 @@ Every tunable lives in `config/<system>.json` in the **extended-1** format:
   the build if one appears.
 - `account_bound: true` forces `tradeable`, `mailable` and `listable` to false
   (RULE_23).
-- Stubs carry `values: {}` until their owning task fills them. Sixteen files are
+- Stubs carry `values: {}` until their owning task fills them. Twenty-one files are
   populated today: `ops`, `compliance`, `net_proto`, `onboarding`,
   `plant_renderer`, `resources`, `world`, `network`, `accounts`,
-  `root_sight`, `weather`, `daynight`, `render`, `plant_world`,
-  `persistence`, `interest`; the other 59 are stubs. See
+  `root_sight`, `weather`, `daynight`, `render`, `growth`, `items`, `dev`,
+  `controls`, `ui`, `chat`, `emotes`, `reports`; the other 56 are stubs. See
   [`docs/tunables.md`](./docs/tunables.md) for the file-to-task map and current
   values.
 
@@ -167,7 +167,7 @@ succession, and cloud-native World orchestration. The index is
 [`docs/v5.4-extension-plan.md`](./docs/v5.4-extension-plan.md); the task specs
 and rule amendments are in [`DESIGN.md`](./DESIGN.md) Parts 2, 11 and 16.
 
-Nothing in that program changes the current 75-file config count or the
+Nothing in that program changes the current 77-file config count or the
 single-process World until the individual task is started.
 
 ## Non-negotiables

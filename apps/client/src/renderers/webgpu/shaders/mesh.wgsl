@@ -20,8 +20,11 @@
    @location(2) uv: vec2f,
    @location(3) nodeType: f32,
    @location(4) isOwn: f32,
-   @location(5) @interpolate(flat) variationIndex: u32,
- }
+      @location(5) @interpolate(flat) variationIndex: u32,
+   @location(6) @interpolate(flat) blendFactor: f32,
+   // C02b: mutation signature bits for this node.
+   @location(7) @interpolate(flat) mutationMask: u32,
+}
 
  @group(0) @binding(0) var<uniform> frame: FrameUniforms;
  @group(0) @binding(1) var<storage, read> renderData: array<PlantRenderData>;
@@ -34,10 +37,6 @@
  @group(0) @binding(7) var seedTextureArray: texture_2d_array<f32>;
  @group(0) @binding(8) var textureArraySampler: sampler;
 
- // Root aura bindings for this pipeline's layout.
- @group(0) @binding(9) var rootAuraTexture: texture_2d<f32>;
- @group(0) @binding(10) var rootAuraSampler: sampler;
-
  fn hiddenVertex() -> VertexOutput {
    return VertexOutput(
      vec4f(2.0, 2.0, 2.0, 1.0),
@@ -45,10 +44,12 @@
      vec3f(0.0, 1.0, 0.0),
      vec2f(0.0, 0.0),
      0.0,
+          0.0,
+     0u,
      0.0,
      0u,
    );
- }
+}
 
  @vertex
  fn vs_main(input: VertexInput) -> VertexOutput {
@@ -57,17 +58,21 @@
      return hiddenVertex();
    }
 
-   let renderInfo = renderData[plantIndex];
-   if (renderInfo.visible == 0u || renderInfo.tier > 1u) {
-     return hiddenVertex();
-   }
+    let renderInfo = renderData[plantIndex];
+    if (renderInfo.visible == 0u || renderInfo.tier > 2u || (renderInfo.tier == 2u && renderInfo.blendFactor >= 1.0)) {
+      return hiddenVertex();
+    }
 
-   let nodeType = f32((input.packed >> 16u) & 0xffu);
-   let isOwn = f32((input.packed >> 24u) & 0x1u);
-    let variationIndex = (input.packed >> 25u) & 0xfu;
+    let nodeType = f32((input.packed >> 16u) & 0xffu);
+    let isOwn = f32((input.packed >> 24u) & 0x1u);
+     let variationIndex = (input.packed >> 25u) & 0xfu;
+    // Bits 0/1/2: bioluminescent, thickened bark, variegated foliage.
+    let mutationMask = (input.packed >> 29u) & 0x7u;
 
-    // C02b: GPU skinning - emergence value for animation
-    var emergence = input.growthProgress;
+    // C02b: GPU skinning - emergence value for animation. Eased so a node that
+    // arrives with a chunk of server progress still unfolds smoothly instead of
+    // snapping through the middle of its growth curve.
+    var emergence = smoothstep(0.0, 1.0, clamp(input.growthProgress, 0.0, 1.0));
 
     // C02b: Per-part wind sway stiffness by node type
     // Leaves/cotyledons sway most, roots/stems least
@@ -106,25 +111,10 @@
     // NOTE: Do NOT scale worldPosition by emergence from origin. JS pre-computes
     // emergent positions; emergence is used only for radius/fade effects below.
     
-    // Cotyledon unfolding animation: rotate leaf from vertical to horizontal
-    // as growthProgress goes 0→1, and tilt toward sun
-    let isCotyledon = nodeType >= 6.5 && nodeType < 7.5;
-    if (isCotyledon && emergence > 0.02) {
-      // Unfold angle: starts pointing up (vertical), unfolds toward horizontal
-      let unfoldAngle = emergence * 1.4; // radians, ~80 degrees at full growth
-      // Rotate position around X axis (unfold from vertical)
-      let unfoldCos = cos(unfoldAngle);
-      let unfoldSin = sin(unfoldAngle);
-      // Rotate around X: y' = y*cos - z*sin, z' = y*sin + z*cos
-      let unfoldedY = worldPosition.y * unfoldCos - worldPosition.z * unfoldSin;
-      let unfoldedZ = worldPosition.y * unfoldSin + worldPosition.z * unfoldCos;
-      worldPosition = vec3f(worldPosition.x, unfoldedY, unfoldedZ);
-      
-      // Tilt cotyledon toward sun
-      let sunDirection = normalize(frame.sunDirection.xyz);
-      let sunTilt = sunDirection * emergence * 0.15;
-      worldPosition = worldPosition + sunTilt;
-    }
+    // Cotyledon unfolding is baked into the vertex positions by the mesh
+    // builder, which rotates the blade around its own base. Rotating it here
+    // used the world origin as the pivot, so a cotyledon at (1.3, 1.2, 3.5)
+    // swung metres away from the plant as it unfolded.
 
     // Apply skinning for joints with weight > 0
     var skinnedNormal = input.normal;
@@ -155,11 +145,17 @@
       nodeType,
       isOwn,
       variationIndex,
+      renderInfo.blendFactor,
+      mutationMask,
     );
   }
 
  @fragment
  fn fs_main(input: VertexOutput, @builtin(front_facing) frontFacing: bool) -> @location(0) vec4f {
+   if (soilOccludes(input.worldPosition)) {
+     discard;
+   }
+
    var normal = normalize(input.normal);
    if (!frontFacing) {
      normal = -normal;
@@ -238,24 +234,42 @@
      }
    }
 
+   // C02b: mutation signatures, per node. Thickened bark darkens the woody
+   // tissue (its thickness is baked into the tube radii) and variegated foliage
+   // mottles leaf colour; bioluminescence is added after lighting below.
+   if ((input.mutationMask & 2u) != 0u && input.nodeType < 2.5) {
+     baseColor *= 1.0 - clamp((frame.mutation1Param - 1.0) * 0.6, 0.0, 0.35);
+   }
+   let isFoliage = (input.nodeType > 2.5 && input.nodeType < 3.5) ||
+     (input.nodeType > 6.5 && input.nodeType < 7.5);
+   if ((input.mutationMask & 4u) != 0u && isFoliage) {
+     let mottle = 0.5 + 0.5 * sin(input.worldPosition.x * 9.0 + input.worldPosition.y * 5.0)
+       * sin(input.worldPosition.z * 7.0 + input.worldPosition.y * 3.0);
+     baseColor = mix(baseColor, baseColor * vec3f(0.82, 1.08, 0.62), mottle * frame.mutation2Param);
+   }
+
    let healthFactor = 1.0 - frame.healthTintStrength * 0.3;
    baseColor = mix(vec3f(0.42, 0.30, 0.16), baseColor, healthFactor);
 
    let sunDirection = normalize(frame.sunDirection.xyz);
    let nDotL = max(dot(normal, sunDirection), 0.0);
-   var lit = baseColor * (0.30 + 0.70 * nDotL);
+   // Generous ambient plus a soft sky fill keeps the player plant readable
+   // even when the sun is low or the camera looks at its shaded side.
+   let skyFill = vec3f(0.06, 0.09, 0.11) * (0.5 + 0.5 * normal.y);
+   var lit = vec4f(baseColor * (0.45 + 0.55 * nDotL) + skyFill, 1.0);
 
-   let viewDirection = normalize(frame.cameraPos.xyz - input.worldPosition);
-   let rim = pow(1.0 - max(dot(normal, viewDirection), 0.0), 3.0) * 0.18;
-   lit += vec3f(0.18, 0.30, 0.18) * rim;
+    let viewDirection = normalize(frame.cameraPos.xyz - input.worldPosition);
+    let rim = pow(1.0 - max(dot(normal, viewDirection), 0.0), 3.0) * 0.18;
+    lit = vec4f(lit.rgb + vec3f(0.18, 0.30, 0.18) * rim, lit.a);
 
-   if (frame.mutation0Param > 0.01) {
-     let emissive = frame.mutation0Param * 0.25;
-     let glowColor = vec3f(0.20, 0.75, 0.45);
-     let pulse = 0.6 + 0.4 * sin(frame.time * 2.0 + input.worldPosition.y * 0.5);
-     lit += glowColor * (emissive * pulse);
-   }
+    if ((input.mutationMask & 1u) != 0u && frame.mutation0Param > 0.01) {
+      let emissive = frame.mutation0Param * 0.25;
+      let glowColor = vec3f(0.20, 0.75, 0.45);
+      let pulse = 0.6 + 0.4 * sin(frame.time * 2.0 + input.worldPosition.y * 0.5);
+      lit = vec4f(lit.rgb + glowColor * (emissive * pulse), lit.a);
+    }
 
-   lit = applyRootSight(lit, input.worldPosition, input.nodeType, input.isOwn, frame);
-   return vec4f(lit, 1.0);
+    lit = applyRootSight(lit.rgb, input.worldPosition, input.nodeType, input.isOwn, frame);
+    lit = vec4f(lit.rgb, lit.a * (1.0 - input.blendFactor));
+    return lit;
  }

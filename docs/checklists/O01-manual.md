@@ -14,9 +14,9 @@ gaps.
 - [x] `pnpm typecheck`
   - Expected: all 4 projects `Done`.
 - [x] `pnpm config:validate`
-  - Expected: 75 files, OK.
+  - Expected: 77 files, OK.
 - [x] `pnpm test`
-  - Expected: 51 shared tests + 51 server tests pass, 0 fail (102 total).
+  - Expected: 57 shared tests + 127 server tests pass, 0 fail (184 total).
 - [x] `pnpm build`
   - Expected: `apps/client/dist/index.html` plus hashed `assets/*.js` and
     `assets/*.css` from Vite.
@@ -28,7 +28,7 @@ gaps.
 - [x] `node apps/server/src/main.ts` (no `DATABASE_URL`)
   - Expected log: `listening`, `database: skipped`.
 - [x] `curl http://127.0.0.1:8080/health`
-  - Expected: 200, `"status":"ok"`, `"config_files":75`,
+  - Expected: 200, `"status":"ok"`, `"config_files":77`,
     `"database":"skipped"`.
   - Observed: exact.
 - [x] `curl http://127.0.0.1:8080/ready`

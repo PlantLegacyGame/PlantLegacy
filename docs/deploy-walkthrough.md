@@ -97,7 +97,7 @@ curl.exe http://127.0.0.1:8080/ready
 ```
 
 Expected: both return 200; `/health` shows `"database":"ok"` and
-`"config_files":75`; `/ready` shows `"ready":true`.
+`"config_files":77`; `/ready` shows `"ready":true`.
 
 Compose auto-loads `ops/.env`. The server itself reads `process.env` directly
 and has no dotenv loader.

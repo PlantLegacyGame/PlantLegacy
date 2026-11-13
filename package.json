@@ -2,7 +2,7 @@
   "name": "plant-legacy",
   "version": "0.1.0",
   "private": true,
-  "description": "Plant Legacy — multiplayer plant organism sim. Phase 0 foundation.",
+  "description": "Plant Legacy — multiplayer plant organism sim. Phase 1.",
   "license": "UNLICENSED",
   "packageManager": "pnpm@10.18.0",
   "engines": {

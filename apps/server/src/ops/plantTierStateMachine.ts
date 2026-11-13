@@ -101,16 +101,27 @@ export function plantTierStateMachineUpdate(
     const oldTier = plant.tier ?? 'dormant';
     if (oldTier !== newTier) {
       transitions.push({ plantId, oldTier, newTier });
+    }
 
-      machine.activePlants.delete(plantId);
-      machine.nearPlants.delete(plantId);
-      machine.dormantPlants.delete(plantId);
+    // Membership is idempotent. When this only ran inside the transition branch,
+    // a plant restored from a save whose tier already matched its computed tier
+    // was in no set at all - never simulated, never maintained, invisible to
+    // getTierStats.
+    machine.activePlants.delete(plantId);
+    machine.nearPlants.delete(plantId);
+    machine.dormantPlants.delete(plantId);
+    if (newTier === 'active') machine.activePlants.add(plantId);
+    else if (newTier === 'near') machine.nearPlants.add(plantId);
+    else machine.dormantPlants.add(plantId);
 
-      if (newTier === 'active') machine.activePlants.add(plantId);
-      else if (newTier === 'near') machine.nearPlants.add(plantId);
-      else machine.dormantPlants.add(plantId);
+    plant.tier = newTier;
+  }
 
-      plant.tier = newTier;
+  // Drop ids whose plant no longer exists, so a removed plant cannot leave a
+  // stale entry behind forever.
+  for (const set of [machine.activePlants, machine.nearPlants, machine.dormantPlants]) {
+    for (const id of set) {
+      if (!allPlants.has(id)) set.delete(id);
     }
   }
 

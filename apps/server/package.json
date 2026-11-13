@@ -6,12 +6,13 @@
   "description": "Plant Legacy world server. One process, one World, one Postgres.",
   "scripts": {
     "start": "node src/main.ts",
-    "dev": "node --watch-path=src/main.ts --watch-path=src/core --watch-path=src/ops --watch-path=../../packages/shared/src src/main.ts",
+    "dev": "node ../../tools/watch-server.mjs",
     "typecheck": "tsc -p tsconfig.json",
     "test": "node --test \"src/**/*.test.ts\""
   },
   "dependencies": {
     "@dimforge/rapier3d-compat": "^0.21.0",
+    "@node-rs/argon2": "^2.2.2",
     "@plant-legacy/shared": "workspace:*",
     "@plant-legacy/weather": "workspace:*",
     "bcryptjs": "^2.4.3",

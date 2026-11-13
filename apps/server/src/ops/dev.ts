@@ -7,7 +7,18 @@ import { loadConfigDir } from '@plant-legacy/shared/config';
 import { createLogger } from '../ops/log.ts';
 
 const log = createLogger('debug');
-const isProduction = process.env.NODE_ENV === 'production';
+
+/**
+ * Dev tooling exists only in a local run.
+ *
+ * The old gate was `NODE_ENV === 'production'`, which left every other deployed
+ * environment — `staging` is a configured one — able to reach `/dev/config` and
+ * DEV_ACTION, including live mutations such as `persistence_enabled` and
+ * force-save. Unset NODE_ENV is `local` by the same defaulting in core/config.
+ */
+export function devToolsAllowed(): boolean {
+  return (process.env.NODE_ENV ?? 'local') === 'local';
+}
 
 function defaultConfigDir(): string {
   let dir = process.cwd();
@@ -95,18 +106,28 @@ export async function readJsonBody(req: IncomingMessage): Promise<unknown> {
   });
 }
 
-/** Loads dev.json config and returns flattened key-value map. */
+/**
+ * Loads dev.json config and returns a flattened key-value map.
+ *
+ * Cached for the process lifetime: `POST /dev/config` mutates this map, and
+ * re-reading the file on every request discarded those updates immediately.
+ */
+let devConfigCache: Map<string, ConfigEntry> | null = null;
+
 export async function loadDevConfig(): Promise<Map<string, ConfigEntry>> {
+  if (devConfigCache) return devConfigCache;
+
   const configDir = defaultConfigDir();
   const result = await loadConfigDir(configDir);
-  const devFile = result.configs.get('dev.json');
-  if (!devFile?.values) {
-    return new Map();
-  }
+  // loadConfigDir keys configs by system name (file name without `.json`).
+  const devFile = result.configs.get('dev');
   const map = new Map<string, ConfigEntry>();
-  for (const [key, entry] of Object.entries(devFile.values)) {
-    map.set(key, entry as ConfigEntry);
+  if (devFile?.values) {
+    for (const [key, entry] of Object.entries(devFile.values)) {
+      map.set(key, entry as ConfigEntry);
+    }
   }
+  devConfigCache = map;
   return map;
 }
 
@@ -124,7 +145,7 @@ export async function handleGetDevConfig(
   _req: IncomingMessage,
   res: ServerResponse,
 ): Promise<void> {
-  if (isProduction) {
+  if (!devToolsAllowed()) {
     res.writeHead(404, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: 'not_found' }));
     return;
@@ -146,11 +167,11 @@ export async function handleGetDevConfig(
 export async function handlePostDevConfig(
   req: IncomingMessage,
   res: ServerResponse,
-): Promise<void> {
-  if (isProduction) {
+): Promise<Array<{ key: string; value: unknown }> | null> {
+  if (!devToolsAllowed()) {
     res.writeHead(404, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: 'not_found' }));
-    return;
+    return null;
   }
 
   try {
@@ -158,11 +179,12 @@ export async function handlePostDevConfig(
     if (typeof body !== 'object' || body === null) {
       res.writeHead(400, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: 'invalid_payload' }));
-      return;
+      return null;
     }
 
     const configs = await loadDevConfig();
     const updated: Record<string, unknown> = {};
+    const applied: Array<{ key: string; value: unknown }> = [];
     const errors: string[] = [];
 
     for (const [key, value] of Object.entries(body)) {
@@ -177,6 +199,7 @@ export async function handlePostDevConfig(
         continue;
       }
       updated[key] = value;
+      applied.push({ key, value });
       // Update in-memory value for immediate effect
       entry.value = value;
     }
@@ -184,16 +207,20 @@ export async function handlePostDevConfig(
     if (errors.length > 0) {
       res.writeHead(400, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ ok: false, errors, updated: Object.keys(updated) }));
-      return;
+      return null;
     }
 
     // TODO: Optionally persist to disk (D01 scope is runtime only)
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ ok: true, updated: Object.keys(updated) }));
+    // Callers must apply these to the live systems: writing the config entry
+    // alone changes nothing for switches already copied into runtime config.
+    return applied;
   } catch (error) {
     log.error('Failed to update dev config', { error: String(error) });
     res.writeHead(500, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: 'internal_error' }));
+    return null;
   }
 }
 
@@ -220,7 +247,9 @@ export type DevActionType =
   | 'dev_reinit_renderer'
   | 'dev_dump_shaders'
   | 'dev_stress_test'
-  | 'dev_regenerate_plant';
+  | 'dev_regenerate_plant'
+  | 'dev_end_season'
+  | 'dev_set_config';
 
 export interface DevActionPayload {
   type: DevActionType;

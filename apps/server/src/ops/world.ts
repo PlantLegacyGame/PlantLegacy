@@ -5,7 +5,10 @@ export interface WorldConfig {
   maxPlayersPerWorld: number;
   reconnectWindowMin: number;
   persistenceEnabled: boolean;
-  offlineDamageMultiplier: number;
+  /** Seconds between periodic plant snapshot writes. */
+  plantSaveIntervalSec: number;
+  /** Real days per season before the calamity. */
+  seasonLengthDays: number;
   detailedPlantBudget: number;
   cellSize: number;
   interestRingRadius: number;
@@ -30,7 +33,8 @@ export function loadWorldConfig(configs: Map<string, ConfigFile>): WorldConfig {
     maxPlayersPerWorld: readNumber(configs, 'world', 'max_players_per_world'),
     reconnectWindowMin: readNumber(configs, 'world', 'reconnect_window_min'),
     persistenceEnabled: readBoolean(configs, 'world', 'persistence_enabled'),
-    offlineDamageMultiplier: readNumber(configs, 'world', 'offline_damage_multiplier'),
+    plantSaveIntervalSec: readNumber(configs, 'world', 'plant_save_interval_s'),
+    seasonLengthDays: readNumber(configs, 'world', 'season_length_days'),
     detailedPlantBudget: readNumber(configs, 'world', 'detailed_plant_budget'),
     cellSize: readNumber(configs, 'world', 'cell_size'),
     interestRingRadius: readNumber(configs, 'world', 'interest_ring_radius'),

@@ -1,39 +1,39 @@
 # Plant Legacy — Complete Developer Reference
 
-**Last Updated:** 2026-11-09  
-**Current Phase:** Gate 0 complete; Gate 1 run-up (Week 3-24)  
-**Completed Tasks:** T00, O01, **T03P**, **C01**, **T00A**, **T01**, **C02**, **T03**, **T08C**, **T02**, **T07**, **C03**  
-**Partial Tasks:** C02b (v1 slice), D01 (foundation)  
-**Next Task:** P0 blockers, then T05 (see `docs/what-works-now.md`)  
+**Last Updated:** 2026-11-09
+**Current Phase:** Gate 0 complete; Gate 1 run-up (Week 3-24)
+**Completed Tasks:** T00, O01, **T03P**, **C01**, **T00A**, **T01**, **C02**, **T03**, **T08C**, **T02**, **T07**, **C03**
+**Partial Tasks:** C02b (v1 slice), D01 (foundation)
+**Next:** visual/onboarding polish, then the remaining C02b gaps (see `docs/what-works-now.md`)
 **Approved 2026-11-09 (not built):** V5.4 extension program — reactive fauna, material simulation, volumetric terrain, parametric features, world objects, succession, cloud orchestration. See `docs/v5.4-extension-plan.md`.
 
 ---
 
-## 📋 Project Status at a Glance
+## Project Status at a Glance
 
 | Task | Status | Description |
 |------|--------|-------------|
-| T00 | ✅ Complete | Foundation: monorepo, 75 config files, config validator, rarity ban (RULE_20), account-bound invariant (RULE_23) |
-| O01 | ✅ Complete | Repo + deploy pipeline: pnpm, Biome, CI, Docker, GitHub Pages, `/health` + `/ready` |
-| T03P | ✅ Complete | WebSocket + JSON protocol, 20 Hz authoritative plant sync; velocity/bounds rejection effective and tested |
-| C01 | ✅ Complete | Input abstraction, UI shell, quality tiers, debug overlay, pause-on-hidden, config routes |
-| C02 | ✅ Complete | Procedural plant renderer v1: Raymarched SDF with polynomial smooth minimum (smin) organic fusion inside local bounding volumes; seamless living organism |
-| T00A | ✅ Complete | Tile grid resource model (light/moisture/minerals), simulation, photosynthesis, absorption, onboarding overlays |
-| T01 | ✅ Complete | Server-authoritative typed-node growth: biomass cost, root competition, canopy shading, root attack; client renders growing plant via C02; biomass UI readout; 'G' key to grow |
-| T03 | ✅ Complete | Persistence (binary snapshot + event log), offline tiers (Active/Near/Dormant), interest management, event bus, tick budget |
-| T08C | ✅ Complete | Accounts and sessions: argon2id, JWT access/refresh, rate limits, lockout, WebSocket auth |
-| T02 | ✅ Complete | Root Sight: two-mode camera and soil cutaway integrated with continuous SDF organism renderer; subterranean roots highlight in green/orange through cutaway |
+| T00 | Complete | Foundation: monorepo, 77 config files, config validator, rarity ban (RULE_20), account-bound invariant (RULE_23) |
+| O01 | Complete | Repo + deploy pipeline: pnpm, Biome, CI, Docker, GitHub Pages, `/health` + `/ready` |
+| T03P | Complete | WebSocket + JSON protocol, 20 Hz authoritative plant sync; movement is client-side camera panning — `validateMovement` is tested but has no call sites (see `docs/tasks/T03P.md`) |
+| C01 | Complete | Input abstraction, UI shell, quality tiers, debug overlay, pause-on-hidden, config routes |
+| C02 | Complete | Procedural plant renderer v1: Raymarched SDF with polynomial smooth minimum (smin) organic fusion inside local bounding volumes; seamless living organism |
+| T00A | Complete | Tile grid resource model (light/moisture/minerals), simulation, photosynthesis, absorption, onboarding overlays |
+| T01 | Complete | Server-authoritative typed-node growth: biomass cost, root competition, canopy shading, root attack; client renders growing plant via C02; biomass UI readout; 'G' key to grow |
+| T03 | Complete | Persistence (binary snapshot + event log), offline tiers (Active/Near/Dormant), interest management, event bus, tick budget |
+| T08C | Complete | Accounts and sessions: Argon2id (bcrypt only for legacy rows), JWT access/refresh, rate limits, lockout, WebSocket auth |
+| T02 | Complete | Root Sight: two-mode camera and soil cutaway integrated with continuous SDF organism renderer; subterranean roots highlight in green/orange through cutaway |
 
 ### What Works Now (Live)
 - **Local dev:** `pnpm dev` → server (8080) + Vite client (4173) with hot reload
 - **Staging:** GitHub Pages at `https://plantlegacygame.github.io/PlantLegacy/`, API via Cloudflare quick tunnel
 - **Protocol:** WebSocket v1 documented in `docs/protocol.md`; two tabs, server-authoritative plant sync
 - **Client:** Three.js scene, OrbitControls, C02 procedural plant renderer (Raymarched SDF with polynomial smooth minimum primitive fusion into one seamless organism, shared material, 3D triplanar noise, vertex wind sway, health tint, mutation signatures, L0/L1), T02 Root Sight cutaway, onboarding overlays
-- **Config:** 75 files in `config/` (extended-1 format), validated at startup + CI
+- **Config:** 77 files in `config/` (extended-1 format), validated at startup + CI
 
 ---
 
-## 🔧 1. Local Development (Daily Workflow)
+## 1. Local Development (Daily Workflow)
 
 ### Primary Command
 ```bash
@@ -43,24 +43,24 @@ pnpm dev
 1. Checks for `node_modules` → runs `pnpm install` if missing
 2. Starts **server** in watch mode (`node --watch src/main.ts`) on `http://127.0.0.1:8080`
 3. Starts **Vite dev server** on `http://localhost:4173` with:
-   - Hot module replacement (HMR)
-   - Proxy for `/health`, `/ready`, `/config`, `/ws` → server
-   - Serves `apps/client/index.html` as entry
+ - Hot module replacement (HMR)
+ - Proxy for `/health`, `/ready`, `/config`, `/ws` → server
+ - Serves `apps/client/index.html` as entry
 
-**Open:** `http://localhost:4173` in **two tabs** to test multiplayer sync  
-(Use `localhost`, not `127.0.0.1`; Vite binds the IPv6 loopback on Windows.)  
+**Open:** `http://localhost:4173` in **two tabs** to test multiplayer sync
+(Use `localhost`, not `127.0.0.1`; Vite binds the IPv6 loopback on Windows.)
 **Stop:** `Ctrl+C` in the terminal running `pnpm dev`
 
 ### Verification Commands
 ```bash
-pnpm verify        # Full CI chain: lint + typecheck + config:validate + test
-pnpm lint          # Biome check (formatter + linter)
-pnpm lint:fix      # Auto-fix lint issues (safe fixes only)
-pnpm typecheck     # TypeScript strict check across all packages
-pnpm config:validate  # Validates all 75 config files (schema + rarity ban + account-bound)
-pnpm test          # node --test in packages/shared + apps/server
-pnpm build         # Production build: Vite → apps/client/dist
-pnpm start         # Server only (no watch), for production
+pnpm verify # Full CI chain: lint + typecheck + config:validate + test
+pnpm lint # Biome check (formatter + linter)
+pnpm lint:fix # Auto-fix lint issues (safe fixes only)
+pnpm typecheck # TypeScript strict check across all packages
+pnpm config:validate # Validates all 77 config files (schema + rarity ban + account-bound)
+pnpm test # node --test in packages/shared + apps/server
+pnpm build # Production build: Vite → apps/client/dist
+pnpm start # Server only (no watch), for production
 ```
 
 ### Key URLs (Local)
@@ -72,7 +72,7 @@ pnpm start         # Server only (no watch), for production
 
 ---
 
-## 🌐 2. Staging Deploy (Public Demo) — Manual Process
+## 2. Staging Deploy (Public Demo) — Manual Process
 
 ### Prerequisites (One-Time Setup)
 - [x] GitHub repo: `PlantLegacyGame/PlantLegacy`
@@ -119,9 +119,9 @@ cloudflared tunnel --url http://localhost:8080
 #### Wire the tunnel origin
 1. Put the tunnel origin in `ops/.env` → `CORS_ORIGINS`.
 2. Restart the server so it picks up the value:
-   `docker compose -f ops/compose.yml up -d server`
+ `docker compose -f ops/compose.yml up -d server`
 3. GitHub → `https://github.com/PlantLegacyGame/PlantLegacy/settings/variables/actions`
-   → edit `STAGING_SERVER_ORIGIN` → paste the **new** tunnel URL.
+ → edit `STAGING_SERVER_ORIGIN` → paste the **new** tunnel URL.
 
 #### Trigger Deploy
 ```powershell
@@ -133,8 +133,8 @@ git push origin main
 #### Verify
 1. **GitHub Actions** → `deploy-staging` → wait for **green**.
 2. **Pages URL:** `https://plantlegacygame.github.io/PlantLegacy/` → canvas renders,
-   hint card appears, and DevTools shows `wss://<tunnel>/ws` **101** plus
-   `/config/onboarding` and `/config/plant_renderer` **200**.
+ hint card appears, and DevTools shows `wss://<tunnel>/ws` **101** plus
+ `/config/onboarding` and `/config/plant_renderer` **200**.
 
 ### Keep Running for Demo
 - **Window 1** (docker compose) — must stay open
@@ -143,7 +143,7 @@ git push origin main
 
 ---
 
-## 🛑 3. Stop Everything
+## 3. Stop Everything
 
 ```powershell
 # Stop staging stack (frees ports 8080, 5432)
@@ -156,7 +156,7 @@ docker compose -f ops/compose.yml down
 
 ---
 
-## 🖥️ 4. Future: Persistent Staging (VPS Options)
+## 4. Future: Persistent Staging (VPS Options)
 
 When you want a persistent staging server that doesn't require tunnel restarts:
 
@@ -202,70 +202,70 @@ nginx or a named Cloudflare tunnel). GitHub Pages is HTTPS, so a plain
 
 ---
 
-## 📚 5. Project Architecture Reference
+## 5. Project Architecture Reference
 
 ### Repository Structure
 ```
 PlantLegacy/
 ├── .github/workflows/
-│   ├── ci.yml              # Lint, typecheck, config:validate, test, build
-│   └── deploy-staging.yml  # Build client → GitHub Pages on main push
+│ ├── ci.yml # Lint, typecheck, config:validate, test, build
+│ └── deploy-staging.yml # Build client → GitHub Pages on main push
 ├── apps/
-│   ├── client/             # Vite + Three.js client (C01, T00A, C02)
-│   │   ├── index.html      # Vite entry + meta[name=server-origin]
-│   │   ├── src/
-│   │   │   ├── main.ts     # Game client entry (WebSocket, Three.js, input, overlays)
-│   │   │   ├── styles.css  # Page + overlay styles
-│   │   │   ├── config/plantRendererConfig.ts  # fetch + fallback for /config/plant_renderer
-│   │   │   └── renderers/PlantRenderer.ts     # C02: tapered tubes, instanced leaves, shared plant material, triplanar noise, wind, health tint, mutation signatures, L0/L1 LOD
-│   │   ├── scripts/        # Legacy preview helpers (unused by `pnpm dev`)
-│   │   ├── vite.config.ts  # Vite config with dev proxy + Pages base path
-│   │   └── package.json    # deps: three, vite, @vitejs/plugin-legacy
-│   └── server/             # Node HTTP + WebSocket server
-│       ├── src/
-│       │   ├── main.ts     # HTTP + WebSocket server, World, /config routes
-│       │   ├── core/       # config.ts, version.ts
-│       │   └── ops/        # net.ts (protocol), health.ts, db.ts, log.ts
-│       ├── Dockerfile      # Node 24 alpine, runs TS directly
-│       └── package.json    # deps: ws, pg, @plant-legacy/shared
-├── packages/shared/        # Shared code (no build step)
-│   └── src/
-│       ├── config/         # Config loader, validator, types
-│       ├── protocol/       # PROTOCOL_VERSION, frame header
-│       ├── events/         # GAME_EVENTS vocabulary
-│       ├── ids/            # Prefixed opaque IDs
-│       ├── math/           # clamp, lerp
-│       └── schemas/        # Item, death-record schemas
-├── config/                 # 75 tunable files (extended-1 format)
-│   ├── _meta/schema.json   # JSON Schema for editors
-│   ├── _meta/validator-rules.md  # Authoritative validator rules
-│   ├── ops.json            # O01, active: ports, CORS, DB, health, log
-│   ├── compliance.json     # T00, draft: 5-line illegal-content policy
-│   ├── net_proto.json      # T03P, draft: protocol tunables
-│   ├── onboarding.json     # T00A, draft: hint card + resource tooltips
-│   ├── plant_renderer.json # T01, draft: Root Sight renderer tunables
-│   └── *.json              # 70 stub configs for future tasks
+│ ├── client/ # Vite + Three.js client (C01, T00A, C02)
+│ │ ├── index.html # Vite entry + meta[name=server-origin]
+│ │ ├── src/
+│ │ │ ├── main.ts # Game client entry (WebSocket, Three.js, input, overlays)
+│ │ │ ├── styles.css # Page + overlay styles
+│ │ │ ├── config/plantRendererConfig.ts # fetch + fallback for /config/plant_renderer
+│ │ │ └── renderers/PlantRenderer.ts # C02: tapered tubes, instanced leaves, shared plant material, triplanar noise, wind, health tint, mutation signatures, L0/L1 LOD
+│ │ ├── scripts/ # Legacy preview helpers (unused by `pnpm dev`)
+│ │ ├── vite.config.ts # Vite config with dev proxy + Pages base path
+│ │ └── package.json # deps: three, vite, @vitejs/plugin-legacy
+│ └── server/ # Node HTTP + WebSocket server
+│ ├── src/
+│ │ ├── main.ts # HTTP + WebSocket server, World, /config routes
+│ │ ├── core/ # config.ts, version.ts
+│ │ └── ops/ # net.ts (protocol), health.ts, db.ts, log.ts
+│ ├── Dockerfile # Node 24 alpine, runs TS directly
+│ └── package.json # deps: ws, pg, @plant-legacy/shared
+├── packages/shared/ # Shared code (no build step)
+│ └── src/
+│ ├── config/ # Config loader, validator, types
+│ ├── protocol/ # PROTOCOL_VERSION, frame header
+│ ├── events/ # GAME_EVENTS vocabulary
+│ ├── ids/ # Prefixed opaque IDs
+│ ├── math/ # clamp, lerp
+│ └── schemas/ # Item, death-record schemas
+├── config/ # 77 tunable files (extended-1 format)
+│ ├── _meta/schema.json # JSON Schema for editors
+│ ├── _meta/validator-rules.md # Authoritative validator rules
+│ ├── ops.json # O01, active: ports, CORS, DB, health, log
+│ ├── compliance.json # T00, draft: 5-line illegal-content policy
+│ ├── net_proto.json # T03P, draft: protocol tunables
+│ ├── onboarding.json # T00A, draft: hint card + resource tooltips
+│ ├── plant_renderer.json # T01, draft: Root Sight renderer tunables
+│ └── *.json # 70 stub configs for future tasks
 ├── tools/
-│   ├── dev.mjs             # pnpm dev orchestrator
-│   ├── config-validator/   # CLI for config validation
-│   └── sim-bots/load-test/seed-data/backup/  # Placeholders
+│ ├── dev.mjs # pnpm dev orchestrator
+│ ├── config-validator/ # CLI for config validation
+│ └── sim-bots/load-test/seed-data/backup/ # Placeholders
 ├── ops/
-│   ├── compose.yml         # Docker Compose: server + postgres:17-alpine
-│   └── docker/backup-scripts/deploy/  # Documentation
+│ ├── compose.yml # Docker Compose: server + postgres:17-alpine
+│ └── docker/backup-scripts/deploy/ # Documentation
 ├── docs/
-│   ├── protocol.md         # Wire protocol spec (T03P)
-│   ├── tunables.md         # Config file → task mapping
-│   ├── v5.4-extension-plan.md # Approved (not built) reactive fauna / materials / terrain / objects
-│   ├── what-works-now.md   # Honest status
-│   ├── tasks/              # Task records (T00.md, O01.md, etc.)
-│   └── checklists/         # Manual test checklists
-├── DESIGN.md               # Master Build Plan v5.3.1 (SOURCE OF TRUTH)
-├── CONTEXT.md              # Current stack, interfaces, locked decisions
-├── README.md               # Quick start, scripts, layout
-├── pnpm-workspace.yaml     # Workspace config
-├── tsconfig.base.json      # TypeScript base config
-├── biome.json              # Lint/format config
-└── .env.example            # Environment variable template
+│ ├── protocol.md # Wire protocol spec (T03P)
+│ ├── tunables.md # Config file → task mapping
+│ ├── v5.4-extension-plan.md # Approved (not built) reactive fauna / materials / terrain / objects
+│ ├── what-works-now.md # Honest status
+│ ├── tasks/ # Task records (T00.md, O01.md, etc.)
+│ └── checklists/ # Manual test checklists
+├── DESIGN.md # Master Build Plan v5.3.1 (SOURCE OF TRUTH)
+├── CONTEXT.md # Current stack, interfaces, locked decisions
+├── README.md # Quick start, scripts, layout
+├── pnpm-workspace.yaml # Workspace config
+├── tsconfig.base.json # TypeScript base config
+├── biome.json # Lint/format config
+└── .env.example # Environment variable template
 ```
 
 ### Key Config Files
@@ -283,7 +283,7 @@ its type, range and default.
 
 ---
 
-## 🔑 6. Critical Rules (Locked Decisions)
+## 6. Critical Rules (Locked Decisions)
 
 These are **non-negotiable** — violating them breaks the architecture:
 
@@ -299,19 +299,19 @@ These are **non-negotiable** — violating them breaks the architecture:
 
 ---
 
-## 🚀 7. Gate 1 Run-up Roadmap (Next Tasks)
+## 7. Gate 1 Run-up Roadmap (Next Tasks)
 
 Per `DESIGN.md` Part 4, the ordered tasks to reach **Gate 1 (Week 24)**:
 
 | Order | Task | Description | Depends On | Status |
 |-------|------|-------------|------------|--------|
-| 0 | **T03P** | Networking gate: config-driven move speed, snake_case `world_bounds`, rejection tested | T03P | ✅ complete |
-| 1 | **T01** | Growth: typed nodes, biomass cost, root competition, canopy shading, root attack | T00A | ✅ complete |
-| 2 | **C03** | Environment rendering: terrain, sky, weather visuals | C01, T01 | next |
-| 2 | **C02** | Procedural plant renderer v1 (tapered tubes, instanced leaves, shared material, L0/L1) | C01 | ✅ complete |
-| 3 | **T03** | Multiplayer world: persistence, offline tiers, binary framing + delta | T03P, T01 | not started |
-| 4 | **T07** | Weather + day/night | T00A, T03 | not started |
-| 5 | **C03** | Environment and weather visuals | T07, C01 | not started |
+| 0 | **T03P** | Networking gate: config-driven move speed, snake_case `world_bounds`, rejection tested | T03P | complete |
+| 1 | **T01** | Growth: typed nodes, biomass cost, root competition, canopy shading, root attack | T00A | complete |
+| 2 | **C03** | Environment rendering: terrain, sky, weather visuals | C01, T01 | complete |
+| 2 | **C02** | Procedural plant renderer v1 (tapered tubes, instanced leaves, shared material, L0/L1) | C01 | complete |
+| 3 | **T03** | Multiplayer world: persistence, offline tiers, event bus (binary framing still not on the wire) | T03P, T01 | complete |
+| 4 | **T07** | Weather + day/night | T00A, T03 | complete |
+| 5 | **C03** | Environment and weather visuals | T07, C01 | complete |
 
 This table is deliberately short: it lists only the tasks whose DESIGN.md
 ordering follows Gate 0. The full ordered list is DESIGN.md Part 4.
@@ -320,7 +320,7 @@ ordering follows Gate 0. The full ordered list is DESIGN.md Part 4.
 
 ---
 
-## ⚡ 8. Quick Reference Card
+## 8. Quick Reference Card
 
 ### Daily Commands
 | Goal | Command |
@@ -361,20 +361,20 @@ ordering follows Gate 0. The full ordered list is DESIGN.md Part 4.
 
 ---
 
-## 📝 9. Important Notes for Future Sessions
+## 9. Important Notes for Future Sessions
 
 ### Config System
 - **Never hardcode values** — always use `readNumber/readInteger/readString/readBoolean/readStringArray/readObject` from `@plant-legacy/shared/config`
 - **Config validator runs at server startup** — invalid config = process exits before listening
-- **75 config files** — 73 DESIGN.md systems plus `onboarding.json` and `plant_renderer.json`
+- **77 config files** — every DESIGN.md Part 6.2 system plus the files added by later tasks (`onboarding`, `plant_renderer`, `growth`, `chat`, `emotes`, `reports`, `dev`)
 - **Rarity ban is absolute** — any `rarity` key or enum member fails validation
 - **`account_bound: true` forces** `tradeable`, `mailable`, `listable` to `false` (RULE_23)
-- **Known RULE_3 gaps to close:** `speed = 5.0` in `apps/server/src/ops/net.ts`, hardcoded WASD bindings and camera limits in `apps/client/src/main.ts`
+- **Known RULE_3 gaps to close:** hardcoded WASD bindings and camera limits in `apps/client/src/main.ts` (the old `speed = 5.0` in `apps/server/src/ops/net.ts` is gone; movement is client-side and unvalidated)
 
 ### Client-Server Boundary
 - **Client is NEVER authoritative** — it renders received state and sends input intents
 - **Server owns the tick** — `World` steps at `net_proto.tick_rate_hz` and broadcasts `STATE` / `KEYFRAME` with plant updates
-- **Rejection is currently broken** — `validateMovement` compares camelCase `worldBounds` keys against the snake_case config and moves at a hardcoded speed below the velocity limit, so no input produces `REJECT`. See `docs/protocol.md` known gaps.
+- **Movement rejection is not wired up** — `validateMovement` has no call sites, so the server never runs it; `processInputs` repeats only the velocity check, and that check cannot fire with the shipped `max_velocity_units_per_tick` of 5.0 against unit direction vectors (0, 1 or √2). No bounds check exists. See `docs/protocol.md`.
 - **Protocol v1** — WebSocket + JSON; T03 will replace with binary framing + delta compression
 
 ### Development Workflow
@@ -390,7 +390,7 @@ ordering follows Gate 0. The full ordered list is DESIGN.md Part 4.
 
 ---
 
-## 📖 10. Essential Documentation Links
+## 10. Essential Documentation Links
 
 | Document | Purpose |
 |----------|---------|
@@ -405,5 +405,5 @@ ordering follows Gate 0. The full ordered list is DESIGN.md Part 4.
 
 ---
 
-**Keep this file updated** as tasks complete and new workflows emerge.  
+**Keep this file updated** as tasks complete and new workflows emerge.
 Next update after **C03 Environment Rendering**.

@@ -49,7 +49,17 @@ export interface AuthResponse {
   error?: string;
 }
 
-export function createAccountsHandlers(accountsService: AccountsService): {
+export interface AccountsHandlerOptions {
+  /** Trust X-Forwarded-For. Off unless a trusted proxy overwrites the header. */
+  trustProxy?: boolean;
+  /** Hard cap on a request body, in bytes. */
+  maxBodyBytes?: number;
+}
+
+export function createAccountsHandlers(
+  accountsService: AccountsService,
+  options: AccountsHandlerOptions = {},
+): {
   handleSignup: (req: IncomingMessage, res: ServerResponse) => Promise<void>;
   handleLogin: (req: IncomingMessage, res: ServerResponse) => Promise<void>;
   handleRefresh: (req: IncomingMessage, res: ServerResponse) => Promise<void>;
@@ -60,10 +70,17 @@ export function createAccountsHandlers(accountsService: AccountsService): {
     accountId: string,
   ) => Promise<void>;
 } {
+  const maxBodyBytes = options.maxBodyBytes ?? 16384;
+
   function getClientIp(req: IncomingMessage): string {
-    const forwarded = req.headers['x-forwarded-for'];
-    if (forwarded) {
-      return (Array.isArray(forwarded) ? forwarded[0] : forwarded).split(',')[0].trim();
+    // X-Forwarded-For is client-controlled unless a proxy rewrites it, so it may
+    // only be trusted when the deployment opts in. Otherwise every caller could
+    // mint a new identity per request and defeat rate limits and lockout.
+    if (options.trustProxy) {
+      const forwarded = req.headers['x-forwarded-for'];
+      if (forwarded) {
+        return (Array.isArray(forwarded) ? forwarded[0] : forwarded).split(',')[0].trim();
+      }
     }
     return req.socket.remoteAddress ?? 'unknown';
   }
@@ -75,7 +92,14 @@ export function createAccountsHandlers(accountsService: AccountsService): {
   async function readBody(req: IncomingMessage): Promise<unknown> {
     return new Promise((resolve, reject) => {
       let body = '';
-      req.on('data', (chunk) => {
+      let bytes = 0;
+      req.on('data', (chunk: Buffer) => {
+        bytes += chunk.length;
+        if (bytes > maxBodyBytes) {
+          req.destroy();
+          reject(new Error('Payload too large'));
+          return;
+        }
         body += chunk;
       });
       req.on('end', () => {

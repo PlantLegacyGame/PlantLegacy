@@ -1,6 +1,13 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { clampGrowthDirectionByGene, NODE_GROWTH_CONSTRAINTS, type NodeType } from './index.ts';
+import {
+  clampGrowthDirectionByGene,
+  getSeedBodyHeightRatio,
+  NODE_GROWTH_CONSTRAINTS,
+  type NodeType,
+  seedBodyCentreY,
+  seedBodyHalfHeight,
+} from './index.ts';
 
 describe('clampGrowthDirectionByGene', () => {
   it('clamps radicle and root directions downward within gene cone', () => {
@@ -80,5 +87,20 @@ describe('clampGrowthDirectionByGene', () => {
       assert(c.minY <= c.maxY, `minY <= maxY for ${t}`);
       assert(c.minY >= -1.0 && c.maxY <= 1.0, `Y bounds within [-1, 1] for ${t}`);
     }
+  });
+});
+
+describe('seed body placement', () => {
+  it('lifts the drawn seed centre by its own half-height', () => {
+    const radius = 0.075;
+    assert.equal(seedBodyHalfHeight(radius), radius * getSeedBodyHeightRatio());
+    assert.equal(seedBodyCentreY(0, radius), seedBodyHalfHeight(radius));
+    assert.equal(seedBodyCentreY(-2, radius), -2 + seedBodyHalfHeight(radius));
+  });
+
+  it('leaves the contact point on the ground when the body is not a real radius', () => {
+    assert.equal(seedBodyHalfHeight(0), 0);
+    assert.equal(seedBodyHalfHeight(-1), 0);
+    assert.equal(seedBodyCentreY(3, Number.NaN), 3);
   });
 });

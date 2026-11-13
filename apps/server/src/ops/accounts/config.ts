@@ -17,7 +17,12 @@ export interface AccountsConfig {
   rateLimitRefreshPerMinute: number;
   lockoutMaxFailedAttempts: number;
   lockoutDurationMin: number;
+  argon2MemoryKib: number;
+  argon2TimeCost: number;
+  argon2Parallelism: number;
+  /** Legacy bcrypt cost, only used to recognise old password hashes. */
   bcryptCost: number;
+  requestBodyMaxBytes: number;
   jwtAlgorithm: 'HS256' | 'RS256';
   jwtIssuer: string;
   jwtAudience: string;
@@ -44,7 +49,11 @@ export function loadAccountsConfig(configs: Map<string, ConfigFile>): AccountsCo
     rateLimitRefreshPerMinute: readInteger(configs, 'accounts', 'rate_limit_refresh_per_minute'),
     lockoutMaxFailedAttempts: readInteger(configs, 'accounts', 'lockout_max_failed_attempts'),
     lockoutDurationMin: readInteger(configs, 'accounts', 'lockout_duration_min'),
+    argon2MemoryKib: readInteger(configs, 'accounts', 'argon2_memory_kib'),
+    argon2TimeCost: readInteger(configs, 'accounts', 'argon2_time_cost'),
+    argon2Parallelism: readInteger(configs, 'accounts', 'argon2_parallelism'),
     bcryptCost: readInteger(configs, 'accounts', 'bcrypt_cost'),
+    requestBodyMaxBytes: readInteger(configs, 'accounts', 'request_body_max_bytes'),
     jwtAlgorithm: readString(configs, 'accounts', 'jwt_algorithm') as 'HS256' | 'RS256',
     jwtIssuer: readString(configs, 'accounts', 'jwt_issuer'),
     jwtAudience: readString(configs, 'accounts', 'jwt_audience'),

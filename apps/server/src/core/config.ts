@@ -23,6 +23,7 @@ export interface RuntimeConfig {
   healthPath: string;
   readinessPath: string;
   readinessRequiresDb: boolean;
+  trustProxy: boolean;
   dbPoolMax: number;
   dbConnectTimeoutMs: number;
   dbIdleTimeoutMs: number;
@@ -123,6 +124,7 @@ export async function loadRuntimeConfig(
       env.READINESS_REQUIRES_DB,
       readBoolean(configs, 'ops', 'readiness_requires_db'),
     ),
+    trustProxy: readBoolean(configs, 'ops', 'trust_proxy'),
     dbPoolMax: readNumber(configs, 'ops', 'db_pool_max'),
     dbConnectTimeoutMs: readNumber(configs, 'ops', 'db_connect_timeout_ms'),
     dbIdleTimeoutMs: readNumber(configs, 'ops', 'db_idle_timeout_ms'),

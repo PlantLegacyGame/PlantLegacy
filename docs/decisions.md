@@ -762,3 +762,9 @@ gaps:
 **Consequences.** Auth is now robust against token reuse, rate-limit races, and
 misconfiguration. Pool errors are visible in logs. Lockout is a real deterrent.
 All changes are backward-compatible (new migrations, no protocol change).
+
+**Update (2026-11-12).** Passwords are hashed with Argon2id
+(`@node-rs/argon2`, tuned by `argon2_memory_kib` / `argon2_time_cost` /
+`argon2_parallelism`). `bcryptjs` remains a dependency only to verify legacy
+`$2*` rows, which are rehashed to Argon2id on the next successful login. The
+bcrypt references above describe the state when this record was written.

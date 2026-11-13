@@ -16,7 +16,6 @@ function makeIntent(nodeId = 'node_0', nodeType: NodeType = 'root'): GrowthInten
     nodeId,
     nodeType,
     direction: { x: 0, y: -1, z: 0 },
-    isAttack: false,
     tick: 1,
   };
 }

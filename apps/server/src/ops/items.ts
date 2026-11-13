@@ -1,10 +1,18 @@
 import type { ConfigFile } from '@plant-legacy/shared/config';
 import type { ItemDefinition } from '@plant-legacy/shared/schemas';
 
+export interface ItemEffects {
+  fertilizerMineralsGain: number;
+  dungWaterGain: number;
+  dungMineralsGain: number;
+  essenceEnergyGain: number;
+}
+
 export interface ItemsConfig {
   itemDefinitions: Map<string, ItemDefinition>;
   startingInventory: Array<{ itemId: string; count: number }>;
   inventorySlots: number;
+  effects: ItemEffects;
 }
 
 export function loadItemsConfig(configs: Map<string, ConfigFile>): ItemsConfig {
@@ -14,6 +22,12 @@ export function loadItemsConfig(configs: Map<string, ConfigFile>): ItemsConfig {
       itemDefinitions: new Map(),
       startingInventory: [],
       inventorySlots: 10,
+      effects: {
+        fertilizerMineralsGain: 0,
+        dungWaterGain: 0,
+        dungMineralsGain: 0,
+        essenceEnergyGain: 0,
+      },
     };
   }
 
@@ -55,9 +69,17 @@ export function loadItemsConfig(configs: Map<string, ConfigFile>): ItemsConfig {
   }));
   const inventorySlots = (values.inventory_slots?.value as number) ?? 10;
 
+  const effects: ItemEffects = {
+    fertilizerMineralsGain: (values.fertilizer_minerals_gain?.value as number) ?? 0,
+    dungWaterGain: (values.dung_water_gain?.value as number) ?? 0,
+    dungMineralsGain: (values.dung_minerals_gain?.value as number) ?? 0,
+    essenceEnergyGain: (values.essence_energy_gain?.value as number) ?? 0,
+  };
+
   return {
     itemDefinitions,
     startingInventory: normalizedStartingInventory,
     inventorySlots,
+    effects,
   };
 }

@@ -59,10 +59,13 @@ export function tickClockScheduleNext(clock: TickClock): void {
   const elapsed = now - clock.lastTime;
   clock.lastTime = now;
 
-  // Cap elapsed time to prevent spiral of death
-  const cappedElapsed = Math.min(elapsed, clock.config.maxFrameTimeMs);
-
-  clock.accumulator += cappedElapsed;
+  // Accumulate REAL elapsed time, so simulated time tracks the wall clock even
+  // when one tick costs more than the step. Capping the input (as this used to)
+  // silently discarded the excess, and a slow tick then stretched every
+  // simulation clock (day/night, growth, resources) with server load. Only a
+  // backlog beyond maxFrameTimeMs (a genuine stall) is dropped.
+  const maxBacklogMs = Math.max(tickIntervalMs, clock.config.maxFrameTimeMs);
+  clock.accumulator = Math.min(clock.accumulator + elapsed, maxBacklogMs);
 
   // Process as many ticks as needed
   let ticksProcessed = 0;
@@ -76,12 +79,9 @@ export function tickClockScheduleNext(clock: TickClock): void {
     }
     ticksProcessed++;
 
-    // Safety: prevent infinite loop if tick processing takes too long
-    if (ticksProcessed > 10) {
-      // Too many ticks to catch up, drop accumulator and continue
-      clock.accumulator = 0;
-      break;
-    }
+    // Safety: prevent an unbounded catch-up burst from blocking the event loop
+    // (and starving the network). The leftover backlog stays capped above.
+    if (ticksProcessed > 10) break;
   }
 
   // Schedule next frame

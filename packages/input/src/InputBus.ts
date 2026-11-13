@@ -201,7 +201,11 @@ export class InputBus {
         const state = inputActionStateMachineGetState(machine);
         this.emit(action, {
           active: inputActionStateMachineIsActive(machine),
-          pressed: state === 'pressed',
+          // `pressed` is the press edge itself. A press-mode action rests in the
+          // machine's `active` state, never in `pressed`, so deriving it from the
+          // state reported false forever and every press binding (Space recenter,
+          // grow cancel, emotes, inventory slots) was silently dead.
+          pressed: result.edge === 'pressed',
           toggled: state === 'toggled',
         });
       }

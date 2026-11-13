@@ -1,11 +1,37 @@
 {
   "_meta": {
     "system": "emotes",
-    "version": "0.1.0",
+    "version": "1.0.0",
     "schema": "extended-1",
     "owner_task": "T05",
-    "status": "stub",
-    "notes": "Declared by T00. Populated by T05 per DESIGN.md Part 5."
+    "status": "active",
+    "notes": "T05 Communication: data-driven emote wheel definitions. Each emote has an id, label, type, and range. No rarity field (RULE_20)."
   },
-  "values": {}
+  "values": {
+    "emote_definitions": {
+      "type": "schema_array",
+      "schema": {
+        "id": "string",
+        "label": "string",
+        "type": "enum",
+        "range_px": "number"
+      },
+      "value": [
+        { "id": "wave", "label": "Wave", "type": "body", "range_px": 40 },
+        { "id": "cheer", "label": "Cheer", "type": "body", "range_px": 50 },
+        { "id": "thumbs_up", "label": "Thumbs Up", "type": "body", "range_px": 30 },
+        { "id": "heart", "label": "Heart", "type": "particle", "range_px": 60 },
+        { "id": "think", "label": "Think", "type": "body", "range_px": 20 },
+        { "id": "sleep", "label": "Sleep", "type": "system", "range_px": 15 },
+        { "id": "dance", "label": "Dance", "type": "body", "range_px": 70 },
+        { "id": "sad", "label": "Sad", "type": "body", "range_px": 25 }
+      ]
+    },
+    "emote_range_px": {
+      "type": "number",
+      "value": 100,
+      "range": [5, 200],
+      "notes": "Default emote broadcast range in world units when per-emote range is not set."
+    }
+  }
 }

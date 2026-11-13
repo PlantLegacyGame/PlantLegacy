@@ -3,7 +3,8 @@ import { describe, it } from 'node:test';
 import type { NodeType, Plant, PlantNode } from '@plant-legacy/shared/growth';
 import { newId } from '@plant-legacy/shared/ids';
 import { hash01, hash32, mulberry32 } from '@plant-legacy/shared/math';
-import { deserializePlant, serializePlant } from './plantPersistence.ts';
+import type { Pool } from 'pg';
+import { deserializePlant, PlantPersistence, serializePlant } from './plantPersistence.ts';
 
 function makePlant(nodeCount: number, idPrefix = 'p_'): Plant {
   const plantId = `${idPrefix}${newId('plant')}`;
@@ -286,5 +287,59 @@ describe('serializePlant with UUID-style IDs', () => {
     const loaded = snapshot.nodes.get(nodeId);
     assert.ok(loaded);
     assert.strictEqual(loaded.id, nodeId);
+  });
+});
+
+describe('season calendar persistence', () => {
+  /** A pool that answers one query, so the row mapping can be tested without pg. */
+  function fakePool(
+    query: (sql: string, params?: unknown[]) => Promise<{ rows: unknown[] }>,
+  ): Pool {
+    return { query } as unknown as Pool;
+  }
+
+  it('reads pg BIGINT strings and timestamps into a usable snapshot', async () => {
+    const seen: unknown[][] = [];
+    const pool = fakePool(async (_sql, params) => {
+      seen.push(params ?? []);
+      return {
+        rows: [
+          {
+            season: '7',
+            season_remaining_ticks: '123456789',
+            last_calamity_at: new Date('2026-01-02T03:04:05.000Z'),
+          },
+        ],
+      };
+    });
+
+    const state = await new PlantPersistence(pool, 'world_0').loadSeasonState();
+    assert.deepEqual(state, {
+      season: 7,
+      remainingTicks: 123_456_789,
+      lastCalamityAt: Date.parse('2026-01-02T03:04:05.000Z'),
+    });
+    assert.deepEqual(seen[0], ['world_0']);
+  });
+
+  it('returns null when this world has no calendar row yet', async () => {
+    const pool = fakePool(async () => ({ rows: [] }));
+    assert.equal(await new PlantPersistence(pool, 'world_0').loadSeasonState(), null);
+  });
+
+  it('writes the calendar as a timestamp and keeps a missing calamity null', async () => {
+    const seen: unknown[][] = [];
+    const pool = fakePool(async (_sql, params) => {
+      seen.push(params ?? []);
+      return { rows: [] };
+    });
+    const persistence = new PlantPersistence(pool, 'world_0');
+
+    const at = Date.parse('2026-02-03T04:05:06.000Z');
+    await persistence.saveSeasonState({ season: 4, remainingTicks: 900, lastCalamityAt: at });
+    await persistence.saveSeasonState({ season: 5, remainingTicks: 10, lastCalamityAt: null });
+
+    assert.deepEqual(seen[0], ['world_0', 4, 900, new Date(at)]);
+    assert.deepEqual(seen[1], ['world_0', 5, 10, null]);
   });
 });

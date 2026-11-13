@@ -35,6 +35,9 @@ export interface PlantRendererConfig {
   mutation0Param: number;
   mutation1Param: number;
   mutation2Param: number;
+  mutationBioluminescenceStrength: number;
+  mutationBarkThicknessScale: number;
+  mutationVariegationStrength: number;
   sminBlendRadius: number;
   maxRaymarchSteps: number;
   raymarchHitEpsilon: number;
@@ -46,6 +49,15 @@ export interface PlantRendererConfig {
   l1RaymarchEpsilon: number;
   l2RaymarchEpsilon: number;
   rootSides: number;
+  // C02b/MeshPlantRenderer tessellation
+  meshTubeRadialSegments: number;
+  meshTubeLengthSegments: number;
+  meshLeafSegments: number;
+  meshJointWidthSegments: number;
+  meshJointHeightSegments: number;
+  meshMaxLeavesPerNode: number;
+  meshJointScale: number;
+  meshMaxLeafSize: number;
 }
 
 let plantRendererConfig: PlantRendererConfig = {
@@ -65,7 +77,7 @@ let plantRendererConfig: PlantRendererConfig = {
   tubeRingCount: 8,
   tubeLengthSegments: 8,
   leafCountPerNode: 1,
-  leafSize: 1.2,
+  leafSize: 0.25, // metres: the WebGPU mesh builder draws blades at this length
   leafLengthWidthRatio: 2.5,
   petioleLength: 0.25,
   petioleThickness: 0.015,
@@ -80,6 +92,9 @@ let plantRendererConfig: PlantRendererConfig = {
   mutation0Param: 0.0,
   mutation1Param: 1.5,
   mutation2Param: 0.3,
+  mutationBioluminescenceStrength: 0.55,
+  mutationBarkThicknessScale: 1.35,
+  mutationVariegationStrength: 0.35,
   sminBlendRadius: 0.25,
   maxRaymarchSteps: 16,
   raymarchHitEpsilon: 0.01,
@@ -91,6 +106,14 @@ let plantRendererConfig: PlantRendererConfig = {
   l1RaymarchEpsilon: 0.012,
   l2RaymarchEpsilon: 0.025,
   rootSides: 4,
+  meshTubeRadialSegments: 12,
+  meshTubeLengthSegments: 6,
+  meshLeafSegments: 4,
+  meshJointWidthSegments: 12,
+  meshJointHeightSegments: 10,
+  meshMaxLeavesPerNode: 6,
+  meshJointScale: 0.55,
+  meshMaxLeafSize: 0.45,
 };
 
 type ConfigPayload = Record<string, unknown> & {
@@ -166,6 +189,21 @@ export async function loadPlantRendererConfig(serverOrigin: string): Promise<Pla
         mutation0Param: readValue(payload, 'mutation_visual_0_param', current.mutation0Param),
         mutation1Param: readValue(payload, 'mutation_visual_1_param', current.mutation1Param),
         mutation2Param: readValue(payload, 'mutation_visual_2_param', current.mutation2Param),
+        mutationBioluminescenceStrength: readValue(
+          payload,
+          'mutation_bioluminescence_strength',
+          current.mutationBioluminescenceStrength,
+        ),
+        mutationBarkThicknessScale: readValue(
+          payload,
+          'mutation_bark_thickness_scale',
+          current.mutationBarkThicknessScale,
+        ),
+        mutationVariegationStrength: readValue(
+          payload,
+          'mutation_variegation_strength',
+          current.mutationVariegationStrength,
+        ),
         sminBlendRadius: readValue(payload, 'smin_blend_radius', current.sminBlendRadius),
         maxRaymarchSteps: readValue(payload, 'max_raymarch_steps', current.maxRaymarchSteps),
         raymarchHitEpsilon: readValue(payload, 'raymarch_hit_epsilon', current.raymarchHitEpsilon),
@@ -177,6 +215,34 @@ export async function loadPlantRendererConfig(serverOrigin: string): Promise<Pla
         l1RaymarchEpsilon: readValue(payload, 'l1_raymarch_epsilon', current.l1RaymarchEpsilon),
         l2RaymarchEpsilon: readValue(payload, 'l2_raymarch_epsilon', current.l2RaymarchEpsilon),
         rootSides: readValue(payload, 'root_sides', current.rootSides),
+        meshTubeRadialSegments: readValue(
+          payload,
+          'mesh_tube_radial_segments',
+          current.meshTubeRadialSegments,
+        ),
+        meshTubeLengthSegments: readValue(
+          payload,
+          'mesh_tube_length_segments',
+          current.meshTubeLengthSegments,
+        ),
+        meshLeafSegments: readValue(payload, 'mesh_leaf_segments', current.meshLeafSegments),
+        meshJointWidthSegments: readValue(
+          payload,
+          'mesh_joint_width_segments',
+          current.meshJointWidthSegments,
+        ),
+        meshJointHeightSegments: readValue(
+          payload,
+          'mesh_joint_height_segments',
+          current.meshJointHeightSegments,
+        ),
+        meshMaxLeavesPerNode: readValue(
+          payload,
+          'mesh_max_leaves_per_node',
+          current.meshMaxLeavesPerNode,
+        ),
+        meshJointScale: readValue(payload, 'mesh_joint_scale', current.meshJointScale),
+        meshMaxLeafSize: readValue(payload, 'mesh_max_leaf_size', current.meshMaxLeafSize),
       };
     }
   } catch {

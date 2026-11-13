@@ -1,6 +1,6 @@
 # Protocol
 
-**Status:** implemented by T03P (Gate 0) and T03 (full protocol with persistence, offline tiers, interest management, event bus). Transport is WebSocket + JSON at 20 Hz. Server-authoritative state with client-side camera.
+**Status:** implemented by T03P (Gate 0) and T03 (full protocol with persistence, offline tiers, interest management, event bus). T05 adds chat, emotes, blocking and reports; inventory sync/use/swap and the dev panel are wired server-side. Transport is WebSocket + JSON at 20 Hz. Server-authoritative state with client-side camera.
 **Source of truth:** DESIGN.md Part 13.8.
 
 ---
@@ -38,6 +38,14 @@ Server rejects with `ERROR { code: "VERSION_MISMATCH", ... }` if mismatch.
 | 4 | `GROWTH_INTENT` | `{ plantId: string, nodeId: string, direction: {x,y,z}, nodeType: string, isAttack: boolean, tick: number }` | Request to grow a node |
 | 5 | `RESOURCE_QUERY` | `{ worldX?: number, worldZ?: number, tileX?: number, tileZ?: number }` | Query local resource tile |
 | 6 | `PLANT_SYNC_REQUEST` | `{ plantId: string }` | Request full plant sync |
+| 7 | `GROWTH_OPTIONS_REQUEST` | `{ plantId: string, nodeId: string }` | Ask the server for the legal growth options at a node (ADR-028) |
+| 8 | `DEV_ACTION` | `{ type: string, ... }` | Dev-panel action; dev builds only (`?dev=1`) |
+| 9 | `CHAT_MESSAGE` | `{ message: string, mode?: 'world' \| 'proximity' }` | Chat line, or `/emote <id>` (T05) |
+| 24 | `INVENTORY_REQUEST` | `{}` | Request a full inventory sync |
+| 25 | `INVENTORY_SLOT_USE` | `{ slotIndex: number }` | Use the item in a slot |
+| 26 | `INVENTORY_SLOT_SWAP` | `{ fromIndex: number, toIndex: number }` | Swap two inventory slots |
+| 29 | `REPORT` | `ReportPayload` | File a player/message report (rate-limited, T05) |
+| 30 | `BLOCK` | `{ targetPlayerId: string, blocked: boolean }` | Mute or unmute a player's chat (T05) |
 
 ### Server → Client
 
@@ -55,6 +63,17 @@ Server rejects with `ERROR { code: "VERSION_MISMATCH", ... }` if mismatch.
 | 19 | `PLANT_CREATED` | `{ plantId: string, ownerId: string, rootNode: ... }` | New plant in world |
 | 20 | `PLANT_REMOVED` | `{ plantId: string }` | Plant removed (death or reconnect expiry) |
 | 21 | `WEATHER_UPDATE` | `WeatherUpdatePayload` | Weather/day-night state |
+| 22 | `GROWTH_OPTIONS_RESULT` | `GrowthOptionsResultPayload` | Legal options, costs and plain reasons for a node |
+| 23 | `CHAT_BROADCAST` | `ChatBroadcastPayload` | Chat or emote from another player |
+| 27 | `INVENTORY_SYNC` | `{ slots: Array<{ itemId: string \| null, count: number \| null }>, maxSlots: number }` | Full inventory |
+| 28 | `INVENTORY_SLOT_UPDATE` | `{ slotIndex: number, itemId: string \| null, count: number \| null }` | One slot changed |
+| 99 | `DEV_RESPONSE` | `{ ... }` | Dev-panel response (dev builds only) |
+
+Type `10` is `WELCOME`: `REPORT` was moved to `29` after it collided with the
+`WELCOME` schema and every report was silently dropped. The authoritative list
+is `MESSAGE_TYPE` in `apps/server/src/ops/net.ts`; the client keeps its own copy
+(INV-NET-16). Payloads are validated against
+`packages/shared/src/protocol/messageSchemas.ts` at both boundaries.
 
 ## Quantization
 
@@ -73,7 +92,12 @@ Applied server-side before broadcast. Client receives already-quantized values.
 
 ## Camera Pan (Client-Side)
 
-The client handles camera panning locally using WASD/Arrow keys. The server does not validate camera movement - it only receives `INPUT` messages for potential future use but processes growth intents instead.
+The client handles camera panning locally using WASD/arrow keys. `INPUT` frames
+are accepted and stored in `player.pendingInputs`, but nothing reads them:
+`validateMovement` in `apps/server/src/ops/net.ts` has **no call sites**, so the
+velocity and world-bounds checks it implements never run against a live client
+(verified 2026-11-12). `REJECT` is used for growth intents, not for movement.
+Plant growth bounds are enforced separately inside `PlantWorld`.
 
 ## Payload Schemas
 
@@ -161,6 +185,10 @@ interface GrowthEventPayload {
   plantDied?: boolean;
 }
 
+// Two shapes share this message type:
+//  - the dirty-tile broadcast: `tiles` only, each entry carrying tileX/tileZ
+//  - the per-tick payload for the player's own tile: `tiles[0]` plus the plant
+//    totals and root-tile count below (ADR-024)
 interface ResourceUpdatePayload {
   tick: number;
   tiles: Array<{
@@ -203,6 +231,50 @@ interface WeatherUpdatePayload {
   ambientIntensity: number;
   lightMultiplier: number;
   moistureDepositRate: number;
+}
+
+interface GrowthOptionsResultPayload {
+  nodeId: string;
+  nodeType: string;
+  isSeed: boolean;
+  energy: number;
+  biomass: number;
+  options: Array<{
+    type: string;
+    label: string;
+    energyCost: number;
+    biomassGain: number;
+    expectedSeconds: number;
+    available: boolean;
+    reason?: string;
+  }>;
+  conditions?: {
+    light: number;
+    moisture: number;
+    minLight: number;
+    minMoisture: number;
+    ok: boolean;
+  };
+  error?: string;
+}
+
+interface ChatBroadcastPayload {
+  playerId: string;
+  playerName: string;
+  message?: string;
+  emoteId?: string;
+  type?: 'emote';
+  timestamp: number;
+}
+
+interface ReportPayload {
+  targetPlayerId: string;
+  targetPlayerName?: string;
+  reason: string;
+  freeText?: string;
+  block?: boolean;
+  contextSnapshot?: Array<{ playerName: string; message: string; timestamp: number }>;
+  timestamp: number;
 }
 ```
 
@@ -273,6 +345,9 @@ All tunables in extended-1 format:
 - [x] Authenticated + anonymous reclaim via HELLO (ADR-021)
 - [x] `PLANT_SYNC` / `PLANT_SYNC_REQUEST` for desync recovery
 - [x] Reconnect window (5 min) with delayed `PLANT_REMOVED` (ADR-021)
+- [x] `GROWTH_OPTIONS_REQUEST` / `GROWTH_OPTIONS_RESULT` documented (ADR-028)
+- [x] T05 chat, block and report messages documented
+- [x] Inventory sync/use/swap messages documented
 - [x] Protocol documented here
 
 ---

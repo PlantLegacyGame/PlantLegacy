@@ -1,5 +1,6 @@
 import type { Layer, NodeType, Plant, PlantNode } from '@plant-legacy/shared/growth';
 import type { Pool } from 'pg';
+import type { SeasonSnapshot } from '../seasonClock.ts';
 
 export interface PlantSnapshot {
   id: string;
@@ -247,8 +248,16 @@ export function serializePlant(plant: Plant): Uint8Array {
 }
 
 function readString(view: DataView, offset: number): { str: string; offset: number } {
+  if (offset + 2 > view.byteLength) {
+    throw new Error('Snapshot truncated while reading a string length');
+  }
   const length = view.getUint16(offset, true);
   offset += 2;
+  if (offset + length > view.byteLength) {
+    throw new Error(
+      `Snapshot string length ${length} runs past the payload (${view.byteLength - offset} bytes left)`,
+    );
+  }
   const decoder = new TextDecoder();
   const bytes = new Uint8Array(view.buffer, view.byteOffset + offset, length);
   const str = decoder.decode(bytes);
@@ -431,10 +440,12 @@ export function deserializePlant(data: Uint8Array): PlantSnapshot {
 export class PlantPersistence {
   private pool: Pool;
   private worldId: string;
+  private onLoadError: ((error: unknown) => void) | undefined;
 
-  constructor(pool: Pool, worldId: string) {
+  constructor(pool: Pool, worldId: string, onLoadError?: (error: unknown) => void) {
     this.pool = pool;
     this.worldId = worldId;
+    this.onLoadError = onLoadError;
   }
 
   async savePlant(plant: Plant, eventLog: PlantEvent[] = []): Promise<void> {
@@ -521,7 +532,62 @@ export class PlantPersistence {
     const result = await this.pool.query('SELECT snapshot FROM world_plants WHERE world_id = $1', [
       this.worldId,
     ]);
-    return result.rows.map((row) => deserializePlant(row.snapshot));
+    // Deserialise per row: one corrupted or truncated snapshot used to throw out
+    // of `.map()` and take every other plant down with it, so the world refused
+    // to boot until someone edited the database by hand.
+    const snapshots: PlantSnapshot[] = [];
+    for (const row of result.rows) {
+      try {
+        snapshots.push(deserializePlant(row.snapshot));
+      } catch (error) {
+        this.onLoadError?.(error);
+      }
+    }
+    return snapshots;
+  }
+
+  /**
+   * Save the season calendar. One row per world: the season is world state, so
+   * a replant after a calamity must not reset it.
+   */
+  async saveSeasonState(state: SeasonSnapshot): Promise<void> {
+    await this.pool.query(
+      `INSERT INTO world_state (world_id, season, season_remaining_ticks, last_calamity_at, updated_at)
+       VALUES ($1, $2, $3, $4, NOW())
+       ON CONFLICT (world_id) DO UPDATE SET
+         season = EXCLUDED.season,
+         season_remaining_ticks = EXCLUDED.season_remaining_ticks,
+         last_calamity_at = EXCLUDED.last_calamity_at,
+         updated_at = NOW()`,
+      [
+        this.worldId,
+        state.season,
+        state.remainingTicks,
+        state.lastCalamityAt === null ? null : new Date(state.lastCalamityAt),
+      ],
+    );
+  }
+
+  async loadSeasonState(): Promise<SeasonSnapshot | null> {
+    const result = await this.pool.query(
+      'SELECT season, season_remaining_ticks, last_calamity_at FROM world_state WHERE world_id = $1',
+      [this.worldId],
+    );
+    if (result.rows.length === 0) return null;
+    const row = result.rows[0] as {
+      season: number | string;
+      season_remaining_ticks: string | number;
+      last_calamity_at: Date | string | null;
+    };
+    const season = Number(row.season);
+    const remainingTicks = Number(row.season_remaining_ticks);
+    const lastCalamityAt = row.last_calamity_at ? new Date(row.last_calamity_at).getTime() : null;
+    return {
+      season: Number.isFinite(season) ? season : 1,
+      remainingTicks: Number.isFinite(remainingTicks) ? remainingTicks : 0,
+      lastCalamityAt:
+        lastCalamityAt !== null && Number.isFinite(lastCalamityAt) ? lastCalamityAt : null,
+    };
   }
 
   async deletePlant(plantId: string): Promise<void> {
@@ -543,13 +609,11 @@ export class PlantPersistence {
   }
 
   /** D01: Dev action - save all plants */
-  async saveAll(): Promise<void> {
-    // This would need access to all plants from PlantWorld
-    // For now, this is a placeholder - the periodic save in main.ts handles this
-  }
-
   /** D01: Dev action - clear all persistence data */
   async clearAll(): Promise<void> {
     await this.pool.query('DELETE FROM world_plants WHERE world_id = $1', [this.worldId]);
+    // The calendar is part of "all persistence" too; leaving it behind would
+    // keep a season number whose plants no longer exist.
+    await this.pool.query('DELETE FROM world_state WHERE world_id = $1', [this.worldId]);
   }
 }

@@ -259,6 +259,7 @@ export const MESSAGE_SCHEMAS: Record<number, Record<string, FieldRule>> = {
     clientVersion: { type: 'number', required: true },
     accessToken: { type: 'string' },
     plantId: { type: 'string' },
+    reconnectToken: { type: 'string' },
   },
   2: {
     // INPUT
@@ -287,9 +288,9 @@ export const MESSAGE_SCHEMAS: Record<number, Record<string, FieldRule>> = {
         nodeId: { type: 'string', required: true },
         direction: vec3,
         nodeType,
-        isAttack: { type: 'boolean', required: true },
         tick: { type: 'number', required: true },
         growthMode: { type: 'string' },
+        attachFraction: { type: 'number' },
       },
     },
   },
@@ -319,6 +320,21 @@ export const MESSAGE_SCHEMAS: Record<number, Record<string, FieldRule>> = {
     // INVENTORY_SLOT_SWAP
     fromIndex: { type: 'integer', required: true },
     toIndex: { type: 'integer', required: true },
+  },
+  30: {
+    // BLOCK (client -> server): mute or unmute another player's chat.
+    targetPlayerId: { type: 'string', required: true },
+    blocked: { type: 'boolean', required: true },
+  },
+  29: {
+    // REPORT (client -> server). Must stay on its own type number: 10 is WELCOME.
+    targetPlayerId: { type: 'string', required: true },
+    targetPlayerName: { type: 'string' },
+    reason: { type: 'string', required: true },
+    freeText: { type: 'string' },
+    block: { type: 'boolean' },
+    contextSnapshot: { type: 'array' },
+    timestamp: { type: 'number', required: true },
   },
 
   // Server -> Client
@@ -377,7 +393,6 @@ export const MESSAGE_SCHEMAS: Record<number, Record<string, FieldRule>> = {
     newNode: { ...fullNode, required: false },
     newNodes: { type: 'array', items: { ...fullNode, required: false } },
     updatedParentNode: { ...fullNode, required: false },
-    damageDealt: { type: 'number' },
     totalBiomass: { type: 'number' },
     totalEnergy: { type: 'number' },
   },
@@ -395,7 +410,14 @@ export const MESSAGE_SCHEMAS: Record<number, Record<string, FieldRule>> = {
     totalBiomass: { type: 'number', required: false },
     storedWater: { type: 'number', required: false },
     storedMinerals: { type: 'number', required: false },
+    // Capacity comes from the plant's own biomass; the HUD shows the ratio so a
+    // plant that is waiting for water looks different from one that is idle.
+    waterCapacity: { type: 'number', required: false },
+    mineralCapacity: { type: 'number', required: false },
     rootTileCount: { type: 'number', required: false },
+    // Large (whole-grid) updates arrive as a base64 buffer of 3 quantised
+    // channels per tile instead of tens of thousands of tile objects.
+    gridBase64: { type: 'string', required: false },
   },
   18: {
     // PLANT_SYNC
@@ -441,6 +463,15 @@ export const MESSAGE_SCHEMAS: Record<number, Record<string, FieldRule>> = {
   20: {
     // PLANT_REMOVED
     plantId: { type: 'string', required: true },
+    // Why it died. Optional so an older server's removal still validates.
+    cause: { type: 'string' },
+  },
+  31: {
+    // SEASON_UPDATE
+    season: { type: 'number', required: true },
+    remainingSeconds: { type: 'number', required: true },
+    lengthTicks: { type: 'number', required: true },
+    calamity: { type: 'boolean', required: true },
   },
   21: {
     // WEATHER_UPDATE

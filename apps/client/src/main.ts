@@ -13,47 +13,83 @@ import RAPIER from '@dimforge/rapier3d-compat';
 import { createInputBus, type InputBus } from '@plant-legacy/input';
 import {
   clampGrowthDirectionByGene,
+  getSeedBodyHeightRatio,
   NODE_GROWTH_CONSTRAINTS,
   type NodeType,
+  nodeRenderRadius,
+  resolveAttachFraction,
 } from '@plant-legacy/shared/growth';
 import { nodeTypeToPhysicsShape } from '@plant-legacy/shared/physics';
 import { PROTOCOL_VERSION } from '@plant-legacy/shared/protocol';
 import { validateMessage } from '@plant-legacy/shared/protocol/messageSchemas';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { ensureFreshSession, signIn, signOut, signUp } from './auth/authClient.js';
 import {
   type ControlsConfig,
+  type DayNightConfig,
+  type GrowthSegmentConfig,
+  loadChatConfig,
   loadControlsConfig,
+  loadDayNightConfig,
+  loadGrowthSegmentConfig,
+  loadNetworkConfig,
   loadRenderConfig,
+  loadReportsConfig,
+  loadResourceTileConfig,
   loadRootSightConfig,
   loadUIConfig,
   type RenderConfig,
+  type ResourceTileConfig,
   type RootSightConfig,
 } from './config/clientConfig.js';
+import { loadGrowthGeometryConfig } from './config/growthGeometryConfig.js';
 import { loadPlantRendererConfig } from './config/plantRendererConfig.js';
+import { playerWorldY, spawnPlayer, stepPlayerVertical } from './physics/playerPhysics.js';
 import { plantPhysicsSync, rapierWorld } from './physics/RapierPhysicsManager.js';
 import { createQualityController, type QualityController } from './render/QualityController.js';
-import { EnvironmentRenderer } from './renderers/EnvironmentRenderer.js';
+import { createRootSightUniforms, EnvironmentRenderer } from './renderers/EnvironmentRenderer.js';
+import { planetTerrainY } from './renderers/environment/planetSurface.js';
 import { DEFAULT_CONFIG, type PlantNodeData, PlantRenderer } from './renderers/PlantRenderer.js';
+import { toClientSpace } from './renderers/plant/clientSpace.js';
+import { readServerMutationMask } from './renderers/plant/mutations.js';
 import {
   createRootSightStateMachine,
   type RootSightStateMachine,
   rootSightStateMachineIsEnabled,
   rootSightStateMachineSetContext,
   rootSightStateMachineSetTarget,
-  rootSightStateMachineToggle,
   rootSightStateMachineUpdate,
 } from './renderers/RootSightStateMachine.js';
+import { plantExtent, resolveCutawayRadius } from './renderers/rootSight/rootSightCutaway.js';
+import {
+  resolveDrawnNodePosition,
+  visualRadiusForNode,
+} from './renderers/webgpu/PlantMeshBuilder.js';
 import { isWebGPUSupported, WebGPUDevice } from './renderers/webgpu/WebGPUDevice.js';
 import { WebGPURenderer } from './renderers/webgpu/WebGPURenderer.js';
 import { createDebugOverlay, type DebugOverlay } from './ui/DebugOverlay.js';
 import { createDevPanel, type DevPanelAPI } from './ui/DevPanel.js';
 import {
+  createEntryFlowStateMachine,
+  entryFlowAuthenticated,
+  entryFlowBack,
+  entryFlowBeginRequest,
+  entryFlowBoot,
+  entryFlowChoose,
+  entryFlowConnectionFailed,
+  entryFlowContinueAsGuest,
+  entryFlowPlantLost,
+  entryFlowRequestFailed,
+  entryFlowReseed,
+  entryFlowSignedOut,
+  entryFlowWorldReady,
+} from './ui/EntryFlowStateMachine.js';
+import { EntryScreen, type EntryScreenCallbacks } from './ui/EntryScreen.js';
+import {
   createGrowthSelectionStateMachine,
-  type GrowthDrawingData,
   type GrowthSelectionViewData,
   growthSelectionStateMachineCancelDrawing,
-  growthSelectionStateMachineConfirmDrawing,
   growthSelectionStateMachineGetDrawingData,
   growthSelectionStateMachineGetState,
   growthSelectionStateMachineHide,
@@ -63,8 +99,8 @@ import {
   growthSelectionStateMachineRequestOptions,
   growthSelectionStateMachineSelectOption,
   growthSelectionStateMachineStartDrawing,
-  growthSelectionStateMachineUpdateDrawing,
 } from './ui/GrowthSelectionStateMachine.js';
+import { formatSeasonChip } from './ui/seasonLabel.js';
 import { createUIShell, type UIShell } from './ui/UIShell.js';
 import './styles.css';
 
@@ -72,19 +108,19 @@ const serverOrigin =
   document.querySelector('meta[name="server-origin"]')?.getAttribute('content') ?? '';
 
 // Use the meta tag if present (production/staging deployment sets it).
-// In local dev the Vite server proxies /config, /ws, /health → :8080, so we
+// In local dev the Vite server proxies /config, /ws, /health -> :8080, so we
 // use the same origin as the page (empty string = relative URLs) rather than
 // pointing directly at :8080, which breaks when the browser is on a different
 // port or the server hasn't started yet.
 const isLocalDev =
   !serverOrigin &&
   (location.hostname === '127.0.0.1' || location.hostname === 'localhost') &&
-  location.port !== '8080'; // already on the game server port — no proxy needed
+  location.port !== '8080'; // already on the game server port - no proxy needed
 
 const httpOrigin = serverOrigin || (isLocalDev ? '' : location.origin);
 
 // WebSocket: in local dev, go through the Vite proxy (/ws path on same port).
-// The proxy config in vite.config.ts forwards ws://localhost:4173/ws → ws://127.0.0.1:8080/ws.
+// The proxy config in vite.config.ts forwards ws://localhost:4173/ws -> ws://127.0.0.1:8080/ws.
 const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
 const wsOrigin = serverOrigin
   ? serverOrigin.replace(/^http/, 'ws')
@@ -138,10 +174,24 @@ async function loadOnboardingConfig(): Promise<void> {
 interface WelcomePayload {
   playerId: string;
   plantId: string;
+  /** Server-issued secret required to reclaim this plant after a disconnect. */
+  reconnectToken?: string;
   tick: number;
   rootNode: { id: string; x: number; y: number; z: number; type: string; biomass: number };
   totalBiomass: number;
   totalEnergy: number;
+  /** Present only when the server had a disconnect snapshot to compare with. */
+  away?: {
+    seconds: number;
+    nodesBefore: number;
+    nodesAfter: number;
+    biomass: number;
+    energy: number;
+    water: number;
+    minerals: number;
+  };
+  /** Set when the previous plant died while the player was away. */
+  previousPlantDied?: { cause: string; secondsAgo: number };
   // Full node set for immediate client render (ADR-021)
   nodes?: Array<{
     id: string;
@@ -170,6 +220,7 @@ interface WelcomePayload {
     parentAttachX?: number;
     parentAttachY?: number;
     parentAttachZ?: number;
+    attachFraction?: number;
     // Server-authoritative target position for connected growth rendering
     targetX?: number;
     targetY?: number;
@@ -225,7 +276,6 @@ interface GrowthIntent {
   nodeId: string;
   direction: { x: number; y: number; z: number };
   nodeType: string;
-  isAttack: boolean;
   tick: number;
 }
 
@@ -251,6 +301,7 @@ interface GrowthEventNode {
   parentAttachX?: number;
   parentAttachY?: number;
   parentAttachZ?: number;
+  attachFraction?: number;
   // Server-authoritative target position where a growing node ends up
   targetX?: number;
   targetY?: number;
@@ -265,7 +316,6 @@ interface GrowthEventPayload {
   newNodes?: GrowthEventNode[];
   /** Germination replaces the seed node with the root under the same id. */
   updatedParentNode?: GrowthEventNode;
-  damageDealt?: number;
   totalBiomass?: number;
   totalEnergy?: number;
   /** Server growth sequence number for client mirror gap detection. */
@@ -284,6 +334,7 @@ interface GrowthOptionView {
   reason?: string;
   risk?: string;
   waterCost?: number;
+  nutrientCost?: number;
   mineralCost?: number;
 }
 
@@ -334,14 +385,28 @@ const MESSAGE_TYPE = {
   PLANT_CREATED: 19,
   PLANT_REMOVED: 20,
   WEATHER_UPDATE: 21,
+  SEASON_UPDATE: 31,
   GROWTH_OPTIONS_RESULT: 22,
   CHAT_BROADCAST: 23,
+  BLOCK: 30,
   DEV_RESPONSE: 99,
 } as const;
 
 let ws: WebSocket | null = null;
 let playerId: string | null = null;
 let serverTick = 0;
+// The tick readout is rewritten at most this often (in server ticks). At 20 Hz
+// it was rewritten on every packet; the panel is informational, so 5 Hz is
+// plenty and stops the text reflowing several times a second.
+let lastDetailTick = -1;
+
+// The server sends the season and its remaining seconds on join and on every
+// rollover; between messages the HUD counts down on its own, so the calendar
+// costs one packet per 36 days rather than one per tick.
+let seasonNumber = 0;
+let seasonEndsAtMs = 0;
+let seasonTickerStarted = false;
+let resSeasonEl: HTMLSpanElement | null = null;
 
 // Per-node-type emergence delay (ms) for staggered growth animation.
 // Roots/radicles emerge first, then stems, then leaves/cotyledons.
@@ -358,17 +423,37 @@ const EMERGENCE_DELAY_MS: Record<string, number> = {
   spore_sac: 240,
 };
 
+// Temp reusable objects to avoid per-frame GC pressure in render/update loops
+const tempRight = new THREE.Vector3();
+const tempMove = new THREE.Vector3();
+const tempTarget = new THREE.Vector3();
+const tempDirection = new THREE.Vector3();
+const tempVector = new THREE.Vector3();
+const tempForward = new THREE.Vector3();
+const tempCameraOffset = new THREE.Vector3();
+
 let connecting = false;
 let plantId: string | null = null;
 let plantReady = false;
+// Framing is a first-spawn convenience, not a reconnect behaviour: a socket
+// blip re-delivers WELCOME, and re-framing there yanked the camera out and
+// centered the plant while the player was orbiting. The camera is re-framed
+// only when the plant itself changes (a server restart respawns it elsewhere,
+// so the old framing would point at empty ground).
 let cameraFramed = false;
+let framedPlantId: string | null = null;
+let clientInitialized = false;
 let welcome: WelcomePayload | null = null;
 
 // Reconnect persistence (ADR-029: explicit dev switch, not implicit)
 const RECONNECT_STORAGE_KEY = 'plantlegacy.reconnect.v1';
 interface ReconnectData {
   accessToken?: string;
+  refreshToken?: string;
+  /** Shown in the account chip; survives a reload with the session. */
+  displayName?: string;
   plantId?: string;
+  reconnectToken?: string;
   timestamp?: number;
 }
 function loadReconnectData(): ReconnectData | null {
@@ -410,16 +495,56 @@ function clearReconnectData(): void {
 }
 
 // Background render loop timer (for hidden tabs)
-let backgroundLoopTimer: ReturnType<typeof setInterval> | null = null;
+let backgroundLoopTimer: number | null = null;
 
 // Dev panel and state
 let devPanel: DevPanelAPI | null = null;
 let plantRendererConfig: import('./config/plantRendererConfig.js').PlantRendererConfig | null =
   null;
 
+// Growth options request timeout tracking (prevents "loading forever" on lost responses)
+let growthOptionsTimeoutId: number | null = null;
+const GROWTH_OPTIONS_TIMEOUT_MS = 5000;
+
+function clearGrowthOptionsTimeout(): void {
+  if (growthOptionsTimeoutId !== null) {
+    window.clearTimeout(growthOptionsTimeoutId);
+    growthOptionsTimeoutId = null;
+  }
+}
+
+function showGrowthOptionsTimeoutError(): void {
+  hideGrowthSelection();
+  setDetail('Growth options timed out - retrying...');
+  uiShell?.toast({ message: 'Growth options timed out', kind: 'error', durationMs: 5000 });
+  clearGrowthOptionsTimeout();
+}
+
 let growthIntentTick = 0;
 let plantBiomass = 0;
 let plantEnergy = 0;
+// Stored water/minerals are what growth actually waits on, so the HUD shows
+// them next to their capacity — otherwise a stalled plant looks like a bug.
+let plantWater = 0;
+let plantMinerals = 0;
+let plantWaterCapacity = 0;
+let plantMineralCapacity = 0;
+// Timestamp of the last shadow-map refresh (see renderFrame).
+let lastShadowRefreshMs = 0;
+// When the last full resource grid (65k tiles) arrived; 0 means never.
+let resourceGridReceivedAt = 0;
+// The welcome grid can arrive before the environment renderer exists; holding it
+// here means the ground still gets its tile lighting instead of staying unlit.
+let pendingResourceGrid: {
+  gridBase64: string;
+  width: number;
+  height: number;
+  tileSize: number;
+} | null = null;
+const RESOURCE_GRID_MAX_AGE_MS = 60_000;
+// WebSocket traffic is chatty (state + resource messages every server tick), so
+// per-message logging is opt-in via ?wslog=1 instead of flooding the console.
+const DEBUG_WS_LOG = new URLSearchParams(window.location.search).has('wslog');
 // Last authoritative tile readings, so growth events never zero the HUD.
 let tileLight = 0;
 let tileWater = 40; // Default base moisture from config (tile_moisture_base)
@@ -440,7 +565,7 @@ const plantNodes = new Map<string, PlantNodeData>();
 // Plant mirror state for gap detection and resync (Phase 1.5)
 let plantGrowthSeq = 0;
 let plantLastResyncAt = 0;
-const PLANT_MAX_GAP_BEFORE_RESYNC = 3;
+let lastPeriodicResyncAt = 0;
 const PLANT_RESYNC_COOLDOWN_MS = 5000;
 
 function requestPlantResync(): void {
@@ -452,50 +577,114 @@ function requestPlantResync(): void {
   }
 }
 
-function checkPlantGrowthGap(expectedSeq: number): boolean {
-  if (expectedSeq > plantGrowthSeq + PLANT_MAX_GAP_BEFORE_RESYNC) {
-    requestPlantResync();
-    return true;
-  }
-  return false;
-}
-
 function resetPlantMirror(): void {
   plantGrowthSeq = 0;
   plantLastResyncAt = 0;
 }
 
+/**
+ * Keep only nodes of the plant this session belongs to.
+ *
+ * Node names carry the plant tag (`<tag>:seed.radicle0`), so a leftover from a
+ * previous world - or a sibling plant whose events arrived late - is
+ * identifiable and can be dropped. Without this a stale node stays in the
+ * mirror forever and is drawn as a piece of your plant floating where the old
+ * one stood.
+ */
+function pruneNodesNotFromPlant(): void {
+  if (!plantId) return;
+  const tag = `${plantId.replace(/^p_/, '').slice(0, 8)}:`;
+  for (const id of [...plantNodes.keys()]) {
+    if (!id.startsWith(tag)) plantNodes.delete(id);
+  }
+}
+
 // Two-step growth selection state machine (ADR-018, ADR-028)
 const growthSelectionMachine = createGrowthSelectionStateMachine();
 
-// Visual indicator for growth direction drawing.
-// Screen-projected 3D line: projects world-space segment through the active camera
-// and draws on a 2D canvas above the WebGPU plant layer (reliable compositing).
-let growthDirectionOverlay: HTMLCanvasElement | null = null;
-let growthDirectionOverlayCtx: CanvasRenderingContext2D | null = null;
+// Growth aiming gizmo: real 3D meshes in the scene - a ring lying on the
+// surface the part grows from, plus a curved arrow for the direction. Depth
+// testing is off for every piece so it can never end up buried inside the plant
+// or the soil (the old screen-projected 2D overlay could silently vanish).
+let growthAimGroup: THREE.Group | null = null;
+let growthAimRing: THREE.Mesh | null = null;
+let growthAimTube: THREE.Mesh | null = null;
+let growthAimHead: THREE.Mesh | null = null;
+let growthAimTip: THREE.Mesh | null = null;
+// The gizmo lives in its own scene drawn to its own canvas. The plants/ground are
+// a separate WebGPU canvas stacked on top of the main WebGL canvas, so geometry
+// added to the main scene is covered by the ground the moment the arrow points
+// below the surface (roots, radicles).
+let growthAimScene: THREE.Scene | null = null;
+let growthAimOverlay: THREE.WebGLRenderer | null = null;
 
-function ensureGrowthDirectionOverlay(): void {
-  if (growthDirectionOverlay && growthDirectionOverlayCtx) return;
-  const app = document.getElementById('app');
-  if (!app) return;
-  const c = document.createElement('canvas');
-  c.id = 'growth-direction-overlay';
-  c.style.cssText =
-    'position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:60;';
-  app.appendChild(c);
-  growthDirectionOverlay = c;
-  growthDirectionOverlayCtx = c.getContext('2d');
+function ensureGrowthAimGizmo(): void {
+  if (growthAimGroup) return;
+  const group = new THREE.Group();
+  group.name = 'growth-aim-gizmo';
+  group.visible = false;
+
+  const ring = new THREE.Mesh(
+    new THREE.TorusGeometry(1, 0.028, 6, 64),
+    new THREE.MeshBasicMaterial({ color: 0xf2e3a0, depthTest: false, depthWrite: false }),
+  );
+  ring.renderOrder = 1000;
+
+  const arrowMaterial = new THREE.MeshBasicMaterial({
+    color: 0x9ede63,
+    depthTest: false,
+    depthWrite: false,
+  });
+  const tube = new THREE.Mesh(new THREE.BufferGeometry(), arrowMaterial);
+  tube.renderOrder = 1001;
+  const head = new THREE.Mesh(
+    new THREE.ConeGeometry(
+      renderConfig?.growthAimHeadRadius ?? 0.032,
+      renderConfig?.growthAimHeadLength ?? 0.095,
+      12,
+    ),
+    arrowMaterial,
+  );
+  head.renderOrder = 1001;
+
+  const tip = new THREE.Mesh(
+    new THREE.SphereGeometry(renderConfig?.growthAimTipRadius ?? 0.014, 10, 8),
+    new THREE.MeshBasicMaterial({ color: 0xffffff, depthTest: false, depthWrite: false }),
+  );
+  tip.renderOrder = 1002;
+
+  group.add(ring, tube, head, tip);
+  const overlayScene = new THREE.Scene();
+  overlayScene.add(group);
+  growthAimScene = overlayScene;
+
+  const overlay = new THREE.WebGLRenderer({ alpha: true, antialias: true });
+  overlay.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  overlay.setSize(window.innerWidth, window.innerHeight, false);
+  overlay.domElement.style.cssText =
+    'position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:5;visibility:hidden;';
+  document.getElementById('app')?.appendChild(overlay.domElement);
+  growthAimOverlay = overlay;
+  growthAimGroup = group;
+  growthAimRing = ring;
+  growthAimTube = tube;
+  growthAimHead = head;
+  growthAimTip = tip;
 }
 
 function removeGrowthDirectionLine(): void {
-  if (growthDirectionOverlayCtx && growthDirectionOverlay) {
-    growthDirectionOverlayCtx.clearRect(
-      0,
-      0,
-      growthDirectionOverlay.width,
-      growthDirectionOverlay.height,
-    );
+  if (growthAimGroup) growthAimGroup.visible = false;
+  if (growthAimOverlay) growthAimOverlay.domElement.style.visibility = 'hidden';
+}
+
+/** Draw the aim gizmo above the plant/ground overlay canvas. */
+function renderGrowthAimOverlay(): void {
+  if (!growthAimOverlay || !growthAimScene || !growthAimGroup?.visible) return;
+  const size = growthAimOverlay.getSize(new THREE.Vector2());
+  if (size.x !== window.innerWidth || size.y !== window.innerHeight) {
+    growthAimOverlay.setSize(window.innerWidth, window.innerHeight, false);
   }
+  growthAimOverlay.render(growthAimScene, camera);
 }
 
 // Smoothed growth direction dragging state (silky smooth, non-rigid)
@@ -504,171 +693,529 @@ let smoothedGrowthDist = 1.0;
 let isGrowthAtMaxReach = false;
 let isGrowthAngleClamped = false;
 
-// Visual preview: draw the gene-constrained 3D growth vector, reach guide, and legible constraints HUD.
+/** Rebuild the ring and curved arrow for the current aim. */
 function updateGrowthDirectionLine(
-  _start: { x: number; y: number; z: number },
+  start: { x: number; y: number; z: number },
   _end: { x: number; y: number; z: number },
-  isValid: boolean,
+  _isValid: boolean,
 ): void {
-  ensureGrowthDirectionOverlay();
-  if (!growthDirectionOverlay || !growthDirectionOverlayCtx) return;
+  ensureGrowthAimGizmo();
+  const group = growthAimGroup;
+  const ring = growthAimRing;
+  const tube = growthAimTube;
+  const head = growthAimHead;
+  const tip = growthAimTip;
   const drawingData = growthSelectionStateMachineGetDrawingData(growthSelectionMachine);
-  const nodeType = drawingData?.selectedOptionType ?? 'radicle';
-  const constraints = NODE_GROWTH_CONSTRAINTS[nodeType as NodeType] ?? NODE_GROWTH_CONSTRAINTS.stem;
-
-  const reach = Math.max(0.35, Math.min(smoothedGrowthDist, constraints.maxReach));
-  const endPos = {
-    x: _start.x + smoothedGrowthDir.x * reach,
-    y: _start.y + smoothedGrowthDir.y * reach,
-    z: _start.z + smoothedGrowthDir.z * reach,
-  };
-
-  const w = window.innerWidth;
-  const h = window.innerHeight;
-  if (growthDirectionOverlay.width !== w) growthDirectionOverlay.width = w;
-  if (growthDirectionOverlay.height !== h) growthDirectionOverlay.height = h;
-  const ctx = growthDirectionOverlayCtx;
-  ctx.clearRect(0, 0, w, h);
-
-  // Project start node to screen
-  const vStart = new THREE.Vector3(_start.x, _start.y, _start.z).project(camera);
-  if (vStart.z > 1 || vStart.z < -1) return;
-  const sx = (vStart.x * 0.5 + 0.5) * w;
-  const sy = (-vStart.y * 0.5 + 0.5) * h;
-
-  // Project end tip to screen
-  const vEnd = new THREE.Vector3(endPos.x, endPos.y, endPos.z).project(camera);
-  if (vEnd.z > 1 || vEnd.z < -1) return;
-  const ex = (vEnd.x * 0.5 + 0.5) * w;
-  const ey = (-vEnd.y * 0.5 + 0.5) * h;
-
-  ctx.save();
-
-  // 1. Draw Allowed Growth Sector / Cone Guide (Gene angle & reach boundary)
-  const guidePts: { x: number; y: number }[] = [];
-  const sampleAngles = 16;
-  const midY = (constraints.minY + constraints.maxY) * 0.5;
-  const maxR = constraints.maxReach;
-  const horizRadius = Math.sqrt(Math.max(0.01, 1 - midY * midY)) * maxR;
-
-  for (let i = 0; i <= sampleAngles; i++) {
-    const theta = (i / sampleAngles) * Math.PI * 2;
-    const gx = _start.x + Math.cos(theta) * horizRadius;
-    const gy = _start.y + midY * maxR;
-    const gz = _start.z + Math.sin(theta) * horizRadius;
-    const vp = new THREE.Vector3(gx, gy, gz).project(camera);
-    if (vp.z <= 1 && vp.z >= -1) {
-      guidePts.push({ x: (vp.x * 0.5 + 0.5) * w, y: (-vp.y * 0.5 + 0.5) * h });
-    }
+  if (!group || !ring || !tube || !head || !tip || !drawingData) {
+    if (group) group.visible = false;
+    return;
   }
 
-  if (guidePts.length >= 3) {
-    ctx.beginPath();
-    ctx.setLineDash([4, 6]);
-    ctx.strokeStyle = 'rgba(129, 199, 132, 0.35)';
-    ctx.lineWidth = 1.5;
-    ctx.moveTo(guidePts[0].x, guidePts[0].y);
-    for (let i = 1; i < guidePts.length; i++) {
-      ctx.lineTo(guidePts[i].x, guidePts[i].y);
-    }
-    ctx.closePath();
-    ctx.stroke();
-    ctx.setLineDash([]);
-  }
-
-  // 2. Draw Trajectory Vector Line with gradient and glow
-  const isClamped = isGrowthAtMaxReach || isGrowthAngleClamped;
-  const strokeColor = !isValid ? '#f44336' : isClamped ? '#ffb74d' : '#4caf50';
-  const glowColor = !isValid
-    ? 'rgba(244, 67, 54, 0.4)'
-    : isClamped
-      ? 'rgba(255, 183, 77, 0.4)'
-      : 'rgba(76, 175, 80, 0.4)';
-
-  ctx.beginPath();
-  ctx.moveTo(sx, sy);
-  ctx.lineTo(ex, ey);
-  ctx.strokeStyle = strokeColor;
-  ctx.lineWidth = 4;
-  ctx.lineCap = 'round';
-  ctx.shadowColor = glowColor;
-  ctx.shadowBlur = 10;
-  ctx.stroke();
-  ctx.shadowBlur = 0;
-
-  // 3. Arrowhead at tip
-  const dx = ex - sx;
-  const dy = ey - sy;
-  const angle = Math.atan2(dy, dx);
-  const headLen = 14;
-  ctx.fillStyle = strokeColor;
-  ctx.beginPath();
-  ctx.moveTo(ex, ey);
-  ctx.lineTo(
-    ex - headLen * Math.cos(angle - Math.PI / 7),
-    ey - headLen * Math.sin(angle - Math.PI / 7),
+  // Preview exactly one real growth step: the server moves the new node by the
+  // layer's growth distance, so the arrow is drawn at that same length and the
+  // plant grows along the arrow instead of somewhere shorter.
+  const optionKey = (drawingData.selectedOptionType ?? '').toLowerCase();
+  const isRootOption = ROOT_OPTION_TYPES.has(optionKey);
+  const reach = Math.max(
+    0.02,
+    growthSegmentConfig?.nodeLengths?.[optionKey] ??
+      (isRootOption
+        ? (growthSegmentConfig?.rootSegmentLength ?? 0.85)
+        : (growthSegmentConfig?.canopySegmentLength ?? 0.95)),
   );
-  ctx.lineTo(
-    ex - headLen * Math.cos(angle + Math.PI / 7),
-    ey - headLen * Math.sin(angle + Math.PI / 7),
+  growthAimPreviewReach = reach;
+  // Anchor on the part as it is actually drawn: the seed mesh sits above the
+  // ground by its own radius, everything else is centred on the node.
+  const node = plantNodes.get(drawingData.nodeId);
+  const visualRadius = node
+    ? visualRadiusForNode(node.nodeType, node.radius ?? 0.05, node.biomass)
+    : 0.05;
+  const isSeedNode = node ? node.isSeed === true || node.nodeType === 'seed' : false;
+  const origin = new THREE.Vector3(start.x, start.y, start.z);
+  if (isSeedNode) origin.y += visualRadius * getSeedBodyHeightRatio();
+
+  // The ring is the cross-section the new segment starts from: the emerging
+  // part's own thickness (never fatter than the node it leaves).
+  const emergingRadius = visualRadiusForNode(drawingData.selectedOptionType, node?.radius ?? 0.05);
+  const ringRadius = Math.max(
+    renderConfig?.growthAimRingMin ?? 0.02,
+    Math.min(visualRadius, emergingRadius * (renderConfig?.growthAimRingScale ?? 1.6)),
   );
-  ctx.closePath();
-  ctx.fill();
+  growthAimRingRadius = ringRadius;
 
-  // 4. Ghost Bud Preview at tip (concentric glowing circles)
-  ctx.beginPath();
-  ctx.arc(ex, ey, 9, 0, Math.PI * 2);
-  ctx.fillStyle = isClamped ? 'rgba(255, 183, 77, 0.25)' : 'rgba(129, 199, 132, 0.25)';
-  ctx.fill();
-  ctx.strokeStyle = strokeColor;
-  ctx.lineWidth = 1.5;
-  ctx.stroke();
+  // Like a sticker on the part: the ring sits on the surface along the aim, and
+  // its plane faces the way the new segment leaves, so it reads as the hole the
+  // sprout comes out of rather than a band around the middle.
+  const surfaceNormal = smoothedGrowthDir.clone().normalize();
+  const ringCentre = origin.clone().addScaledVector(surfaceNormal, visualRadius);
+  growthAimRingAnchor.copy(ringCentre);
+  growthAimRingNormal.copy(surfaceNormal);
 
-  ctx.beginPath();
-  ctx.arc(ex, ey, 3.5, 0, Math.PI * 2);
-  ctx.fillStyle = '#ffffff';
-  ctx.fill();
-
-  // 5. Origin Marker at node
-  ctx.beginPath();
-  ctx.arc(sx, sy, 4.5, 0, Math.PI * 2);
-  ctx.fillStyle = '#ffffff';
-  ctx.fill();
-  ctx.strokeStyle = strokeColor;
-  ctx.lineWidth = 2;
-  ctx.stroke();
-
-  // 6. Legible Status Badge / Constraints Tooltip
-  const label = drawingData?.selectedOptionLabel ?? nodeType;
-  let badgeText = `${label} • ${reach.toFixed(2)}m`;
-  if (isGrowthAtMaxReach) {
-    badgeText = `${label} • ${reach.toFixed(2)}m (Max Reach)`;
-  } else if (isGrowthAngleClamped) {
-    badgeText = `${label} • ${reach.toFixed(2)}m (Gene Angle Clamped)`;
+  // Keep the tube a real world thickness: scaling a fat torus down to a small
+  // radius would make the ring vanish into a sub-pixel hairline.
+  const ringThickness = renderConfig?.growthAimRingThickness ?? 0.004;
+  if (Math.abs(growthAimRingBuiltRadius - ringRadius) > 1e-5) {
+    ring.geometry.dispose();
+    ring.geometry = new THREE.TorusGeometry(1, ringThickness / ringRadius, 8, 64);
+    growthAimRingBuiltRadius = ringRadius;
   }
 
-  ctx.font = '600 12px system-ui, -apple-system, sans-serif';
-  const textMetrics = ctx.measureText(badgeText);
-  const badgeW = textMetrics.width + 16;
-  const badgeH = 24;
-  const badgeX = Math.min(w - badgeW - 12, Math.max(12, ex + 14));
-  const badgeY = Math.min(h - badgeH - 12, Math.max(12, ey - 28));
+  const normal = growthAimNormal.clone();
+  if (normal.lengthSq() < 0.5) normal.set(0, 1, 0);
+  normal.normalize();
 
-  // Badge background
-  ctx.fillStyle = 'rgba(15, 23, 42, 0.88)';
-  ctx.strokeStyle = strokeColor;
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.roundRect(badgeX, badgeY, badgeW, badgeH, 12);
-  ctx.fill();
-  ctx.stroke();
+  group.visible = true;
+  if (growthAimOverlay) growthAimOverlay.domElement.style.visibility = 'visible';
 
-  // Badge text
-  ctx.fillStyle = isClamped ? '#ffe0b2' : '#e8f5e9';
-  ctx.textBaseline = 'middle';
-  ctx.fillText(badgeText, badgeX + 8, badgeY + badgeH / 2);
+  // The torus lies in its local XY plane, so map +Z onto the surface normal.
+  ring.position.copy(ringCentre);
+  ring.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), surfaceNormal);
+  ring.scale.setScalar(ringRadius);
 
-  ctx.restore();
+  // The arrow bends along the plant's own habit: the player steers a general
+  // direction and the exact shape stays a surprise.
+  const side = new THREE.Vector3().crossVectors(smoothedGrowthDir, normal);
+  if (side.lengthSq() < 1e-4) side.set(1, 0, 0);
+  side.normalize();
+  const points: THREE.Vector3[] = [];
+  for (let i = 0; i <= 24; i++) {
+    const t = i / 24;
+    const bend = Math.sin(t * Math.PI) * (renderConfig?.growthAimCurveBend ?? 0.24) * reach;
+    const wobble = Math.sin(t * Math.PI * 2) * (renderConfig?.growthAimCurveWobble ?? 0.05) * reach;
+    points.push(
+      ringCentre
+        .clone()
+        .addScaledVector(smoothedGrowthDir, reach * t)
+        .addScaledVector(side, bend + wobble),
+    );
+  }
+  growthAimPath = points;
+  tube.geometry.dispose();
+  tube.geometry = new THREE.TubeGeometry(
+    new THREE.CatmullRomCurve3(points),
+    24,
+    renderConfig?.growthAimTubeRadius ?? 0.009,
+    6,
+    false,
+  );
+
+  const tipPoint = points[points.length - 1];
+  const heading = tipPoint
+    .clone()
+    .sub(points[points.length - 2])
+    .normalize();
+  head.position.copy(tipPoint);
+  head.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), heading);
+  // Sit the bud dot on the arrow's point, not at the cone's centre.
+  tip.position
+    .copy(tipPoint)
+    .addScaledVector(heading, (renderConfig?.growthAimHeadLength ?? 0.095) * 0.5);
+}
+
+// Growth aiming state. The player never drags a line: picking an option starts
+// an aim, the plant proposes a direction from its own growth bias, and dragging
+// simply turns that arrow. Commit with the Grow button or Enter.
+const growthAimNormal = new THREE.Vector3(0, 1, 0);
+let growthAimRingRadius = 0.28;
+let growthAimRingBuiltRadius = -1;
+const growthAimRingAnchor = new THREE.Vector3();
+const growthAimRingNormal = new THREE.Vector3(0, 1, 0);
+let growthAimPath: THREE.Vector3[] = [];
+let growthAimPreviewReach = 0;
+let growthSegmentConfig: GrowthSegmentConfig | null = null;
+// Day/night length and tile ranges, so the client clock and the ground shader
+// normalisation both come from the server's config rather than constants.
+let dayNightConfig: DayNightConfig = { cycleLengthS: 3600, dayFraction: 0.5 };
+let tileConfig: ResourceTileConfig = {
+  tileLightBase: 80,
+  maxLight: 500,
+  maxMoisture: 500,
+  maxMinerals: 500,
+};
+const ROOT_OPTION_TYPES = new Set(['radicle', 'root', 'lateral_root']);
+let growthAimYaw = 0;
+let growthAimPitch = 0;
+let growthAimDragging = false;
+let growthAimLastX = 0;
+let growthAimLastY = 0;
+
+// A lateral root or branch buds part-way along its parent's own segment, so the
+// aim gizmo has to start where the server will attach it, not at the parent's
+// tip. The drawn ring/arrow and the drag/pick hit tests all ask this helper, so
+// the thing the player aims at is exactly the thing the server grows from.
+function branchAttachAnchor(position: THREE.Vector3, nodeId: string): THREE.Vector3 {
+  const node = plantNodes.get(nodeId);
+  const anchor = position.clone();
+  if (!node) return anchor;
+  const emergingType =
+    growthSelectionStateMachineGetDrawingData(growthSelectionMachine)?.selectedOptionType ?? '';
+  const fraction = resolveAttachFraction(emergingType, undefined);
+  if (fraction < 1 && node.parentAttachX !== undefined && node.parentAttachY !== undefined) {
+    const segmentStart = new THREE.Vector3(
+      node.parentAttachX,
+      node.parentAttachY,
+      node.parentAttachZ ?? node.position.z,
+    );
+    anchor.copy(segmentStart.lerp(position, fraction));
+  }
+  return anchor;
+}
+
+function growthAimDirectionFromAngles(): THREE.Vector3 {
+  const cp = Math.cos(growthAimPitch);
+  return new THREE.Vector3(
+    Math.sin(growthAimYaw) * cp,
+    Math.sin(growthAimPitch),
+    Math.cos(growthAimYaw) * cp,
+  );
+}
+
+/** Rebuild the shared growth direction from the current aim angles (gene clamped). */
+function applyGrowthAimAngles(): void {
+  const data = growthSelectionStateMachineGetDrawingData(growthSelectionMachine);
+  const optionType = data?.selectedOptionType ?? 'stem';
+  const raw = growthAimDirectionFromAngles();
+  const clamped = clampGrowthDirectionByGene(optionType, { x: raw.x, y: raw.y, z: raw.z });
+  isGrowthAngleClamped = Math.abs(clamped.y - raw.y) > 0.08;
+  smoothedGrowthDir.set(clamped.x, clamped.y, clamped.z).normalize();
+  if (data) {
+    // Start the gizmo on the attachment point, not the part's tip: a lateral
+    // root or branch leaves its parent part-way down that parent's segment.
+    const anchor = branchAttachAnchor(
+      new THREE.Vector3(data.nodePosition.x, data.nodePosition.y, data.nodePosition.z),
+      data.nodeId,
+    );
+    updateGrowthDirectionLine(
+      anchor,
+      {
+        x: anchor.x + smoothedGrowthDir.x * smoothedGrowthDist,
+        y: anchor.y + smoothedGrowthDir.y * smoothedGrowthDist,
+        z: anchor.z + smoothedGrowthDir.z * smoothedGrowthDist,
+      },
+      true,
+    );
+  }
+}
+
+/** Start aiming a new segment from a node: surface ring + curved arrow preview. */
+function beginGrowthAiming(nodeId: string, optionType: string, optionLabel: string): boolean {
+  const node = plantNodes.get(nodeId);
+  if (!node) return false;
+  const constraints =
+    NODE_GROWTH_CONSTRAINTS[optionType as NodeType] ?? NODE_GROWTH_CONSTRAINTS.stem;
+  const parent = node.parentId ? plantNodes.get(node.parentId) : undefined;
+
+  // Surface the ring lies on: the soil plane for anything at ground level (a
+  // seed or the root crown), otherwise a collar perpendicular to the link the
+  // part grew along.
+  const atSurface = node.isSeed === true || Math.abs(node.position.y) < 0.18;
+  if (atSurface || !parent) {
+    growthAimNormal.set(0, 1, 0);
+  } else {
+    growthAimNormal.copy(node.position).sub(parent.position);
+    if (growthAimNormal.lengthSq() < 1e-5) growthAimNormal.set(0, 1, 0);
+    else growthAimNormal.normalize();
+  }
+
+  // "Direction according to its own self": start where the part already points.
+  const outward = new THREE.Vector3();
+  if (parent) outward.copy(node.position).sub(parent.position);
+  outward.y = 0;
+  if (outward.lengthSq() < 1e-4) {
+    camera.getWorldDirection(outward);
+    outward.y = 0;
+  }
+  if (outward.lengthSq() < 1e-4) outward.set(0, 0, 1);
+  growthAimYaw = Math.atan2(outward.x, outward.z);
+  growthAimPitch = constraints.downwardPreferred ? -1.0 : constraints.upwardPreferred ? 0.95 : 0.3;
+
+  // Ring size is derived from the part's rendered radius in the gizmo update, so
+  // it hugs the stem/node instead of being a fixed halo.
+  smoothedGrowthDist = Math.min(1.0, constraints.maxReach * 0.7);
+  isGrowthAtMaxReach = false;
+
+  growthSelectionStateMachineStartDrawing(
+    growthSelectionMachine,
+    nodeId,
+    { x: node.position.x, y: node.position.y, z: node.position.z },
+    optionType,
+    optionLabel,
+  );
+  webgpuRenderer?.setSelectedNode(nodeId);
+  // Camera controls stay live: orbiting must never be captured by the aim gizmo.
+  // Only a drag that starts on the part itself turns the arrow.
+  applyGrowthAimAngles();
+  showGrowthAimControls(optionLabel);
+  setDetail(`${optionLabel}: drag to turn the direction, then Grow.`);
+  return true;
+}
+
+/** Turn the aim from a pointer delta (yaw around the part, pitch up/down). */
+function rotateGrowthAim(dx: number, dy: number): void {
+  growthAimYaw -= dx * 0.006;
+  growthAimPitch = THREE.MathUtils.clamp(growthAimPitch + dy * 0.005, -1.45, 1.45);
+  applyGrowthAimAngles();
+}
+
+/** Confirm the aimed direction and send the growth intent. */
+function commitGrowthAim(): void {
+  const data = growthSelectionStateMachineGetDrawingData(growthSelectionMachine);
+  if (!data) return;
+  const dir = { x: smoothedGrowthDir.x, y: smoothedGrowthDir.y, z: smoothedGrowthDir.z };
+  removeGrowthDirectionLine();
+  controls.enabled = true;
+  controls.enableRotate = true;
+  controls.enablePan = true;
+  confirmGrowth(data.nodeId, data.selectedOptionType, dir);
+}
+
+/** Footer under the option list while aiming: the single commit action. */
+function showGrowthAimControls(optionLabel: string): void {
+  const panel = growthSelectionPanel;
+  if (!panel) return;
+  panel.querySelector('#growth-aim-controls')?.remove();
+  const footer = document.createElement('div');
+  footer.id = 'growth-aim-controls';
+  footer.style.cssText =
+    'display:flex; align-items:center; gap:8px; margin-top:8px; padding-top:8px; border-top:1px solid var(--hud-border);';
+  const hint = document.createElement('div');
+  hint.style.cssText = 'flex:1; font-size:0.7rem; color:var(--bark-300); line-height:1.25;';
+  hint.textContent = `Drag to turn the ${optionLabel} direction`;
+  const growBtn = document.createElement('button');
+  growBtn.type = 'button';
+  growBtn.textContent = 'Grow';
+  growBtn.className = 'hud-button hud-button--primary';
+  growBtn.style.cssText = 'cursor:pointer; font-weight:700; padding:6px 16px;';
+  growBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    commitGrowthAim();
+  });
+  footer.appendChild(hint);
+  footer.appendChild(growBtn);
+  panel.appendChild(footer);
+}
+
+// Growth debug readout (F2). Covers every growth-side value that decides how a
+// new part appears: graph position, radius, the model/visual mapping, the aim
+// frame, and how the aim relates to the design's growth bias for that part.
+let growthDebugEl: HTMLDivElement | null = null;
+let growthDebugVisible = false;
+
+const growthDebugNum = (value: number | undefined, digits = 2): string =>
+  (Number.isFinite(value) ? Number(value) : 0).toFixed(digits);
+
+function ensureGrowthDebugPanel(): HTMLDivElement | null {
+  if (growthDebugEl) return growthDebugEl;
+  const app = document.getElementById('app');
+  if (!app) return null;
+  const el = document.createElement('div');
+  el.id = 'growth-debug';
+  el.style.cssText = [
+    'position:absolute',
+    'left:12px',
+    'bottom:130px',
+    'z-index:400',
+    'background:rgba(10,14,8,0.88)',
+    'border:1px solid #3a4a2a',
+    'border-radius:6px',
+    'padding:8px 10px',
+    'color:#dfe9c8',
+    'font:11px/1.45 ui-monospace, "JetBrains Mono", monospace',
+    'white-space:pre',
+    'pointer-events:none',
+    'display:none',
+    'max-width:min(680px, 62vw)',
+    'max-height:56vh',
+    'overflow:hidden',
+  ].join(';');
+  app.appendChild(el);
+  growthDebugEl = el;
+  return el;
+}
+
+function toggleGrowthDebug(): void {
+  const el = ensureGrowthDebugPanel();
+  if (!el) return;
+  growthDebugVisible = !growthDebugVisible;
+  el.style.display = growthDebugVisible ? 'block' : 'none';
+  if (growthDebugVisible) updateGrowthDebug();
+}
+
+function updateGrowthDebug(): void {
+  if (!growthDebugVisible) return;
+  const el = ensureGrowthDebugPanel();
+  if (!el) return;
+
+  const nodes = [...plantNodes.values()].filter((node) => node.isOwnPlant);
+  const data = growthSelectionStateMachineGetDrawingData(growthSelectionMachine);
+  const lines: string[] = ['GROWTH DEBUG  nodes=' + nodes.length];
+
+  // Where the plant lands on the canvas versus the canvas centre. This uses the
+  // same camera the WebGPU draw path builds its view-projection from, so it is
+  // the frame the player actually sees: a mismatch here is a real camera bug,
+  // not a stale screenshot.
+  const frameRoot = nodes.find((node) => node.parentId === null);
+  if (frameRoot) {
+    camera.updateMatrixWorld(true);
+    const projected = tempCameraOffset
+      .set(frameRoot.position.x, frameRoot.position.y, frameRoot.position.z)
+      .project(camera);
+    const canvasEl = renderer.domElement;
+    const px = Math.round((projected.x * 0.5 + 0.5) * canvasEl.clientWidth);
+    const py = Math.round((-projected.y * 0.5 + 0.5) * canvasEl.clientHeight);
+    const centreX = Math.round(canvasEl.clientWidth / 2);
+    const centreY = Math.round(canvasEl.clientHeight / 2);
+    lines.push(`view  root px=(${px}, ${py}) centre=(${centreX}, ${centreY})`);
+  }
+
+  if (webgpuRenderer) {
+    lines.push(
+      'mesh verts=' + webgpuRenderer.getVertexCount() + ' plants=' + webgpuRenderer.getPlantCount(),
+    );
+    lines.push(
+      'rootSight=' +
+        (webgpuRenderer.rootSightEnabled ? 'on' : 'off') +
+        ' r=' +
+        growthDebugNum(webgpuRenderer.rootSightRadius),
+    );
+  }
+
+  if (data) {
+    const type = data.selectedOptionType;
+    const c = NODE_GROWTH_CONSTRAINTS[type as NodeType] ?? NODE_GROWTH_CONSTRAINTS.stem;
+    const node = plantNodes.get(data.nodeId);
+    lines.push('');
+    lines.push('AIM  ' + type + ' "' + (data.selectedOptionLabel ?? '') + '"');
+    lines.push(
+      ' state=' +
+        growthSelectionStateMachineGetState(growthSelectionMachine) +
+        ' dragging=' +
+        growthAimDragging,
+    );
+    lines.push(
+      ' origin=(' +
+        growthDebugNum(data.nodePosition.x) +
+        ', ' +
+        growthDebugNum(data.nodePosition.y) +
+        ', ' +
+        growthDebugNum(data.nodePosition.z) +
+        ')',
+    );
+    lines.push(
+      ' normal=(' +
+        growthDebugNum(growthAimNormal.x) +
+        ', ' +
+        growthDebugNum(growthAimNormal.y) +
+        ', ' +
+        growthDebugNum(growthAimNormal.z) +
+        ')',
+    );
+    lines.push(
+      ' dir=(' +
+        growthDebugNum(smoothedGrowthDir.x) +
+        ', ' +
+        growthDebugNum(smoothedGrowthDir.y) +
+        ', ' +
+        growthDebugNum(smoothedGrowthDir.z) +
+        ')',
+    );
+    lines.push(
+      ' yaw=' +
+        growthDebugNum(THREE.MathUtils.radToDeg(growthAimYaw), 1) +
+        'deg pitch=' +
+        growthDebugNum(THREE.MathUtils.radToDeg(growthAimPitch), 1) +
+        'deg',
+    );
+    lines.push(
+      ' reach=' +
+        growthDebugNum(growthAimPreviewReach) +
+        ' ringR=' +
+        growthDebugNum(growthAimRingRadius) +
+        ' clamped=' +
+        (isGrowthAngleClamped ? 'yes' : 'no') +
+        ' maxReach=' +
+        (isGrowthAtMaxReach ? 'yes' : 'no'),
+    );
+    lines.push(
+      ` gizmo anchor=(${growthDebugNum(growthAimRingAnchor.x)}, ${growthDebugNum(
+        growthAimRingAnchor.y,
+      )}, ${growthDebugNum(growthAimRingAnchor.z)}) n·dir=${growthDebugNum(
+        growthAimRingNormal.dot(smoothedGrowthDir),
+      )} grab=${growthDebugNum(renderConfig?.growthAimGrabPx ?? 34, 0)}px`,
+    );
+    lines.push(
+      ' gene minY=' +
+        c.minY +
+        ' maxY=' +
+        c.maxY +
+        ' horizontal=[' +
+        c.minHorizontal +
+        ', ' +
+        c.maxHorizontal +
+        '] bias=' +
+        (c.downwardPreferred ? 'down' : c.upwardPreferred ? 'up' : 'outward'),
+    );
+    if (node) {
+      const parent = node.parentId ? plantNodes.get(node.parentId) : undefined;
+      lines.push(
+        ' part type=' +
+          node.nodeType +
+          ' visualType=' +
+          node.type +
+          ' radius=' +
+          growthDebugNum(node.radius) +
+          ' biomass=' +
+          growthDebugNum(node.biomass),
+      );
+      lines.push(
+        ' part pos=(' +
+          growthDebugNum(node.position.x) +
+          ', ' +
+          growthDebugNum(node.position.y) +
+          ', ' +
+          growthDebugNum(node.position.z) +
+          ') parent=' +
+          (parent ? parent.nodeType : 'none') +
+          ' prog=' +
+          growthDebugNum(node.growthProgress),
+      );
+      lines.push(
+        ' design attachAt=' +
+          (parent && parent.nodeType === 'seed' ? 'seed crown/base' : 'parent tip') +
+          ' groundLevel=' +
+          (Math.abs(node.position.y) < 0.18 ? 'yes' : 'no'),
+      );
+    }
+  } else {
+    lines.push('');
+    lines.push('AIM  idle (select a part, then an option)');
+  }
+
+  lines.push('');
+  lines.push('OWN NODES');
+  for (const node of nodes.slice(0, 14)) {
+    const parent = node.parentId ? plantNodes.get(node.parentId) : undefined;
+    lines.push(
+      ' ' +
+        node.id.slice(-4) +
+        ' ' +
+        String(node.nodeType).padEnd(10) +
+        ' r=' +
+        growthDebugNum(node.radius) +
+        ' pos=(' +
+        growthDebugNum(node.position.x) +
+        ', ' +
+        growthDebugNum(node.position.y) +
+        ', ' +
+        growthDebugNum(node.position.z) +
+        ') prog=' +
+        growthDebugNum(node.growthProgress) +
+        ' ' +
+        (parent ? 'p=' + parent.nodeType : 'root'),
+    );
+  }
+
+  el.textContent = lines.join('\n');
 }
 
 // Click/drag tracking to distinguish click from camera orbit drag
@@ -692,46 +1239,57 @@ const keyboardZoomState = {
 };
 
 // Smooth camera focus and zoom animation
-const cameraFocusTarget = new THREE.Vector3();
-let isCameraFocusing = false;
-const CAMERA_FOCUS_LERP_SPEED = 4.5; // Lerp rate per second for smooth arrival
 let targetCameraDistance = -1; // Desired distance from target; smoothly lerps when > 0
 
-function focusCameraOnNode(nodeData: PlantNodeData, immediate = false): void {
-  const nodePos = nodeData.position.clone();
+function focusCameraOnNode(nodeData: PlantNodeData): void {
+  // The local framing distance has no meaning while orbiting the whole planet.
+  if (planetViewActive) return;
+  // Frame the node where it is drawn, not where the model puts it: stubbed
+  // nodes (cotyledons, crown stem) are drawn offset from their parent.
+  const parentNode = nodeData.parentId ? plantNodes.get(nodeData.parentId) : undefined;
+  const nodePos = resolveDrawnNodePosition(nodeData, parentNode, plantNodes.values()).clone();
   // If it's a seed, offset to visual seed center
   if (nodeData.isSeed || nodeData.nodeType === 'seed') {
     nodePos.y += (nodeData.radius || 0.08) * 0.25;
   }
 
-  cameraFocusTarget.copy(nodePos);
-  isCameraFocusing = true;
+  // Frame distance follows the node's own size, floored by the orbit minimum
+  // that applies to it. Root nodes are framed much tighter than canopy nodes:
+  // a root tip is the thing being inspected, not a whole stem.
+  // Ground level decides the view, not the node's layer: the seed is the root
+  // crown and carries layer 'root', yet it sits on the surface and must be read
+  // from the side above ground, not from below it.
+  const underground = nodeData.position.y < 0 || nodeData.type === 0;
+  const frameMin = cameraMinDistanceForNode(nodeData);
+  const sizeDistance = (nodeData.radius || 0.05) * (underground ? 12 : 25);
+  const frameCeiling = underground ? 1.25 : 3.5;
+  const frameDist = Math.max(frameMin * 2, Math.min(frameCeiling, sizeDistance));
 
-  // Frame distance: 1.8m to 3.5m based on node size so it is centered and seen in its entirety
-  const frameDist = Math.max(1.8, Math.min(3.5, (nodeData.radius || 0.05) * 25));
-  targetCameraDistance = frameDist;
+  // A node focus is a single deterministic camera placement: a side view at a
+  // shallow elevation, keeping the azimuth the player was already looking from.
+  // It used to lerp the target and the distance instead, which left the framing
+  // fighting the player every frame after the click.
+  cancelCameraAutoMove();
+  const horizontal = camera.position.clone().sub(controls.target);
+  horizontal.y = 0;
+  if (horizontal.lengthSq() < 1e-6) horizontal.set(0.8, 0, 0.6);
+  horizontal.normalize();
+  // Side elevation: a seedling is read best from the side, roots from slightly
+  // below the surface they grow in.
+  horizontal.y = underground ? -0.3 : 0.3;
+  horizontal.normalize();
+
+  controls.target.copy(nodePos);
+  camera.position.copy(nodePos).addScaledVector(horizontal, frameDist);
 
   // Allow camera to go below the horizon for underground nodes,
-  // but do NOT auto-enable Root Sight — that is a manual player toggle (R key).
-  if (nodePos.y < -0.05 || nodeData.layer === 'root' || nodeData.type === 0) {
+  // but do NOT auto-enable Root Sight - that is a manual player toggle (R key).
+  if (underground) {
     controls.maxPolarAngle = Math.PI - 0.05;
-    // If camera is high above ground, smoothly guide its position down towards subterranean angle
-    if (camera.position.y > 0.8) {
-      const offset = camera.position.clone().sub(controls.target);
-      offset.y = Math.max(-0.4, Math.min(0.6, offset.y * 0.4));
-      if (offset.lengthSq() < 1e-4) offset.set(0.5, 0.2, 0.8);
-      offset.normalize().multiplyScalar(frameDist);
-      camera.position.copy(nodePos).add(offset);
-    }
   } else {
-    // Canopy node: reset to standard surface maxPolarAngle
     controls.maxPolarAngle = renderConfig?.cameraMaxPolarAngle ?? Math.PI / 2 - 0.05;
   }
-
-  if (immediate) {
-    controls.target.copy(nodePos);
-    isCameraFocusing = false;
-  }
+  controls.update();
 }
 
 // Growth animation tracking - nodes with growthProgress < 1.0
@@ -763,104 +1321,253 @@ let webgpuCanvas: HTMLCanvasElement | null = null;
 let useWebGPU = false;
 let renderConfig: RenderConfig | null = null;
 
-// Node radii are derived from biomass and tree height/depth with botanical Murray allometry:
-// Sturdy, thick trunk at base, gracefully tapering toward apical leader, slender fibrous roots,
-// and thin delicate lateral branchlets.
-// Based on botanical allometry: trunk diameter ~ 10-30cm at base, tapering to 2-5cm at crown
-// Leaves: 1.5-4cm radius (delicate lamina)
-// Roots: 2-8cm radius, tapering with depth
-function nodeRadius(biomass: number, type = 1, y = 0): number {
-  if (type === 0) {
-    // Root: taproot is firm near crown (0.05 - 0.08m), deep/lateral roots slenderize to 0.02 - 0.035m
-    const depth = Math.max(0, -y);
-    const depthTaper = 1.0 / (1.0 + depth * 0.35);
-    return Math.max(
-      0.018,
-      (0.035 + Math.min(0.07, Math.sqrt(Math.max(0, biomass)) * 0.012)) * depthTaper,
-    );
-  }
-  if (type === 4) {
-    // Seed: 6-12cm botanical teardrop seed radius
-    return Math.max(0.07, Math.min(0.12, 0.07 + Math.sqrt(Math.max(0, biomass)) * 0.01));
-  }
-  if (type === 3) {
-    // Leaf / foliage: delicate thin lamina (1.5cm - 4cm)
-    return 0.015 + Math.min(0.04, Math.sqrt(Math.max(0, biomass)) * 0.006);
-  }
-  // Stem / shoot / trunk:
-  // Height-based allometric tapering (Murray's Law / Pipe Model):
-  // At base (y near 0), sturdy trunk ~0.05-0.08m radius (5-8cm).
-  // At height (y > 2m), slender branches and twigs (0.02-0.05m).
-  const height = Math.max(0, y);
-  const heightTaper = 1.0 / (1.0 + height * 0.4);
-  const baseTrunkBonus = Math.max(0.0, 0.04 * (1.0 - Math.min(1.0, height / 1.5)));
-  return Math.max(
-    0.018,
-    (0.03 + baseTrunkBonus + Math.min(0.08, Math.sqrt(Math.max(0, biomass)) * 0.01)) * heightTaper,
+/**
+ * Server nodes are laid out on the flat simulation grid. On a planet that grid
+ * is the surface at the pole, so a node at horizontal distance r has to drop by
+ * the sphere's sag at r or it floats above the curved ground.
+ */
+function surfacePosition(x: number, z: number, y: number): THREE.Vector3 {
+  const radius = renderConfig?.planetRadiusM ?? 0;
+  const amplitude = renderConfig?.terrainAmplitudeM ?? 0;
+  return new THREE.Vector3(x, y + planetTerrainY(radius, x, z, amplitude), z);
+}
+
+/** Server height (metres above the soil) as a client world height. */
+function clientSurfaceY(x: number, z: number, y: number): number {
+  return (
+    y + planetTerrainY(renderConfig?.planetRadiusM ?? 0, x, z, renderConfig?.terrainAmplitudeM ?? 0)
   );
 }
 
-// Growth system helpers (ADR-018 two-step gene-gated growth)
-function getNodeTypeName(type: number): string {
-  const names = [
-    'seed',
-    'radicle',
-    'root',
-    'lateral_root',
-    'stem',
-    'branch',
-    'vine',
-    'leaf',
-    'cotyledon',
-    'flower',
-    'spore_sac',
-  ];
-  return names[type] ?? 'unknown';
+/**
+ * A node's attach point on its parent, in the space the plant is drawn in.
+ *
+ * The server sends attach and target points in the same surface-relative frame
+ * as node positions. Mapping only the positions left every segment starting
+ * wherever the server's origin happened to be, so grown parts hung off the
+ * plant instead of joining it.
+ */
+function clientAttach(x?: number, y?: number, z?: number) {
+  const point = toClientSpace({ x, y, z }, clientSurfaceY);
+  return point ? { parentAttachX: point.x, parentAttachY: point.y, parentAttachZ: point.z } : {};
 }
 
-function nodeTypeLabel(node: PlantNodeData): string {
-  return node.nodeType ?? getNodeTypeName(node.type);
+/** Where a growing node is heading, in the space the plant is drawn in. */
+function clientTarget(x?: number, y?: number, z?: number) {
+  const point = toClientSpace({ x, y, z }, clientSurfaceY);
+  return point ? { targetX: point.x, targetY: point.y, targetZ: point.z } : {};
+}
+
+// Fallback drawn radius for payloads that predate the server sending a radius.
+// The canonical sizes live in the shared per-type table (`nodeRenderRadius`), so
+// this only maps the legacy numeric visual type back to a node type. `y` is kept
+// for call-site compatibility; depth/height tapering is the table's job now.
+function nodeRadius(biomass: number, type = 1, _y = 0): number {
+  const nodeType =
+    type === 4 ? 'seed' : type === 3 ? 'leaf' : type === 2 ? 'vine' : type === 0 ? 'root' : 'stem';
+  return nodeRenderRadius(nodeType, biomass);
+}
+
+// Growth system helpers (ADR-018 two-step gene-gated growth)
+
+// Whole-plant framing distance follows how big the plant actually is. The old
+// rule measured the distance from the seed to the furthest node and multiplied
+// it by twelve, so a 1 m seedling was clamped to the 6 m start distance and
+// read as a speck on the ground. Frame the plant's own bounding sphere instead,
+// which is what "fill the view with this plant" means, and keep the start
+// distance as the ceiling for mature ones.
+function plantFrameDistance(): number {
+  const start = renderConfig?.cameraStartDistance ?? 6;
+  const min = renderConfig?.cameraMinDistance ?? 1;
+  const own = Array.from(plantNodes.values()).filter((node) => node.isOwnPlant);
+  if (own.length === 0) return start;
+  const bounds = new THREE.Box3();
+  for (const node of own) {
+    bounds.expandByPoint(tempTarget.set(node.position.x, node.position.y, node.position.z));
+  }
+  const radius = Math.max(0.08, bounds.getBoundingSphere(new THREE.Sphere()).radius);
+  // Distance that just fits the sphere in the vertical field of view, with a
+  // margin so the tips do not touch the screen edges.
+  const fitting = radius / Math.tan((camera.fov * Math.PI) / 360);
+  return Math.max(min * 1.5, Math.min(start, fitting * 1.6));
 }
 
 // ADR-027: frame the independent camera close to the plant. The plant model
 // keeps its normal size; only the camera distance changes.
 function frameCameraOnPlant(x: number, y: number, z: number): void {
-  const distance = renderConfig?.cameraStartDistance ?? 6;
-  const target = new THREE.Vector3(x, y, z);
-  controls.target.copy(target);
+  // A whole-plant recenter wins over any node focus still animating, otherwise
+  // the leftover framing distance would drag the camera back in.
+  cancelCameraAutoMove();
+  const distance = plantFrameDistance();
+  tempTarget.set(x, y, z);
+  controls.target.copy(tempTarget);
 
-  // Use a fixed angle looking down at the plant from above (positive y)
-  // Direction: slightly forward, slightly down, slightly right
-  const direction = new THREE.Vector3(0.3, 0.7, 0.6).normalize();
-  camera.position.copy(target).addScaledVector(direction, distance);
+  // Shallow side view, not a high orbit. A young plant is only a seed or a
+  // seedling, so looking down on it at 40°+ read as a bird's-eye view of a dot;
+  // a normal side view shows the whole plant and is what players expect.
+  // Elevation is ~15° above the target, azimuth slightly forward and right.
+  tempDirection.set(0.3, 0.27, 0.92).normalize();
+  camera.position.copy(tempTarget).addScaledVector(tempDirection, distance);
   controls.update();
 }
 
-// WASD / arrows move the camera and its orbit target together.
-// W/ArrowUp   → camera UP   (+Y world axis)
-// S/ArrowDown → camera DOWN (-Y world axis)
-// A/ArrowLeft → pan left  (screen-right Ã— camera-up cross product)
-// D/ArrowRight → pan right
-// Nothing on the plant moves (ADR-022).
-function applyCameraPan(deltaTime: number): void {
-  const speed = renderConfig?.cameraPanSpeed ?? 0;
-  if (speed <= 0) return;
+// The up vector for the current view. Planet view looks at the whole globe, so
+// it keeps world up; the local view uses the surface normal where the camera is
+// looking. At a 100 km radius this is a 0.34° tilt across the clearing, but it
+// is what keeps the horizon level as the play area grows.
+function desiredCameraUp(out: THREE.Vector3): THREE.Vector3 {
+  const radius = renderConfig?.planetRadiusM ?? 0;
+  if (radius <= 0 || planetViewActive) return out.copy(WORLD_UP);
+  return out.set(controls.target.x, controls.target.y + radius, controls.target.z).normalize();
+}
 
-  let x = 0; // left / right pan
-  let y = 0; // up / down (W/S, ArrowUp/Down)
-  if (cameraPanState.forward) y += 1; // W / ArrowUp   → camera UP
-  if (cameraPanState.backward) y -= 1; // S / ArrowDown → camera DOWN
+// OrbitControls takes `object.up` as its orbit axis when it is constructed and
+// keeps that frame for the life of the instance. The cached frame is private and
+// has moved between three.js releases, so this never touches it: when the
+// normal has moved far enough to matter, the controls are replaced with a new
+// instance built from the same public constructor. The threshold (1.1 degrees)
+// is far below anything visible, so this is a rare event rather than a per-frame
+// rebuild.
+const CONTROL_UP_EPSILON = 0.02;
+const controlFrameUp = new THREE.Vector3(0, 1, 0);
+
+function applyCameraUp(up: THREE.Vector3): void {
+  if (camera.up.distanceToSquared(up) < 1e-14) return;
+  camera.up.copy(up);
+  if (up.angleTo(controlFrameUp) < CONTROL_UP_EPSILON) return;
+  rebuildControls();
+  controlFrameUp.copy(up);
+}
+
+function rebuildControls(): void {
+  const previous = controls;
+  const target = previous.target.clone();
+  const carried = {
+    enabled: previous.enabled,
+    minDistance: previous.minDistance,
+    maxDistance: previous.maxDistance,
+    maxPolarAngle: previous.maxPolarAngle,
+    dampingFactor: previous.dampingFactor,
+    enableDamping: previous.enableDamping,
+    enableRotate: previous.enableRotate,
+    enablePan: previous.enablePan,
+    panSpeed: previous.panSpeed,
+    rotateSpeed: previous.rotateSpeed,
+    zoomSpeed: previous.zoomSpeed,
+  };
+  previous.dispose();
+  controls = createControls();
+  controls.enabled = carried.enabled;
+  controls.minDistance = carried.minDistance;
+  controls.maxDistance = carried.maxDistance;
+  controls.maxPolarAngle = carried.maxPolarAngle;
+  controls.dampingFactor = carried.dampingFactor;
+  controls.enableDamping = carried.enableDamping;
+  controls.enableRotate = carried.enableRotate;
+  controls.enablePan = carried.enablePan;
+  controls.panSpeed = carried.panSpeed;
+  controls.rotateSpeed = carried.rotateSpeed;
+  controls.zoomSpeed = carried.zoomSpeed;
+  controls.target.copy(target);
+  controls.update();
+}
+
+// Recenter on the whole plant. Space uses this path.
+function recenterCamera(): void {
+  // Only the player's own plant. plantNodes also holds rival and wild plants, so
+  // taking the first parentless node in the map framed whichever plant happened
+  // to be inserted first: Space jumped the view to a seed metres away from the
+  // one being grown.
+  const own = Array.from(plantNodes.values()).filter((node) => node.isOwnPlant);
+  if (own.length === 0) {
+    frameCameraOnPlant(controls.target.x, controls.target.y, controls.target.z);
+    return;
+  }
+  // Aim at the middle of the plant rather than its seed: the seed is the lowest
+  // node, so centring it left the shoot hanging above the middle of the screen.
+  const bounds = new THREE.Box3();
+  for (const node of own) {
+    bounds.expandByPoint(tempTarget.set(node.position.x, node.position.y, node.position.z));
+  }
+  const centre = bounds.getCenter(tempTarget);
+  frameCameraOnPlant(centre.x, centre.y, centre.z);
+}
+
+// Any deliberate camera input cancels a pending automatic framing, so a
+// double-click focus can never keep dragging the view around afterwards.
+function cancelCameraAutoMove(): void {
+  targetCameraDistance = -1;
+}
+
+// Screen-space pick radius for double-clicking a plant node, in CSS pixels.
+const NODE_DOUBLE_CLICK_PICK_PX = 24;
+const nodePickVector = new THREE.Vector3();
+
+// How close the orbit may get depends on what is being inspected. Above ground
+// the camera must not enter the plant (camera_min_distance), while the root
+// layer needs to reach root tips (camera_min_distance_root): Root Sight makes
+// the soil translucent, so the camera also travels below the surface.
+function currentCameraMinDistance(): number {
+  const surfaceMin = renderConfig?.cameraMinDistance ?? 1.0;
+  const rootMin = renderConfig?.cameraMinDistanceRoot ?? surfaceMin;
+  const rootSightOn = rootSightMachine ? rootSightStateMachineIsEnabled(rootSightMachine) : false;
+  const belowSurface = camera.position.y < 0 || controls.target.y < 0;
+  return rootSightOn || belowSurface ? Math.min(surfaceMin, rootMin) : surfaceMin;
+}
+
+// The floor that applies to a specific node: underground nodes may be inspected
+// from the root-layer minimum even while the camera is still above ground.
+function cameraMinDistanceForNode(node: PlantNodeData): number {
+  const underground = node.position.y < 0 || node.type === 0;
+  if (!underground) return currentCameraMinDistance();
+  const surfaceMin = renderConfig?.cameraMinDistance ?? 1.0;
+  const rootMin = renderConfig?.cameraMinDistanceRoot ?? surfaceMin;
+  return Math.min(surfaceMin, rootMin);
+}
+
+// WASD / arrows fly the camera in the direction the camera is facing.
+// W/ArrowUp    -> forward along the view heading
+// S/ArrowDown  -> backward along the view heading
+// A/ArrowLeft  -> strafe left   (view heading X camera up)
+// D/ArrowRight -> strafe right
+// The heading is flattened onto the ground plane, so looking down at the soil
+// still travels across it instead of burrowing. Nothing on the plant moves, and
+// the orbit pivot is wherever the player has looked it (ADR-022).
+function applyCameraPan(deltaTime: number): void {
+  const baseSpeed = renderConfig?.cameraPanSpeed ?? 0;
+  if (baseSpeed <= 0) return;
+
+  // Pan speed follows the current zoom: at arm's length the camera crawls, far
+  // out it covers ground quickly. A fixed metres-per-second made close-up work
+  // unusable and long shots sluggish.
+  const distance = camera.position.distanceTo(controls.target);
+  const speed = baseSpeed * Math.max(0.15, distance / 12);
+
+  let forwardAxis = 0; // W / S: along the direction the camera looks
+  let x = 0; // A / D: strafe perpendicular to it
+  if (cameraPanState.forward) forwardAxis += 1;
+  if (cameraPanState.backward) forwardAxis -= 1;
   if (cameraPanState.left) x -= 1;
   if (cameraPanState.right) x += 1;
-  if (x === 0 && y === 0) return;
+  if (x === 0 && forwardAxis === 0) return;
+  cancelCameraAutoMove();
 
-  const right = new THREE.Vector3()
-    .crossVectors(camera.getWorldDirection(new THREE.Vector3()), camera.up)
-    .normalize();
+  // The old W/S drove the camera up and down the world Y axis, which read as
+  // the view being bolted to the plant rather than a free camera.
+  const forward = tempForward.copy(camera.getWorldDirection(tempVector));
+  forward.y = 0;
+  if (forward.lengthSq() < 1e-6) {
+    // Looking straight down: any ground heading is arbitrary, so use the
+    // camera's own into-the-screen axis instead of stalling.
+    forward.set(0, 0, -1).applyQuaternion(camera.quaternion);
+    forward.y = 0;
+  }
+  forward.normalize();
+  const right = tempRight.crossVectors(forward, camera.up).normalize();
 
-  const move = new THREE.Vector3()
+  const move = tempMove
+    .addScaledVector(forward, forwardAxis)
     .addScaledVector(right, x)
-    .addScaledVector(new THREE.Vector3(0, 1, 0), y)
     .normalize()
     .multiplyScalar(speed * deltaTime);
 
@@ -869,6 +1576,60 @@ function applyCameraPan(deltaTime: number): void {
   // OrbitControls.update() will keep the spherical offset intact.
   controls.target.add(move);
   camera.position.add(move);
+
+  // Height is not snapped to the surface here any more: the player's vertical
+  // physics owns it (settlePlayerOnGround), so panning up a hill lifts the rig
+  // with the terrain instead of teleporting it, and the camera keeps its orbit
+  // offset while it does.
+}
+
+// Simple player physics: the player is a point that falls onto the terrain and
+// stops, so the rig spawns in the air instead of starting inside a hill and
+// cannot sink when the relief changes underneath it.
+let playerVertical = spawnPlayer(0);
+
+/** Drop the player in from the configured spawn height, above the ground. */
+function respawnPlayer(): void {
+  playerVertical = spawnPlayer(renderConfig?.playerSpawnHeightM ?? 0);
+}
+
+/**
+ * Integrate the player's vertical physics and move the whole rig with it.
+ *
+ * Both the orbit target and the camera shift by the same delta, so the orbit
+ * offset (including Root Sight's negative one) is preserved while the player
+ * falls and lands.
+ */
+function settlePlayerOnGround(deltaTime: number): void {
+  const planetRadius = renderConfig?.planetRadiusM ?? 0;
+  if (planetRadius <= 0) return;
+  const groundY = planetTerrainY(
+    planetRadius,
+    controls.target.x,
+    controls.target.z,
+    renderConfig?.terrainAmplitudeM ?? 0,
+  );
+  playerVertical = stepPlayerVertical(
+    playerVertical,
+    deltaTime,
+    renderConfig?.playerGravityMps2 ?? 0,
+  );
+  const wantedY = playerWorldY(groundY, playerVertical);
+  const delta = wantedY - controls.target.y;
+  controls.target.y = wantedY;
+  camera.position.y += delta;
+
+  // Keep the eye above the dirt, not inside a hill. The orbit target is a point
+  // on the surface, so a low orbit angle can otherwise put the camera under a
+  // slope that rises between it and the plant.
+  const eyeGroundY = planetTerrainY(
+    planetRadius,
+    camera.position.x,
+    camera.position.z,
+    renderConfig?.terrainAmplitudeM ?? 0,
+  );
+  const eyeFloorY = eyeGroundY + (renderConfig?.cameraGroundClearanceM ?? 0.25);
+  if (camera.position.y < eyeFloorY) camera.position.y = eyeFloorY;
 }
 
 // T01: Plant Renderer
@@ -884,32 +1645,20 @@ let rootSightMachine: RootSightStateMachine | null = null;
 const rootSightTarget = new THREE.Vector3();
 
 // Shared by the soil cutaway shader and the per-frame transition update.
-const soilCutawayUniforms = {
-  uRootSightProgress: { value: 0 },
-  uRootSightCenter: { value: new THREE.Vector3() },
-  uRootSightRadius: { value: 50 },
-  uRootSightSoilOpacity: { value: 0.3 },
-};
+const soilCutawayUniforms = createRootSightUniforms({ radius: 50, soilOpacity: 0.3 });
 
 let statusElement: HTMLDivElement | null = null;
+// Timestamp of the in-flight PING, used to spot a stalled connection.
+let pingSentAt: number | null = null;
+// Connection-health thresholds from config/network.json; defaults until loaded.
+let networkConfig: { slowRttMs: number; stallMs: number } = { slowRttMs: 1200, stallMs: 12000 };
 let detailElement: HTMLDivElement | null = null;
 let hintCardElement: HTMLDivElement | null = null;
-
-function setStatus(text: string, state: 'pending' | 'ok' | 'down'): void {
-  if (!statusElement) return;
-  statusElement.textContent = text;
-  statusElement.dataset.state = state;
-}
-
-function setDetail(text: string): void {
-  if (!detailElement) return;
-  detailElement.textContent = text;
-}
 
 // T02: Root Sight toggle and transition.
 // Root Sight is a silent, player-controlled view mode (R key).
 // It activates the soil cutaway shader and allows underground polar angles.
-// It does NOT move the camera — the player keeps control at all times.
+// It does NOT move the camera - the player keeps control at all times.
 function setRootSightEnabled(enabled: boolean, plantId?: string): void {
   if (!rootSightMachine) return;
 
@@ -928,7 +1677,7 @@ function setRootSightEnabled(enabled: boolean, plantId?: string): void {
   }
 
   // Adjust polar angle limits so underground nodes are reachable, but do NOT
-  // move the camera — the player orbits freely at all times.
+  // move the camera - the player orbits freely at all times.
   if (enabled) {
     controls.maxPolarAngle = Math.PI - 0.05;
   } else {
@@ -937,24 +1686,7 @@ function setRootSightEnabled(enabled: boolean, plantId?: string): void {
 
   const isEnabled = rootSightStateMachineIsEnabled(rootSightMachine);
   setDetail(
-    isEnabled ? 'Root Sight: ON — Underground view active' : 'Root Sight: OFF — Surface view',
-  );
-}
-
-function toggleRootSight(): void {
-  if (!rootSightMachine) return;
-  rootSightStateMachineToggle(rootSightMachine);
-  const isEnabled = rootSightStateMachineIsEnabled(rootSightMachine);
-
-  // Adjust polar angle limits silently — no camera movement.
-  if (isEnabled) {
-    controls.maxPolarAngle = Math.PI - 0.05;
-  } else {
-    controls.maxPolarAngle = renderConfig?.cameraMaxPolarAngle ?? Math.PI / 2 - 0.05;
-  }
-
-  setDetail(
-    isEnabled ? 'Root Sight: ON — Underground view active' : 'Root Sight: OFF — Surface view',
+    isEnabled ? 'Root Sight: ON - Underground view active' : 'Root Sight: OFF - Surface view',
   );
 }
 
@@ -980,9 +1712,72 @@ function updateRootSight(deltaTime: number): void {
   const { eased, targetPosition } = rootSightStateMachineUpdate(rootSightMachine, deltaTime);
   rootSightTarget.copy(targetPosition);
 
+  // Size the pit to the plant, capped by the configured radius. A fixed 50-unit
+  // cutaway around a seed was a crater with a speck in the middle.
+  const cutawayRadius = resolveCutawayRadius(
+    plantExtent(plantNodes.values()),
+    eased,
+    rootSightConfig.cutawayRadius,
+  );
+
+  // T02 organic envelope: hand the soil shader every subterranean node, own and
+  // rival, so the cutaway follows the branching root paths.
+  const envelopeNodes = soilCutawayUniforms.uRootSightNodes.value;
+  // T02 cavity sizing: every underground node gets its own bubble, scaled by
+  // that node's own radius relative to the largest one, capped by the configured
+  // cutaway radius. Any underground element can carry Root Sight.
+  const undergroundList: PlantNodeData[] = [];
+  const collectUnderground = (node: PlantNodeData): void => {
+    const underground =
+      node.layer === 'root' ||
+      node.isSeed === true ||
+      node.nodeType === 'seed' ||
+      (node.position && node.position.y < -0.01) ||
+      node.type === 0;
+    if (underground) undergroundList.push(node);
+  };
+  for (const node of plantNodes.values()) collectUnderground(node);
+  for (const otherPlant of otherPlayerPlants.values()) {
+    for (const node of otherPlant.values()) collectUnderground(node);
+  }
+  // Share of each bubble that sits below the soil line. A bubble centred on a
+  // node at the surface is half above it, which from below reads as a dome of
+  // sky standing on the ground. Burying it turns the same sphere into a dug
+  // cavity whose mouth is at the surface and whose interior is dirt.
+  const CAVITY_BURY_FACTOR = 0.7;
+  let maxNodeRadius = 0;
+  for (const node of undergroundList) maxNodeRadius = Math.max(maxNodeRadius, node.radius || 0);
+  let envelopeCount = 0;
+  for (const node of undergroundList) {
+    if (envelopeCount >= envelopeNodes.length) break;
+    const share = maxNodeRadius > 0 ? (node.radius || 0) / maxNodeRadius : 1;
+    // The shader multiplies by the eased progress itself, so the stored radius
+    // is the open-cavity size.
+    const bubbleRadius = Math.max(0.12, cutawayRadius * Math.min(1, Math.max(0.35, share)));
+    envelopeNodes[envelopeCount].set(
+      node.position.x,
+      node.position.y - bubbleRadius * CAVITY_BURY_FACTOR,
+      node.position.z,
+      bubbleRadius,
+    );
+    envelopeCount += 1;
+  }
+  for (let i = envelopeCount; i < envelopeNodes.length; i += 1) envelopeNodes[i].w = 0;
+  soilCutawayUniforms.uRootSightNodeCount.value = envelopeCount;
+
   soilCutawayUniforms.uRootSightProgress.value = eased;
   soilCutawayUniforms.uRootSightCenter.value.copy(rootSightTarget);
-  soilCutawayUniforms.uRootSightRadius.value = rootSightConfig.cutawayRadius;
+  soilCutawayUniforms.uRootSightRadius.value = cutawayRadius;
+  // Keep the dirt the seed stands on. Sized from the seed itself so a bigger
+  // seed gets a wider mound, and floored so the cavity never eats the last of
+  // the ground under a small one.
+  const seedNode = Array.from(plantNodes.values()).find((node) => node.parentId === null);
+  // A seed a few centimetres across needs half a metre of ground around it
+  // before the cavity starts, or the only earth left under it is a sliver and
+  // the seed reads as hovering over its own hole.
+  soilCutawayUniforms.uRootSightSeedPad.value = seedNode
+    ? Math.max(0.5, (seedNode.radius ?? 0.12) * 6)
+    : 0.5;
   soilCutawayUniforms.uRootSightSoilOpacity.value = rootSightConfig.soilOpacity;
 
   const isEnabled = rootSightStateMachineIsEnabled(rootSightMachine);
@@ -991,29 +1786,48 @@ function updateRootSight(deltaTime: number): void {
     isEnabled,
     eased,
     rootSightTarget,
-    rootSightConfig.cutawayRadius,
+    cutawayRadius,
     3.0,
+    rootSightConfig.soilOpacity,
   );
-  if (isEnabled && eased > 0.01) {
-    const allNodes = Array.from(plantNodes.values());
-    webgpuRenderer?.updateRootAura(allNodes);
-  }
 }
 
 async function initC01(): Promise<void> {
   // Load C01 configs
-  const [loadedRenderConfig, loadedControlsConfig, uiConfig, loadedRootSightConfig] =
-    await Promise.all([
-      loadRenderConfig(httpOrigin),
-      loadControlsConfig(httpOrigin),
-      loadUIConfig(httpOrigin),
-      loadRootSightConfig(httpOrigin),
-    ]);
+  const [
+    loadedRenderConfig,
+    loadedControlsConfig,
+    uiConfig,
+    loadedRootSightConfig,
+    loadedChatConfig,
+    loadedReportsConfig,
+    loadedNetworkConfig,
+    loadedGrowthSegmentConfig,
+    loadedDayNightConfig,
+    loadedResourceTileConfig,
+  ] = await Promise.all([
+    loadRenderConfig(httpOrigin),
+    loadControlsConfig(httpOrigin),
+    loadUIConfig(httpOrigin),
+    loadRootSightConfig(httpOrigin),
+    loadChatConfig(httpOrigin),
+    loadReportsConfig(httpOrigin),
+    loadNetworkConfig(httpOrigin),
+    loadGrowthSegmentConfig(httpOrigin),
+    loadDayNightConfig(httpOrigin),
+    loadResourceTileConfig(httpOrigin),
+  ]);
 
   renderConfig = loadedRenderConfig;
+  growthSegmentConfig = loadedGrowthSegmentConfig;
+  dayNightConfig = loadedDayNightConfig;
+  tileConfig = loadedResourceTileConfig;
   controlsConfig = loadedControlsConfig;
   rootSightConfig = loadedRootSightConfig;
   rootSightMachine = createRootSightStateMachine(rootSightConfig);
+  chatConfig = loadedChatConfig;
+  reportConfig = loadedReportsConfig;
+  networkConfig = loadedNetworkConfig;
 
   // Build input bus
   inputBus = createInputBus({ bindings: controlsConfig.bindings });
@@ -1043,6 +1857,14 @@ async function initC01(): Promise<void> {
             environmentRenderer.setTimeOfDay(t);
           }
         },
+        setTimeFrozen: (frozen: boolean) => {
+          environmentRenderer?.setTimeFrozen(frozen);
+        },
+        getTimeFrozen: () => environmentRenderer?.isTimeFrozen() ?? false,
+        setTimeScale: (scale: number) => {
+          environmentRenderer?.setTimeScale(scale);
+        },
+        getTimeScale: () => environmentRenderer?.getTimeScale() ?? 1,
         setWeatherState: (stateName: string) => {
           if (environmentRenderer) {
             environmentRenderer.handleWeatherUpdate({
@@ -1069,7 +1891,13 @@ async function initC01(): Promise<void> {
         ) => {
           // Local visual update only; server sync via sendToServer
         },
-        getTileResources: (_x: number, _z: number) => ({ light: 0, moisture: 0, minerals: 0 }),
+        // The client only receives coverage for the tiles under its own plant,
+        // so the inspector shows those readings instead of fabricated zeros.
+        getTileResources: (_x: number, _z: number) => ({
+          light: tileLight,
+          moisture: tileWater,
+          minerals: tileMinerals,
+        }),
         getTileSize: () => 1,
         getGridWidth: () => 256,
         getGridHeight: () => 256,
@@ -1122,6 +1950,7 @@ async function initC01(): Promise<void> {
         },
       },
       camera: {
+        setPlanetView: (enabled: boolean) => setPlanetView(enabled),
         setDistance: (dist: number) => {
           controls.minDistance = dist;
           controls.maxDistance = dist;
@@ -1171,36 +2000,36 @@ async function initC01(): Promise<void> {
     },
   );
 
-  // Grow mode state
+  // Grow mode state. The mode is not a badge any more: one line at the very
+  // bottom of the screen says which key toggles it and shows whether it is on.
   let isGrowMode = false;
-  let growModeIndicator: HTMLDivElement | null = null;
+  let growModeHint: HTMLDivElement | null = null;
 
-  function createGrowModeIndicator(): void {
-    const indicator = document.createElement('div');
-    indicator.id = 'grow-mode-indicator';
-    indicator.style.cssText = `
+  function createGrowModeHint(): void {
+    const hint = document.createElement('div');
+    hint.id = 'grow-mode-hint';
+    hint.style.cssText = `
       position: fixed;
-      top: 90px;
-      left: 16px;
-      z-index: 1000;
+      bottom: 6px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 150;
       font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
-      font-size: calc(13px * var(--text-scale));
-      font-weight: 600;
-      color: var(--leaf-400);
-      background: rgba(20, 24, 15, 0.85);
-      border: 1px solid var(--bark-700);
-      border-radius: 4px;
-      padding: 6px 12px;
+      font-size: calc(11px * var(--text-scale));
+      font-weight: 500;
+      color: var(--bark-300);
+      background: rgba(20, 24, 15, 0.6);
+      border-radius: 8px;
+      padding: 3px 10px;
       pointer-events: none;
-      transition: opacity 0.2s ease;
+      letter-spacing: 0.02em;
     `;
-    indicator.textContent = 'Mode: Normal (G to toggle)';
-    document.body.appendChild(indicator);
-    growModeIndicator = indicator;
+    document.body.appendChild(hint);
+    growModeHint = hint;
+    updateGrowModeHint();
   }
 
-  // Create grow mode indicator
-  createGrowModeIndicator();
+  createGrowModeHint();
 
   // Quality controller
   qualityController = createQualityController({
@@ -1213,10 +2042,18 @@ async function initC01(): Promise<void> {
 
   // Apply the camera and shadow tunables from config/render.json.
   controls.dampingFactor = renderConfig.cameraSmoothing;
+  // The orbit limits are the camera's physical range of travel: it may come no
+  // closer than camera_min_distance (so it never ends up inside the plant) and
+  // no further than the far plane.
   controls.minDistance = renderConfig.cameraMinDistance;
-  controls.maxDistance = renderConfig.cameraMaxDistance;
+  controls.maxDistance = Math.min(camera.far * 0.9, renderConfig.cameraMaxDistance);
   controls.maxPolarAngle = renderConfig.cameraMaxPolarAngle;
   sunLight.shadow.mapSize.set(renderConfig.shadowMapSize, renderConfig.shadowMapSize);
+  // A shadow texel covers a large patch of the ground, so without these the
+  // soil plane self-shadows at low sun angles and the near ground reads as a
+  // separate grey slab beneath the dirt.
+  sunLight.shadow.bias = renderConfig.shadowBias;
+  sunLight.shadow.normalBias = renderConfig.shadowNormalBias;
 
   // C03: Initialize environment rendering (sky dome, diurnal grading, fog, rain, ground soil tint)
   environmentRenderer = new EnvironmentRenderer(
@@ -1227,11 +2064,61 @@ async function initC01(): Promise<void> {
     ambientLight,
     hemisphereLight,
     soilCutawayUniforms,
+    {
+      dayLengthSeconds: dayNightConfig.cycleLengthS,
+      tiles: tileConfig,
+    },
   );
 
   // Initialize Rapier physics world (client-side cosmetic simulation)
   try {
     await rapierWorld.init({ x: 0, y: -9.81, z: 0 });
+
+    // Static soil collider: the camera is a physical observer, so it cannot
+    // pass through the ground. There is no cap on the planet any more, so the
+    // collider is the planet itself — the player can walk all the way around it
+    // instead of stopping at the edge of a local box. A flat world keeps the
+    // box, which is the whole of a flat world.
+    const planetRadiusM = renderConfig.planetRadiusM;
+    const soilBody = rapierWorld
+      .getWorld()
+      .createRigidBody(
+        RAPIER.RigidBodyDesc.fixed().setTranslation(0, planetRadiusM > 0 ? -planetRadiusM : -1, 0),
+      );
+    soilColliderRef.current = rapierWorld
+      .getWorld()
+      .createCollider(
+        planetRadiusM > 0
+          ? RAPIER.ColliderDesc.ball(planetRadiusM)
+          : RAPIER.ColliderDesc.cuboid(renderConfig.terrainRadius, 1, renderConfig.terrainRadius),
+        soilBody,
+      );
+
+    // The visible ground is the sphere plus hills, and the sphere alone would
+    // leave anything physical standing at the sphere while the hills rise above
+    // it — the player ends up buried up to the waist in a mound. The patch is
+    // the exact geometry that is drawn, so collide with that as well. The ball
+    // stays for the rest of the planet and as the floor under the relief, which
+    // is raise-only.
+    const terrainPatch = environmentRenderer?.terrainPatch ?? null;
+    if (terrainPatch) {
+      const geometry = terrainPatch.geometry;
+      const positions = geometry.getAttribute('position');
+      const vertices = new Float32Array(positions.count * 3);
+      for (let i = 0; i < positions.count; i += 1) {
+        vertices[i * 3] = positions.getX(i);
+        vertices[i * 3 + 1] = positions.getY(i);
+        vertices[i * 3 + 2] = positions.getZ(i);
+      }
+      const index = geometry.getIndex();
+      const indices = index
+        ? Uint32Array.from(index.array as ArrayLike<number>)
+        : Uint32Array.from({ length: positions.count }, (_, i) => i);
+      terrainColliderRef.current = rapierWorld
+        .getWorld()
+        .createCollider(RAPIER.ColliderDesc.trimesh(vertices, indices), soilBody);
+    }
+
     physicsReady = true;
     setDetail('Physics initialized');
   } catch (err) {
@@ -1241,24 +2128,21 @@ async function initC01(): Promise<void> {
   }
 
   // Grow mode functions
-  function updateGrowModeIndicator(): void {
-    if (growModeIndicator) {
-      growModeIndicator.textContent = isGrowMode
-        ? 'Mode: GROW (G to toggle)'
-        : 'Mode: Normal (G to toggle)';
-      growModeIndicator.style.color = isGrowMode ? 'var(--ember-500)' : 'var(--leaf-400)';
-      growModeIndicator.style.borderColor = isGrowMode ? 'var(--ember-500)' : 'var(--bark-700)';
-    }
+  function updateGrowModeHint(): void {
+    if (!growModeHint) return;
+    growModeHint.textContent = isGrowMode ? 'Grow mode on · G to toggle' : 'G to toggle grow mode';
+    growModeHint.style.color = isGrowMode ? 'var(--leaf-300)' : 'var(--bark-300)';
+    growModeHint.style.background = isGrowMode ? 'rgba(52, 40, 14, 0.82)' : 'rgba(20, 24, 15, 0.6)';
   }
 
   function setGrowMode(enabled: boolean): void {
     isGrowMode = enabled;
-    updateGrowModeIndicator();
+    updateGrowModeHint();
     if (enabled) {
-      setDetail('Grow Mode ON — Click a node to grow');
+      setDetail('Grow Mode ON - Click a node to grow');
       uiShell?.toast({ message: 'Grow Mode enabled', kind: 'info', durationMs: 2000 });
     } else {
-      setDetail('Grow Mode OFF — Click a node to focus');
+      setDetail('Grow Mode OFF - Click a node to focus');
       uiShell?.toast({ message: 'Grow Mode disabled', kind: 'info', durationMs: 2000 });
       hideGrowthSelection();
     }
@@ -1277,49 +2161,31 @@ async function initC01(): Promise<void> {
 
     const panel = document.createElement('div');
     panel.id = 'inventory-overview-panel';
+    panel.className = 'hud-panel';
     panel.style.cssText = `
       position: fixed;
       top: 50%;
       left: 50%;
       transform: translate(-50%, -50%);
       z-index: 200;
-      background: rgba(20, 24, 15, 0.98);
-      border: 1px solid var(--bark-700);
-      border-radius: 8px;
-      padding: 16px 24px;
-      color: var(--bone-100);
-      font-family: ui-monospace, "JetBrains Mono", monospace;
-      font-size: calc(13px * var(--text-scale));
-      min-width: 360px;
-      max-width: 500px;
-      max-height: 70vh;
+      width: min(520px, 92vw);
+      max-width: 520px;
+      max-height: 75vh;
       overflow-y: auto;
       pointer-events: auto;
-      box-shadow: 0 8px 32px rgba(0,0,0,0.6);
       display: none;
+      animation: cozyFadeIn 0.3s cubic-bezier(0.4, 0, 0.2, 1);
     `;
 
     panel.innerHTML = `
-      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid var(--bark-700);">
-        <h2 style="margin: 0; color: var(--leaf-400);">Inventory & Plant Overview</h2>
-        <button id="inventory-close" style="background: none; border: none; color: var(--bark-300); cursor: pointer; font-size: 1.5em; line-height: 1;">Ã—</button>
-      </div>
-      <div id="plant-overview" style="margin-bottom: 16px;">
-        <h3 style="margin: 0 0 8px; color: var(--sprout-300);">Your Plant</h3>
-        <div id="plant-stats" style="font-size: 0.9em; color: var(--bark-300);">Loading...</div>
-      </div>
-      <div id="inventory-slots">
-        <h3 style="margin: 0 0 8px; color: var(--sprout-300);">Inventory (1-0 to select)</h3>
+      <div id="plant-stats" style="padding: 8px 10px; font-size: 0.72rem; color: var(--warm-ink); line-height: 1.5;"></div>
+      <div id="inventory-slots" style="padding: 8px 10px;">
         <div id="inventory-grid" style="display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px;"></div>
       </div>
     `;
 
     layer.appendChild(panel);
     inventoryOverviewPanel = panel;
-
-    panel.querySelector('#inventory-close')?.addEventListener('click', () => {
-      toggleInventoryOverview();
-    });
 
     // Close on Escape
     const handleInventoryEscape = (e: KeyboardEvent) => {
@@ -1349,60 +2215,45 @@ async function initC01(): Promise<void> {
   function updateInventoryOverview(): void {
     if (!inventoryOverviewPanel) return;
 
-    // Update plant stats
+    // Update plant stats — combined into one flowing line instead of fragmented rows
     const plantStats = document.getElementById('plant-stats');
     if (plantStats && plantId) {
       const ownNodes = Array.from(plantNodes.values()).filter((n) => n.isOwnPlant);
       const totalBiomass = ownNodes.reduce((sum, n) => sum + (n.biomass || 0), 0);
       const nodeCount = ownNodes.length;
-      const rootNodes = ownNodes.filter((n) => n.layer === 'root' || n.type === 0).length;
-      const canopyNodes = ownNodes.filter((n) => n.layer === 'canopy' || n.type >= 1).length;
       plantStats.innerHTML = `
-        <div>Plant ID: ${plantId.slice(0, 12)}...</div>
-        <div>Total Biomass: ${totalBiomass.toFixed(1)}</div>
-        <div>Nodes: ${nodeCount} (Roots: ${rootNodes}, Canopy: ${canopyNodes})</div>
-        <div>Energy: ${plantEnergy.toFixed(1)} / ${plantBiomass ? (plantBiomass * 10).toFixed(0) : '—'}</div>
-        <div>Light: ${tileLight.toFixed(0)} | Water: ${tileWater.toFixed(0)} | Minerals: ${tileMinerals.toFixed(0)}</div>
-        <div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--bark-700); color: var(--sprout-300);">
-          Growth: ${isGrowMode ? 'ACTIVE' : 'Idle'} | Root Sight: ${rootSightMachine && rootSightStateMachineIsEnabled(rootSightMachine) ? 'ON' : 'OFF'}
+        <div style="font-size: 0.72rem; color: var(--warm-ink); line-height: 1.5;">
+          <span style="color: var(--leaf-300);">${totalBiomass.toFixed(1)}B</span>
+          <span style="color: var(--sprout-300);">·${plantEnergy.toFixed(1)}E</span>
+          <span style="color: var(--bark-300);">·${nodeCount}N</span>
         </div>
       `;
     }
 
-    // Update inventory grid (stub - 10 slots)
+    // Update inventory grid (game pouch slots)
     const inventoryGrid = document.getElementById('inventory-grid');
     if (inventoryGrid) {
       inventoryGrid.innerHTML = '';
       for (let i = 1; i <= 10; i++) {
         const slot = document.createElement('div');
-        slot.style.cssText = `
-          aspect-ratio: 1;
-          background: var(--bark-800);
-          border: 1px solid var(--bark-600);
-          border-radius: 4px;
-          display: flex;
-          flex-direction: column;
-          align-items: center;
-          justify-content: center;
-          font-size: 0.75em;
-          color: var(--bark-300);
-          position: relative;
-          transition: border-color 0.1s ease, background 0.1s ease;
-        `;
+        slot.className = 'hud-slot hud-slot-empty';
+        slot.style.animationDelay = `${i * 0.03}s`;
         const keyLabel = i === 10 ? '0' : String(i);
         slot.innerHTML = `
-          <div style="position: absolute; top: 2px; left: 4px; font-size: 0.65em; font-weight: bold; color: var(--bone-300); opacity: 0.7;">${keyLabel}</div>
-          <div style="font-size: 2em; line-height: 1;">ðŸ“¦</div>
-          <div style="margin-top: 4px; font-size: 0.7em;">Empty</div>
+          <div class="hud-slot-key">${keyLabel}</div>
+          <div class="slot-icon">•</div>
+          <div class="slot-label">Empty</div>
         `;
         // Highlight on hover
         slot.addEventListener('mouseenter', () => {
           slot.style.borderColor = 'var(--leaf-400)';
-          slot.style.background = 'rgba(20, 24, 15, 0.95)';
+          slot.style.background = 'rgba(159, 200, 96, 0.15)';
+          slot.style.color = 'var(--leaf-300)';
         });
         slot.addEventListener('mouseleave', () => {
-          slot.style.borderColor = 'var(--bark-600)';
+          slot.style.borderColor = 'var(--hud-border)';
           slot.style.background = 'var(--bark-800)';
+          slot.style.color = 'var(--bark-300)';
         });
         inventoryGrid.appendChild(slot);
       }
@@ -1411,39 +2262,46 @@ async function initC01(): Promise<void> {
 
   // Emote definitions
   const EMOTES = [
-    { id: 'wave', label: 'Wave', emoji: 'ðŸ‘‹' },
-    { id: 'cheer', label: 'Cheer', emoji: 'ðŸŽ‰' },
-    { id: 'thumbs_up', label: 'Thumbs Up', emoji: 'ðŸ‘' },
-    { id: 'heart', label: 'Heart', emoji: 'â¤ï¸' },
-    { id: 'think', label: 'Think', emoji: 'ðŸ¤”' },
-    { id: 'sleep', label: 'Sleep', emoji: 'ðŸ˜´' },
-    { id: 'dance', label: 'Dance', emoji: 'ðŸ’ƒ' },
-    { id: 'sad', label: 'Sad', emoji: 'ðŸ˜¢' },
+    { id: 'wave', label: 'Wave' },
+    { id: 'cheer', label: 'Cheer' },
+    { id: 'thumbs_up', label: 'Thumbs Up' },
+    { id: 'heart', label: 'Heart' },
+    { id: 'think', label: 'Think' },
+    { id: 'sleep', label: 'Sleep' },
+    { id: 'dance', label: 'Dance' },
+    { id: 'sad', label: 'Sad' },
   ] as const;
 
   let emoteWheelElement: HTMLDivElement | null = null;
 
+  createEmoteWheel();
+
   function createEmoteWheel(): void {
     const wheel = document.createElement('div');
     wheel.id = 'emote-wheel';
+    wheel.className = 'hud-panel';
     wheel.style.cssText = `
       position: fixed;
       top: 50%;
       left: 50%;
-      transform: translate(-50%, -50%) scale(0.8);
+      transform: translate(-50%, -50%) scale(0.85);
       z-index: 400;
       pointer-events: auto;
       opacity: 0;
-      transition: opacity 0.15s ease, transform 0.15s ease;
+      transition: opacity 0.2s cubic-bezier(0.4, 0, 0.2, 1),
+                  transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
       display: none;
+      width: min(340px, 90vw);
+      max-width: 340px;
+      padding: 18px;
     `;
 
-    const radius = 120;
-    const centerSize = 80;
-    const buttonSize = 64;
+    const radius = 110;
+    const centerSize = 72;
 
     // Center close button
-    const center = document.createElement('div');
+    const center = document.createElement('button');
+    center.type = 'button';
     center.style.cssText = `
       position: absolute;
       top: 50%;
@@ -1452,19 +2310,28 @@ async function initC01(): Promise<void> {
       width: ${centerSize}px;
       height: ${centerSize}px;
       border-radius: 50%;
-      background: rgba(20, 24, 15, 0.95);
-      border: 2px solid var(--bark-700);
+      background: var(--bark-800);
+      border: 1px solid var(--hud-border);
       display: flex;
       align-items: center;
       justify-content: center;
-      font-size: 1.5em;
+      font-size: calc(1.4rem * var(--text-scale));
       color: var(--bone-100);
       cursor: pointer;
       z-index: 10;
-      box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+      box-shadow: var(--hud-shadow);
+      transition: var(--hud-transition);
     `;
-    center.textContent = 'âœ•';
+    center.textContent = 'X';
     center.title = 'Close (Esc or click away)';
+    center.addEventListener('mouseenter', () => {
+      center.style.borderColor = 'var(--leaf-400)';
+      center.style.background = 'var(--bark-700)';
+    });
+    center.addEventListener('mouseleave', () => {
+      center.style.borderColor = 'var(--hud-border)';
+      center.style.background = 'var(--bark-800)';
+    });
     center.addEventListener('click', hideEmoteWheel);
     wheel.appendChild(center);
 
@@ -1475,43 +2342,45 @@ async function initC01(): Promise<void> {
       const y = Math.sin(angle) * radius;
 
       const btn = document.createElement('button');
+      btn.type = 'button';
       btn.dataset.emoteId = emote.id;
       btn.style.cssText = `
         position: absolute;
         top: 50%;
         left: 50%;
         transform: translate(-50%, -50%) translate(${x}px, ${y}px);
-        width: ${buttonSize}px;
-        height: ${buttonSize}px;
+        width: ${centerSize * 0.75}px;
+        height: ${centerSize * 0.75}px;
         border-radius: 50%;
-        background: rgba(20, 24, 15, 0.95);
-        border: 2px solid var(--bark-700);
+        background: var(--bark-800);
+        border: 1px solid var(--hud-border);
         display: flex;
         flex-direction: column;
         align-items: center;
         justify-content: center;
-        font-size: 1.8em;
+        font-size: calc(1.1rem * var(--text-scale));
+        font-weight: 700;
         color: var(--bone-100);
         cursor: pointer;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.4);
-        transition: transform 0.1s ease, border-color 0.1s ease, background 0.1s ease;
-        padding: 0;
-        gap: 2px;
+        box-shadow: var(--hud-shadow);
+        transition: var(--hud-transition);
+        line-height: 1.15;
       `;
-      btn.innerHTML = `
-        <span>${emote.emoji}</span>
-        <span style="font-size: 0.5em; font-weight: 600; text-transform: capitalize;">${emote.label}</span>
-      `;
+      btn.textContent = emote.label;
 
       btn.addEventListener('mouseenter', () => {
         btn.style.transform = `translate(-50%, -50%) translate(${x}px, ${y}px) scale(1.15)`;
         btn.style.borderColor = 'var(--leaf-400)';
-        btn.style.background = 'rgba(20, 24, 15, 0.98)';
+        btn.style.background = 'var(--bark-700)';
+        btn.style.color = 'var(--leaf-300)';
+        btn.style.boxShadow = '0 0 0 3px var(--leaf-glow), var(--hud-shadow)';
       });
       btn.addEventListener('mouseleave', () => {
         btn.style.transform = `translate(-50%, -50%) translate(${x}px, ${y}px) scale(1)`;
-        btn.style.borderColor = 'var(--bark-700)';
-        btn.style.background = 'rgba(20, 24, 15, 0.95)';
+        btn.style.borderColor = 'var(--hud-border)';
+        btn.style.background = 'var(--bark-800)';
+        btn.style.color = 'var(--bone-100)';
+        btn.style.boxShadow = 'var(--hud-shadow)';
       });
       btn.addEventListener('click', () => {
         sendEmote(emote.id);
@@ -1582,9 +2451,7 @@ async function initC01(): Promise<void> {
       if (actionId === 'grow_cancel' && state.pressed) hideGrowthSelection();
 
       if (actionId === 'camera_recenter' && state.pressed) {
-        const rootNode = Array.from(plantNodes.values()).find((node) => node.parentId === null);
-        const target = rootNode?.position ?? controls.target;
-        frameCameraOnPlant(target.x, target.y, target.z);
+        recenterCamera();
       }
       if (import.meta.env.DEV && actionId === 'plant_regenerate' && state.pressed) {
         if (plantRenderer) {
@@ -1601,11 +2468,11 @@ async function initC01(): Promise<void> {
         }
       }
       if (actionId === 'root_sight_toggle' && rootSightMachine) {
-        if (typeof state.active === 'boolean') {
-          setRootSightEnabled(state.active);
-        } else if (state.pressed || state.toggled) {
-          toggleRootSight();
-        }
+        // Drive the state machine from the action's latched state instead of
+        // toggling blindly. This keeps Root Sight in sync after a reconnect
+        // resets the machine (a stale input latch previously needed two
+        // presses to recover).
+        setRootSightEnabled(state.active === true);
       }
       if (actionId === 'hint_card_toggle' && (state.pressed || state.toggled)) {
         toggleHintCard();
@@ -1636,6 +2503,9 @@ async function initC01(): Promise<void> {
 
   // Keyboard producer
   window.addEventListener('keydown', (e) => {
+    // The entry screen is a modal: until the server has welcomed us, keystrokes
+    // belong to the form (or the title), not to the camera, grow mode or chat.
+    if (entryFlow.step !== 'world') return;
     if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
       if (e.code === 'Enter')
         inputBus?.handleKeyDown(e.code, {
@@ -1691,6 +2561,7 @@ async function initC01(): Promise<void> {
   });
 
   window.addEventListener('keyup', (e) => {
+    if (entryFlow.step !== 'world') return;
     if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
 
     if (e.key === '+' || e.key === '=' || e.code === 'NumpadAdd') {
@@ -1730,10 +2601,101 @@ async function initC01(): Promise<void> {
   // Ensure canvas can receive focus for keyboard events
   canvas.setAttribute('tabindex', '0');
 
+  // Screen-space distance from the pointer to the part being aimed from. A drag
+  // that starts further away is a camera gesture, not an aim turn.
+  // Same anchor the gizmo uses: the seed mesh is drawn above its node position.
+  const aimAnchorFor = (position: THREE.Vector3, nodeId: string): THREE.Vector3 => {
+    const node = plantNodes.get(nodeId);
+    // Same attach point the gizmo is drawn from (mid-segment for a lateral root
+    // or branch), plus the seed's own body lift when the node is the seed.
+    const anchor = branchAttachAnchor(position, nodeId);
+    if (!node) return anchor;
+    if (node.isSeed === true || node.nodeType === 'seed') {
+      anchor.y +=
+        visualRadiusForNode(node.nodeType, node.radius ?? 0.05, node.biomass) *
+        getSeedBodyHeightRatio();
+    }
+    return anchor;
+  };
+
+  const aimTargetScreenDistance = (clientX: number, clientY: number): number => {
+    const data = growthSelectionStateMachineGetDrawingData(growthSelectionMachine);
+    if (!data) return Number.POSITIVE_INFINITY;
+    const rect = canvas.getBoundingClientRect();
+    const projected = aimAnchorFor(
+      new THREE.Vector3(data.nodePosition.x, data.nodePosition.y, data.nodePosition.z),
+      data.nodeId,
+    ).project(camera);
+    if (projected.z > 1) return Number.POSITIVE_INFINITY;
+    const sx = rect.left + (projected.x * 0.5 + 0.5) * rect.width;
+    const sy = rect.top + (-projected.y * 0.5 + 0.5) * rect.height;
+    return Math.hypot(clientX - sx, clientY - sy);
+  };
+
+  // How much of the screen the part occupies, so clicking anywhere on the part
+  // (not just its centre) starts an aim drag.
+  const aimTargetScreenRadius = (): number => {
+    const data = growthSelectionStateMachineGetDrawingData(growthSelectionMachine);
+    const node = data ? plantNodes.get(data.nodeId) : undefined;
+    if (!data || !node) return 0;
+    const rect = canvas.getBoundingClientRect();
+    const worldRadius = visualRadiusForNode(node.nodeType, node.radius ?? 0.05, node.biomass);
+    const anchor = aimAnchorFor(
+      new THREE.Vector3(data.nodePosition.x, data.nodePosition.y, data.nodePosition.z),
+      data.nodeId,
+    );
+    const centre = anchor.clone().project(camera);
+    const edge = anchor
+      .clone()
+      .setX(anchor.x + worldRadius)
+      .project(camera);
+    return Math.abs(edge.x - centre.x) * 0.5 * rect.width;
+  };
+
+  // Screen-space distance to the drawn arrow, so grabbing the arrow anywhere
+  // along its length turns the aim instead of orbiting the camera.
+  const aimArrowScreenDistance = (clientX: number, clientY: number): number => {
+    if (growthAimPath.length < 2) return Number.POSITIVE_INFINITY;
+    const rect = canvas.getBoundingClientRect();
+    const toScreen = (p: THREE.Vector3) => {
+      const v = p.clone().project(camera);
+      return {
+        x: rect.left + (v.x * 0.5 + 0.5) * rect.width,
+        y: rect.top + (-v.y * 0.5 + 0.5) * rect.height,
+      };
+    };
+    let best = Number.POSITIVE_INFINITY;
+    let prev = toScreen(growthAimPath[0]);
+    for (let i = 1; i < growthAimPath.length; i++) {
+      const cur = toScreen(growthAimPath[i]);
+      const dx = cur.x - prev.x;
+      const dy = cur.y - prev.y;
+      const lengthSq = dx * dx + dy * dy;
+      const t =
+        lengthSq > 1e-6
+          ? Math.max(0, Math.min(1, ((clientX - prev.x) * dx + (clientY - prev.y) * dy) / lengthSq))
+          : 0;
+      best = Math.min(best, Math.hypot(clientX - (prev.x + dx * t), clientY - (prev.y + dy * t)));
+      prev = cur;
+    }
+    return best;
+  };
+
   const startGrowthDragFromEvent = (e: MouseEvent | PointerEvent): boolean => {
     const gState = growthSelectionStateMachineGetState(growthSelectionMachine);
     if (gState !== 'option_selected' && gState !== 'drawing') return false;
-    if (gState === 'drawing') return true; // move/up handlers own it
+    if (gState === 'drawing') {
+      // Dragging the part or the arrow turns the aim; anywhere else the camera
+      // orbits as usual.
+      const grabRadiusPx = Math.max(renderConfig?.growthAimGrabPx ?? 34, aimTargetScreenRadius());
+      const onPart = aimTargetScreenDistance(e.clientX, e.clientY) <= grabRadiusPx;
+      const onArrow = aimArrowScreenDistance(e.clientX, e.clientY) <= grabRadiusPx;
+      if (!onPart && !onArrow) return false;
+      growthAimDragging = true;
+      growthAimLastX = e.clientX;
+      growthAimLastY = e.clientY;
+      return true;
+    }
     const selectedNodeId = growthSelectionMachine.selectedNodeId;
     if (!selectedNodeId) return false;
     const nodeData = plantNodes.get(selectedNodeId);
@@ -1754,52 +2716,11 @@ async function initC01(): Promise<void> {
       return false;
     }
 
-    const initConstraints =
-      NODE_GROWTH_CONSTRAINTS[optionType as NodeType] ?? NODE_GROWTH_CONSTRAINTS.stem;
-    const initialClamped = clampGrowthDirectionByGene(
-      optionType,
-      initConstraints.downwardPreferred ? { x: 0, y: -1, z: 0 } : { x: 0.05, y: 0.998, z: 0.05 },
-    );
-    smoothedGrowthDir.set(initialClamped.x, initialClamped.y, initialClamped.z);
-    smoothedGrowthDist = Math.min(1.0, initConstraints.maxReach * 0.7);
-    isGrowthAtMaxReach = false;
-    isGrowthAngleClamped = false;
-
-    growthSelectionStateMachineStartDrawing(
-      growthSelectionMachine,
-      selectedNodeId,
-      { x: nodeData.position.x, y: nodeData.position.y, z: nodeData.position.z },
-      optionType,
-      optionLabel,
-    );
-    // Seed direction from pointer hit so a quick click/release still sends.
-    const drawingData = growthSelectionStateMachineGetDrawingData(growthSelectionMachine);
-    if (drawingData) {
-      const hit = getGrowthDrawHitPoint(e, drawingData);
-      const v = validateGrowthDirection(drawingData, { x: hit.x, y: hit.y, z: hit.z });
-      growthSelectionStateMachineUpdateDrawing(
-        growthSelectionMachine,
-        { x: hit.x, y: hit.y, z: hit.z },
-        { isValid: v.isValid, reason: v.reason, distance: v.distance },
-      );
-      updateGrowthDirectionLine(
-        drawingData.startPosition,
-        { x: hit.x, y: hit.y, z: hit.z },
-        v.isValid,
-      );
-    } else {
-      updateGrowthDirectionLine(
-        { x: nodeData.position.x, y: nodeData.position.y, z: nodeData.position.z },
-        { x: nodeData.position.x, y: nodeData.position.y + 0.5, z: nodeData.position.z },
-        true,
-      );
-    }
-    webgpuRenderer?.setSelectedNode(selectedNodeId);
-    controls.enabled = false;
-    controls.enableRotate = false;
-    controls.enablePan = false;
-    setDetail(`Drag to set ${optionType} direction, then release.`);
-    console.log('[PlantLegacy] Growth drawing started', {
+    if (!beginGrowthAiming(selectedNodeId, optionType, optionLabel)) return false;
+    growthAimDragging = true;
+    growthAimLastX = e.clientX;
+    growthAimLastY = e.clientY;
+    console.log('[PlantLegacy] Growth aiming started', {
       nodeId: selectedNodeId,
       optionType,
       state: growthSelectionStateMachineGetState(growthSelectionMachine),
@@ -1828,7 +2749,8 @@ async function initC01(): Promise<void> {
     'pointerdown',
     (e) => {
       if (e.button === 0 && startGrowthDragFromEvent(e)) {
-        controls.enabled = false;
+        // Swallow just this drag so OrbitControls never sees it; the camera stays
+        // enabled, so a drag anywhere else still orbits.
         e.stopImmediatePropagation();
         e.preventDefault();
       }
@@ -1934,30 +2856,15 @@ async function initC01(): Promise<void> {
     // If we have a growth option selected, start drawing from this node on click/drag
     const growthState = growthSelectionStateMachineGetState(growthSelectionMachine);
     if (growthState === 'option_selected') {
-      console.log('[Click] option_selected state, starting drawing for node:', clickedNodeId);
+      console.log('[Click] option_selected state, aiming from node:', clickedNodeId);
       const selectedNodeId = growthSelectionMachine.selectedNodeId;
       if (clickedNodeId && selectedNodeId && clickedNodeId === selectedNodeId) {
-        const nodeData = plantNodes.get(clickedNodeId);
         const optionType =
           growthSelectionMachine.selectedOptionType ??
           growthSelectionMachine.drawingData?.selectedOptionType ??
           '';
         const optionLabel = growthSelectionMachine.selectedOptionLabel ?? optionType;
-        if (nodeData && optionType) {
-          growthSelectionStateMachineStartDrawing(
-            growthSelectionMachine,
-            clickedNodeId,
-            { x: nodeData.position.x, y: nodeData.position.y, z: nodeData.position.z },
-            optionType,
-            optionLabel,
-          );
-          webgpuRenderer?.setSelectedNode(clickedNodeId);
-          controls.enabled = false; // disable orbit while drawing direction
-          setDetail(
-            `Drag to set growth direction, then release to ${nodeData.isSeed ? 'germinate' : 'grow'}.`,
-          );
-          return;
-        }
+        if (optionType && beginGrowthAiming(clickedNodeId, optionType, optionLabel)) return;
       }
       // Click elsewhere while waiting for drag cancels the pending option selection
       growthSelectionStateMachineHide(growthSelectionMachine);
@@ -1967,15 +2874,17 @@ async function initC01(): Promise<void> {
     }
 
     if (clickedNodeId) {
-      // Single-click does NOT zoom into the node — double-click (dblclick) handles zooming.
-      // Only request growth options in Grow Mode
+      // Single-click never moves the camera; it only requests growth options
+      // in Grow Mode.
       if (isGrowMode) {
         requestGrowthOptions(clickedNodeId);
       }
     }
   });
 
-  // Double-click on a node zooms in (focusCameraOnNode). Single click only opens growth options.
+  // Double-click a plant node to recenter on that node; double-click empty
+  // ground to recenter on the whole plant (the double_click_ground binding,
+  // same framing as Space). Single clicks and growth never move the view.
   canvas.addEventListener('dblclick', (e) => {
     if (e.button !== 0) return;
     if (growthSelectionStateMachineGetState(growthSelectionMachine) === 'drawing') return;
@@ -1988,221 +2897,67 @@ async function initC01(): Promise<void> {
       return;
 
     const rect = canvas.getBoundingClientRect();
-    const dblMouse = new THREE.Vector2(
-      ((e.clientX - rect.left) / rect.width) * 2 - 1,
-      -((e.clientY - rect.top) / rect.height) * 2 + 1,
-    );
-    const dblRaycaster = new THREE.Raycaster();
-    dblRaycaster.setFromCamera(dblMouse, camera);
-    const dblObjects: THREE.Object3D[] = [];
-    const dblMap = new Map<THREE.Object3D, string>();
-    const isRSEnabled = rootSightMachine ? rootSightStateMachineIsEnabled(rootSightMachine) : false;
+    const localX = e.clientX - rect.left;
+    const localY = e.clientY - rect.top;
+    const rootSightOn = rootSightMachine ? rootSightStateMachineIsEnabled(rootSightMachine) : false;
     const camBelowGround = camera.position.y < 0;
-    for (const [id, nodeData] of plantNodes.entries()) {
-      if (!nodeData.isOwnPlant) continue;
-      if (nodeData.type === 0 && !nodeData.isSeed && !isRSEnabled && !camBelowGround) continue;
-      const sphere = new THREE.Mesh(
-        new THREE.SphereGeometry(Math.max(nodeData.radius * 1.5, 0.35), 8, 8),
-        new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }),
-      );
-      sphere.position.copy(nodeData.position);
-      sphere.updateMatrixWorld(true);
-      dblObjects.push(sphere);
-      dblMap.set(sphere, id);
-    }
-    const dblIntersects = dblRaycaster.intersectObjects(dblObjects);
-    if (dblIntersects.length > 0) {
-      const nodeId = dblMap.get(dblIntersects[0].object);
-      if (nodeId) {
-        const nodeData = plantNodes.get(nodeId);
-        if (nodeData) focusCameraOnNode(nodeData);
+
+    // Pick the node whose projected centre is nearest the click, in screen
+    // space, so no invisible pick meshes are needed.
+    let picked: PlantNodeData | null = null;
+    let pickedPx = NODE_DOUBLE_CLICK_PICK_PX;
+    for (const node of plantNodes.values()) {
+      if (!node.isOwnPlant) continue;
+      // Underground nodes are only visible (and pickable) in the root layer.
+      if (node.type === 0 && !node.isSeed && !rootSightOn && !camBelowGround) continue;
+      const parent = node.parentId ? plantNodes.get(node.parentId) : undefined;
+      nodePickVector
+        .copy(resolveDrawnNodePosition(node, parent, plantNodes.values()))
+        .project(camera);
+      if (nodePickVector.z > 1) continue; // behind the camera
+      const px = ((nodePickVector.x + 1) / 2) * rect.width;
+      const py = ((-nodePickVector.y + 1) / 2) * rect.height;
+      const distancePx = Math.hypot(px - localX, py - localY);
+      if (distancePx < pickedPx) {
+        pickedPx = distancePx;
+        picked = node;
       }
     }
+
+    if (picked) focusCameraOnNode(picked);
+    else recenterCamera();
   });
 
-  function validateGrowthDirection(
-    drawingData: GrowthDrawingData,
-    targetPosition: { x: number; y: number; z: number },
-  ): {
-    isValid: boolean;
-    reason?: string;
-    distance: number;
-    clampedDirection?: { x: number; y: number; z: number };
-  } {
-    const start = drawingData.nodePosition;
-    const dx = targetPosition.x - start.x;
-    const dy = targetPosition.y - start.y;
-    const dz = targetPosition.z - start.z;
-    const rawDist = Math.hypot(dx, dy, dz);
+  // Grabbing the camera cancels any automatic framing still in flight.
+  canvas.addEventListener('pointerdown', () => cancelCameraAutoMove());
 
-    const nodeType = drawingData.selectedOptionType;
-    const constraints =
-      NODE_GROWTH_CONSTRAINTS[nodeType as NodeType] ?? NODE_GROWTH_CONSTRAINTS.stem;
-
-    let targetDir = { x: dx, y: dy, z: dz };
-    if (rawDist > 0.05) {
-      targetDir = { x: dx / rawDist, y: dy / rawDist, z: dz / rawDist };
-    } else {
-      targetDir = constraints.downwardPreferred
-        ? { x: 0, y: -1, z: 0 }
-        : { x: 0.05, y: 0.998, z: 0.05 };
-    }
-
-    const clamped = clampGrowthDirectionByGene(nodeType, targetDir);
-    const targetDist = Math.max(0.35, Math.min(rawDist, constraints.maxReach));
-
-    isGrowthAtMaxReach = rawDist >= constraints.maxReach - 0.05;
-    isGrowthAngleClamped = Math.abs(clamped.y - targetDir.y) > 0.08;
-
-    // Smooth exponential damping (alpha = 0.35) makes the 3D line silky smooth and responsive
-    smoothedGrowthDir.lerp(new THREE.Vector3(clamped.x, clamped.y, clamped.z), 0.35).normalize();
-    smoothedGrowthDist += (targetDist - smoothedGrowthDist) * 0.35;
-
-    return {
-      isValid: true,
-      distance: smoothedGrowthDist,
-      clampedDirection: { x: smoothedGrowthDir.x, y: smoothedGrowthDir.y, z: smoothedGrowthDir.z },
-    };
-  }
-
-  // Growth direction drawing: mousemove/pointermove and mouseup/pointerup handlers
-  const getGrowthDrawHitPoint = (
-    e: MouseEvent | PointerEvent,
-    drawingData: GrowthDrawingData,
-  ): THREE.Vector3 => {
-    const rect = canvas.getBoundingClientRect();
-    const mouse = new THREE.Vector2(
-      ((e.clientX - rect.left) / rect.width) * 2 - 1,
-      -((e.clientY - rect.top) / rect.height) * 2 + 1,
-    );
-    const raycaster = new THREE.Raycaster();
-    raycaster.setFromCamera(mouse, camera);
-
-    // Camera-facing drag plane through the node
-    // Provides 1-to-1 linear screen drag without singularities or horizon jumps
-    const camDir = new THREE.Vector3();
-    camera.getWorldDirection(camDir);
-    const nodePos = new THREE.Vector3(
-      drawingData.nodePosition.x,
-      drawingData.nodePosition.y,
-      drawingData.nodePosition.z,
-    );
-    const dragPlane = new THREE.Plane().setFromNormalAndCoplanarPoint(
-      camDir.clone().negate(),
-      nodePos,
-    );
-    const hit = new THREE.Vector3();
-    if (raycaster.ray.intersectPlane(dragPlane, hit)) {
-      return hit;
-    }
-    return nodePos.clone().add(camDir.multiplyScalar(2));
-  };
-
+  // Dragging turns the aimed direction; it never sends growth and never drags a
+  // line across the world (that read as a rope rather than a plant growing).
   const handleGrowthDrawMove = (e: MouseEvent | PointerEvent) => {
+    if (!growthAimDragging) return;
     if (!growthSelectionStateMachineIsDrawing(growthSelectionMachine)) return;
-    console.log('[GrowthDrawMove] drawing...');
-
-    const drawingData = growthSelectionStateMachineGetDrawingData(growthSelectionMachine);
-    if (!drawingData) return;
-
-    const hit = getGrowthDrawHitPoint(e, drawingData);
-    const validation = validateGrowthDirection(drawingData, hit);
-    growthSelectionStateMachineUpdateDrawing(growthSelectionMachine, hit, validation);
-    if (validation.clampedDirection) {
-      drawingData.direction = validation.clampedDirection;
-      drawingData.distance = validation.distance;
-    }
-    updateGrowthDirectionLine(drawingData.nodePosition, hit, validation.isValid);
+    const dx = e.clientX - growthAimLastX;
+    const dy = e.clientY - growthAimLastY;
+    growthAimLastX = e.clientX;
+    growthAimLastY = e.clientY;
+    if (dx === 0 && dy === 0) return;
+    rotateGrowthAim(dx, dy);
     e.preventDefault();
     e.stopPropagation();
   };
   canvas.addEventListener('mousemove', handleGrowthDrawMove);
   canvas.addEventListener('pointermove', handleGrowthDrawMove, { capture: true });
 
+  // Releasing the mouse only ends the turn gesture. Growth is committed by the
+  // Grow button or Enter, so a slip of the hand never plants a segment.
   const handleGrowthDrawEnd = (e: MouseEvent | PointerEvent) => {
     if ((e as MouseEvent).button !== 0) return;
-    const gState = growthSelectionStateMachineGetState(growthSelectionMachine);
-    console.log(
-      '[GrowthDrawEnd] state:',
-      gState,
-      'drawingData:',
-      growthSelectionStateMachineGetDrawingData(growthSelectionMachine),
-    );
-    if (gState !== 'drawing' && gState !== 'option_selected') return;
-    if (gState === 'option_selected') {
-      // Click without drag capture starting: treat as a send attempt using selected option.
-      const selectedNodeId = growthSelectionMachine.selectedNodeId;
-      const optionType = growthSelectionMachine.selectedOptionType;
-      const nodeData = selectedNodeId ? plantNodes.get(selectedNodeId) : null;
-      if (selectedNodeId && optionType && nodeData) {
-        growthSelectionStateMachineStartDrawing(
-          growthSelectionMachine,
-          selectedNodeId,
-          { x: nodeData.position.x, y: nodeData.position.y, z: nodeData.position.z },
-          optionType,
-          growthSelectionMachine.selectedOptionLabel ?? optionType,
-        );
-      } else {
-        return;
-      }
-    }
-
-    const drawingData = growthSelectionStateMachineGetDrawingData(growthSelectionMachine);
-    let result = growthSelectionStateMachineConfirmDrawing(growthSelectionMachine);
-    if (!result && drawingData) {
-      const node = plantNodes.get(drawingData.nodeId);
-      const t = drawingData.selectedOptionType;
-      const dir = {
-        x: smoothedGrowthDir.x,
-        y: smoothedGrowthDir.y,
-        z: smoothedGrowthDir.z,
-      };
-      if (node) {
-        result = {
-          nodeId: drawingData.nodeId,
-          optionType: t,
-          direction: dir,
-          distance: smoothedGrowthDist,
-        };
-        console.log('[PlantLegacy] Using smoothed growth direction', {
-          optionType: t,
-          dir,
-        });
-      }
-    }
-    if (result) {
-      // Send raw drawn direction; server is authoritative for clamping/validation
-      const rawDirection = {
-        x: smoothedGrowthDir.x,
-        y: smoothedGrowthDir.y,
-        z: smoothedGrowthDir.z,
-      };
-      confirmGrowth(result.nodeId, result.optionType, rawDirection);
-      uiShell?.toast({
-        message: `Sent ${result.optionType} growth...`,
-        kind: 'info',
-        durationMs: 1500,
-      });
-      console.log('[PlantLegacy] Growth drawing confirmed', {
-        ...result,
-        rawDirection: {
-          x: smoothedGrowthDir.x,
-          y: smoothedGrowthDir.y,
-          z: smoothedGrowthDir.z,
-        },
-      });
-    } else {
-      console.warn('[PlantLegacy] Growth drawing: no drawingData/result', { drawingData, gState });
-      setDetail('Growth not sent (no drag data). Select option and drag again.');
-      uiShell?.toast({ message: 'Growth not sent: drag again', kind: 'error', durationMs: 3000 });
-      hideGrowthSelection();
-    }
-    removeGrowthDirectionLine();
-    controls.enabled = true;
-    controls.enableRotate = true;
-    controls.enablePan = true;
-    e.stopImmediatePropagation();
-    e.preventDefault();
+    if (!growthAimDragging) return;
+    growthAimDragging = false;
+    try {
+      (e.target as HTMLElement)?.releasePointerCapture?.((e as PointerEvent).pointerId);
+    } catch {}
+    e.stopPropagation();
   };
   canvas.addEventListener('mouseup', handleGrowthDrawEnd);
   canvas.addEventListener('pointerup', handleGrowthDrawEnd, { capture: true });
@@ -2228,12 +2983,30 @@ async function initC01(): Promise<void> {
     }
   });
 
-  // Escape key cancels drawing mode
+  // Escape cancels aiming; Enter/Space commits the aimed direction.
   window.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && growthSelectionStateMachineIsDrawing(growthSelectionMachine)) {
+    if (!growthSelectionStateMachineIsDrawing(growthSelectionMachine)) return;
+    if (e.key === 'Escape') {
+      growthAimDragging = false;
       growthSelectionStateMachineCancelDrawing(growthSelectionMachine);
+      growthSelectionPanel?.querySelector('#growth-aim-controls')?.remove();
       removeGrowthDirectionLine();
       controls.enabled = true;
+      controls.enableRotate = true;
+      controls.enablePan = true;
+    } else if (e.key === 'Enter' || e.key === ' ') {
+      const target = e.target as HTMLElement | null;
+      if (target && /^(INPUT|TEXTAREA)$/.test(target.tagName)) return;
+      e.preventDefault();
+      commitGrowthAim();
+    }
+  });
+
+  // F2 toggles the growth debugger (positions, radii, model mapping, aim frame).
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'F2') {
+      e.preventDefault();
+      toggleGrowthDebug();
     }
   });
 
@@ -2258,24 +3031,32 @@ async function initC01(): Promise<void> {
         if (!backgroundLoopTimer) {
           backgroundLoopTimer = window.setInterval(() => renderFrame(0.1), 100); // 10 FPS when hidden
         }
-        setDetail('Tab hidden — background loop');
+        setDetail('Tab hidden - background loop');
       } else {
         // Clear background timer, requestAnimationFrame will take over
         if (backgroundLoopTimer) {
           window.clearInterval(backgroundLoopTimer);
           backgroundLoopTimer = null;
         }
-        setDetail('Tab visible — resuming');
+        setDetail('Tab visible - resuming');
         // Request full plant sync when tab becomes visible again
         if (ws && ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify({ type: MESSAGE_TYPE.PLANT_SYNC_REQUEST, payload: {} }));
-          // Request full resource grid for ground rendering
-          ws.send(
-            JSON.stringify({
-              type: MESSAGE_TYPE.RESOURCE_QUERY,
-              payload: { fullGrid: true },
-            }),
-          );
+          // The full grid is ~65 000 tiles (megabytes of JSON, a 1 MB texture
+          // upload and a long message-handler block). Re-requesting it on every
+          // visibility flip flooded the socket and stalled frames; only refetch
+          // when we have never received one, or it has genuinely gone stale.
+          if (
+            resourceGridReceivedAt === 0 ||
+            performance.now() - resourceGridReceivedAt > RESOURCE_GRID_MAX_AGE_MS
+          ) {
+            ws.send(
+              JSON.stringify({
+                type: MESSAGE_TYPE.RESOURCE_QUERY,
+                payload: { fullGrid: true },
+              }),
+            );
+          }
           // Also request current resource tile for own plant (light/moisture/minerals)
           // Use the local plant's root/seed node (parentId === null) for accurate position
           const ownRootNode = Array.from(plantNodes.values()).find((n) => n.parentId === null);
@@ -2336,6 +3117,9 @@ async function initPlantRenderer(): Promise<void> {
 
   const config = await loadPlantRendererConfig(httpOrigin);
   plantRendererConfig = config;
+  // Seed aspect, radius table and branch attach fraction: the same numbers the
+  // server places nodes with, so drawing and aiming cannot drift from the model.
+  await loadGrowthGeometryConfig(httpOrigin);
 
   // Try WebGPU renderer first (with automatic fallback to SDF)
   if (renderConfig?.webgpuEnabled && isWebGPUSupported()) {
@@ -2352,6 +3136,9 @@ async function initPlantRenderer(): Promise<void> {
       if (deviceReady && device.getDevice() && device.getContext()) {
         const gpuRenderer = new WebGPURenderer(device, {
           maxPlants: renderConfig.webgpuMaxPlants,
+          soilDryColor: renderConfig.soilDryColor,
+          soilWetColor: renderConfig.soilWetColor,
+          soilMineralColor: renderConfig.soilMineralTint,
           leafSize: config.leafSize,
           leafCountPerNode: config.leafCountPerNode,
           tubeSides: config.tubeRingCount,
@@ -2371,18 +3158,26 @@ async function initPlantRenderer(): Promise<void> {
           mutation0Param: config.mutation0Param,
           mutation1Param: config.mutation1Param,
           mutation2Param: config.mutation2Param,
+          mutationBioluminescence:
+            config.mutationBioluminescenceStrength ?? DEFAULT_CONFIG.mutation0Param,
+          mutationBarkThicknessScale: config.mutationBarkThicknessScale ?? 1.35,
+          mutationVariegation: config.mutationVariegationStrength ?? 0.35,
+          planetRadius: renderConfig?.planetRadiusM ?? 0,
           ownRootColor: rootSightConfig?.ownRootHighlightColor ?? '#4CAF50',
           rivalRootColor: rootSightConfig?.rivalRootHighlightColor ?? '#FF5722',
           rainStreakLength: renderConfig.rainStreakLength,
           rainStreakWidth: renderConfig.rainStreakWidth,
           rainMaxVelocity: renderConfig.rainMaxVelocity,
+          rainParticleCount: renderConfig.rainParticleCount,
+          rainBoxWidth: renderConfig.rainBoxWidth,
+          rainBoxHeight: renderConfig.rainBoxHeight,
         });
 
         const rendererReady = await gpuRenderer.initialize();
         if (rendererReady) {
           gpuRenderer.setCamera(camera);
           gpuRenderer.resize(window.innerWidth, window.innerHeight, renderer.getPixelRatio());
-          gpuRenderer.setSunDirection(sunLight.position);
+          gpuRenderer.setSunDirection(environmentRenderer?.getSunDirection() ?? sunLight.position);
           device.setDeviceLostCallback((reason) => {
             console.error('WebGPU device lost:', reason);
             device.setDeviceLostCallback(() => {});
@@ -2464,6 +3259,19 @@ async function initPlantRenderer(): Promise<void> {
       l0RaymarchEpsilon: DEFAULT_CONFIG.l0RaymarchEpsilon,
       l1RaymarchEpsilon: DEFAULT_CONFIG.l1RaymarchEpsilon,
       l2RaymarchEpsilon: DEFAULT_CONFIG.l2RaymarchEpsilon,
+      // Mesh tessellation for the L0/L1 pass (plant_renderer.json)
+      meshTubeRadialSegments:
+        config.meshTubeRadialSegments ?? DEFAULT_CONFIG.meshTubeRadialSegments,
+      meshTubeLengthSegments:
+        config.meshTubeLengthSegments ?? DEFAULT_CONFIG.meshTubeLengthSegments,
+      meshLeafSegments: config.meshLeafSegments ?? DEFAULT_CONFIG.meshLeafSegments,
+      meshJointWidthSegments:
+        config.meshJointWidthSegments ?? DEFAULT_CONFIG.meshJointWidthSegments,
+      meshJointHeightSegments:
+        config.meshJointHeightSegments ?? DEFAULT_CONFIG.meshJointHeightSegments,
+      meshMaxLeavesPerNode: config.meshMaxLeavesPerNode ?? DEFAULT_CONFIG.meshMaxLeavesPerNode,
+      meshJointScale: config.meshJointScale ?? DEFAULT_CONFIG.meshJointScale,
+      meshMaxLeafSize: config.meshMaxLeafSize ?? DEFAULT_CONFIG.meshMaxLeafSize,
       // T02: Root Sight specific
       rootSightCutawayRadius:
         rootSightConfig?.cutawayRadius ?? DEFAULT_CONFIG.rootSightCutawayRadius,
@@ -2526,74 +3334,157 @@ renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFShadowMap;
+// The sun and the plant move too slowly to need a fresh shadow pass every
+// frame; renderFrame refreshes it on a timer instead.
+renderer.shadowMap.autoUpdate = false;
 app.appendChild(renderer.domElement);
 
+// Cinematic overlay — vignette + film grain for atmospheric depth
+const cinematicOverlay = document.createElement('div');
+cinematicOverlay.id = 'cinematic-overlay';
+app.appendChild(cinematicOverlay);
+
 // UI overlay elements
+// Connection dot: a single green/red light that lives in the chat toolbar.
+// Green = socket open and ping round-trips are healthy; red = closed or stalled.
 statusElement = document.createElement('div');
 statusElement.id = 'status';
 statusElement.style.cssText = `
-    position: fixed;
-    top: 16px;
-    left: 16px;
-    z-index: 1000;
-    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
-    font-size: calc(14px * var(--text-scale));
-    font-weight: 600;
-    color: var(--leaf-500);
-    pointer-events: none;
+    flex: 0 0 auto;
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: var(--ink-muted);
+    box-shadow: 0 0 0 1px rgba(10, 12, 8, 0.7);
+    display: none;
   `;
 document.body.appendChild(statusElement);
 
+function setStatus(text: string, state: 'pending' | 'ok' | 'down'): void {
+  if (!statusElement) return;
+  statusElement.style.display = 'block';
+  statusElement.style.background =
+    state === 'ok' ? 'var(--leaf-500)' : state === 'down' ? 'var(--ember-500)' : 'var(--ink-muted)';
+  statusElement.style.boxShadow =
+    state === 'ok'
+      ? '0 0 6px rgba(125, 184, 61, 0.75), 0 0 0 1px rgba(10, 12, 8, 0.6)'
+      : state === 'down'
+        ? '0 0 6px rgba(238, 112, 64, 0.8), 0 0 0 1px rgba(10, 12, 8, 0.6)'
+        : '0 0 0 1px rgba(10, 12, 8, 0.6)';
+  statusElement.title = text;
+  statusElement.setAttribute('aria-label', text);
+}
+
 detailElement = document.createElement('div');
 detailElement.id = 'detail';
+detailElement.className = 'hud-panel';
 detailElement.style.cssText = `
     position: fixed;
-    top: 40px;
-    left: 16px;
-    z-index: 1000;
-    font-family: ui-monospace, "JetBrains Mono", monospace;
-    font-size: calc(12px * var(--text-scale));
-    color: var(--bone-300);
-    white-space: pre-wrap;
-    max-width: 400px;
+    /* Bottom-left corner, clear of the plant and its roots at screen centre. */
+    bottom: var(--hud-detail-bottom);
+    left: var(--hud-corner);
+    z-index: 150;
+    /* A fixed box, not max-content: an auto-width panel changed size with the
+       digits in the tick readout, which made the whole readout jitter. */
+    width: min(360px, 60vw);
     pointer-events: none;
+    display: none;
   `;
+
+const detailBody = document.createElement('div');
+detailBody.style.cssText = `
+    padding: var(--hud-pad-y) var(--hud-pad-x);
+    font-size: var(--hud-font-sm);
+    color: var(--warm-ink);
+    line-height: 1.3;
+    border-left: 2px solid var(--leaf-500);
+    /* Tabular digits keep each character cell the same width, so a changing
+       number cannot shift the rest of the line around. */
+    font-variant-numeric: tabular-nums;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  `;
+// Two blocks, not one text node: the live tick readout used to share this panel
+// with hints and outcomes, so every update erased whatever it had just said.
+// The stats keep their lines and the message keeps its own.
+const detailStats = document.createElement('div');
+detailStats.id = 'detail-stats';
+detailStats.style.cssText = 'font-variant-numeric: tabular-nums; white-space: pre; display: none;';
+
+const detailMessage = document.createElement('div');
+detailMessage.id = 'detail-message';
+detailMessage.style.cssText = 'white-space: pre-wrap; overflow-wrap: anywhere;';
+
+detailBody.appendChild(detailStats);
+detailBody.appendChild(detailMessage);
+detailElement.appendChild(detailBody);
 document.body.appendChild(detailElement);
+
+function setDetail(text: string): void {
+  if (!detailElement) return;
+  detailElement.style.display = detailSuppressed ? 'none' : 'block';
+  detailMessage.textContent = text;
+  detailMessage.style.marginTop = detailStats.textContent ? '4px' : '0';
+}
+
+/** The live numbers, on their own fixed lines so they never reflow the message. */
+function updateTickDetail(text: string): void {
+  if (!detailElement) return;
+  detailStats.textContent = text;
+  detailStats.style.display = text ? 'block' : 'none';
+  detailMessage.style.marginTop = text && detailMessage.textContent ? '4px' : '0';
+  detailElement.style.display = detailSuppressed ? 'none' : 'block';
+}
+
+// The growth panel owns the bottom of the screen while it is open. The
+// server-tick readout (bottom-left) and the hint card (bottom centre) sit in the
+// same band, so both step aside while it is open and return when it closes,
+// rather than overlapping it or each other.
+let detailSuppressed = false;
+function setGrowthPanelOpen(open: boolean): void {
+  detailSuppressed = open;
+  if (detailElement) {
+    detailElement.style.display = open ? 'none' : detailBody.textContent ? 'block' : 'none';
+  }
+  if (hintCardElement) {
+    hintCardElement.style.display = open ? 'none' : '';
+  }
+}
 
 hintCardElement = document.createElement('div');
 hintCardElement.id = 'hint-card';
+hintCardElement.className = 'hud-panel';
 hintCardElement.style.cssText = `
       position: fixed;
-      bottom: 20px;
+      bottom: 20vh;
       left: 50%;
       transform: translateX(-50%);
-      background: rgba(20, 24, 15, 0.95);
-      border: 1px solid var(--bark-700);
-      border-radius: 8px;
-      padding: 16px 24px;
-      color: var(--bone-100);
-      font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
-      font-size: calc(14px * var(--text-scale));
-      line-height: 1.6;
-      text-align: center;
-      max-width: 90vw;
-      z-index: 100;
-      box-shadow: 0 4px 20px rgba(0,0,0,0.5);
-      opacity: 0;
-      transition: opacity 0.3s ease;
+      max-width: min(360px, 86vw);
       pointer-events: none;
+      z-index: 120;
+      opacity: 0;
+      transition: opacity 0.4s ease, transform 0.4s ease;
+      transform: translateX(-50%) translateY(8px);
+      padding: var(--hud-pad-y) var(--hud-pad-x);
     `;
+
+const hintBody = document.createElement('div');
+hintBody.style.cssText = `
+    font-size: var(--hud-font-sm);
+    color: var(--warm-ink);
+    text-align: center;
+    line-height: 1.4;
+  `;
+hintCardElement.appendChild(hintBody);
 document.body.appendChild(hintCardElement);
 
 // T00A: Resource readout element (HUD layer)
 let resourceReadoutElement: HTMLDivElement | null = null;
-let resourceTooltipElements: {
-  biomass: HTMLSpanElement;
-  energy: HTMLSpanElement;
-  light: HTMLSpanElement;
-  water: HTMLSpanElement;
-  minerals: HTMLSpanElement;
-} | null = null;
+let resBiomassEl: HTMLSpanElement | null = null;
+let resEnergyEl: HTMLSpanElement | null = null;
+let resLightEl: HTMLSpanElement | null = null;
+let resWaterEl: HTMLSpanElement | null = null;
+let resMineralsEl: HTMLSpanElement | null = null;
 
 function createResourceReadout(): void {
   const layer = uiShell?.getLayer('hud');
@@ -2601,59 +3492,105 @@ function createResourceReadout(): void {
 
   resourceReadoutElement = document.createElement('div');
   resourceReadoutElement.id = 'resource-readout';
+  resourceReadoutElement.className = 'hud-panel';
   resourceReadoutElement.style.cssText = `
       position: fixed;
-      top: 16px;
-      right: 16px;
+      /* Top right: the chat box owns the top left corner. On phones it drops
+         below the chat instead of sharing the row. */
+      top: var(--hud-readout-top);
+      right: var(--hud-corner);
       z-index: 200;
-      background: rgba(20, 24, 15, 0.9);
-      border: 1px solid var(--bark-700);
-      border-radius: 8px;
-      padding: 12px 16px;
-      color: var(--bone-100);
-      font-family: ui-monospace, "JetBrains Mono", monospace;
-      font-size: calc(12px * var(--text-scale));
-      line-height: 1.8;
-      min-width: 180px;
+      width: auto;
       pointer-events: auto;
-      box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+      display: none;
+      min-width: clamp(104px, 11vw, 160px);
     `;
 
-  const biomassEl = document.createElement('div');
-  biomassEl.innerHTML = `<span style="color: var(--leaf-400);">ðŸŒ¿</span> Biomass: <span id="res-biomass">0</span>`;
-  const energyEl = document.createElement('div');
-  energyEl.innerHTML = `<span style="color: var(--gold-400);">âš¡</span> Energy: <span id="res-energy">0</span>`;
-  const lightEl = document.createElement('div');
-  lightEl.innerHTML = `<span style="color: var(--gold-400);">â˜€</span> Light: <span id="res-light">0</span>`;
-  const waterEl = document.createElement('div');
-  waterEl.innerHTML = `<span style="color: var(--water-400);">ðŸ’§</span> Water: <span id="res-water">0</span>`;
-  const mineralsEl = document.createElement('div');
-  mineralsEl.innerHTML = `<span style="color: var(--mineral-400);">â›</span> Minerals: <span id="res-minerals">0</span>`;
+  const resourceBody = document.createElement('div');
+  resourceBody.style.cssText = `
+    padding: var(--hud-pad-y) var(--hud-pad-x);
+    font-size: var(--hud-font-sm);
+    line-height: 1.2;
+    color: var(--warm-ink);
+    display: flex;
+    flex-direction: column;
+    gap: var(--hud-gap);
+  `;
+  resourceReadoutElement.appendChild(resourceBody);
 
-  resourceReadoutElement.appendChild(biomassEl);
-  resourceReadoutElement.appendChild(energyEl);
-  resourceReadoutElement.appendChild(lightEl);
-  resourceReadoutElement.appendChild(waterEl);
-  resourceReadoutElement.appendChild(mineralsEl);
+  // Distinct, saturated hues plus a written label: colour alone was ambiguous
+  // (biomass and energy were two nearly identical yellow-greens).
+  const rows = [
+    { label: 'biomass', color: '#4CAF50', id: 'res-biomass' },
+    { label: 'energy', color: '#FFB300', id: 'res-energy' },
+    { label: 'light', color: '#FFE066', id: 'res-light' },
+    { label: 'water', color: '#29B6F6', id: 'res-water' },
+    { label: 'minerals', color: '#BA68C8', id: 'res-minerals' },
+  ];
+
+  for (const row of rows) {
+    const el = document.createElement('div');
+    el.style.cssText = `
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    padding: 2px 0;
+    font-size: 0.72rem;
+  `;
+    el.innerHTML = `
+    <span style="display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: ${row.color}; flex-shrink: 0;"></span>
+    <span style="color: var(--warm-ink); opacity: 0.72; text-transform: capitalize; min-width: 58px;">${row.label}</span>
+    <span id="${row.id}" style="color: var(--bone-100); font-variant-numeric: tabular-nums; display: inline-block; min-width: 7ch; text-align: right;">0</span>
+  `;
+    resourceBody.appendChild(el);
+    // Scope the lookup to the row: the panel is still detached from the document
+    // here, so document.getElementById would return null for every span and the
+    // readout would sit at its placeholder zeros forever.
+    const valEl = el.querySelector<HTMLSpanElement>(`#${row.id}`);
+    if (valEl) {
+      const key = row.label.toLowerCase();
+      if (key === 'biomass') resBiomassEl = valEl as HTMLSpanElement;
+      if (key === 'energy') resEnergyEl = valEl as HTMLSpanElement;
+      if (key === 'light') resLightEl = valEl as HTMLSpanElement;
+      if (key === 'water') resWaterEl = valEl as HTMLSpanElement;
+      if (key === 'minerals') resMineralsEl = valEl as HTMLSpanElement;
+    }
+  }
+
+  // The season is a date, not a resource: it gets its own row under a rule so
+  // the readout's five resource rows keep lining up with each other.
+  const seasonRow = document.createElement('div');
+  seasonRow.style.cssText = `
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    padding: 4px 0 0;
+    margin-top: 2px;
+    border-top: 1px solid var(--hud-border, rgba(239,233,216,0.12));
+    font-size: 0.68rem;
+    color: var(--warm-ink);
+  `;
+  seasonRow.innerHTML = `
+    <span style="color: var(--warm-ink); opacity: 0.72; text-transform: capitalize; min-width: 58px;">season</span>
+    <span id="res-season" style="color: var(--bone-100); font-variant-numeric: tabular-nums; display: inline-block; min-width: 21ch; text-align: right;">\u2014</span>
+  `;
+  resourceBody.appendChild(seasonRow);
+  resSeasonEl = seasonRow.querySelector<HTMLSpanElement>('#res-season');
+
+  // Remove last border
+  const last = resourceReadoutElement.lastElementChild;
+  if (last) (last as HTMLElement).style.borderBottom = 'none';
+
   layer.appendChild(resourceReadoutElement);
 
-  // Store tooltip references
-  resourceTooltipElements = {
-    biomass: document.getElementById('res-biomass') as HTMLSpanElement,
-    energy: document.getElementById('res-energy') as HTMLSpanElement,
-    light: document.getElementById('res-light') as HTMLSpanElement,
-    water: document.getElementById('res-water') as HTMLSpanElement,
-    minerals: document.getElementById('res-minerals') as HTMLSpanElement,
-  };
-
   // Add hover tooltips
-  if (resourceTooltipElements) {
-    biomassEl.title = onboardingConfig.resource_tooltips.biomass;
-    energyEl.title = 'Energy: spendable currency for growth. Produced by photosynthesis (leaves).';
-    lightEl.title = onboardingConfig.resource_tooltips.light;
-    waterEl.title = onboardingConfig.resource_tooltips.water;
-    mineralsEl.title = onboardingConfig.resource_tooltips.minerals;
-  }
+  if (resBiomassEl) resBiomassEl.title = onboardingConfig.resource_tooltips.biomass;
+  if (resEnergyEl)
+    resEnergyEl.title =
+      'Energy: spendable currency for growth. Produced by photosynthesis (leaves).';
+  if (resLightEl) resLightEl.title = onboardingConfig.resource_tooltips.light;
+  if (resWaterEl) resWaterEl.title = onboardingConfig.resource_tooltips.water;
+  if (resMineralsEl) resMineralsEl.title = onboardingConfig.resource_tooltips.minerals;
 }
 
 function updateResourceReadout(
@@ -2664,32 +3601,58 @@ function updateResourceReadout(
   energy?: number,
   storedWater?: number,
   storedMinerals?: number,
+  waterCapacity?: number,
+  mineralCapacity?: number,
 ): void {
-  console.log('[PlantLegacy] updateResourceReadout called with:', {
-    light,
-    water,
-    minerals,
-    biomass,
-    energy,
-    storedWater,
-    storedMinerals,
-  });
-  if (!resourceTooltipElements) {
-    console.warn('[PlantLegacy] resourceTooltipElements not initialized!');
-    return;
+  if (!resourceReadoutElement) {
+    createResourceReadout();
   }
-  resourceTooltipElements.biomass.textContent = biomass.toFixed(1);
-  if (energy !== undefined) resourceTooltipElements.energy.textContent = energy.toFixed(1);
-  resourceTooltipElements.light.textContent = light.toFixed(1);
-  // Show average tile water/minerals with stored amount in tooltip
-  resourceTooltipElements.water.textContent = water.toFixed(1);
-  if (storedWater !== undefined) {
-    resourceTooltipElements.water.title = `Tile avg: ${water.toFixed(1)} | Stored: ${storedWater.toFixed(1)}`;
+  if (!resourceReadoutElement) return;
+  resourceReadoutElement.style.display = 'flex';
+  if (resBiomassEl) resBiomassEl.textContent = biomass.toFixed(1);
+  if (energy !== undefined && resEnergyEl) resEnergyEl.textContent = energy.toFixed(1);
+  if (resLightEl) resLightEl.textContent = light.toFixed(1);
+  // Growth is paid from what the plant itself has captured, so the readout shows
+  // stored amounts against capacity; the ambient tile average stays in the title.
+  if (resWaterEl) {
+    resWaterEl.textContent =
+      storedWater === undefined
+        ? water.toFixed(1)
+        : waterCapacity !== undefined
+          ? `${storedWater.toFixed(1)}/${waterCapacity.toFixed(0)}`
+          : storedWater.toFixed(1);
+    if (storedWater !== undefined) {
+      resWaterEl.title = `Stored: ${storedWater.toFixed(1)}${waterCapacity !== undefined ? `/${waterCapacity.toFixed(0)}` : ''} | Tile avg: ${water.toFixed(1)}`;
+    }
   }
-  resourceTooltipElements.minerals.textContent = minerals.toFixed(1);
-  if (storedMinerals !== undefined) {
-    resourceTooltipElements.minerals.title = `Tile avg: ${minerals.toFixed(1)} | Stored: ${storedMinerals.toFixed(1)}`;
+  if (resMineralsEl) {
+    resMineralsEl.textContent =
+      storedMinerals === undefined
+        ? minerals.toFixed(1)
+        : mineralCapacity !== undefined
+          ? `${storedMinerals.toFixed(1)}/${mineralCapacity.toFixed(0)}`
+          : storedMinerals.toFixed(1);
+    if (storedMinerals !== undefined) {
+      resMineralsEl.title = `Stored: ${storedMinerals.toFixed(1)}${mineralCapacity !== undefined ? `/${mineralCapacity.toFixed(0)}` : ''} | Tile avg: ${minerals.toFixed(1)}`;
+    }
   }
+}
+
+// The readout shows the whole plant id: it is the id players need to quote when
+// reporting a plant, and a tail cannot be matched against server logs.
+function plantIdLabel(): string {
+  return plantId ?? 'none';
+}
+
+function updateSeasonChip(): void {
+  if (!resSeasonEl || seasonNumber <= 0) return;
+  const remainingSeconds = Math.max(0, (seasonEndsAtMs - performance.now()) / 1000);
+  resSeasonEl.textContent = formatSeasonChip(seasonNumber, remainingSeconds);
+  resSeasonEl.title = `Season ${seasonNumber}. At the end of the season the calamity takes every plant.`;
+
+  if (seasonTickerStarted) return;
+  seasonTickerStarted = true;
+  setInterval(updateSeasonChip, 1000);
 }
 
 // Two-step growth selection UI (ADR-018)
@@ -2701,41 +3664,29 @@ function createGrowthSelectionUI(): void {
 
   const panel = document.createElement('div');
   panel.id = 'growth-selection-panel';
+  panel.className = 'hud-panel';
   panel.style.cssText = `
     position: fixed;
-    bottom: 16px;
+    /* Middle bottom of the screen: chat lives top-left, so the bottom band is
+       free and the plant stays visible. */
+    bottom: clamp(40px, 8vh, 90px);
     left: 50%;
     transform: translateX(-50%);
-    z-index: 200;
-    background: rgba(20, 24, 15, 0.95);
-    border: 1px solid var(--bark-700);
-    border-radius: 8px;
-    padding: 12px 16px;
-    color: var(--bone-100);
-    font-family: ui-monospace, "JetBrains Mono", monospace;
-    font-size: calc(12px * var(--text-scale));
-    min-width: 280px;
-    max-width: 400px;
+    z-index: 300;
+    width: auto;
+    max-width: min(560px, 88vw);
+    max-height: var(--hud-panel-max-h);
+    overflow-y: auto;
     pointer-events: auto;
-    box-shadow: 0 4px 16px rgba(0,0,0,0.5);
     display: none;
+    padding: var(--hud-pad-y) var(--hud-pad-x);
+    margin-bottom: var(--hud-gap);
   `;
 
-  // Prevent clicks inside panel from bubbling to canvas
   panel.addEventListener('click', (e) => e.stopPropagation());
 
   panel.innerHTML = `
-    <div id="growth-title" style="font-weight: bold; margin-bottom: 8px; color: var(--leaf-400);">
-      Select growth for node <span id="growth-node-id"></span>
-    </div>
     <div id="growth-options" style="display: flex; flex-direction: column; gap: 6px;"></div>
-    <div id="growth-node-info" style="margin-top: 8px; font-size: 0.9em; color: var(--bark-300);"></div>
-    <div style="margin-top: 10px; display: flex; gap: 8px;">
-      <button id="growth-cancel" style="
-        flex: 1; padding: 6px 12px; background: var(--bark-800); border: 1px solid var(--bark-600);
-        border-radius: 4px; color: var(--bone-100); cursor: pointer; font-family: inherit;
-      ">Cancel (Esc)</button>
-    </div>
   `;
 
   layer.appendChild(panel);
@@ -2748,7 +3699,14 @@ function requestGrowthOptions(nodeId: string): void {
   growthSelectionStateMachineRequestOptions(growthSelectionMachine, nodeId);
   // WebGPU selection outline
   webgpuRenderer?.setSelectedNode(nodeId);
-  showGrowthPanelMessage(nodeId, 'Loading growth options…');
+  showGrowthPanelMessage(nodeId, '…');
+
+  // Set timeout to prevent "loading forever" if server doesn't respond
+  clearGrowthOptionsTimeout();
+  growthOptionsTimeoutId = window.setTimeout(
+    showGrowthOptionsTimeoutError,
+    GROWTH_OPTIONS_TIMEOUT_MS,
+  );
 
   ws.send(
     JSON.stringify({
@@ -2758,25 +3716,16 @@ function requestGrowthOptions(nodeId: string): void {
   );
 }
 
-function prepareGrowthPanel(nodeId: string): {
-  title: HTMLElement;
+function prepareGrowthPanel(_nodeId: string): {
   optionsEl: HTMLElement;
-  infoEl: HTMLElement;
 } | null {
   const panel = growthSelectionPanel;
-  const title = document.getElementById('growth-title');
   const optionsEl = document.getElementById('growth-options');
-  const infoEl = document.getElementById('growth-node-info');
-  if (!panel || !title || !optionsEl || !infoEl) return null;
-
-  const node = plantNodes.get(nodeId);
-  title.textContent = node ? `Grow from ${nodeTypeLabel(node)} (${node.id.slice(0, 8)})` : 'Grow';
-
-  const cancelBtn = document.getElementById('growth-cancel');
-  if (cancelBtn) cancelBtn.onclick = hideGrowthSelection;
+  if (!panel || !optionsEl) return null;
 
   panel.style.display = 'block';
-  return { title, optionsEl, infoEl };
+  setGrowthPanelOpen(true);
+  return { optionsEl };
 }
 
 function showGrowthPanelMessage(nodeId: string, message: string): void {
@@ -2784,10 +3733,9 @@ function showGrowthPanelMessage(nodeId: string, message: string): void {
   if (!parts) return;
   parts.optionsEl.innerHTML = '';
   const note = document.createElement('div');
-  note.style.cssText = 'color: var(--bark-300);';
+  note.style.cssText = 'color: var(--bark-300); font-size: 0.72rem; padding: 8px 10px;';
   note.textContent = message;
   parts.optionsEl.appendChild(note);
-  parts.infoEl.textContent = '';
 }
 
 function renderGrowthOptions(result: GrowthOptionsView): void {
@@ -2805,253 +3753,153 @@ function renderGrowthOptions(result: GrowthOptionsView): void {
   const parts = prepareGrowthPanel(result.nodeId);
   if (!parts) return;
 
-  const infoLines = [`Biomass: ${result.biomass.toFixed(1)} | Energy: ${result.energy.toFixed(1)}`];
-  if (result.conditions) {
-    const c = result.conditions;
-    infoLines.push(
-      `Light: ${c.light.toFixed(0)} / ${c.minLight.toFixed(0)} | ` +
-        `Moisture: ${c.moisture.toFixed(0)} / ${c.minMoisture.toFixed(0)}`,
-    );
-  }
-  parts.infoEl.innerHTML = infoLines.map((line) => `<div>${line}</div>`).join('');
-
   parts.optionsEl.innerHTML = '';
   if (result.options.length === 0) {
-    const note = document.createElement('div');
-    note.style.cssText = 'color: var(--bark-300);';
-    note.textContent = 'No growth is available from this node.';
-    parts.optionsEl.appendChild(note);
+    const empty = document.createElement('div');
+    empty.className = 'hud-card';
+    empty.style.cssText = 'text-align: center; padding: 16px 10px; border-style: dashed;';
+    empty.innerHTML = `
+      <div style="font-size: 2rem; line-height: 1; margin-bottom: 8px; opacity: 0.5;">Seed</div>
+      <div class="hud-label">No growth available</div>
+      <div class="hud-note">This node cannot grow right now.</div>
+    `;
+    parts.optionsEl.appendChild(empty);
     return;
   }
 
-  for (const opt of result.options) {
-    const btn = document.createElement('button');
-    btn.style.cssText = `
-      padding: 10px 12px; background: var(--bark-800); border: 1px solid var(--bark-600);
-      border-radius: 4px; color: var(--bone-100); font-family: inherit;
-      text-align: left; transition: background 0.1s;
-      cursor: ${opt.available ? 'pointer' : 'default'};
-      opacity: ${opt.available ? '1' : '0.55'};
-      margin-bottom: 6px;
-    `;
-    btn.disabled = !opt.available;
+  // Group options by plant part type for scannable browsing
+  const typeOrder: Record<string, number> = {
+    radicle: 0,
+    root: 1,
+    lateral_root: 2,
+    stem: 3,
+    branch: 4,
+    cotyledon: 5,
+    leaf: 6,
+    vine: 7,
+    flower: 8,
+    spore_sac: 9,
+    seed: 10,
+  };
+  const sorted = [...result.options].sort(
+    (a, b) => (typeOrder[a.type] ?? 99) - (typeOrder[b.type] ?? 99),
+  );
 
-    const reasonHtml =
-      !opt.available && opt.reason
-        ? `<div style="font-size: 0.8em; color: #e08a7a; margin-top: 4px;">âœ— ${opt.reason}</div>`
-        : '';
-    const riskHtml = opt.risk
-      ? `<div style="font-size: 0.8em; color: #ffb26b; margin-top: 4px;">âš  ${opt.risk}</div>`
-      : '';
+  // Section headers by group
+  const groupOf = (t: string) => {
+    const tl = t.toLowerCase();
+    if (tl === 'radicle' || tl === 'root' || tl === 'lateral_root') return 'roots';
+    if (tl === 'stem' || tl === 'branch') return 'stem';
+    if (tl === 'cotyledon' || tl === 'leaf' || tl === 'vine') return 'foliage';
+    if (tl === 'flower' || tl === 'spore_sac') return 'bloom';
+    return 'other';
+  };
 
-    // Build requirements display - show both germination (tile) and growth (stored) requirements
-    let requirementsHtml = '';
-    if (result.conditions) {
-      const c = result.conditions;
-      // Germination requirements (tile-based)
-      const lightStatus = c.light >= c.minLight ? 'âœ“' : 'âœ—';
-      const moistureStatus = c.moisture >= c.minMoisture ? 'âœ“' : 'âœ—';
-
-      // Growth requirements (stored-based) - only show for non-seed nodes
-      let growthReqHtml = '';
-      if (!result.isSeed && c.storedWater !== undefined && c.storedMinerals !== undefined) {
-        const waterStatus =
-          c.growthOk !== false && c.storedWater >= (c.growthMinWater ?? 0) ? 'âœ“' : 'âœ—';
-        const mineralStatus =
-          c.growthOk !== false && c.storedMinerals >= (c.growthMinMinerals ?? 0) ? 'âœ“' : 'âœ—';
-        growthReqHtml = `
-          <div>Growth: ${waterStatus} Stored Water ${c.storedWater.toFixed(1)}/${c.growthMinWater?.toFixed(1) ?? 0} | ${mineralStatus} Stored Minerals ${c.storedMinerals.toFixed(1)}/${c.growthMinMinerals?.toFixed(1) ?? 0}</div>`;
-      }
-
-      // Per-option resource costs
-      const optionCostHtml =
-        opt.waterCost !== undefined || opt.mineralCost !== undefined
-          ? `<div>Cost: ${opt.waterCost?.toFixed(1) ?? 0} ðŸ’§ | ${opt.mineralCost?.toFixed(1) ?? 0} â›ï¸</div>`
-          : '';
-
-      requirementsHtml = `
-        <div style="font-size: 0.75em; color: var(--bark-300); margin-top: 6px; padding: 6px; background: var(--bark-900); border-radius: 3px;">
-          <div>Germination: ${lightStatus} Light ${c.light.toFixed(0)}/${c.minLight.toFixed(0)} | ${moistureStatus} Tile Water ${c.moisture.toFixed(0)}/${c.minMoisture.toFixed(0)}</div>
-          ${growthReqHtml}
-          ${optionCostHtml}
-        </div>`;
+  let lastGroup: string | null = null;
+  for (const opt of sorted) {
+    const group = groupOf(opt.type);
+    if (group !== lastGroup) {
+      lastGroup = group;
+      const groupLabels: Record<string, string> = {
+        roots: 'Roots (grow down & sideways)',
+        stem: 'Stem & Branches (grow up)',
+        foliage: 'Leaves (photosynthesize light)',
+        bloom: 'Flowers & Spores (reproduce)',
+        other: 'Other',
+      };
+      const section = document.createElement('div');
+      section.className = 'hud-group-title';
+      section.textContent = groupLabels[group] ?? group;
+      parts.optionsEl.appendChild(section);
     }
 
-    // Detailed per-option info: upkeep, efficiency, photosynthesis, water/mineral
-    const typeLower = opt.type.toLowerCase();
-    const isLeafish = typeLower === 'leaf' || typeLower === 'cotyledon' || typeLower === 'vine';
-    const isRootish =
-      typeLower === 'radicle' || typeLower === 'root' || typeLower === 'lateral_root';
-    const isStemish = typeLower === 'stem' || typeLower === 'branch';
-    const isFlowerish = typeLower === 'flower' || typeLower === 'spore_sac';
-    const biomassPerEnergy =
-      opt.energyCost > 0 ? (opt.biomassGain / opt.energyCost).toFixed(2) : 'âˆž';
+    const card = document.createElement('div');
+    card.className = 'hud-grow-option';
+    card.style.cssText = `cursor: ${opt.available ? 'pointer' : 'default'};`;
+    card.style.opacity = opt.available ? '1' : '0.6';
+    card.style.filter = opt.available ? '' : 'grayscale(0.5)';
 
-    // Estimated per-second upkeep (positive = consumes, negative = produces via photosynthesis)
-    let upkeepEnergy = 0;
-    let upkeepWater = 0;
-    let upkeepMinerals = 0;
-    let doesPhotosynthesize = false;
-    let partDescription = '';
+    // Type chip (removed — using flowing text instead)
 
-    if (isLeafish) {
-      doesPhotosynthesize = true;
-      if (typeLower === 'cotyledon') {
-        upkeepEnergy = -0.8; // Cotyledons: strong early photosynthesis
-        upkeepWater = 0.15;
-        upkeepMinerals = 0.03;
-        partDescription =
-          'Cotyledon (seed leaf): initial photosynthetic organ, unfolds toward light.';
-      } else if (typeLower === 'vine') {
-        upkeepEnergy = -0.6;
-        upkeepWater = 0.15;
-        upkeepMinerals = 0.05;
-        partDescription = 'Vine: flexible climbing stem with leaves.';
-      } else {
-        upkeepEnergy = -1.2; // Mature leaves: strong photosynthesis
-        upkeepWater = 0.2;
-        upkeepMinerals = 0.08;
-        partDescription = 'Leaf: photosynthesizes sunlight into energy for the plant.';
-      }
-    } else if (isRootish) {
-      if (typeLower === 'radicle') {
-        upkeepEnergy = 0.05;
-        upkeepWater = 0.5; // Radicle: absorbs lots of moisture early
-        upkeepMinerals = 0.4;
-        partDescription = 'Radicle: first root, anchors seed and absorbs moisture.';
-      } else if (typeLower === 'lateral_root') {
-        upkeepEnergy = 0.03;
-        upkeepWater = 0.3;
-        upkeepMinerals = 0.25;
-        partDescription = 'Lateral root: branches from main root, increases absorption.';
-      } else {
-        upkeepEnergy = 0.08;
-        upkeepWater = 0.4;
-        upkeepMinerals = 0.35;
-        partDescription = 'Root: absorbs water and minerals from soil, anchors plant.';
-      }
-    } else if (isStemish) {
-      if (typeLower === 'stem') {
-        upkeepEnergy = 0.1;
-        upkeepWater = 0.05;
-        upkeepMinerals = 0.03;
-      } else {
-        upkeepEnergy = 0.08;
-        upkeepWater = 0.04;
-        upkeepMinerals = 0.02;
-      }
-      partDescription =
-        'Stem/Branch: structural support, transports nutrients between root and leaves.';
-    } else if (isFlowerish) {
-      if (typeLower === 'flower') {
-        upkeepEnergy = 0.2;
-        upkeepWater = 0.15;
-        upkeepMinerals = 0.1;
-        partDescription = 'Flower: reproductive organ, attracts pollinators.';
-      } else {
-        upkeepEnergy = 0.25;
-        upkeepWater = 0.18;
-        upkeepMinerals = 0.12;
-        partDescription = 'Spore sac: reproductive organ, releases spores for dispersal.';
-      }
-    } else if (typeLower === 'seed') {
-      partDescription = 'Seed: dormant embryonic plant, germinates when conditions are right.';
-    }
+    const waterCost = opt.waterCost ?? 0;
+    const nutrientCost = opt.nutrientCost ?? 0;
+    const mineralCost = opt.mineralCost ?? 0;
 
-    const upkeepEnergyHtml =
-      upkeepEnergy !== 0
-        ? `<div>Upkeep: ${upkeepEnergy > 0 ? '+' : ''}${upkeepEnergy.toFixed(2)} âš¡/s | ${upkeepWater > 0 ? '+' : ''}${upkeepWater.toFixed(2)} ðŸ’§/s | ${upkeepMinerals > 0 ? '+' : ''}${upkeepMinerals.toFixed(2)} â›ï¸/s</div>`
-        : '';
-    const photosynthesisHtml = doesPhotosynthesize
-      ? '<div>Photosynthesis: âœ“ converts light into energy</div>'
-      : '';
-    const efficiencyHtml = `
-      <div>Efficiency: +${opt.biomassGain.toFixed(1)} biomass per ${opt.energyCost.toFixed(1)} energy (ratio: ${biomassPerEnergy})</div>
-    `;
-    const descriptionHtml = partDescription
-      ? `<div style="font-size: 0.75em; color: var(--leaf-300); margin-top: 2px;">${partDescription}</div>`
-      : '';
+    // Type-specific description + upkeep
+    const typeChipClass = (() => {
+      const tl = opt.type.toLowerCase();
+      if (tl === 'radicle' || tl === 'root' || tl === 'lateral_root') return 'option-chip-root';
+      if (tl === 'stem' || tl === 'branch') return 'option-chip-stem';
+      if (tl === 'cotyledon' || tl === 'leaf' || tl === 'vine') return 'option-chip-leaf';
+      return 'option-chip';
+    })();
 
-    btn.innerHTML = `
-      <div style="font-weight: bold; font-size: 0.95em;">${opt.label}</div>
-      <div style="font-size: 0.8em; color: var(--bark-300); margin-top: 4px;">
-        Cost: ${opt.energyCost.toFixed(1)} âš¡ | Gain: +${opt.biomassGain.toFixed(1)} ðŸŒ¿ | ~${opt.expectedSeconds.toFixed(1)}s
+    card.innerHTML = `
+      <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 4px;">
+        <span class="hud-grow-option__chip ${typeChipClass}">${opt.label}</span>
+        ${
+          !opt.available && opt.reason
+            ? `<span class="hud-badge hud-badge-low">${opt.reason}</span>`
+            : opt.available
+              ? '<span class="hud-badge hud-badge-ok">Ready</span>'
+              : ''
+        }
       </div>
-      ${efficiencyHtml}
-      ${upkeepEnergyHtml}
-      ${photosynthesisHtml}
-      ${descriptionHtml}
-      ${requirementsHtml}
-      ${reasonHtml}
-      ${riskHtml}
+      <div style="font-size: 0.72rem; color: var(--warm-ink); line-height: 1.3;">
+        ${opt.energyCost.toFixed(1)}E &nbsp;•&nbsp; +${opt.biomassGain.toFixed(1)}B &nbsp;•&nbsp; ~${opt.expectedSeconds.toFixed(0)}s
+        ${waterCost > 0 || nutrientCost > 0 || mineralCost > 0 ? '&nbsp;•&nbsp; ' : ''}
+        ${waterCost > 0 ? `${waterCost.toFixed(1)}W` : ''}
+        ${nutrientCost > 0 ? `${waterCost > 0 ? ', ' : ''}${nutrientCost.toFixed(1)}N` : ''}
+        ${mineralCost > 0 ? `${waterCost > 0 || nutrientCost > 0 ? ', ' : ''}${mineralCost.toFixed(1)}M` : ''}
+      </div>
     `;
+
     if (opt.available) {
-      btn.onmouseenter = () => (btn.style.background = 'var(--bark-700)');
-      btn.onmouseleave = () => (btn.style.background = 'var(--bark-800)');
-      btn.onclick = (e) => {
+      card.onmouseenter = () => {
+        if (!card.classList.contains('selected')) {
+          card.style.borderColor = 'var(--leaf-400)';
+          card.style.background = 'rgba(159, 200, 96, 0.12)';
+        }
+      };
+      card.onmouseleave = () => {
+        if (!card.classList.contains('selected')) {
+          card.style.borderColor = 'var(--hud-border)';
+          card.style.background = 'var(--hud-bg)';
+        }
+      };
+      card.onclick = (e) => {
         e.stopPropagation();
-        // Select this growth option, then drag from the selected node to set direction
         growthSelectionStateMachineSelectOption(growthSelectionMachine, opt.type, opt.label);
-        // If player selects a subterranean root option (radicle, root, lateral_root),
-        // automatically enable Root Sight so the player can see underground growth!
-        if (opt.type === 'radicle' || opt.type === 'root' || opt.type === 'lateral_root') {
-          setRootSightEnabled(true, plantId ?? undefined);
-        }
-        controls.enabled = false;
-        controls.enableRotate = false;
-        controls.enablePan = false;
-        parts.optionsEl.querySelectorAll('button').forEach((b) => {
-          (b as HTMLButtonElement).style.outline = 'none';
-        });
-        btn.style.outline = '2px solid var(--leaf-400)';
 
-        // Immediately initialize smoothed direction and preview vector at the node
-        const nodeData = plantNodes.get(result.nodeId);
-        if (nodeData) {
-          const initConstraints =
-            NODE_GROWTH_CONSTRAINTS[opt.type as NodeType] ?? NODE_GROWTH_CONSTRAINTS.stem;
-          const initialClamped = clampGrowthDirectionByGene(
-            opt.type,
-            initConstraints.downwardPreferred
-              ? { x: 0, y: -1, z: 0 }
-              : { x: 0.05, y: 0.998, z: 0.05 },
-          );
-          smoothedGrowthDir.set(initialClamped.x, initialClamped.y, initialClamped.z);
-          smoothedGrowthDist = Math.min(1.0, initConstraints.maxReach * 0.7);
-          isGrowthAtMaxReach = false;
-          isGrowthAngleClamped = false;
-          updateGrowthDirectionLine(
-            { x: nodeData.position.x, y: nodeData.position.y, z: nodeData.position.z },
-            {
-              x: nodeData.position.x + smoothedGrowthDir.x * smoothedGrowthDist,
-              y: nodeData.position.y + smoothedGrowthDir.y * smoothedGrowthDist,
-              z: nodeData.position.z + smoothedGrowthDir.z * smoothedGrowthDist,
-            },
-            true,
-          );
-        }
-
-        console.log('[PlantLegacy] Growth option selected', {
-          nodeId: result.nodeId,
-          optionType: opt.type,
-          state: growthSelectionStateMachineGetState(growthSelectionMachine),
+        // Mark selected visually
+        parts.optionsEl.querySelectorAll('.hud-grow-option').forEach((c) => {
+          const cc = c as HTMLElement;
+          cc.classList.remove('selected');
+          cc.style.borderColor = 'var(--hud-border)';
+          cc.style.background = 'var(--hud-bg)';
         });
-        setDetail(
-          `Selected ${opt.label}. Click+drag on the plant/canvas to set direction, then release.`,
-        );
+        card.classList.add('selected');
+        card.style.borderColor = 'var(--leaf-400)';
+        card.style.background = 'rgba(159, 200, 96, 0.18)';
+        card.style.boxShadow = '0 0 0 2px rgba(159, 200, 96, 0.25)';
+
+        // Start aiming straight away: ring on the surface, arrow to turn.
+        beginGrowthAiming(result.nodeId, opt.type, opt.label);
         uiShell?.toast({
-          message: `Selected ${opt.label} — drag to grow`,
+          message: `Aiming ${opt.label} - drag to turn, then Grow`,
           kind: 'info',
           durationMs: 2000,
         });
       };
     }
-    parts.optionsEl.appendChild(btn);
+    parts.optionsEl.appendChild(card);
   }
 }
 
 function hideGrowthSelection(): void {
   growthSelectionStateMachineHide(growthSelectionMachine);
+  growthAimDragging = false;
+  growthSelectionPanel?.querySelector('#growth-aim-controls')?.remove();
   removeGrowthDirectionLine();
   controls.enabled = true;
   controls.enableRotate = true;
@@ -3060,6 +3908,7 @@ function hideGrowthSelection(): void {
   webgpuRenderer?.setSelectedNode(null);
   const panel = growthSelectionPanel;
   if (panel) panel.style.display = 'none';
+  setGrowthPanelOpen(false);
 }
 
 // Chat UI
@@ -3068,7 +3917,23 @@ let chatMessages: HTMLElement | null = null;
 let chatInput: HTMLInputElement | null = null;
 let chatOpen = false;
 const MAX_CHAT_MESSAGES = 50;
-let chatHudZIndex = 100;
+let chatHudZIndex = 200;
+
+// T05 Communication state
+let chatConfig: { proximityRangePx: number; worldRateMsgPerMin: number; logSize: number } | null =
+  null;
+let reportConfig: {
+  reportReasons: Array<{ id: string; label: string; category: string }>;
+  contextLineCount: number;
+  reportFreeTextMax: number;
+  reportRateLimitPerMin: number;
+} | null = null;
+let chatMode: 'proximity' | 'world' = 'world';
+const blockedPlayerIds = new Set<string>();
+const chatRateTimestamps: number[] = [];
+const recentChatLines: Array<{ playerName: string; message: string; timestamp: number }> = [];
+let reportDialogEl: HTMLElement | null = null;
+let reportTarget: { playerId?: string; playerName?: string; message?: string } | null = null;
 
 function createChatUI(): void {
   const hudLayer = uiShell?.getLayer('hud');
@@ -3078,59 +3943,121 @@ function createChatUI(): void {
   chatContainer.id = 'chat-container';
   chatContainer.style.cssText = `
     position: fixed;
-    bottom: 120px;
-    left: 16px;
-    width: 320px;
-    max-height: 300px;
-    background: var(--loam-900, #14180f);
-    border: 1px solid var(--bark-700, #2a281f);
-    border-radius: 8px;
+    top: var(--hud-top);
+    left: var(--hud-corner);
+    /* Shrinks with the viewport so it never crowds the readout on phones, and
+       keeps a fixed height: messages scroll inside instead of the box growing. */
+    width: var(--hud-chat-w);
+    height: var(--hud-chat-h);
+    max-height: var(--hud-chat-h);
+    background: linear-gradient(180deg, rgba(18, 22, 13, 0.9) 0%, rgba(24, 30, 20, 0.85) 100%);
+    border: 1px solid var(--hud-border);
+    border-radius: var(--hud-radius);
     display: none;
     flex-direction: column;
     font-family: inherit;
-    font-size: calc(13px * var(--text-scale, 1));
-    color: var(--bone-100, #efe9d8);
+    font-size: var(--hud-font-sm);
+    color: var(--warm-ink);
     z-index: ${chatHudZIndex};
     overflow: hidden;
+    box-shadow: var(--hud-shadow-sm);
   `;
 
-  // Chat header
-  const header = document.createElement('div');
-  header.style.cssText = `
-    padding: 8px 12px;
-    border-bottom: 1px solid var(--bark-700);
-    font-weight: bold;
+  // No title bar: the tabs and the close button share one compact row.
+  const chatCloseBtn = document.createElement('button');
+  chatCloseBtn.id = 'chat-close';
+  chatCloseBtn.type = 'button';
+  chatCloseBtn.textContent = 'X';
+  chatCloseBtn.style.cssText = `
+    background: none;
+    border: none;
+    color: var(--bark-300);
+    cursor: pointer;
+    font-size: 0.8rem;
+    line-height: 1;
+    padding: 3px 7px;
+    border-radius: 8px;
+  `;
+  chatCloseBtn.addEventListener('click', () => toggleChat(false));
+
+  // Proximity / World tabs plus the close button in a single row.
+  const tabBar = document.createElement('div');
+  tabBar.style.cssText = `
     display: flex;
-    justify-content: space-between;
     align-items: center;
+    padding: 5px 8px;
+    border-bottom: 1px solid rgba(94, 122, 53, 0.12);
+    gap: 6px;
   `;
-  header.innerHTML = `
-    <span>Chat</span>
-    <button id="chat-close" style="background: none; border: none; color: var(--bark-300); cursor: pointer; font-size: 1.2em; line-height: 1;">Ã—</button>
+
+  const proximityBtn = document.createElement('button');
+  proximityBtn.type = 'button';
+  proximityBtn.textContent = 'Proximity';
+  proximityBtn.style.cssText = `
+    flex: 1;
+    background: ${chatMode === 'proximity' ? 'var(--leaf-900)' : 'transparent'};
+    border: 1px solid var(--hud-border);
+    border-radius: 8px;
+    color: var(--bone-100);
+    font-family: inherit;
+    font-size: calc(11px * var(--text-scale, 1));
+    padding: 4px 8px;
+    cursor: pointer;
   `;
-  chatContainer.appendChild(header);
+  proximityBtn.addEventListener('click', () => {
+    chatMode = 'proximity';
+    proximityBtn.style.background = 'var(--leaf-900)';
+    worldBtn.style.background = 'transparent';
+  });
+
+  const worldBtn = document.createElement('button');
+  worldBtn.type = 'button';
+  worldBtn.textContent = 'World';
+  worldBtn.style.cssText = `
+    flex: 1;
+    background: ${chatMode === 'world' ? 'var(--leaf-900)' : 'transparent'};
+    border: 1px solid var(--hud-border);
+    border-radius: 8px;
+    color: var(--bone-100);
+    font-family: inherit;
+    font-size: calc(11px * var(--text-scale, 1));
+    padding: 4px 8px;
+    cursor: pointer;
+  `;
+  worldBtn.addEventListener('click', () => {
+    chatMode = 'world';
+    worldBtn.style.background = 'var(--leaf-900)';
+    proximityBtn.style.background = 'transparent';
+  });
+
+  tabBar.appendChild(proximityBtn);
+  tabBar.appendChild(worldBtn);
+  tabBar.appendChild(chatCloseBtn);
+  // Connection light sits at the head of the toolbar row.
+  if (statusElement) tabBar.insertBefore(statusElement, proximityBtn);
+  chatContainer.appendChild(tabBar);
 
   // Messages area
   chatMessages = document.createElement('div');
   chatMessages.id = 'chat-messages';
   chatMessages.style.cssText = `
-    flex: 1;
+    flex: 1 1 auto;
+    min-height: 0;
     overflow-y: auto;
-    padding: 8px 12px;
+    padding: 8px;
     display: flex;
     flex-direction: column;
-    gap: 4px;
-    max-height: 200px;
+    gap: var(--hud-gap);
   `;
   chatContainer.appendChild(chatMessages);
 
   // Input area
   const inputWrapper = document.createElement('div');
   inputWrapper.style.cssText = `
-    padding: 8px 12px;
-    border-top: 1px solid var(--bark-700);
+    padding: 6px 8px;
+    border-top: 1px solid rgba(94, 122, 53, 0.15);
     display: flex;
-    gap: 8px;
+    gap: 6px;
   `;
   chatInput = document.createElement('input');
   chatInput.type = 'text';
@@ -3140,7 +4067,7 @@ function createChatUI(): void {
     flex: 1;
     background: var(--loam-800);
     border: 1px solid var(--bark-600);
-    border-radius: 4px;
+    border-radius: 10px;
     padding: 6px 10px;
     color: var(--bone-100);
     font-family: inherit;
@@ -3159,14 +4086,20 @@ function createChatUI(): void {
 
   const sendBtn = document.createElement('button');
   sendBtn.textContent = 'Send';
+  sendBtn.type = 'button';
   sendBtn.style.cssText = `
-    background: var(--leaf-600);
-    border: none;
-    border-radius: 4px;
-    padding: 6px 12px;
+    background: linear-gradient(180deg, var(--leaf-500) 0%, var(--leaf-600) 100%);
+    border: 1px solid var(--leaf-400);
+    border-radius: var(--hud-radius-sm);
+    padding: clamp(3px, 0.5vh, 6px) clamp(8px, 1vw, 14px);
     color: var(--loam-900);
-    font-weight: bold;
+    font-family: inherit;
+    font-size: var(--hud-font-md);
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    line-height: 1.2;
     cursor: pointer;
+    align-self: stretch;
   `;
   sendBtn.onclick = () => {
     if (chatInput?.value.trim()) {
@@ -3176,9 +4109,6 @@ function createChatUI(): void {
   };
   inputWrapper.appendChild(sendBtn);
   chatContainer.appendChild(inputWrapper);
-
-  // Close button handler
-  header.querySelector('#chat-close')?.addEventListener('click', () => toggleChat(false));
 
   hudLayer.appendChild(chatContainer);
 }
@@ -3192,25 +4122,50 @@ function toggleChat(open?: boolean): void {
   }
 }
 
-function addChatMessage(playerName: string, message: string, isOwn: boolean): void {
+function addChatMessage(
+  playerId: string | null,
+  playerName: string,
+  message: string,
+  isOwn: boolean,
+): void {
   if (!chatMessages) return;
+
+  // T05: block hides blocked players' chat
+  if (playerId && blockedPlayerIds.has(playerId)) return;
+
+  // T05: track recent lines for report context snapshots
+  recentChatLines.push({ playerName, message, timestamp: Date.now() });
+  const maxLines = reportConfig?.contextLineCount ?? 50;
+  while (recentChatLines.length > maxLines) recentChatLines.shift();
 
   const msgEl = document.createElement('div');
   msgEl.style.cssText = `
-    padding: 4px 8px;
+    padding: 5px 9px;
     background: ${isOwn ? 'var(--leaf-900)' : 'var(--bark-800)'};
-    border-radius: 4px;
-    max-width: 90%;
+    border-radius: 10px 10px 10px 2px;
+    max-width: 85%;
     align-self: ${isOwn ? 'flex-end' : 'flex-start'};
-    word-wrap: break-word;
+    overflow-wrap: break-word;
+    font-size: 0.7rem;
+    line-height: 1.3;
+    color: var(--warm-ink);
+    box-shadow: var(--hud-shadow-sm);
+    position: relative;
   `;
   const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   const nameColor = isOwn ? 'var(--leaf-300)' : 'var(--bark-200)';
   msgEl.innerHTML = `
-    <span style="font-weight: bold; color: ${nameColor}; margin-right: 6px;">${playerName}</span>
+    <span style="font-weight: bold; color: ${nameColor}; margin-right: 6px;">${escapeHtml(playerName)}</span>
     <span>${escapeHtml(message)}</span>
     <span style="font-size: 0.75em; color: var(--bark-400); margin-left: 8px;">${time}</span>
   `;
+
+  // T05: right-click context menu for report/block
+  msgEl.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    showChatContextMenu(e.clientX, e.clientY, playerId, playerName, message);
+  });
 
   chatMessages.appendChild(msgEl);
 
@@ -3232,25 +4187,403 @@ function addChatMessage(playerName: string, message: string, isOwn: boolean): vo
   }
 }
 
+function showChatContextMenu(
+  x: number,
+  y: number,
+  playerId: string | null,
+  playerName: string,
+  message: string,
+): void {
+  // Remove existing context menu
+  const existing = document.getElementById('chat-context-menu');
+  if (existing) existing.remove();
+
+  const menu = document.createElement('div');
+  menu.id = 'chat-context-menu';
+  menu.style.cssText = `
+    position: fixed;
+    left: ${x}px;
+    top: ${y}px;
+    z-index: 600;
+    background: var(--bark-800);
+    border: 1px solid var(--hud-border);
+    border-radius: var(--hud-radius);
+    box-shadow: var(--hud-shadow);
+    padding: 6px 0;
+    min-width: 160px;
+    pointer-events: auto;
+    font-family: inherit;
+    font-size: calc(12px * var(--text-scale, 1));
+  `;
+
+  const isBlocked = playerId ? blockedPlayerIds.has(playerId) : false;
+
+  const blockItem = document.createElement('div');
+  blockItem.textContent = isBlocked ? 'Unblock player' : 'Block player';
+  blockItem.style.cssText = `
+    padding: 8px 14px;
+    color: var(--bone-100);
+    cursor: pointer;
+  `;
+  blockItem.addEventListener('mouseenter', () => {
+    blockItem.style.background = 'var(--bark-700)';
+  });
+  blockItem.addEventListener('mouseleave', () => {
+    blockItem.style.background = 'transparent';
+  });
+  blockItem.addEventListener('click', () => {
+    toggleBlockPlayer(playerId, playerName);
+    menu.remove();
+  });
+  menu.appendChild(blockItem);
+
+  const reportItem = document.createElement('div');
+  reportItem.textContent = 'Report message';
+  reportItem.style.cssText = `
+    padding: 8px 14px;
+    color: var(--bone-100);
+    border-top: 1px solid var(--hud-border);
+    cursor: pointer;
+  `;
+  reportItem.addEventListener('mouseenter', () => {
+    reportItem.style.background = 'var(--bark-700)';
+  });
+  reportItem.addEventListener('mouseleave', () => {
+    reportItem.style.background = 'transparent';
+  });
+  reportItem.addEventListener('click', () => {
+    openReportDialog({ playerId: playerId ?? undefined, playerName, message });
+    menu.remove();
+  });
+  menu.appendChild(reportItem);
+
+  document.body.appendChild(menu);
+
+  // Close on click away
+  const close = () => {
+    menu.remove();
+    document.removeEventListener('click', close);
+  };
+  document.addEventListener('click', close);
+}
+
+function toggleBlockPlayer(playerId: string | null, playerName: string): void {
+  if (!playerId) return;
+  const blocked = !blockedPlayerIds.has(playerId);
+  if (blocked) {
+    blockedPlayerIds.add(playerId);
+    uiShell?.toast({ message: `Blocked ${playerName}`, kind: 'state', durationMs: 3000 });
+  } else {
+    blockedPlayerIds.delete(playerId);
+    uiShell?.toast({ message: `Unblocked ${playerName}`, kind: 'info', durationMs: 3000 });
+  }
+
+  // The server keeps its own mute list so blocked messages never reach us.
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(
+      JSON.stringify({
+        type: MESSAGE_TYPE.BLOCK,
+        payload: { targetPlayerId: playerId, blocked },
+      }),
+    );
+  }
+}
+
+function openReportDialog(target: {
+  playerId?: string;
+  playerName?: string;
+  message?: string;
+}): void {
+  reportTarget = target;
+  createReportDialog();
+}
+
+function createReportDialog(): void {
+  if (reportDialogEl) {
+    reportDialogEl.style.display = 'flex';
+    return;
+  }
+
+  if (!reportConfig) return;
+
+  const modalLayer = uiShell?.getLayer('modal');
+  if (!modalLayer) return;
+
+  const dialog = document.createElement('div');
+  dialog.id = 'report-dialog';
+  dialog.style.cssText = `
+    position: fixed;
+    inset: 0;
+    z-index: 600;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: auto;
+  `;
+
+  const backdrop = document.createElement('div');
+  backdrop.style.cssText = `
+    inset: 0;
+    background: rgba(10, 12, 8, 0.6);
+    backdrop-filter: blur(2px);
+  `;
+  backdrop.addEventListener('click', closeReportDialog);
+  dialog.appendChild(backdrop);
+
+  const card = document.createElement('div');
+  card.style.cssText = `
+    background: var(--bark-800);
+    border: 1px solid var(--hud-border);
+    border-radius: var(--hud-radius);
+    padding: 16px;
+    width: min(380px, 92vw);
+    max-height: 85vh;
+    overflow-y: auto;
+    box-shadow: var(--hud-shadow);
+    pointer-events: auto;
+  `;
+
+  const title = document.createElement('div');
+  title.textContent = 'Report';
+  title.style.cssText = `
+    font-weight: 700;
+    color: var(--bone-100);
+    margin-bottom: 12px;
+    font-size: calc(14px * var(--text-scale, 1));
+  `;
+  card.appendChild(title);
+
+  // Target info (pre-filled, read-only)
+  const targetLabel = document.createElement('div');
+  const who = reportTarget?.playerName ?? 'Unknown player';
+  const what = reportTarget?.message ? `"${escapeHtml(reportTarget.message)}"` : 'player';
+  targetLabel.textContent = `Reporting ${who} for ${what}`;
+  targetLabel.style.cssText = `
+    color: var(--bone-300);
+    font-size: calc(12px * var(--text-scale, 1));
+    margin-bottom: 12px;
+  `;
+  card.appendChild(targetLabel);
+
+  // Reason dropdown
+  const reasonLabel = document.createElement('div');
+  reasonLabel.textContent = 'Reason';
+  reasonLabel.style.cssText = `
+    color: var(--bone-100);
+    font-size: calc(11px * var(--text-scale, 1));
+    margin-bottom: 6px;
+  `;
+  card.appendChild(reasonLabel);
+
+  const reasonSelect = document.createElement('select');
+  reasonSelect.style.cssText = `
+    width: 100%;
+    background: var(--loam-800);
+    border: 1px solid var(--bark-600);
+    border-radius: 8px;
+    color: var(--bone-100);
+    font-family: inherit;
+    font-size: calc(12px * var(--text-scale, 1));
+    padding: 6px 10px;
+    margin-bottom: 12px;
+  `;
+  for (const reason of reportConfig.reportReasons) {
+    const opt = document.createElement('option');
+    opt.value = reason.id;
+    opt.textContent = reason.label;
+    reasonSelect.appendChild(opt);
+  }
+  card.appendChild(reasonSelect);
+
+  // Additional info
+  const infoLabel = document.createElement('div');
+  infoLabel.textContent = 'Additional info';
+  infoLabel.style.cssText = `
+    color: var(--bone-100);
+    font-size: calc(11px * var(--text-scale, 1));
+    margin-bottom: 6px;
+  `;
+  card.appendChild(infoLabel);
+
+  const infoText = document.createElement('textarea');
+  infoText.placeholder = 'Any additional details...';
+  infoText.style.cssText = `
+    width: 100%;
+    background: var(--loam-800);
+    border: 1px solid var(--bark-600);
+    border-radius: 8px;
+    color: var(--bone-100);
+    font-family: inherit;
+    font-size: calc(12px * var(--text-scale, 1));
+    padding: 8px 10px;
+    margin-bottom: 12px;
+    resize: vertical;
+    min-height: 80px;
+  `;
+  infoText.maxLength = reportConfig.reportFreeTextMax;
+  card.appendChild(infoText);
+
+  // Block checkbox
+  const blockRow = document.createElement('div');
+  blockRow.style.cssText = `
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 14px;
+  `;
+  const blockCheckbox = document.createElement('input');
+  blockCheckbox.type = 'checkbox';
+  blockCheckbox.checked = true;
+  blockCheckbox.style.cssText = `accent-color: var(--leaf-500);`;
+  const blockLabel = document.createElement('label');
+  blockLabel.textContent = 'Block this player';
+  blockLabel.style.cssText = `
+    color: var(--bone-100);
+    font-size: calc(12px * var(--text-scale, 1));
+    cursor: pointer;
+  `;
+  blockRow.appendChild(blockCheckbox);
+  blockRow.appendChild(blockLabel);
+  card.appendChild(blockRow);
+
+  // Buttons
+  const btnRow = document.createElement('div');
+  btnRow.style.cssText = `
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+  `;
+
+  const cancelBtn = document.createElement('button');
+  cancelBtn.type = 'button';
+  cancelBtn.textContent = 'Cancel';
+  cancelBtn.style.cssText = `
+    background: transparent;
+    border: 1px solid var(--hud-border);
+    border-radius: 8px;
+    color: var(--bone-100);
+    font-family: inherit;
+    font-size: calc(12px * var(--text-scale, 1));
+    padding: 6px 14px;
+    cursor: pointer;
+  `;
+  cancelBtn.addEventListener('click', closeReportDialog);
+  btnRow.appendChild(cancelBtn);
+
+  const submitBtn = document.createElement('button');
+  submitBtn.type = 'button';
+  submitBtn.textContent = 'Submit';
+  submitBtn.style.cssText = `
+    background: var(--ember-600);
+    border: 1px solid var(--ember-500);
+    border-radius: 8px;
+    color: var(--loam-900);
+    font-family: inherit;
+    font-size: calc(12px * var(--text-scale, 1));
+    font-weight: 700;
+    padding: 6px 14px;
+    cursor: pointer;
+  `;
+  submitBtn.addEventListener('click', () => {
+    submitReport(reasonSelect.value, infoText.value, blockCheckbox.checked);
+    closeReportDialog();
+  });
+  btnRow.appendChild(submitBtn);
+  card.appendChild(btnRow);
+
+  dialog.appendChild(card);
+  modalLayer.appendChild(dialog);
+  reportDialogEl = dialog;
+}
+
+function closeReportDialog(): void {
+  if (reportDialogEl) {
+    reportDialogEl.remove();
+    reportDialogEl = null;
+  }
+  reportTarget = null;
+}
+
+async function submitReport(
+  reasonId: string,
+  freeText: string,
+  shouldBlock: boolean,
+): Promise<void> {
+  if (!reportTarget?.playerId) return;
+
+  // T05: rate limit reports
+  const now = Date.now();
+  const reportWindow = now - 60000; // last 60 seconds
+  const recentReports = chatRateTimestamps.filter((t) => t > reportWindow);
+  const rateLimit = reportConfig ? reportConfig.reportRateLimitPerMin : 5;
+  if (recentReports.length >= rateLimit) {
+    uiShell?.toast({
+      message: 'Report rate limit reached. Try again later.',
+      kind: 'error',
+      durationMs: 4000,
+    });
+    return;
+  }
+
+  // Build context snapshot from recent chat lines
+  const contextLineCount = reportConfig ? reportConfig.contextLineCount : 20;
+  const contextSnapshot = recentChatLines.slice(-contextLineCount);
+
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    const payload = JSON.stringify({
+      // 29 = REPORT. It must not reuse 10, which is WELCOME.
+      type: 29,
+      payload: {
+        targetPlayerId: reportTarget.playerId ?? '',
+        targetPlayerName: reportTarget.playerName,
+        reason: reasonId,
+        freeText: freeText.slice(0, reportConfig ? reportConfig.reportFreeTextMax : 500),
+        block: shouldBlock,
+        contextSnapshot,
+        timestamp: now,
+      },
+    });
+    ws.send(payload);
+    chatRateTimestamps.push(now);
+    uiShell?.toast({ message: 'Report submitted', kind: 'info', durationMs: 3000 });
+
+    if (shouldBlock && reportTarget.playerId) {
+      blockedPlayerIds.add(reportTarget.playerId);
+    }
+  }
+}
+
+function checkChatRateLimit(): boolean {
+  const now = Date.now();
+  const windowStart = now - 60000;
+  while (chatRateTimestamps.length > 0 && chatRateTimestamps[0] < windowStart) {
+    chatRateTimestamps.shift();
+  }
+  const limit = chatConfig?.worldRateMsgPerMin ?? 12;
+  if (chatRateTimestamps.length >= limit) return false;
+  chatRateTimestamps.push(now);
+  return true;
+}
+
 function escapeHtml(text: string): string {
   const div = document.createElement('div');
   div.textContent = text;
   return div.innerHTML;
 }
 
-const EMOTE_EMOJIS: Record<string, string> = {
-  wave: 'ðŸ‘‹',
-  cheer: 'ðŸŽ‰',
-  thumbs_up: 'ðŸ‘',
-  heart: 'â¤ï¸',
-  think: 'ðŸ¤”',
-  sleep: 'ðŸ˜´',
-  dance: 'ðŸ’ƒ',
-  sad: 'ðŸ˜¢',
+const EMOTE_LABELS: Record<string, string> = {
+  wave: 'Wave',
+  cheer: 'Cheer',
+  thumbs_up: 'Thumbs Up',
+  heart: 'Heart',
+  think: 'Think',
+  sleep: 'Sleep',
+  dance: 'Dance',
+  sad: 'Sad',
 };
 
 function showEmoteAbovePlant(fromPlayerId: string, playerName: string, emoteId: string): void {
-  const emoji = EMOTE_EMOJIS[emoteId] ?? 'âœ¨';
+  const emoteLabel = EMOTE_LABELS[emoteId] ?? 'Emote';
   let targetPlantId: string | null = null;
 
   // Find the plant for this player
@@ -3289,14 +4622,21 @@ function showEmoteAbovePlant(fromPlayerId: string, playerName: string, emoteId: 
     position: fixed;
     pointer-events: none;
     z-index: 300;
-    font-size: 2.5em;
+    font-size: calc(0.95em * var(--text-scale));
+    font-weight: 600;
     line-height: 1;
     transform: translate(-50%, -100%);
     animation: emote-pop 0.2s ease-out, emote-float 2s ease-out forwards;
-    text-shadow: 0 2px 8px rgba(0,0,0,0.6);
-    filter: drop-shadow(0 2px 4px rgba(0,0,0,0.5));
+    color: var(--bone-100);
+    background: rgba(20, 24, 15, 0.85);
+    border: 1px solid var(--bark-700);
+    border-radius: 12px;
+    padding: 6px 12px;
+    white-space: nowrap;
+    text-shadow: none;
+    filter: none;
   `;
-  bubble.textContent = emoji;
+  bubble.textContent = emoteLabel;
 
   // Add name label
   const nameLabel = document.createElement('div');
@@ -3310,7 +4650,7 @@ function showEmoteAbovePlant(fromPlayerId: string, playerName: string, emoteId: 
     color: var(--bone-100);
     background: rgba(20, 24, 15, 0.85);
     padding: 2px 6px;
-    border-radius: 4px;
+    border-radius: 10px;
     white-space: nowrap;
     text-shadow: none;
     filter: none;
@@ -3376,9 +4716,23 @@ function showEmoteAbovePlant(fromPlayerId: string, playerName: string, emoteId: 
 
 function sendChatMessage(message: string): void {
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
+
+  // T05: rate limit outgoing chat messages
+  if (!checkChatRateLimit()) {
+    uiShell?.toast({
+      message: 'Chat rate limit reached. Slow down.',
+      kind: 'error',
+      durationMs: 4000,
+    });
+    return;
+  }
+
   const payload = JSON.stringify({
     type: MESSAGE_TYPE.CHAT_MESSAGE,
-    payload: { message: message.slice(0, 500) },
+    payload: {
+      message: message.slice(0, 500),
+      mode: chatMode,
+    },
   });
   ws.send(payload);
 }
@@ -3452,7 +4806,6 @@ function confirmGrowth(
     nodeId,
     direction: finalDir,
     nodeType,
-    isAttack: false,
     tick: growthIntentTick,
   };
 
@@ -3466,35 +4819,109 @@ function confirmGrowth(
 }
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x14180f);
-scene.fog = new THREE.Fog(0x14180f, 60, 260);
+// Sky-coloured background/fog so the world is never pitched into near-black.
+// EnvironmentRenderer tints both toward the live horizon colour each frame,
+// so this is the neutral starting colour before weather takes over.
+scene.background = new THREE.Color('#C8D6D4');
+scene.fog = new THREE.Fog('#C8D6D4', 60, 260);
 
-const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 800);
+// The far plane must clear the sky dome (max(300, terrain_radius * 1.5)) and
+// the ground disc, otherwise the dome's far side is clipped and its cut edge
+// shows as a faceted wall above the horizon.
+const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 2500);
 camera.position.set(0, 18, 26);
 camera.lookAt(0, 0, 0);
 
-const controls = new OrbitControls(camera, renderer.domElement);
-controls.enableDamping = true;
-controls.dampingFactor = 0.05;
-controls.enablePan = true;
-controls.screenSpacePanning = true;
-// Mouse: left-drag orbits, middle-drag orbits, right-drag pans (left click still selects).
-// Touch: one-finger drag pans world, two-finger gesture orbits/zooms.
-controls.mouseButtons = {
-  LEFT: THREE.MOUSE.ROTATE,
-  MIDDLE: THREE.MOUSE.ROTATE,
-  RIGHT: THREE.MOUSE.PAN,
-};
-controls.touches = {
-  ONE: THREE.TOUCH.PAN,
-  TWO: THREE.TOUCH.DOLLY_ROTATE,
-};
-controls.minDistance = 1;
-controls.maxDistance = 200;
-controls.maxPolarAngle = Math.PI / 2 - 0.05;
+/** Settings every OrbitControls instance starts with, including rebuilt ones. */
+function createControls(): OrbitControls {
+  const created = new OrbitControls(camera, renderer.domElement);
+  created.enableDamping = true;
+  created.dampingFactor = 0.05;
+  created.enablePan = true;
+  created.screenSpacePanning = true;
+  // Mouse: left-drag orbits, middle-drag orbits, right-drag pans (left click
+  // still selects). Touch: one-finger drag pans world, two-finger orbits/zooms.
+  created.mouseButtons = {
+    LEFT: THREE.MOUSE.ROTATE,
+    MIDDLE: THREE.MOUSE.ROTATE,
+    RIGHT: THREE.MOUSE.PAN,
+  };
+  created.touches = {
+    ONE: THREE.TOUCH.PAN,
+    TWO: THREE.TOUCH.DOLLY_ROTATE,
+  };
+  // Provisional limits before config/render.json is applied; the configured
+  // camera_min_distance / camera_max_distance take over during init.
+  created.minDistance = 1;
+  created.maxDistance = camera.far * 0.9;
+  created.maxPolarAngle = Math.PI / 2 - 0.05;
+  return created;
+}
+
+let controls = createControls();
+
+// Planet view pulls the camera out to orbit the whole body. The normal camera
+// is a local observer standing at the pole: it is clamped to a few hundred
+// metres and the sky fog hides anything at planet scale.
+let planetViewActive = false;
+const WORLD_UP = new THREE.Vector3(0, 1, 0);
+const cameraUpTarget = new THREE.Vector3();
+let planetViewSavedFog: THREE.Fog | null = null;
+let planetViewSavedFar = camera.far;
+let planetViewSavedNear = camera.near;
+
+function setPlanetView(enabled: boolean): void {
+  const radius = renderConfig?.planetRadiusM ?? 0;
+  if (radius <= 0) return;
+  planetViewActive = enabled;
+  const distanceMultiplier = renderConfig?.planetViewDistanceMultiplier ?? 3;
+  const farMultiplier = renderConfig?.planetViewFarMultiplier ?? 12;
+  const minMultiplier = renderConfig?.planetViewMinDistanceMultiplier ?? 1.4;
+  const nearMultiplier = renderConfig?.planetViewNearMultiplier ?? 0.01;
+
+  if (enabled) {
+    if (scene.fog instanceof THREE.Fog) planetViewSavedFog = scene.fog;
+    scene.fog = null;
+    planetViewSavedFar = camera.far;
+    planetViewSavedNear = camera.near;
+    // A 100 km body needs a near plane in the kilometres and a far plane past
+    // the camera; both scale with the radius so any planet size works.
+    camera.near = Math.max(planetViewSavedNear, radius * nearMultiplier);
+    camera.far = Math.max(camera.far, radius * farMultiplier);
+    camera.updateProjectionMatrix();
+    controls.minDistance = radius * minMultiplier;
+    controls.maxDistance = radius * (distanceMultiplier + 2);
+    controls.maxPolarAngle = Math.PI * 0.98;
+    controls.target.set(0, -radius, 0);
+    // Frame the globe from slightly above its equator, at the configured
+    // distance from the centre.
+    camera.position
+      .set(0, -radius, 0)
+      .addScaledVector(new THREE.Vector3(0, 0.45, 1).normalize(), radius * distanceMultiplier);
+    controls.update();
+  } else {
+    if (planetViewSavedFog) scene.fog = planetViewSavedFog;
+    camera.far = planetViewSavedFar;
+    camera.near = planetViewSavedNear;
+    camera.updateProjectionMatrix();
+    controls.minDistance = renderConfig?.cameraMinDistance ?? 0.5;
+    controls.maxDistance = Math.min(camera.far * 0.9, renderConfig?.cameraMaxDistance ?? 200);
+    controls.maxPolarAngle = renderConfig?.cameraMaxPolarAngle ?? 1.52;
+    controls.target.set(0, 0, 0);
+    camera.position.set(0, 18, 26);
+    controls.update();
+  }
+}
 
 // Physics (Rapier) - client-side cosmetic simulation, server-authoritative state
 let physicsReady = false;
+// The ground collider, kept so the spring arm can ignore it: the camera orbits a
+// target that sits on that surface, so treating the ground as an obstruction
+// only ever produced grazing hits that yanked the camera in and out.
+const soilColliderRef: { current: unknown } = { current: null };
+// The relief collider is ground too: the camera is not pulled in by a hill it
+// orbits over, for the same reason it is not pulled in by the sphere.
+const terrainColliderRef: { current: unknown } = { current: null };
 
 function registerNodePhysics(node: PlantNodeData): void {
   if (!physicsReady || !rapierWorld.isReady) return;
@@ -3558,7 +4985,7 @@ scene.add(sunLight);
 const hemisphereLight = new THREE.HemisphereLight(0x87ceeb, 0x8b4513, 0.3);
 scene.add(hemisphereLight);
 
-function connect(): void {
+async function connect(): Promise<void> {
   // Clean up existing connection if any
   if (ws) {
     // Remove all event listeners to prevent memory leaks
@@ -3576,8 +5003,27 @@ function connect(): void {
   if (connecting) return;
 
   connecting = true;
-  setStatus('Connecting…', 'pending');
+  setStatus('Connecting...', 'pending');
   setDetail(`Connecting to ${wsOrigin}...`);
+
+  // Refresh a stale access token before HELLO. The server treats an unusable
+  // token as an anonymous connection, so sending an expired one would silently
+  // drop the account - and the plant that account owns - on every reconnect.
+  const stored = loadReconnectData();
+  const refreshed = await ensureFreshSession(fetch, httpOrigin, stored, Date.now());
+  if (refreshed) {
+    saveReconnectData({
+      ...stored,
+      accessToken: refreshed.accessToken,
+      refreshToken: refreshed.refreshToken,
+      displayName: refreshed.displayName ?? stored?.displayName,
+    });
+  } else if (stored?.accessToken) {
+    // The refresh was refused. The server answers a HELLO carrying an unusable
+    // token with AUTH_FAILED and closes, rather than falling back to guest, so
+    // drop the dead tokens and keep only the anonymous reclaim identity.
+    saveReconnectData({ plantId: stored.plantId, reconnectToken: stored.reconnectToken });
+  }
 
   ws = new WebSocket(`${wsOrigin}/ws`);
 
@@ -3596,6 +5042,7 @@ function connect(): void {
         clientVersion: PROTOCOL_VERSION,
         accessToken: reconnectData?.accessToken,
         plantId: reconnectData?.plantId,
+        reconnectToken: reconnectData?.reconnectToken,
       },
     });
     console.log('[PlantLegacy] Sending HELLO:', hello);
@@ -3607,12 +5054,14 @@ function connect(): void {
       const message = JSON.parse(event.data);
       const { type, payload } = message;
 
-      console.log(
-        '[PlantLegacy] Received message type:',
-        type,
-        'payload keys:',
-        Object.keys(payload || {}),
-      );
+      // Guard against missing message type
+      if (typeof type !== 'number') {
+        console.warn('PlantLegacy: received message without valid type', {
+          type,
+          payloadKeys: payload && typeof payload === 'object' ? Object.keys(payload) : null,
+        });
+        return;
+      }
 
       // Phase 2: validate message schemas before acting on payloads. Malformed
       // server broadcasts are skipped with a warning instead of being
@@ -3633,10 +5082,6 @@ function connect(): void {
           );
         }
         return;
-      }
-
-      if (debugOverlay) {
-        debugOverlay.recordBytes(event.data.length, 0);
       }
 
       if (debugOverlay) {
@@ -3676,80 +5121,109 @@ function connect(): void {
           } catch {
             // Keep existing bindings (may be empty from initC01 fallback).
           }
-          // Persist plantId for anonymous reconnect (ADR-029: dev switch)
-          saveReconnectData({ plantId: welcome.plantId });
+          // Persist the plant id with the server-issued reclaim secret. The id
+          // alone is public (it is in broadcasts); the token is what proves this
+          // client owns the plant. The access token is preserved here too - this
+          // used to overwrite the stored session and silently demote a signed-in
+          // client to anonymous on its next reconnect.
+          saveReconnectData({
+            accessToken: reconnectData?.accessToken,
+            refreshToken: reconnectData?.refreshToken,
+            displayName: reconnectData?.displayName,
+            plantId: welcome.plantId,
+            reconnectToken: welcome.reconnectToken,
+          });
+          entryFlowWorldReady(entryFlow);
+          entryScreen.render(entryFlow);
+          updateAccountChip();
+          showAwayReport(welcome.away);
+          if (welcome.previousPlantDied) {
+            showLossReport(welcome.previousPlantDied.cause, welcome.previousPlantDied.secondsAgo);
+          }
+          // A reconnect can hand us a different plant (new world, new seed). Any
+          // node kept from the previous session would be drawn as if it belonged
+          // to this plant, which is exactly how parts ended up floating far from
+          // the seed. Start from nothing and let the server refill the mirror.
           plantNodes.clear();
+          growingNodes.clear();
+          otherGrowingNodes.clear();
+          otherPlayerPlants.clear();
+          pruneNodesNotFromPlant();
           // Initialize with full node set from server (ADR-021).
           // WELCOME now carries all nodes for the player's own plant.
           if (welcome.nodes && welcome.nodes.length > 0) {
             for (const node of welcome.nodes) {
-              const typeMap: Record<string, number> = {
-                seed: 4,
-                radicle: 0,
-                root: 0,
-                lateral_root: 0,
-                stem: 1,
-                branch: 1,
-                vine: 2,
-                leaf: 3,
-                cotyledon: 3,
-                flower: 3,
-                spore_sac: 3,
-              };
-              const nodeTypeNum = typeMap[node.type] ?? 0;
-              // Use server-authoritative radius (Murray's law) if available
-              const radius = node.radius ?? nodeRadius(node.biomass, nodeTypeNum, node.y);
-              const health = Math.min(1, node.biomass / 10);
+              try {
+                const typeMap: Record<string, number> = {
+                  seed: 4,
+                  radicle: 0,
+                  root: 0,
+                  lateral_root: 0,
+                  stem: 1,
+                  branch: 1,
+                  vine: 2,
+                  leaf: 3,
+                  cotyledon: 3,
+                  flower: 3,
+                  spore_sac: 3,
+                };
+                const nodeTypeNum = typeMap[node.type] ?? 0;
+                // Use server-authoritative radius (Murray's law) if available
+                const radius = node.radius ?? nodeRadius(node.biomass, nodeTypeNum, node.y);
+                const health = Math.min(1, node.biomass / 10);
 
-              // Server-authoritative growth timing for nodes that are still growing
-              const SERVER_TICK_RATE_HZ = 20;
-              let spawnTime = performance.now();
-              let growthProgress = node.growthProgress ?? 1.0;
+                // Server-authoritative growth timing for nodes that are still growing
+                const SERVER_TICK_RATE_HZ = 20;
+                let spawnTime = performance.now();
+                let growthProgress = node.growthProgress ?? 1.0;
 
-              if (
-                node.growthTimeSeconds !== undefined &&
-                node.growthStartTick !== undefined &&
-                growthProgress < 1.0
-              ) {
-                const elapsedTicks = Math.max(0, serverTick - node.growthStartTick);
-                const serverProgress = Math.min(
-                  1,
-                  elapsedTicks / (node.growthTimeSeconds * SERVER_TICK_RATE_HZ),
-                );
-                growthProgress = node.growthProgress ?? serverProgress;
-                const totalMs = node.growthTimeSeconds * 1000;
-                spawnTime = performance.now() - growthProgress * totalMs;
-                // Back-date startTime so animation continues from server-reported progress, not 0.
-                growingNodes.set(node.id, {
-                  startTime: performance.now() - growthProgress * totalMs,
-                  duration: totalMs,
+                if (
+                  node.growthTimeSeconds !== undefined &&
+                  node.growthStartTick !== undefined &&
+                  growthProgress < 1.0
+                ) {
+                  const elapsedTicks = Math.max(0, serverTick - node.growthStartTick);
+                  const serverProgress = Math.min(
+                    1,
+                    elapsedTicks / (node.growthTimeSeconds * SERVER_TICK_RATE_HZ),
+                  );
+                  growthProgress = node.growthProgress ?? serverProgress;
+                  const totalMs = node.growthTimeSeconds * 1000;
+                  spawnTime = performance.now() - growthProgress * totalMs;
+                  // Back-date startTime so animation continues from server-reported progress, not 0.
+                  growingNodes.set(node.id, {
+                    startTime: performance.now() - growthProgress * totalMs,
+                    duration: totalMs,
+                  });
+                }
+
+                const nodeData: PlantNodeData = {
+                  id: node.id,
+                  position: surfacePosition(node.x, node.z, node.y),
+                  type: nodeTypeNum,
+                  radius,
+                  parentId: node.parentId,
+                  age: node.age,
+                  health,
+                  mutationFlags: readServerMutationMask(node),
+                  biomass: node.biomass,
+                  isOwnPlant: true,
+                  isSeed: node.isSeed ?? node.type === 'seed',
+                  nodeType: node.type,
+                  spawnTime,
+                  growthProgress,
+                  ...clientAttach(node.parentAttachX, node.parentAttachY, node.parentAttachZ),
+                  attachFraction: node.attachFraction,
+                  ...clientTarget(node.targetX, node.targetY, node.targetZ),
+                };
+                plantNodes.set(node.id, nodeData);
+                registerNodePhysics(nodeData);
+              } catch (err) {
+                console.warn('[PlantLegacy] Skipping malformed node in WELCOME:', {
+                  nodeId: node.id,
+                  error: err instanceof Error ? err.message : String(err),
                 });
               }
-
-              const nodeData: PlantNodeData = {
-                id: node.id,
-                position: new THREE.Vector3(node.x, node.y, node.z),
-                type: nodeTypeNum,
-                radius,
-                parentId: node.parentId,
-                age: node.age,
-                health,
-                mutationFlags: 0,
-                biomass: node.biomass,
-                isOwnPlant: true,
-                isSeed: node.isSeed ?? node.type === 'seed',
-                nodeType: node.type,
-                spawnTime,
-                growthProgress,
-                parentAttachX: node.parentAttachX,
-                parentAttachY: node.parentAttachY,
-                parentAttachZ: node.parentAttachZ,
-                targetX: node.targetX,
-                targetY: node.targetY,
-                targetZ: node.targetZ,
-              };
-              plantNodes.set(node.id, nodeData);
-              registerNodePhysics(nodeData);
             }
             plantBiomass = welcome.totalBiomass;
             plantEnergy = welcome.totalEnergy;
@@ -3764,17 +5238,13 @@ function connect(): void {
             // Fallback for older server without nodes in WELCOME
             const fallbackRoot: PlantNodeData = {
               id: welcome.rootNode.id,
-              position: new THREE.Vector3(
-                welcome.rootNode.x,
-                welcome.rootNode.y,
-                welcome.rootNode.z,
-              ),
+              position: surfacePosition(welcome.rootNode.x, welcome.rootNode.z, welcome.rootNode.y),
               type: 0, // root
               radius: nodeRadius(welcome.rootNode.biomass, 0, welcome.rootNode.y),
               parentId: null,
               age: 10,
               health: 0.9,
-              mutationFlags: 0,
+              mutationFlags: readServerMutationMask(welcome.rootNode),
               biomass: welcome.rootNode.biomass,
               isOwnPlant: true,
               isSeed: welcome.rootNode.type === 'seed',
@@ -3794,11 +5264,11 @@ function connect(): void {
             }
           }
 
-          // Focus camera on the player's plant (root/seed node)
-          const focusNode = Array.from(plantNodes.values()).find((n) => n.parentId === null);
-          if (focusNode) {
-            focusCameraOnNode(focusNode, true); // immediate = true for initial focus
-          }
+          // Camera framing stays with the gated block at the end of this
+          // handler: it runs only when the plant actually changed, so a
+          // same-plant reconnect leaves the view where the player put it.
+          // Focusing here unconditionally snapped the camera back on every
+          // WELCOME, including reconnects.
 
           // Clear other players' plants to avoid stale data on reconnect
           otherPlayerPlants.clear();
@@ -3849,20 +5319,29 @@ function connect(): void {
             break;
           }
           serverTick = state.tick;
-          console.debug('[PlantLegacy] STATE/KEYFRAME received:', {
-            type,
-            tick: state.tick,
-            plantCount: state.plants?.length ?? 0,
-          });
+          if (DEBUG_WS_LOG)
+            console.debug('[PlantLegacy] STATE/KEYFRAME received:', {
+              type,
+              tick: state.tick,
+              plantCount: state.plants?.length ?? 0,
+            });
           if (debugOverlay) {
             debugOverlay.recordBytes(0, event.data.length);
           }
-          // Update detail element with current server tick so UI shows live tick
-          setDetail(
-            `Server tick: ${serverTick}\n` +
-              `Biomass: ${plantBiomass.toFixed(1)} | Energy: ${plantEnergy.toFixed(1)}\n` +
-              `Plants: ${state.plants?.length ?? 0} | Own plant: ${plantId ?? 'none'}`,
-          );
+          // Live tick readout, throttled. Updating it on every packet meant
+          // rewriting a multi-line block 20 times a second; the numbers still
+          // move at a readable pace and the panel keeps one layout.
+          const stateTick = typeof state.tick === 'number' ? state.tick : serverTick;
+          if (stateTick - lastDetailTick >= 4) {
+            lastDetailTick = stateTick;
+            updateTickDetail(
+              `Server tick: ${serverTick}\n` +
+                `Biomass: ${plantBiomass.toFixed(1)} | Energy: ${plantEnergy.toFixed(1)}\n` +
+                `Water: ${plantWater.toFixed(1)}/${plantWaterCapacity.toFixed(0)} | ` +
+                `Minerals: ${plantMinerals.toFixed(1)}/${plantMineralCapacity.toFixed(0)}\n` +
+                `Plants: ${state.plants?.length ?? 0} | Own plant: ${plantIdLabel()}`,
+            );
+          }
           break;
         }
 
@@ -3883,9 +5362,19 @@ function connect(): void {
             totalBiomass?: number;
             storedWater?: number;
             storedMinerals?: number;
-            rootTileCount?: number;
+            waterCapacity?: number;
+            mineralCapacity?: number;
+            /** Tiles any part of the plant occupies, root or canopy. */
+            coveredTileCount?: number;
+            tileAvgLight?: number;
+            tileAvgMoisture?: number;
+            tileAvgMinerals?: number;
+            /** One covered tile, for the dev panel readout. */
+            coverageTileX?: number;
+            coverageTileZ?: number;
             fullGrid?: boolean;
             delta?: boolean;
+            gridBase64?: string;
           };
           if (serverTick !== 0 && Math.abs(update.tick - serverTick) > 1000) {
             console.warn('[PlantLegacy] Ignoring stale RESOURCE_UPDATE', {
@@ -3899,101 +5388,103 @@ function connect(): void {
           if (debugOverlay) {
             debugOverlay.recordBytes(0, event.data.length);
           }
-          console.debug('[PlantLegacy] RESOURCE_UPDATE received:', {
-            tick: update.tick,
-            tileCount: update.tiles?.length ?? 0,
-            totalEnergy: update.totalEnergy,
-            totalBiomass: update.totalBiomass,
-          });
-          const tile = update.tiles[0];
-          if (tile) {
-            console.debug('[PlantLegacy] Processing tile:', {
-              light: tile.light,
-              moisture: tile.moisture,
-              minerals: tile.minerals,
-              tileX: tile.tileX,
-              tileZ: tile.tileZ,
-              storedWater: update.storedWater,
-              storedMinerals: update.storedMinerals,
-              rootTileCount: update.rootTileCount,
+          if (DEBUG_WS_LOG)
+            console.debug('[PlantLegacy] RESOURCE_UPDATE received:', {
+              tick: update.tick,
+              tileCount: update.tiles?.length ?? 0,
+              totalEnergy: update.totalEnergy,
+              totalBiomass: update.totalBiomass,
             });
+          // Compact whole-grid updates carry no tile objects, only `gridBase64`.
+          const tile = update.tiles?.[0];
+          // The per-player update carries precomputed averages over every tile
+          // any part of the plant occupies; `tiles` is only present from older
+          // servers or the single-tile RESOURCE_QUERY reply.
+          const hasTileAverages =
+            update.tileAvgLight !== undefined &&
+            update.tileAvgMoisture !== undefined &&
+            update.tileAvgMinerals !== undefined;
+          if (tile || hasTileAverages) {
+            if (DEBUG_WS_LOG && tile)
+              console.debug('[PlantLegacy] Processing tile:', {
+                light: tile.light,
+                moisture: tile.moisture,
+                minerals: tile.minerals,
+                tileX: tile.tileX,
+                tileZ: tile.tileZ,
+                storedWater: update.storedWater,
+                storedMinerals: update.storedMinerals,
+                coveredTileCount: update.coveredTileCount,
+              });
             if (update.totalEnergy !== undefined) plantEnergy = update.totalEnergy;
             if (update.totalBiomass !== undefined) plantBiomass = update.totalBiomass;
+            if (update.storedWater !== undefined) plantWater = update.storedWater;
+            if (update.storedMinerals !== undefined) plantMinerals = update.storedMinerals;
+            if (update.waterCapacity !== undefined) plantWaterCapacity = update.waterCapacity;
+            if (update.mineralCapacity !== undefined) plantMineralCapacity = update.mineralCapacity;
 
             // Delta broadcasts contain arbitrary dirty tiles and full-grid
             // responses contain the whole world; neither represents the light
             // reaching this plant. Only the per-player root-tile update does.
             const isLocalTileUpdate = update.delta !== true && update.fullGrid !== true;
-            if (isLocalTileUpdate && update.tiles.length > 0) {
-              let lightSum = 0;
-              let moistureSum = 0;
-              let mineralsSum = 0;
-              for (const t of update.tiles) {
-                lightSum += t.light;
-                moistureSum += t.moisture;
-                mineralsSum += t.minerals;
+            if (isLocalTileUpdate) {
+              if (hasTileAverages) {
+                tileLight = update.tileAvgLight ?? 0;
+                tileWater = update.tileAvgMoisture ?? 0;
+                tileMinerals = update.tileAvgMinerals ?? 0;
+              } else if (update.tiles && update.tiles.length > 0) {
+                let lightSum = 0;
+                let moistureSum = 0;
+                let mineralsSum = 0;
+                for (const t of update.tiles) {
+                  lightSum += t.light;
+                  moistureSum += t.moisture;
+                  mineralsSum += t.minerals;
+                }
+                const count = update.tiles.length;
+                tileLight = lightSum / count;
+                tileWater = moistureSum / count;
+                tileMinerals = mineralsSum / count;
               }
-              const count = update.tiles.length;
-              tileLight = lightSum / count;
-              tileWater = moistureSum / count;
-              tileMinerals = mineralsSum / count;
             }
 
             // Use plant's stored resources for growth panel
             storedWater = update.storedWater ?? 0;
             storedMinerals = update.storedMinerals ?? 0;
+            // Refresh on every update that carries plant totals: a seed with no
+            // root tiles receives no local-tile packet, and gating on that left
+            // the whole readout stuck at its placeholder zeros.
+            updateResourceReadout(
+              tileLight,
+              tileWater,
+              tileMinerals,
+              plantBiomass,
+              plantEnergy,
+              plantWater,
+              plantMinerals,
+              plantWaterCapacity,
+              plantMineralCapacity,
+            );
             if (isLocalTileUpdate) {
-              updateResourceReadout(
-                tileLight,
-                tileWater,
-                tileMinerals,
-                plantBiomass,
-                plantEnergy,
-                storedWater,
-                storedMinerals,
-              );
               // Sky grade follows the light reaching the local tiles.
               environmentRenderer?.setLocalTileLight(tileLight);
               // Update dev panel tile info
               if (devPanel?.updateTileInfo) {
-                devPanel.updateTileInfo(tile.tileX ?? 0, tile.tileZ ?? 0, {
-                  light: tileLight,
-                  moisture: tileWater,
-                  minerals: tileMinerals,
-                  storedWater,
-                  storedMinerals,
-                  rootTileCount: update.rootTileCount ?? 1,
-                });
+                devPanel.updateTileInfo(
+                  update.coverageTileX ?? tile?.tileX ?? 0,
+                  update.coverageTileZ ?? tile?.tileZ ?? 0,
+                  {
+                    light: tileLight,
+                    moisture: tileWater,
+                    minerals: tileMinerals,
+                    storedWater,
+                    storedMinerals,
+                    coveredTileCount: update.coveredTileCount ?? 1,
+                  },
+                );
               }
             }
 
-            // Handle full resource grid for ground rendering
-            if (update.fullGrid && update.width && update.height) {
-              environmentRenderer?.setResourceGrid(
-                update.tiles as Array<{
-                  tileX: number;
-                  tileZ: number;
-                  light: number;
-                  moisture: number;
-                  minerals: number;
-                }>,
-                update.width,
-                update.height,
-                update.tileSize,
-              );
-            }
-            // Handle delta (dirty tiles) - merge into existing grid
-            if (update.delta && update.width && update.height) {
-              environmentRenderer?.updateResourceGrid(
-                update.tiles as Array<{
-                  tileX: number;
-                  tileZ: number;
-                  light: number;
-                  moisture: number;
-                  minerals: number;
-                }>,
-              );
-            }
             // Update growth panel if visible with live resource values
             if (
               isLocalTileUpdate &&
@@ -4008,15 +5499,70 @@ function connect(): void {
               growthSelectionMachine.conditions.storedMinerals = storedMinerals;
               const parts = prepareGrowthPanel(growthSelectionMachine.selectedNodeId);
               if (parts) {
-                const infoLines = [
-                  `Biomass: ${plantBiomass.toFixed(1)} | Energy: ${plantEnergy.toFixed(1)}`,
-                  `Light: ${tileLight.toFixed(0)} / ${growthSelectionMachine.conditions.minLight.toFixed(0)} | Moisture: ${tileWater.toFixed(0)} / ${growthSelectionMachine.conditions.minMoisture.toFixed(0)}`,
-                  `Stored Water: ${storedWater.toFixed(1)} | Stored Minerals: ${storedMinerals.toFixed(1)}`,
-                ];
-                parts.infoEl.innerHTML = infoLines.map((line) => `<div>${line}</div>`).join('');
+                // Info display removed - growth panel is minimal now
               }
             }
           }
+
+          // Ground grid updates are handled for every variant, including the
+          // compact ones that carry no tile objects at all (`tiles` absent).
+          if (update.width && update.height) {
+            if (update.fullGrid) {
+              resourceGridReceivedAt = performance.now();
+              if (update.gridBase64) {
+                pendingResourceGrid = {
+                  gridBase64: update.gridBase64,
+                  width: update.width,
+                  height: update.height,
+                  tileSize: update.tileSize,
+                };
+              } else if (update.tiles) {
+                environmentRenderer?.setResourceGrid(
+                  update.tiles as Array<{
+                    tileX: number;
+                    tileZ: number;
+                    light: number;
+                    moisture: number;
+                    minerals: number;
+                  }>,
+                  update.width,
+                  update.height,
+                  update.tileSize,
+                );
+              }
+            } else if (update.gridBase64) {
+              // One decode + one texture upload instead of 65 000 tile objects.
+              environmentRenderer?.updateResourceGridQuantized(
+                update.gridBase64,
+                update.width,
+                update.height,
+                update.tileSize,
+              );
+            } else if (update.delta && update.tiles) {
+              environmentRenderer?.updateResourceGrid(
+                update.tiles as Array<{
+                  tileX: number;
+                  tileZ: number;
+                  light: number;
+                  moisture: number;
+                  minerals: number;
+                }>,
+              );
+            }
+          }
+          break;
+        }
+
+        case MESSAGE_TYPE.SEASON_UPDATE: {
+          const season = payload as {
+            season: number;
+            remainingSeconds: number;
+            calamity?: boolean;
+          };
+          seasonNumber = season.season;
+          seasonEndsAtMs = performance.now() + Math.max(0, season.remainingSeconds) * 1000;
+          updateSeasonChip();
+          if (season.calamity) setDetail(`Season ${season.season} begins.`);
           break;
         }
 
@@ -4127,7 +5673,7 @@ function connect(): void {
 
             return {
               id: node.id,
-              position: new THREE.Vector3(node.x, node.y, node.z),
+              position: surfacePosition(node.x, node.z, node.y),
               type: nodeTypeNum,
               // Use server-authoritative radius (Murray's law) if available
               radius: node.radius ?? nodeRadius(node.biomass, nodeTypeNum, node.y),
@@ -4135,7 +5681,7 @@ function connect(): void {
               children: node.children ?? existing?.children ?? [],
               age: node.age,
               health: Math.min(1, node.biomass / 10),
-              mutationFlags: 0,
+              mutationFlags: readServerMutationMask(node),
               biomass: node.biomass,
               isOwnPlant,
               isSeed: node.isSeed ?? node.type === 'seed',
@@ -4144,14 +5690,10 @@ function connect(): void {
                 node.layer === 'canopy' ? 'canopy' : node.layer === 'root' ? 'root' : undefined,
               spawnTime,
               growthProgress,
-              // Server-authoritative parent attachment position
-              parentAttachX: node.parentAttachX,
-              parentAttachY: node.parentAttachY,
-              parentAttachZ: node.parentAttachZ,
-              // Server-authoritative target position for connected growth rendering
-              targetX: node.targetX,
-              targetY: node.targetY,
-              targetZ: node.targetZ,
+              // Server-authoritative attachment and target, mapped into draw space.
+              ...clientAttach(node.parentAttachX, node.parentAttachY, node.parentAttachZ),
+              attachFraction: node.attachFraction,
+              ...clientTarget(node.targetX, node.targetY, node.targetZ),
             };
           };
 
@@ -4199,16 +5741,18 @@ function connect(): void {
             }
             plantBiomass = growth.totalBiomass ?? plantBiomass;
             plantEnergy = growth.totalEnergy ?? plantEnergy;
-            // Track growth sequence from server for gap detection (Phase 1.5)
+            // Gap detection has to run BEFORE the mirror adopts the new
+            // sequence number: assigning first set the two equal, so a skipped
+            // event (e.g. both cotyledons while the client was busy) could
+            // never be seen and the client kept a plant with fewer parts than
+            // the server had. Any jump of more than one means events went
+            // missing, and one resync fills the mirror back in.
             const serverGrowthSeq = growth.growthSeq ?? 0;
-            if (serverGrowthSeq > plantGrowthSeq) {
-              plantGrowthSeq = serverGrowthSeq;
-            } else if (serverGrowthSeq < plantGrowthSeq) {
-              // Server sequence behind - potential desync, request resync
-              checkPlantGrowthGap(serverGrowthSeq + PLANT_MAX_GAP_BEFORE_RESYNC);
+            if (plantGrowthSeq > 0 && serverGrowthSeq > plantGrowthSeq + 1) {
+              requestPlantResync();
             }
-            // Check for gap in growth sequence
-            checkPlantGrowthGap(plantGrowthSeq);
+            plantGrowthSeq = Math.max(plantGrowthSeq, serverGrowthSeq);
+            pruneNodesNotFromPlant();
             // Keep the last tile readings; growth must not blank the HUD.
             updateResourceReadout(
               tileLight,
@@ -4238,7 +5782,7 @@ function connect(): void {
             const lastNode = incomingNodes[incomingNodes.length - 1] ?? updatedParent;
             if (lastNode) {
               setDetail(
-                `Grew ${lastNode.type} #${plantNodes.size} at (${lastNode.x.toFixed(1)}, ${lastNode.y.toFixed(1)}, ${lastNode.z.toFixed(1)}) — Biomass: ${plantBiomass.toFixed(1)}, Energy: ${plantEnergy.toFixed(1)}`,
+                `Grew ${lastNode.type} #${plantNodes.size} at (${lastNode.x.toFixed(1)}, ${lastNode.y.toFixed(1)}, ${lastNode.z.toFixed(1)}) - Biomass: ${plantBiomass.toFixed(1)}, Energy: ${plantEnergy.toFixed(1)}`,
               );
             }
           } else {
@@ -4308,6 +5852,7 @@ function connect(): void {
         }
 
         case MESSAGE_TYPE.GROWTH_OPTIONS_RESULT: {
+          clearGrowthOptionsTimeout();
           const response = payload as {
             nodeId?: string;
             nodeType?: string;
@@ -4340,7 +5885,7 @@ function connect(): void {
               response.error === 'node_not_found'
                 ? 'That node is no longer part of your plant.'
                 : response.error === 'plant_mismatch'
-                  ? 'Plant mismatch — refresh to sync.'
+                  ? 'Plant mismatch - refresh to sync.'
                   : 'Could not load growth options.';
             hideGrowthSelection();
             setDetail(reason);
@@ -4360,9 +5905,15 @@ function connect(): void {
 
         case MESSAGE_TYPE.REJECT: {
           const reject = payload as RejectPayload;
+          // Quantify the germination gate: the last known tile readings and
+          // thresholds are already in the growth state machine.
+          const germConditions = growthSelectionMachine.conditions;
+          const germinationNumbers = germConditions
+            ? ` (tile moisture ${germConditions.moisture.toFixed(1)} / needs ${germConditions.minMoisture}, light ${germConditions.light.toFixed(1)} / needs ${germConditions.minLight})`
+            : '';
           const readableReason =
             reject.reason === 'growth_on_cooldown'
-              ? 'Cooldown (0.5s) — wait a moment to grow'
+              ? 'Cooldown (0.5s) - wait a moment to grow'
               : reject.reason === 'insufficient_biomass' ||
                   reject.reason === 'insufficient_biomass_for_node'
                 ? 'Insufficient biomass to grow'
@@ -4370,7 +5921,7 @@ function connect(): void {
                   ? 'Cannot cross layer directly'
                   : reject.reason === 'insufficient_energy_for_node' ||
                       reject.reason === 'insufficient_energy'
-                    ? 'Not enough energy — grow leaves to photosynthesize'
+                    ? 'Not enough energy - grow leaves to photosynthesize'
                     : reject.reason === 'insufficient_energy_for_germination'
                       ? 'Not enough energy to germinate'
                       : reject.reason === 'Roots must grow mostly downward' ||
@@ -4378,19 +5929,19 @@ function connect(): void {
                           reject.reason ===
                             'Root growth must trend below the selected node (can arc near surface, but not mostly upward)' ||
                           reject.reason === 'Root growth direction too horizontal'
-                        ? 'Root direction too shallow/horizontal — trace a route that ends clearly below the node (it can arc near the surface)'
+                        ? 'Root direction too shallow/horizontal - trace a route that ends clearly below the node (it can arc near the surface)'
                         : reject.reason === 'Cotyledons must grow upward'
-                          ? 'Cotyledon direction too low — drag upward/outward'
+                          ? 'Cotyledon direction too low - drag upward/outward'
                           : reject.reason === 'germination_failed_conditions'
-                            ? 'Germination failed: light or moisture was below the threshold — the seed died.'
+                            ? `Germination failed: light or moisture was below the threshold${germinationNumbers} - the seed died.`
                             : reject.reason === 'germination_conditions_not_met'
-                              ? 'Germination failed: light or moisture was below the threshold.'
+                              ? `Germination failed: light or moisture was below the threshold${germinationNumbers}.`
                               : reject.reason === 'plant_not_found'
-                                ? 'Plant not found — refresh to get a new seed'
+                                ? 'Plant not found - refresh to get a new seed'
                                 : reject.reason === 'plant_mismatch'
-                                  ? 'Plant mismatch — refresh to sync'
+                                  ? 'Plant mismatch - refresh to sync'
                                   : reject.reason === 'parent_node_not_found'
-                                    ? 'Parent node not found — plant may have changed'
+                                    ? 'Parent node not found - plant may have changed'
                                     : reject.reason === 'out_of_bounds'
                                       ? 'Growth would go out of world bounds'
                                       : reject.reason === 'invalid_direction'
@@ -4419,23 +5970,47 @@ function connect(): void {
           const error = payload as ErrorPayload;
           console.log('[PlantLegacy] ERROR received:', error);
           setDetail(`ERROR: ${error.code} - ${error.message}`);
+          if (error.code === 'SESSION_REPLACED') {
+            // The same account opened somewhere else and the server kicked this
+            // socket. Reconnecting would quietly come back as a guest.
+            suppressReconnect = true;
+            clearReconnectData();
+            updateAccountChip();
+            entryFlowConnectionFailed(
+              entryFlow,
+              'Signed in on another device. Sign in again to continue.',
+            );
+            entryScreen.render(entryFlow);
+          }
+          if (error.code === 'AUTH_FAILED') {
+            // The socket is about to close with 4001; the stored session is dead.
+            clearReconnectData();
+            updateAccountChip();
+            entryFlowConnectionFailed(entryFlow, 'Your session expired. Sign in again.');
+            entryScreen.render(entryFlow);
+          }
           break;
         }
 
         case MESSAGE_TYPE.DEV_RESPONSE: {
           const response = payload as {
+            action?: string;
+            ok?: boolean;
             success?: boolean;
+            error?: string;
             message?: string;
             [key: string]: unknown;
           };
           console.log('[PlantLegacy] DEV_RESPONSE received:', response);
-          const msg = response.success
-            ? 'âœ“ Dev command succeeded'
-            : `âœ— Dev command failed: ${response.message ?? 'unknown'}`;
+          // The server answers `{ ok, error }`. Reading `success`/`message`
+          // instead labelled every successful dev action a failure.
+          const ok = response.ok ?? response.success ?? true;
+          const failure = response.error ?? response.message;
+          const msg = ok ? 'Dev command applied' : `Dev command refused: ${failure ?? 'unknown'}`;
           setDetail(msg);
           uiShell?.toast({
             message: msg,
-            kind: response.success ? 'state' : 'error',
+            kind: ok ? 'state' : 'error',
             durationMs: 3000,
           });
           break;
@@ -4477,6 +6052,7 @@ function connect(): void {
                 parentAttachX?: number;
                 parentAttachY?: number;
                 parentAttachZ?: number;
+                attachFraction?: number;
                 // Server-authoritative target position for connected growth rendering
                 targetX?: number;
                 targetY?: number;
@@ -4542,6 +6118,7 @@ function connect(): void {
                 parentAttachX?: number;
                 parentAttachY?: number;
                 parentAttachZ?: number;
+                attachFraction?: number;
                 growthTimeSeconds?: number;
                 // Server-authoritative target position for connected growth rendering
                 targetX?: number;
@@ -4578,27 +6155,23 @@ function connect(): void {
 
               target.set(node.id, {
                 id: node.id,
-                position: new THREE.Vector3(node.x, node.y, node.z),
+                position: surfacePosition(node.x, node.z, node.y),
                 type: nodeTypeNum,
                 radius,
                 parentId: node.parentId,
                 age: node.age,
                 health,
-                mutationFlags: 0,
+                mutationFlags: readServerMutationMask(node),
                 biomass: node.biomass,
                 isOwnPlant: isOwn,
                 isSeed: node.isSeed ?? node.type === 'seed',
                 nodeType: node.type,
                 spawnTime,
                 growthProgress,
-                // Server-authoritative parent attachment position
-                parentAttachX: node.parentAttachX,
-                parentAttachY: node.parentAttachY,
-                parentAttachZ: node.parentAttachZ,
-                // Server-authoritative target position for connected growth rendering
-                targetX: node.targetX,
-                targetY: node.targetY,
-                targetZ: node.targetZ,
+                // Server-authoritative attachment and target, mapped into draw space.
+                ...clientAttach(node.parentAttachX, node.parentAttachY, node.parentAttachZ),
+                attachFraction: node.attachFraction,
+                ...clientTarget(node.targetX, node.targetY, node.targetZ),
                 growthTimeSeconds: node.growthTimeSeconds,
               });
             }
@@ -4707,15 +6280,12 @@ function connect(): void {
                 growthDirectionBias: string;
                 lastGrowthTick: number;
                 isSeed?: boolean;
+                /** Server-authoritative drawn radius, in metres. */
+                radius?: number;
               }>;
             };
           };
-          console.log('[PlantLegacy] PLANT_CREATED received:', {
-            plantId: created.plant.id,
-            ownerId: created.plant.ownerId,
-            nodeCount: created.plant.nodes?.length ?? 0,
-            biomass: created.plant.totalBiomass,
-          });
+
           const typeMap: Record<string, number> = {
             seed: 4,
             radicle: 0,
@@ -4749,17 +6319,17 @@ function connect(): void {
           >();
           for (const node of created.plant.nodes) {
             const nodeTypeNum = typeMap[node.type] ?? 0;
-            const radius = nodeRadius(node.biomass, nodeTypeNum);
+            const radius = node.radius ?? nodeRadius(node.biomass, nodeTypeNum);
             const health = Math.min(1, node.biomass / 10);
             otherPlant.set(node.id, {
               id: node.id,
-              position: new THREE.Vector3(node.x, node.y, node.z),
+              position: surfacePosition(node.x, node.z, node.y),
               type: nodeTypeNum,
               radius,
               parentId: node.parentId,
               age: node.age,
               health,
-              mutationFlags: 0,
+              mutationFlags: readServerMutationMask(node),
               biomass: node.biomass,
               isOwnPlant: false,
               isSeed: node.isSeed ?? node.type === 'seed',
@@ -4792,7 +6362,7 @@ function connect(): void {
         }
 
         case MESSAGE_TYPE.PLANT_REMOVED: {
-          const removed = payload as { plantId: string };
+          const removed = payload as { plantId: string; cause?: string };
           console.log('[PlantLegacy] PLANT_REMOVED received:', {
             plantId: removed.plantId,
             isOwnPlant: removed.plantId === plantId,
@@ -4806,7 +6376,9 @@ function connect(): void {
             plantReady = false;
             // Reset plant mirror (Phase 1.5)
             resetPlantMirror();
-            clearReconnectData();
+            // Keep the account session: losing a plant must not sign the player
+            // out, or the next seed silently belongs to nobody.
+            clearPlantIdentity();
             hideGrowthSelection();
             setRootSightEnabled(false, removed.plantId);
             plantBiomass = 0;
@@ -4822,7 +6394,18 @@ function connect(): void {
             );
             if (plantRenderer) plantRenderer.updatePlantData([]);
             if (webgpuRenderer) webgpuRenderer.updatePlants([], performance.now());
-            setDetail('Your plant died. Reload to plant a new seed.');
+            setDetail('Your plant died.');
+            // Reloading was the only way to get a seed back; offer it explicitly.
+            // A cause we do not recognise falls back to the neutral line rather
+            // than printing the raw enum, and `removed` is administrative rather
+            // than something that happened to the plant.
+            entryFlowPlantLost(
+              entryFlow,
+              removed.cause && removed.cause !== 'removed'
+                ? describeDeathCause(removed.cause)
+                : null,
+            );
+            entryScreen.render(entryFlow);
             break;
           }
           if (otherPlayerPlants.delete(removed.plantId)) {
@@ -4852,8 +6435,16 @@ function connect(): void {
           break;
         }
 
-        case MESSAGE_TYPE.PONG:
+        case MESSAGE_TYPE.PONG: {
+          if (pingSentAt !== null) {
+            const rtt = Math.round(performance.now() - pingSentAt);
+            pingSentAt = null;
+            // Round-trips above the configured threshold feel like a bad link.
+            if (rtt > networkConfig.slowRttMs) setStatus(`Slow connection (${rtt} ms)`, 'down');
+            else setStatus(`Connected (${rtt} ms)`, 'ok');
+          }
           break;
+        }
 
         case MESSAGE_TYPE.CHAT_BROADCAST: {
           const chat = payload as {
@@ -4867,7 +6458,12 @@ function connect(): void {
           if (chat.type === 'emote' && chat.emoteId) {
             showEmoteAbovePlant(chat.playerId, chat.playerName, chat.emoteId);
           } else if (chat?.message) {
-            addChatMessage(chat.playerName, chat.message, chat.playerId === playerId);
+            addChatMessage(
+              chat.playerId,
+              chat.playerName,
+              chat.message,
+              chat.playerId === playerId,
+            );
           }
           break;
         }
@@ -4876,12 +6472,16 @@ function connect(): void {
           console.warn('Unknown message type:', type);
       }
 
-      // Frame camera on first spawn (after WELCOME). ADR-027: close framing on
-      // the normal-sized plant model; the model itself is not enlarged.
+      // Frame camera on first spawn (after WELCOME), and again only when the
+      // plant itself changed. A same-plant reconnect leaves the view alone.
+      // ADR-027: close framing on the normal-sized plant model; the model itself
+      // is not enlarged.
       // Guard on `welcome` (not `welcome.rootNode`) so initPlantRenderer() runs
       // even when all nodes arrive via welcome.nodes (ADR-021 fast-path).
-      if (welcome && !cameraFramed) {
+      const plantChanged = welcome !== null && welcome.plantId !== framedPlantId;
+      if (welcome && (!cameraFramed || plantChanged)) {
         cameraFramed = true;
+        framedPlantId = welcome.plantId;
         if (welcome.rootNode) {
           frameCameraOnPlant(welcome.rootNode.x, welcome.rootNode.y, welcome.rootNode.z);
         } else {
@@ -4891,12 +6491,19 @@ function connect(): void {
             frameCameraOnPlant(firstNode.position.x, firstNode.position.y, firstNode.position.z);
           }
         }
+        // Spawn high above the ground and let the player fall in, rather than
+        // starting the rig embedded in the terrain it is standing on.
+        respawnPlayer();
+
         setDetail(
-          `Welcome! Player ID: ${playerId}\nServer tick: ${serverTick}\nClick your plant to grow. Press H for hints.`,
+          `Welcome! Player ID: …${(playerId ?? '').slice(-8)}\nServer tick: ${serverTick}\nClick your plant to grow. Press H for hints.`,
         );
-        // T00A: Load onboarding config and init renderer on first spawn
-        await loadOnboardingConfig();
-        await initPlantRenderer();
+        // T00A: Load onboarding config and init renderer once per page load
+        if (!clientInitialized) {
+          clientInitialized = true;
+          await loadOnboardingConfig();
+          await initPlantRenderer();
+        }
       }
     } catch (error) {
       console.error('Failed to parse message:', error);
@@ -4907,15 +6514,32 @@ function connect(): void {
   };
 
   ws.onclose = (event) => {
+    if (suppressReconnect) {
+      // Signing out closes the socket on purpose. The retry below would connect
+      // straight back as a guest, which looks exactly like being signed in.
+      suppressReconnect = false;
+      connecting = false;
+      setStatus('Offline', 'down');
+      return;
+    }
     connecting = false;
     plantId = null;
     plantReady = false;
-    cameraFramed = false;
+    // Deliberately NOT reset: the player keeps their chosen framing across a
+    // dropped socket (server restart, tunnel blip). Space / double-click still
+    // recenter on demand.
     hideGrowthSelection();
     rootSightActivePlants.clear();
+    otherPlayerPlants.clear();
+    otherGrowingNodes.clear();
+    clearGrowthOptionsTimeout();
     setRootSightEnabled(false);
     setStatus('Disconnected', 'down');
     setDetail(`Connection closed: code=${event.code}, reason=${event.reason || 'none'}`);
+    if (entryFlow.step === 'connecting') {
+      entryFlowConnectionFailed(entryFlow, 'Could not reach the server.');
+      entryScreen.render(entryFlow);
+    }
     setTimeout(connect, 3000);
   };
 
@@ -4930,10 +6554,6 @@ window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
-  if (growthDirectionOverlay) {
-    growthDirectionOverlay.width = window.innerWidth;
-    growthDirectionOverlay.height = window.innerHeight;
-  }
   if (plantRenderer) {
     plantRenderer.setViewportSize(renderer.domElement.width, renderer.domElement.height);
     plantRenderer.onResize();
@@ -4973,6 +6593,22 @@ window.addEventListener(
 
 window.addEventListener('gesturestart', (e) => e.preventDefault(), { passive: false });
 
+// If the window loses focus mid-press the matching keyup never arrives, which
+// used to leave the camera dollying (or panning) on its own. Release every held
+// camera input so the view stays wherever the player left it.
+function releaseHeldCameraInput(): void {
+  keyboardZoomState.in = false;
+  keyboardZoomState.out = false;
+  cameraPanState.forward = false;
+  cameraPanState.backward = false;
+  cameraPanState.left = false;
+  cameraPanState.right = false;
+}
+window.addEventListener('blur', releaseHeldCameraInput);
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) releaseHeldCameraInput();
+});
+
 // Aggressive zoom reset: if page somehow gets zoomed, force reset to 1.0
 let zoomCheckTimer: number | null = null;
 function enforceNoZoom(): void {
@@ -4996,37 +6632,88 @@ window.addEventListener('beforeunload', () => {
 // Render loop
 let measuredFps = 60;
 
+/**
+ * Spring-arm collision: when the line from the orbit target to the camera
+ * crosses a solid collider (the terrain), pull the camera in front of the
+ * obstruction instead of letting it clip through the ground.
+ */
+function resolveCameraCollision(): void {
+  if (planetViewActive) return;
+  if (!physicsReady || !rapierWorld.isReady) return;
+  if (!renderConfig?.cameraCollisionEnabled) return;
+
+  const target = controls.target;
+  // Going below the surface is deliberate (Root Sight, inspecting roots). The
+  // spring arm used to treat the ground as an obstruction the moment the camera
+  // sank into it: with the root-layer minimum distance it clamped the camera to
+  // a few centimetres from the target and then chased the changing hit every
+  // frame, which is the spasming that shoved the view back up. Underground, the
+  // ground is the subject, not an obstruction.
+  if (camera.position.y < 0 || target.y < 0) return;
+  tempCameraOffset.copy(camera.position).sub(target);
+  const distance = tempCameraOffset.length();
+  if (distance <= 1e-4) return;
+  tempCameraOffset.divideScalar(distance);
+
+  const ray = new RAPIER.Ray(target, tempCameraOffset);
+  const hit = rapierWorld.getWorld().castRay(ray, distance, true);
+  if (!hit) return;
+
+  const hitRecord = hit as unknown as {
+    timeOfImpact?: number;
+    toi?: number;
+    collider?: unknown;
+  };
+  // The ground never blocks the view: it is a surface the orbit target sits on,
+  // not an obstacle between the eye and the subject.
+  if (soilColliderRef.current && hitRecord.collider === soilColliderRef.current) return;
+  if (terrainColliderRef.current && hitRecord.collider === terrainColliderRef.current) return;
+  const travel = hitRecord.timeOfImpact ?? hitRecord.toi ?? distance;
+  if (travel >= distance) return;
+
+  const minDistance = currentCameraMinDistance();
+  const margin = renderConfig.cameraCollisionMargin;
+  // A hit this close to the target cannot be avoided by pulling the camera in:
+  // it would land inside the target. The orbit target sits on the ground the
+  // plant grows from, so the spring-arm ray grazes that ground every frame; the
+  // old unconditional clamp to cameraMinDistance therefore pinned the camera at
+  // arm's length and made the view feel locked. Grazing hits are ignored.
+  if (travel <= minDistance + margin) return;
+
+  const clamped = Math.max(minDistance, travel - margin);
+  camera.position.copy(target).addScaledVector(tempCameraOffset, clamped);
+}
+
 // Shared render frame logic (used by both requestAnimationFrame and background setInterval)
 function renderFrame(deltaTime: number): void {
   // WASD / arrows pan the camera and its target together (ADR-022).
   applyCameraPan(deltaTime);
+  // Gravity and ground contact for the player. Runs every frame, after the pan,
+  // so the terrain under the new position is what the player stands on.
+  settlePlayerOnGround(deltaTime);
 
-  // Smooth keyboard camera zoom (- and + keys)
+  // - and + dolly the camera backwards and forwards along its own view axis.
+  // The camera is a physical object here: the distance to the orbit target
+  // changes by cameraZoomSpeed metres per second, the field of view never does.
   if (keyboardZoomState.in || keyboardZoomState.out) {
     const currentDist = camera.position.distanceTo(controls.target);
-    // Zoom rate from config; scales by current distance for smooth logarithmic feel
-    const zoomRate = renderConfig?.cameraZoomSpeed ?? 2.0;
+    const dollySpeed = renderConfig?.cameraZoomSpeed ?? 2.0;
     let delta = 0;
-    if (keyboardZoomState.in) delta -= currentDist * zoomRate * deltaTime;
-    if (keyboardZoomState.out) delta += currentDist * zoomRate * deltaTime;
+    if (keyboardZoomState.in) delta -= dollySpeed * deltaTime;
+    if (keyboardZoomState.out) delta += dollySpeed * deltaTime;
 
-    const minD = controls.minDistance || 0.5;
-    const maxD = controls.maxDistance || 100;
+    // Bounded by the orbit limits, so the camera stops at arm's length instead
+    // of ending up inside the plant.
+    const minD = Math.max(0.05, currentCameraMinDistance());
+    const maxD = Math.min(
+      camera.far * 0.9,
+      renderConfig?.cameraMaxDistance ?? controls.maxDistance ?? Infinity,
+    );
     const newDist = Math.max(minD, Math.min(maxD, currentDist + delta));
 
-    const dir = camera.position.clone().sub(controls.target).normalize();
-    camera.position.copy(controls.target).addScaledVector(dir, newDist);
+    tempVector.copy(camera.position).sub(controls.target).normalize();
+    camera.position.copy(controls.target).addScaledVector(tempVector, newDist);
     targetCameraDistance = -1; // Manual zoom takes precedence
-  }
-
-  // Smooth camera target recenter/focus on selected or growing node
-  if (isCameraFocusing) {
-    const t = Math.min(1.0, deltaTime * CAMERA_FOCUS_LERP_SPEED);
-    controls.target.lerp(cameraFocusTarget, t);
-    if (controls.target.distanceTo(cameraFocusTarget) < 0.005) {
-      controls.target.copy(cameraFocusTarget);
-      isCameraFocusing = false;
-    }
   }
 
   // Smooth camera distance framing
@@ -5034,14 +6721,37 @@ function renderFrame(deltaTime: number): void {
     const currentDist = camera.position.distanceTo(controls.target);
     const distT = Math.min(1.0, deltaTime * 3.5);
     const newDist = THREE.MathUtils.lerp(currentDist, targetCameraDistance, distT);
-    const dir = camera.position.clone().sub(controls.target).normalize();
-    camera.position.copy(controls.target).addScaledVector(dir, newDist);
+    tempVector.copy(camera.position).sub(controls.target).normalize();
+    camera.position.copy(controls.target).addScaledVector(tempVector, newDist);
     if (Math.abs(currentDist - targetCameraDistance) < 0.02) {
       targetCameraDistance = -1;
     }
   }
 
+  // Camera up follows the surface normal at the look-at point. The orbit/pan
+  // math is kept in that frame too, otherwise the controls rotate around world
+  // Y while the camera looks along the normal and the two fight each other.
+  applyCameraUp(desiredCameraUp(cameraUpTarget));
+
+  // The orbit floor follows what is being inspected: plant-sized above ground,
+  // root-tip-sized in the root layer. Planet view sets its own floors.
+  if (!planetViewActive) {
+    const orbitMinDistance = currentCameraMinDistance();
+    controls.minDistance = orbitMinDistance;
+  }
   controls.update();
+  resolveCameraCollision();
+  // OrbitControls only applies minDistance while dollies are in progress, so
+  // enforce the floor here too: after leaving the root layer the camera must be
+  // pushed back out of the plant instead of staying inside it.
+  if (!planetViewActive) {
+    const orbitMinDistance = currentCameraMinDistance();
+    const orbitDistance = camera.position.distanceTo(controls.target);
+    if (orbitDistance < orbitMinDistance - 1e-4) {
+      tempVector.copy(camera.position).sub(controls.target).normalize();
+      camera.position.copy(controls.target).addScaledVector(tempVector, orbitMinDistance);
+    }
+  }
 
   // Update selection marker orientation to face camera (billboard)
   // T02: Update Root Sight transition and cutaway state
@@ -5066,6 +6776,10 @@ function renderFrame(deltaTime: number): void {
       if (progress >= 1.0) {
         node.growthProgress = 1.0;
         growingNodes.delete(nodeId);
+        // The server owns the final position of a finished segment. Pull it now,
+        // otherwise the node keeps the position it had when growth started and
+        // the new part looks detached from the plant.
+        requestPlantResync();
       } else {
         node.growthProgress = progress;
       }
@@ -5111,15 +6825,44 @@ function renderFrame(deltaTime: number): void {
     webgpuRenderer.update(deltaTime);
   }
 
+  // Apply a full grid that arrived before the environment renderer was ready.
+  if (pendingResourceGrid && environmentRenderer) {
+    const grid = pendingResourceGrid;
+    pendingResourceGrid = null;
+    environmentRenderer.updateResourceGridQuantized(
+      grid.gridBase64,
+      grid.width,
+      grid.height,
+      grid.tileSize,
+    );
+  }
+
   // C03: Update environment renderer (sky dome, fog, rain particles, lightning)
   if (environmentRenderer) {
+    // Underground Root Sight view: no sky, no surface sheet, dark earth instead.
+    const undergroundView =
+      camera.position.y < -0.05 &&
+      (rootSightMachine ? rootSightStateMachineIsEnabled(rootSightMachine) : false);
+    webgpuRenderer?.setUndergroundView(undergroundView);
     environmentRenderer.update(deltaTime);
+    updateGrowthDebug();
+    // Keep WebGPU plant/ground lighting in sync with the visual sun every frame.
+    webgpuRenderer?.setSunDirection(environmentRenderer.getSunDirection());
+    webgpuRenderer?.setSoilMoisture(environmentRenderer.getSoilMoisture());
   }
 
   // Step Rapier physics and sync body transforms to Three.js meshes
   if (physicsReady && rapierWorld.isReady) {
     rapierWorld.step();
     plantPhysicsSync.syncTransforms();
+  }
+
+  // Safety net: a dropped growth event would otherwise leave the mirror short of
+  // nodes until the next reconnect (a plant stuck at seed + radicle while the
+  // server has a seedling). A cheap periodic sync repairs any gap.
+  if (ws && ws.readyState === WebSocket.OPEN && performance.now() - lastPeriodicResyncAt > 10000) {
+    lastPeriodicResyncAt = performance.now();
+    requestPlantResync();
   }
 
   // Periodically notify the SDF renderer of updated growthProgress (it doesn't
@@ -5141,6 +6884,9 @@ function renderFrame(deltaTime: number): void {
     const ratio = qualityController.pixelRatio;
     if (Number.isFinite(ratio) && Math.abs(renderer.getPixelRatio() - ratio) > 0.001) {
       renderer.setPixelRatio(ratio);
+      // Both canvases composite over each other; the WebGPU one has to follow
+      // the same resolution or half the frame keeps its full pixel cost.
+      webgpuRenderer?.resize(window.innerWidth, window.innerHeight, ratio);
     }
   }
 
@@ -5154,6 +6900,15 @@ function renderFrame(deltaTime: number): void {
     });
   }
 
+  // Shadow map refresh: ~8 Hz normally, ~4 Hz when the frame budget is already
+  // tight. This removes a full extra scene pass from most frames.
+  const shadowIntervalMs = measuredFps < 50 ? 250 : 125;
+  const shadowNow = performance.now();
+  if (renderer.shadowMap.enabled && shadowNow - lastShadowRefreshMs >= shadowIntervalMs) {
+    renderer.shadowMap.needsUpdate = true;
+    lastShadowRefreshMs = shadowNow;
+  }
+
   if (useWebGPU && webgpuRenderer) {
     // 1. Clear and render environment (sky, fog, rain)
     renderer.clear();
@@ -5164,6 +6919,9 @@ function renderFrame(deltaTime: number): void {
     renderer.clear();
     renderer.render(scene, camera);
   }
+
+  // Growth aim gizmo last, on its own canvas above the plant/ground layer.
+  renderGrowthAimOverlay();
 }
 
 function animate(): void {
@@ -5174,16 +6932,426 @@ function animate(): void {
   lastUpdateTime = now;
   if (deltaTime > 0) measuredFps = 1 / deltaTime;
 
-  renderFrame(deltaTime);
+  try {
+    renderFrame(deltaTime);
+  } catch (error) {
+    console.error('[PlantLegacy] Render frame error:', error);
+    // Continue animation loop even if one frame fails
+  }
+}
+
+// ---- Account presence ----------------------------------------------------
+// The logout endpoint existed with no way to reach it from the game, so a
+// signed-in player could neither see their session nor end it. This chip is the
+// only in-world account surface until the C05 menu lands.
+let accountChip: HTMLDivElement | null = null;
+let suppressReconnect = false;
+
+function storedSession(): ReconnectData {
+  return loadReconnectData() ?? {};
+}
+
+let chipConfirmTimer: ReturnType<typeof setTimeout> | null = null;
+
+function chipButton(label: string, onClick: () => void): HTMLButtonElement {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'hud-btn';
+  button.textContent = label;
+  button.addEventListener('click', onClick);
+  return button;
+}
+
+/**
+ * Two-step sign out. Logging out is not a pause button (RULE_11), so the chip
+ * says so before it does anything, and "Stay" is one click away.
+ */
+function renderAccountChip(confirming: boolean): void {
+  if (!accountChip) return;
+  const session = storedSession();
+  accountChip.replaceChildren();
+
+  const dot = document.createElement('span');
+  dot.setAttribute('aria-hidden', 'true');
+  dot.style.cssText = `width: 7px; height: 7px; border-radius: 50%;
+    background: var(--leaf-400); box-shadow: 0 0 8px rgba(157, 198, 94, 0.6);`;
+  const name = document.createElement('span');
+  name.style.cssText = `font-size: var(--hud-font-sm); color: var(--bone-300);
+    letter-spacing: 0.02em; max-width: 16ch; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap;`;
+  name.textContent = session.displayName ?? 'Signed in';
+  accountChip.append(dot, name);
+
+  if (!confirming) {
+    accountChip.append(chipButton('Sign out', () => renderAccountChip(true)));
+    return;
+  }
+
+  const warning = document.createElement('span');
+  warning.textContent = 'The world keeps running.';
+  warning.style.cssText = `font-size: var(--hud-font-sm); color: var(--ink-muted);`;
+  accountChip.append(
+    warning,
+    chipButton('Sign out', () => {
+      void handleSignOut();
+    }),
+    chipButton('Stay', () => renderAccountChip(false)),
+  );
+
+  if (chipConfirmTimer) clearTimeout(chipConfirmTimer);
+  chipConfirmTimer = setTimeout(() => renderAccountChip(false), 8000);
+}
+
+function updateAccountChip(): void {
+  const session = storedSession();
+  if (!session.accessToken) {
+    if (chipConfirmTimer) clearTimeout(chipConfirmTimer);
+    chipConfirmTimer = null;
+    accountChip?.remove();
+    accountChip = null;
+    return;
+  }
+
+  if (!accountChip) {
+    accountChip = document.createElement('div');
+    accountChip.id = 'account-chip';
+    accountChip.className = 'hud-panel';
+    accountChip.style.cssText = `
+      position: fixed;
+      right: var(--hud-corner);
+      bottom: var(--hud-corner);
+      z-index: 210;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 5px 6px 5px 10px;
+      pointer-events: auto;
+    `;
+    if (uiShell) uiShell.attachTo('hud', accountChip);
+    else document.body.appendChild(accountChip);
+  }
+
+  renderAccountChip(false);
+}
+
+// ---- While you were away -------------------------------------------------
+// The server sends deltas from a disconnect snapshot. The panel is terse data,
+// never commentary (RULE_13), and it is the only place a player can see what the
+// world did without them.
+let awayPanel: HTMLDivElement | null = null;
+let awayPanelTimer: ReturnType<typeof setTimeout> | null = null;
+
+function formatAway(seconds: number): string {
+  if (seconds >= 86_400) {
+    const days = Math.floor(seconds / 86_400);
+    const hours = Math.floor((seconds % 86_400) / 3600);
+    return `${days} d ${hours} h`;
+  }
+  if (seconds >= 3600) {
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    return `${hours} h ${minutes} m`;
+  }
+  return `${Math.max(1, Math.round(seconds / 60))} m`;
+}
+
+function signed(value: number, digits = 1): string {
+  const rounded = Number(value.toFixed(digits));
+  if (rounded === 0) return '0';
+  return `${rounded > 0 ? '+' : '\u2212'}${Math.abs(rounded)}`;
+}
+
+function hideAwayReport(): void {
+  if (awayPanelTimer) clearTimeout(awayPanelTimer);
+  awayPanelTimer = null;
+  awayPanel?.remove();
+  awayPanel = null;
+}
+
+function showAwayReport(away: WelcomePayload['away']): void {
+  if (!away) return;
+  hideAwayReport();
+
+  const panel = document.createElement('div');
+  panel.id = 'away-report';
+  panel.className = 'hud-panel';
+  panel.style.cssText = `
+    position: fixed;
+    left: 50%;
+    top: var(--hud-top);
+    transform: translateX(-50%);
+    z-index: 205;
+    width: min(340px, 88vw);
+    padding: 10px 12px;
+    display: grid;
+    gap: 6px;
+    pointer-events: auto;
+  `;
+
+  const title = document.createElement('div');
+  title.textContent = `Away ${formatAway(away.seconds)}`;
+  title.style.cssText = `font-size: var(--hud-font-sm); font-weight: 700;
+    letter-spacing: 0.07em; text-transform: uppercase; color: var(--leaf-300);`;
+  panel.appendChild(title);
+
+  const rows: Array<[string, string]> = [
+    ['Nodes', `${away.nodesBefore} \u2192 ${away.nodesAfter}`],
+    ['Biomass', signed(away.biomass)],
+    ['Energy', signed(away.energy)],
+    ['Water', signed(away.water)],
+    ['Minerals', signed(away.minerals)],
+  ];
+  for (const [label, value] of rows) {
+    const row = document.createElement('div');
+    row.style.cssText = `display: flex; justify-content: space-between; gap: 12px;
+      font-size: var(--hud-font-sm); color: var(--bone-300);`;
+    const left = document.createElement('span');
+    left.textContent = label;
+    left.style.color = 'var(--ink-muted)';
+    const right = document.createElement('span');
+    right.textContent = value;
+    right.style.color =
+      value.startsWith('\u2212') || value.startsWith('-')
+        ? 'var(--ember-400)'
+        : 'var(--sprout-300)';
+    row.append(left, right);
+    panel.appendChild(row);
+  }
+
+  const dismiss = chipButton('Dismiss', hideAwayReport);
+  dismiss.style.marginTop = '2px';
+  panel.appendChild(dismiss);
+
+  if (uiShell) uiShell.attachTo('panel', panel);
+  else document.body.appendChild(panel);
+  awayPanel = panel;
+  awayPanelTimer = setTimeout(hideAwayReport, 20_000);
+}
+
+let lossPanel: HTMLDivElement | null = null;
+let lossPanelTimer: ReturnType<typeof setTimeout> | null = null;
+
+function hideLossReport(): void {
+  if (lossPanelTimer) clearTimeout(lossPanelTimer);
+  lossPanelTimer = null;
+  lossPanel?.remove();
+  lossPanel = null;
+}
+
+function describeDeathCause(cause: string): string {
+  switch (cause) {
+    case 'starvation':
+      return 'It used the last of its energy.';
+    case 'dehydration':
+      return 'It ran out of water.';
+    case 'germination_failed':
+      return 'The seed never sprouted.';
+    case 'damage':
+      return 'It was damaged past saving.';
+    case 'competition':
+      return 'Another plant took its ground.';
+    case 'calamity':
+      return 'The season turned and took it with it.';
+    default:
+      return cause.replace(/_/g, ' ');
+  }
+}
+
+/**
+ * The replacement seed used to arrive silently, which read as if nothing had
+ * happened. A death away from the screen is still a death.
+ */
+function showLossReport(cause: string, secondsAgo: number): void {
+  hideLossReport();
+  const panel = document.createElement('div');
+  panel.id = 'loss-report';
+  panel.className = 'hud-panel';
+  panel.style.cssText = `
+    position: fixed;
+    left: 50%;
+    top: var(--hud-top);
+    transform: translateX(-50%);
+    z-index: 206;
+    width: min(340px, 88vw);
+    padding: 10px 12px;
+    display: grid;
+    gap: 6px;
+    border-left: 3px solid var(--ember-500);
+    pointer-events: auto;
+  `;
+
+  const title = document.createElement('div');
+  title.textContent = 'Your plant died while you were away';
+  title.style.cssText = `font-size: var(--hud-font-sm); font-weight: 700;
+    letter-spacing: 0.04em; color: var(--ember-400);`;
+  const body = document.createElement('div');
+  body.textContent = `${describeDeathCause(cause)} It died ${formatAway(secondsAgo)} ago.`;
+  body.style.cssText = `font-size: var(--hud-font-sm); color: var(--bone-300); line-height: 1.45;`;
+  panel.append(title, body, chipButton('Dismiss', hideLossReport));
+
+  if (uiShell) uiShell.attachTo('panel', panel);
+  else document.body.appendChild(panel);
+  lossPanel = panel;
+  lossPanelTimer = setTimeout(hideLossReport, 25_000);
+}
+
+async function handleSignOut(): Promise<void> {
+  const session = storedSession();
+  suppressReconnect = true;
+  // Revoking the refresh session server-side matters even after the local tokens
+  // are gone: the session stays valid for its full lifetime otherwise. A failed
+  // revoke must not trap the player in a session they asked to end.
+  if (session.refreshToken) await signOut(fetch, httpOrigin, session.refreshToken);
+  clearReconnectData();
+  updateAccountChip();
+
+  const socket = ws;
+  ws = null;
+  if (
+    socket &&
+    (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)
+  ) {
+    socket.close(1000, 'Signed out');
+  }
+  connecting = false;
+  entryFlowSignedOut(entryFlow);
+  entryScreen.render(entryFlow);
+}
+
+// Entry flow. Until now the client had no auth UI and never called /auth/*,
+// so an access token could not be obtained at all: accounts and account-owned
+// plants were unreachable from the game. Nothing connects until the player
+// chooses, and the overlay stays up until the server has welcomed us.
+const entryFlow = createEntryFlowStateMachine();
+
+function saveSession(accessToken: string, refreshToken: string, displayName?: string): void {
+  saveReconnectData({ accessToken, refreshToken, displayName });
+}
+
+/**
+ * Forget which plant this tab holds while keeping the account session. Used when
+ * a plant dies or is replaced: the player keeps their identity and simply gets a
+ * new seed, instead of being demoted to a guest without being told.
+ */
+function clearPlantIdentity(): void {
+  const stored = loadReconnectData();
+  saveReconnectData({
+    accessToken: stored?.accessToken,
+    refreshToken: stored?.refreshToken,
+    displayName: stored?.displayName,
+  });
+}
+
+async function handleSignIn(username: string, password: string): Promise<void> {
+  if (!entryFlowBeginRequest(entryFlow)) return;
+  entryScreen.render(entryFlow);
+  try {
+    const session = await signIn(fetch, httpOrigin, { username, password });
+    saveSession(session.accessToken, session.refreshToken, session.displayName ?? username);
+    entryFlowAuthenticated(entryFlow, session.displayName ?? username);
+    entryScreen.render(entryFlow);
+    void connect();
+  } catch (error) {
+    entryFlowRequestFailed(entryFlow, error instanceof Error ? error.message : String(error));
+    entryScreen.render(entryFlow);
+  }
+}
+
+async function handleSignUp(
+  username: string,
+  displayName: string,
+  password: string,
+): Promise<void> {
+  if (!entryFlowBeginRequest(entryFlow)) return;
+  entryScreen.render(entryFlow);
+  try {
+    const session = await signUp(fetch, httpOrigin, { username, displayName, password });
+    saveSession(session.accessToken, session.refreshToken, session.displayName ?? displayName);
+    entryFlowAuthenticated(entryFlow, session.displayName ?? displayName);
+    entryScreen.render(entryFlow);
+    void connect();
+  } catch (error) {
+    entryFlowRequestFailed(entryFlow, error instanceof Error ? error.message : String(error));
+    entryScreen.render(entryFlow);
+  }
+}
+
+/**
+ * Layer for the entry screen. The shell owns the stack: modal (400) keeps
+ * toasts (500) and the debug overlay (700) above it and the HUD (120-200)
+ * below it, which is exactly where a blocking title should sit.
+ */
+function modalMount(shell: UIShell | null): HTMLElement {
+  return shell?.getLayer('modal') ?? document.body;
+}
+
+// Declared here, built in startEntryFlow(): the shell and its modal layer only
+// exist after initC01(), and an overlay mounted before that lands on <body> with
+// an ad-hoc z-index instead of in the layer stack.
+let entryScreen!: EntryScreen;
+
+const entryCallbacks: EntryScreenCallbacks = {
+  onContinue: () => {
+    // Keep the stored session: connect() refreshes it if needed.
+    entryFlowAuthenticated(entryFlow, entryFlow.displayName);
+    entryScreen.render(entryFlow);
+    void connect();
+  },
+  onSignInForm: () => {
+    entryFlowChoose(entryFlow, 'sign_in');
+    entryScreen.render(entryFlow);
+  },
+  onSignUpForm: () => {
+    entryFlowChoose(entryFlow, 'sign_up');
+    entryScreen.render(entryFlow);
+  },
+  onSignIn: (username, password) => {
+    void handleSignIn(username, password);
+  },
+  onSignUp: (username, displayName, password) => {
+    void handleSignUp(username, displayName, password);
+  },
+  onGuest: () => {
+    entryFlowContinueAsGuest(entryFlow);
+    entryScreen.render(entryFlow);
+    void connect();
+  },
+  onReseed: () => {
+    entryFlowReseed(entryFlow);
+    entryScreen.render(entryFlow);
+    // A signed-in player keeps their account and gets a fresh plant for it.
+    clearPlantIdentity();
+    void connect();
+  },
+  onBack: () => {
+    entryFlowBack(entryFlow);
+    entryScreen.render(entryFlow);
+  },
+};
+
+function startEntryFlow(): void {
+  entryScreen = new EntryScreen({ mount: modalMount(uiShell), callbacks: entryCallbacks });
+  const stored = loadReconnectData();
+  entryFlowBoot(entryFlow, Boolean(stored?.accessToken || stored?.refreshToken));
+  entryScreen.render(entryFlow);
 }
 
 // Start
 await initC01();
-connect();
+startEntryFlow();
 
 // Ping every 5 seconds
 setInterval(() => {
   if (ws && ws.readyState === WebSocket.OPEN) {
+    const now = performance.now();
+    // Only track one in-flight probe: if it is still unanswered after 12 s the
+    // link has stalled, so light the dot red and start a fresh probe.
+    if (pingSentAt !== null && now - pingSentAt > networkConfig.stallMs) {
+      setStatus('Connection unstable', 'down');
+      pingSentAt = now;
+    } else if (pingSentAt === null) {
+      pingSentAt = now;
+    }
     ws.send(JSON.stringify({ type: MESSAGE_TYPE.PING, payload: {} }));
   }
 }, 5000);
@@ -5216,8 +7384,13 @@ interface PlantLegacyDebugHandle {
   renderer: THREE.WebGLRenderer;
   scene: THREE.Scene;
   camera: THREE.PerspectiveCamera;
-  controls: OrbitControls;
+  readonly controls: OrbitControls;
   plantNodes: typeof plantNodes;
+  otherPlayerPlants: typeof otherPlayerPlants;
+  readonly inputBus: InputBus | null;
+  readonly socket: WebSocket | null;
+  readonly plantId: string | null;
+  readonly drawnPositionOf: (node: PlantNodeData) => THREE.Vector3;
   readonly plantRenderer: PlantRenderer | null;
   readonly webgpuRenderer: WebGPURenderer | null;
   readonly environmentRenderer: EnvironmentRenderer | null;
@@ -5231,8 +7404,28 @@ if (import.meta.env.DEV) {
     renderer,
     scene,
     camera,
-    controls,
+    // A getter, not a captured reference: the controls are rebuilt when the
+    // surface normal moves, and the handle must follow the live instance.
+    get controls() {
+      return controls;
+    },
     plantNodes,
+    otherPlayerPlants,
+    get inputBus() {
+      return inputBus;
+    },
+    get socket() {
+      return ws;
+    },
+    get plantId() {
+      return plantId;
+    },
+    drawnPositionOf: (node: PlantNodeData) =>
+      resolveDrawnNodePosition(
+        node,
+        node.parentId ? plantNodes.get(node.parentId) : undefined,
+        plantNodes.values(),
+      ),
     get plantRenderer() {
       return plantRenderer;
     },

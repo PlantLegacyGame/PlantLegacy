@@ -55,7 +55,7 @@ row-level locks (RULE_17); no in-memory inventories exist.
 | `id` | `uuid` | PK, `acct_` prefix |
 | `username` | `text` | unique, lowercased |
 | `display_name` | `text` | |
-| `password_hash` | `text` | argon2id |
+| `password_hash` | `text` | Argon2id (legacy bcrypt rows are rehashed on next login) |
 | `role` | `text` | `player` \| `admin` |
 | `failed_login_attempts` | `integer` | default 0 |
 | `locked_until` | `timestamptz` | nullable |
@@ -67,7 +67,7 @@ row-level locks (RULE_17); no in-memory inventories exist.
 |---|---|---|
 | `id` | `uuid` | PK, `ses_` prefix |
 | `account_id` | `uuid` | FK → `accounts` |
-| `refresh_token_hash` | `text` | argon2id of refresh token |
+| `refresh_token_hash` | `text` | bcrypt of refresh token |
 | `refresh_token_lookup_hash` | `text` | **NOT NULL**, SHA-256 for deterministic lookup |
 | `user_agent` | `text` | |
 | `ip_address` | `text` | |

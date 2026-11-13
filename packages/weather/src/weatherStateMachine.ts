@@ -262,15 +262,16 @@ export function weatherStateMachineGetBroadcast(machine: WeatherStateMachine): {
     timeUntilNextStateS: number;
   };
 } {
-  const isDayTime = machine.timeOfDay < machine.dayFraction;
+  // Phase the day exactly like the renderer's sun arc (`celestial.ts`):
+  // 0 = midnight, 0.25 = sunrise, 0.5 = noon, 0.75 = sunset. Anchoring the
+  // curve at midnight instead (day = 0..dayFraction) made the broadcast call
+  // midnight daytime and drop sun intensity to zero by 4pm while the sky was
+  // still bright.
+  const sunElev = Math.sin(machine.timeOfDay * Math.PI * 2 - Math.PI / 2);
+  const isDayTime = sunElev > 0;
   const condition = machine.conditionMapping[machine.currentState] ?? 'sun';
   const remainingS = Math.max(0, machine.currentDurationS - machine.stateTimerS);
-
-  let dayCurve = 0.0;
-  if (machine.timeOfDay < machine.dayFraction) {
-    dayCurve = Math.sin((machine.timeOfDay / machine.dayFraction) * Math.PI);
-  }
-  const sunIntensity = dayCurve * weatherStateMachineGetLightMultiplier(machine);
+  const sunIntensity = Math.max(0, sunElev) * weatherStateMachineGetLightMultiplier(machine);
 
   return {
     timeOfDay: machine.timeOfDay,
@@ -287,7 +288,9 @@ export function weatherStateMachineGetBroadcast(machine: WeatherStateMachine): {
 }
 
 export function weatherStateMachineIsDay(machine: WeatherStateMachine): boolean {
-  return machine.timeOfDay < machine.dayFraction;
+  // Same sun arc as the broadcast and the renderer, so "is it day" agrees with
+  // the sky at midnight and dusk instead of calling 00:00 daylight.
+  return Math.sin(machine.timeOfDay * Math.PI * 2 - Math.PI / 2) > 0;
 }
 
 export function weatherStateMachineGetTimeOfDay(machine: WeatherStateMachine): number {

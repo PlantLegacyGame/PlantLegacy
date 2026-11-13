@@ -27,7 +27,6 @@ export interface GrowthEventPayload {
   newNodes?: PlantNode[];
   /** Replaced node (germination: the seed becomes the root). */
   updatedParentNode?: PlantNode;
-  damageDealt?: number;
   totalBiomass?: number;
   totalEnergy?: number;
 }

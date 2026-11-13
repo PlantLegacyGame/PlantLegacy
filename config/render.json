@@ -22,13 +22,13 @@
     },
     "resolution_floor": {
       "type": "number",
-      "value": 0.75,
+      "value": 1.0,
       "range": [0.1, 1.0],
       "notes": "Minimum renderer pixel ratio relative to devicePixelRatio."
     },
     "max_pixel_ratio": {
       "type": "number",
-      "value": 1.25,
+      "value": 1,
       "range": [1.0, 4.0],
       "notes": "Maximum renderer pixel ratio."
     },
@@ -43,6 +43,12 @@
       "value": 1.0,
       "range": [0.1, 100.0],
       "notes": "Minimum orbit distance."
+    },
+    "camera_min_distance_root": {
+      "type": "number",
+      "value": 0.15,
+      "range": [0.02, 1.0],
+      "notes": "Minimum orbit distance while inspecting the root layer (Root Sight on, or the camera/target below the surface), so root tips stay readable without letting the camera enter the seed above ground."
     },
     "camera_max_distance": {
       "type": "number",
@@ -70,9 +76,20 @@
     },
     "camera_zoom_speed": {
       "type": "number",
-      "value": 2.0,
+      "value": 4.0,
       "range": [0.5, 10.0],
-      "notes": "Keyboard zoom rate multiplier for - and + keys (logarithmic, applied per second)."
+      "notes": "Dolly speed for the - and + keys in metres per second: the camera travels towards or away from its orbit target, the field of view never changes."
+    },
+    "camera_collision_enabled": {
+      "type": "boolean",
+      "value": true,
+      "notes": "Pull the camera in when the line of sight from its target would pass through a solid physics collider (terrain)."
+    },
+    "camera_collision_margin": {
+      "type": "number",
+      "value": 0.3,
+      "range": [0.05, 2.0],
+      "notes": "Gap kept between the camera and whatever solid object it is pushed away from."
     },
     "idle_drop_timeout_ms": {
       "type": "integer",
@@ -85,6 +102,48 @@
       "value": 1024,
       "range": [512, 4096],
       "notes": "Directional light shadow map dimension."
+    },
+    "shadow_bias": {
+      "type": "number",
+      "value": -0.0005,
+      "range": [-0.01, 0.01],
+      "notes": "Depth offset for the sun's shadow map. Without it the soil plane shadows itself at low sun angles and the near ground goes grey."
+    },
+    "shadow_normal_bias": {
+      "type": "number",
+      "value": 0.5,
+      "range": [0, 2],
+      "notes": "Normal-aligned shadow offset in metres; the soil plane needs it because a shadow texel covers a large patch of ground."
+    },
+    "planet_radius_m": {
+      "type": "number",
+      "value": 100000,
+      "range": [50, 1000000],
+      "notes": "Radius of the planet the world is the surface of. The play area is a cap at its pole; 0 keeps a flat plane."
+    },
+    "planet_view_distance_multiplier": {
+      "type": "number",
+      "value": 3.0,
+      "range": [1.5, 10.0],
+      "notes": "Orbit-view camera distance from the planet centre, as a multiple of planet_radius_m."
+    },
+    "planet_view_far_multiplier": {
+      "type": "number",
+      "value": 12.0,
+      "range": [4.0, 40.0],
+      "notes": "Orbit-view far plane, as a multiple of planet_radius_m."
+    },
+    "planet_view_min_distance_multiplier": {
+      "type": "number",
+      "value": 1.4,
+      "range": [1.05, 4.0],
+      "notes": "Orbit-view minimum distance from the planet centre, as a multiple of planet_radius_m; keeps the camera outside the body."
+    },
+    "planet_view_near_multiplier": {
+      "type": "number",
+      "value": 0.01,
+      "range": [0.001, 0.1],
+      "notes": "Orbit-view near plane, as a multiple of planet_radius_m. Keeps depth precision usable at planetary distances."
     },
     "quality_tiers": {
       "type": "schema_array",
@@ -324,20 +383,56 @@
       "range": [3.0, 60.0],
       "notes": "Maximum delay in seconds between lightning strikes during thunderstorm."
     },
+    "rain_slant": {
+      "type": "number",
+      "value": 0.12,
+      "range": [0.0, 1.0],
+      "notes": "Horizontal drift of rain streaks per unit fallen; the fall angle."
+    },
+    "sun_orbital_distance": {
+      "type": "number",
+      "value": 120.0,
+      "range": [20.0, 1000.0],
+      "notes": "Orbit radius that places the directional light on the visual sun."
+    },
+    "weather_transition_ms": {
+      "type": "integer",
+      "value": 6000,
+      "range": [0, 30000],
+      "notes": "Cross-fade between weather sky/fog presets; short values snap, long values smear."
+    },
+    "lightning_max_intensity": {
+      "type": "number",
+      "value": 1.0,
+      "range": [0.05, 5.0],
+      "notes": "Peak flash intensity the storm weather state emits."
+    },
     "soil_dry_color": {
       "type": "color",
-      "value": "#4A4536",
-      "notes": "Terrain soil tint when moisture is low."
+      "value": "#6B5539",
+      "notes": "Terrain soil tint when moisture is low. Warm brown so dry dirt does not read as grey."
     },
     "soil_wet_color": {
       "type": "color",
-      "value": "#1B2014",
+      "value": "#2E2418",
       "notes": "Terrain soil tint when moisture is high or after rain."
     },
     "soil_mineral_tint": {
       "type": "color",
       "value": "#5A8FA8",
       "notes": "Subtle mineral accent tone on ground terrain."
+    },
+    "soil_grain_strength": {
+      "type": "number",
+      "value": 0.02,
+      "range": [0, 0.2],
+      "notes": "Per-pixel mineral hash on the ground. The old 0.08 speckled the dirt; the Root Sight dome colour is the smoother target."
+    },
+    "soil_mineral_strength": {
+      "type": "number",
+      "value": 0.05,
+      "range": [0, 0.5],
+      "notes": "How much the per-tile mineral channel tints the ground."
     },
     "terrain_mesh_subdivisions": {
       "type": "integer",
@@ -347,7 +442,7 @@
     },
     "terrain_radius": {
       "type": "number",
-      "value": 300.0,
+      "value": 620.0,
       "range": [50.0, 800.0],
       "notes": "World radius of the ground terrain mesh."
     },
@@ -415,6 +510,87 @@
       "value": 0.35,
       "range": [0.1, 2.0],
       "notes": "Minimum world-space pick radius for node selection during growth."
+    },
+
+    "underground_view_color": {
+      "type": "color",
+      "value": "#241D16",
+      "notes": "Backdrop and fog colour while the camera is below the surface with Root Sight open."
+    },
+
+    "growth_aim_ring_scale": {
+      "type": "number",
+      "value": 1.6,
+      "range": [0.5, 4],
+      "notes": "Aim ring radius as a multiple of the emerging segment's own thickness, capped at the node's radius."
+    },
+
+    "growth_aim_ring_min": {
+      "type": "number",
+      "value": 0.02,
+      "range": [0.008, 0.5],
+      "notes": "Minimum aim ring radius in metres, so thin roots still show a usable ring."
+    },
+    "growth_aim_ring_thickness": {
+      "type": "number",
+      "value": 0.004,
+      "range": [0.001, 0.02],
+      "notes": "Tube thickness of the aim ring in metres; kept in world units so small rings stay visible."
+    },
+    "growth_aim_grab_px": {
+      "type": "number",
+      "value": 34,
+      "range": [12, 120],
+      "notes": "Screen radius around the part where a drag turns the aim arrow; elsewhere a drag orbits the camera."
+    },
+
+
+    "growth_aim_reach_min": {
+      "type": "number",
+      "value": 0.22,
+      "range": [0.05, 1],
+      "notes": "Minimum aim arrow length in metres."
+    },
+
+    "growth_aim_tube_radius": {
+      "type": "number",
+      "value": 0.009,
+      "range": [0.002, 0.05],
+      "notes": "Radius of the curved aim arrow shaft in metres."
+    },
+
+    "growth_aim_head_radius": {
+      "type": "number",
+      "value": 0.032,
+      "range": [0.01, 0.15],
+      "notes": "Radius of the aim arrow head cone in metres."
+    },
+
+    "growth_aim_head_length": {
+      "type": "number",
+      "value": 0.095,
+      "range": [0.02, 0.4],
+      "notes": "Length of the aim arrow head cone in metres."
+    },
+    "growth_aim_tip_radius": {
+      "type": "number",
+      "value": 0.014,
+      "range": [0.004, 0.06],
+      "notes": "Radius of the bud dot at the aim arrow point, in metres."
+    },
+
+    "growth_aim_curve_bend": {
+      "type": "number",
+      "value": 0,
+      "range": [0, 1],
+      "notes": "Sideways bend of the aim arrow, as a fraction of its length. 0 keeps the preview straight like the real segment."
+    },
+
+    "growth_aim_curve_wobble": {
+      "type": "number",
+      "value": 0,
+      "range": [0, 0.5],
+      "notes": "Secondary wave of the aim arrow, as a fraction of its length. 0 keeps the preview straight like the real segment."
     }
   }
 }

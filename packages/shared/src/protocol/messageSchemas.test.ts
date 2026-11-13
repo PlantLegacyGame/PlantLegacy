@@ -48,7 +48,6 @@ describe('validateMessage', () => {
           nodeId: 'n1',
           direction: { x: 0, y: 1, z: 0 },
           nodeType: 'stem',
-          isAttack: false,
           tick: 5,
         },
       }).issues,
@@ -64,7 +63,6 @@ describe('validateMessage', () => {
           nodeId: 'n1',
           direction: { x: 0, y: 1 }, // missing z
           nodeType: 'stem',
-          isAttack: false,
           tick: 5,
         },
       }).includes('message.field_missing'),
@@ -79,7 +77,6 @@ describe('validateMessage', () => {
           nodeId: 'n1',
           direction: { x: 0, y: 0, z: 0 },
           nodeType: 'stem',
-          isAttack: false,
           tick: 5,
         },
       }).issues,

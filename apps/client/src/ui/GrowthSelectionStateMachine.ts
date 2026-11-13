@@ -94,7 +94,10 @@ export function growthSelectionStateMachineRequestOptions(
   machine: GrowthSelectionStateMachine,
   nodeId: string,
 ): void {
-  if (machine.state !== 'hidden') return;
+  // Requesting options for a second part while a panel is already open used to
+  // be ignored, so the new result was dropped as stale and the panel sat on
+  // "…". Only a request that is still in flight is ignored.
+  if (machine.state === 'loading') return;
 
   machine.state = 'loading';
   machine.selectedNodeId = nodeId;
@@ -143,14 +146,6 @@ export function growthSelectionStateMachineStartDrawing(
   optionType: string,
   optionLabel: string,
 ): void {
-  console.log(
-    '[GrowthSM] startDrawing called, state:',
-    machine.state,
-    'selectedNodeId:',
-    machine.selectedNodeId,
-    'nodeId:',
-    nodeId,
-  );
   if (machine.state !== 'option_selected' && machine.state !== 'options_visible') return;
   if (!machine.selectedNodeId || machine.selectedNodeId !== nodeId) return;
 

@@ -45,7 +45,7 @@
         { "action": "dev_panel_toggle", "keys": ["Backquote"], "mouse": "", "mode": "toggle", "context": "" },
         { "action": "debug_toggle", "keys": ["ShiftLeft", "ShiftRight"], "mouse": "", "mode": "toggle", "context": "" },
         { "action": "hint_card_toggle", "keys": ["KeyH"], "mouse": "", "mode": "toggle", "context": "" },
-        { "action": "plant_regenerate", "keys": ["KeyR"], "mouse": "", "mode": "press", "context": "dev" }
+        { "action": "plant_regenerate", "keys": ["KeyP"], "mouse": "", "mode": "press", "context": "dev" }
       ]
     },
     "bindings_touch": {

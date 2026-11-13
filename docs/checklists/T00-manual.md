@@ -8,15 +8,15 @@ the stated result observed.
 - [x] `pnpm config:validate`
   - Expected at T00: `config: 73 file(s)` and `config: OK`, exit 0.
   - Observed at T00: 73 files, OK.
-  - Today: 75 files, OK (T00A added `onboarding.json`, T01 added
-    `plant_renderer.json`).
+  - Today: 77 files, OK (four files were added after T00 by later tasks;
+    `docs/tunables.md` lists them).
 
 ## 2. Every Part 6.2 file exists
 
 - [x] Compare the file list in `docs/tunables.md` with DESIGN.md Part 6.2.
   - Expected: 73 names, no extras, no missing.
-  - Observed: 73/73 at T00. Today `docs/tunables.md` lists 75: the same 73 plus
-    `onboarding` and `plant_renderer`.
+  - Observed: 73/73 at T00. Today `docs/tunables.md` lists 77: the same 73 plus
+    four files added by later tasks.
 
 ## 3. Rarity ban fails the build and startup
 
