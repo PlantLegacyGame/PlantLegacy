@@ -1040,9 +1040,9 @@ The client never resolves a gameplay outcome by physics. It can predict camera m
 
 Formalize the existing `config/physics.json` owner C02c:
 
-- `max_colliders_per_plant`: 192 default, 384 desktop high.
-- `max_collider_plants`: 24 default, 64 desktop, 16 phone.
-- `collider_lod_distance_m`: 70 m; beyond, merge chains or drop.
+- Budgets are `max_colliders_per_plant`, `max_collider_plants` (tier override)
+  and `collider_lod_distance_m` — values in `config/physics.json`, indexed by
+  `docs/tunables.md`.
 - Leaf colliders: none/box/hull by tier.
 - Joint spheres: off by default.
 - Debris bodies: 24 default; 64 desktop.
@@ -1886,150 +1886,77 @@ A concrete starting sequence that does not break the current gate plan:
 
 ---
 
-# Appendix A — Config key catalogue (initial values)
+# Appendix A — Config key catalogue (names only)
 
-**Key names only (ADR-049).** Config values are owned by `config/*.json` and indexed by `docs/tunables.md`; this appendix names the keys a work package will add and deliberately does not carry defaults that would drift. Any `value` you see below is a pre-review starting point, not an owner.
+**Key names only (ADR-049).** Values, ranges and defaults belong to
+`config/*.json` and are indexed by `docs/tunables.md`; this appendix names the
+keys each work package adds, so the plan and the config cannot drift apart.
+Enum members are kept where the set of allowed values *is* the design (T57
+shapes, T59 stages); numeric starting points are not. All keys require `_meta`,
+type, range/default, owner task and notes.
 
-All keys require `_meta`, type, range/default, owner task, and notes.
+`render.json` — `renderer_primary`, `renderer_fallback`, `gpu_target_min_ms`,
+`gpu_target_max_ms`, `draw_distance_floor`, `quality_persistence_key`,
+`atmosphere_extinction`, `atmosphere_height_falloff`, `atmosphere_sun_phase`,
+`light_shaft_samples`, `light_shaft_strength`, `detail_texture_scale`,
+`scatter_budget_desktop`, `scatter_budget_phone`, `post_bloom`, `post_grain`,
+`shadow_cascades_desktop`, `shadow_caster_budget`, `plant_tier0_budget`,
+`plant_tier1_budget`, `l3_atlas_size` (L3 colour-only billboard; L2 is an
+ellipsoid and has no atlas — ADR-042), `water_quality`.
 
-## `render.json`
-- `renderer_primary`: `webgpu`
-- `renderer_fallback`: `webgl2`
-- `gpu_target_min_ms`: 9.8
-- `gpu_target_max_ms`: 13.6
-- `draw_distance_floor`: 0.4
-- `quality_persistence_key`: `plantlegacy.quality`
-- `atmosphere_extinction`: [0.018, 0.012, 0.009]
-- `atmosphere_height_falloff`: 0.012
-- `atmosphere_sun_phase`: 0.6
-- `light_shaft_samples`: 24
-- `light_shaft_strength`: 0.5
-- `detail_texture_scale`: 0.5
-- `scatter_budget_desktop`: 500000
-- `scatter_budget_phone`: 80000
-- `post_bloom`: true
-- `post_grain`: 0.02
-- `shadow_cascades_desktop`: 2
-- `shadow_caster_budget`: 128
-- `plant_tier0_budget`: 100
-- `plant_tier1_budget`: 1280
-- `l3_atlas_size`: 1024 (L3 colour-only billboard only; L2 is an ellipsoid and has no atlas — ADR-042)
-- `water_quality`: `medium`
+`terrain_volume.json` — `chunk_size_m`, `chunk_resolution`, `voxel_size_m`,
+`world_height_m`, `sea_level_m`, `sdf_range_m`, `sdf_quantization`,
+`lod_distances_m`, `max_chunks_per_client`, `max_active_chunks`,
+`collision_lod`, `snapshot_interval_s`, `interest_radius_chunks`,
+`biome_field_resolution_m`, `biome_rules`.
 
-## `terrain_volume.json`
-- `chunk_size_m`: 32
-- `chunk_resolution`: 32
-- `voxel_size_m`: 0.5
-- `world_height_m`: 512
-- `sea_level_m`: 0
-- `sdf_range_m`: 8
-- `sdf_quantization`: 1/256
-- `lod_distances_m`: [32, 96, 256, 768]
-- `max_chunks_per_client`: 256
-- `max_active_chunks`: 64
-- `collision_lod`: 1
-- `snapshot_interval_s`: 300
-- `interest_radius_chunks`: 4
-- `biome_field_resolution_m`: 32
-- `biome_rules`: [] (schema array)
+`terrain_features.json` — `max_features_per_chunk`, `max_control_points`,
+`max_blend_radius_m`, `types` (`spline_sweep`, `bezier_patch`, `extrusion`,
+`volume_carve`, `noise_blend`, `torus_arch`, `clear_zone`), `clear_zones`
+(spawn, Root Sight, hubs; no named outcomes).
 
-## `terrain_features.json`
-- `max_features_per_chunk`: 8
-- `max_control_points`: 16
-- `max_blend_radius_m`: 8
-- `types`: `spline_sweep`, `bezier_patch`, `extrusion`, `volume_carve`, `noise_blend`, `torus_arch`, `clear_zone`
-- `clear_zones`: [] (spawn, Root Sight, hubs; no named outcomes)
+`materials.json` — `ca_hz`, `max_active_chunks`, `tick_budget_share`,
+`flow_rate`, `settle_threshold`, `temperature_range`, `moisture_range`,
+`material_definitions`, `element_definitions`, `reaction_matrix`,
+`snapshot_interval_s`, `interest_radius_chunks`.
 
-## `materials.json`
-- `ca_hz`: 2
-- `max_active_chunks`: 64
-- `tick_budget_share`: 0.10
-- `flow_rate`: 0.5
-- `settle_threshold`: 0.2
-- `temperature_range`: [-50, 1200]
-- `moisture_range`: [0, 1]
-- `material_definitions`: []
-- `element_definitions`: []
-- `reaction_matrix`: []
-- `snapshot_interval_s`: 300
-- `interest_radius_chunks`: 3
+`fauna.json` — `max_fauna_per_world`, `species`, `vocalizations`,
+`influence_map` (`cell_size_m`, `update_hz`, `decay`), `spawn_sources`,
+`population_caps`, `offline_tick_hz`, `trap_strength`, `struggle_damage`,
+`escape_threshold`, `kill_credit_window_s`.
 
-## `fauna.json`
-- `max_fauna_per_world`: 2000
-- `species`: []
-- `vocalizations`: []
-- `influence_map`: { `cell_size_m`: 8, `update_hz`: 2, `decay`: 0.1 }
-- `spawn_sources`: []
-- `population_caps`: {}
-- `offline_tick_hz`: 1
-- `trap_strength`: 1
-- `struggle_damage`: 1
-- `escape_threshold`: 1
-- `kill_credit_window_s`: 60
+`water.json` — `sea_level_m`, `max_depth_m`, `water_density_kg_m3`,
+`salinity_default`, `temperature_default_c`, `flow_update_hz`,
+`wave_amplitude_m`, `wave_speed`, `underwater_extinction`,
+`caustics_strength`, `foam_strength`, `ice_temperature_c`,
+`max_water_bodies_per_chunk`.
 
-## `water.json`
-- `sea_level_m`: 0
-- `max_depth_m`: 400
-- `water_density_kg_m3`: 1000
-- `salinity_default`: 35
-- `temperature_default_c`: 12
-- `flow_update_hz`: 1
-- `wave_amplitude_m`: 0.4
-- `wave_speed`: 1
-- `underwater_extinction`: [0.20, 0.08, 0.05]
-- `caustics_strength`: 1
-- `foam_strength`: 1
-- `ice_temperature_c`: -2
-- `max_water_bodies_per_chunk`: 4
+`physics.json` — existing values plus `max_collider_plants` (tier override),
+`max_colliders_per_plant`, `water_buoyancy_enabled`,
+`server_analytic_collision`, `client_physics_layers` (`terrain`, `plant`,
+`fauna`, `debris`, `water`, `sensor`), `rebase_distance_m`,
+`interpolation_ms`.
 
-## `physics.json`
-- Existing values plus:
-- `max_collider_plants`: 64 desktop / 16 phone (tier override)
-- `max_colliders_per_plant`: 384 high / 192 default
-- `water_buoyancy_enabled`: true
-- `server_analytic_collision`: true
-- `client_physics_layers`: [terrain, plant, fauna, debris, water, sensor]
-- `rebase_distance_m`: 1000
-- `interpolation_ms`: 100
+`mutations.json` — `traits`, `tolerance_weights`,
+`adaptive_pressure_enabled`, `decay_half_life_ticks`,
+`max_pressure_multiplier`, `category_to_tag_map`,
+`visual_signature_max_params`, `maintenance_curve`.
 
-## `mutations.json`
-- `traits`: []
-- `tolerance_weights`: {}
-- `adaptive_pressure_enabled`: true
-- `decay_half_life_ticks`: 6000
-- `max_pressure_multiplier`: 4
-- `category_to_tag_map`: {}
-- `visual_signature_max_params`: 3
-- `maintenance_curve`: []
+`deep_time.json` — `transformation_ops` (`uplift`, `subsidence`, `erosion`,
+`deposition`, `volcanism`, `sea_level`, `climate_shift`),
+`fossilization_chance`, `time_lapse_years_per_second`,
+`calamity_grant_seed`. `season_length_days` stays in `world.json` and
+`world_state` (ADR-044).
 
-## `deep_time.json`
-- *(removed)* `season_length_days` — owned by `world.json` and persisted in `world_state`. A second owner here would have made two sources for one clock (ADR-044).
-- `transformation_ops`: [`uplift`, `subsidence`, `erosion`, `deposition`, `volcanism`, `sea_level`, `climate_shift`]
-- `fossilization_chance`: 0.05
-- `time_lapse_years_per_second`: 1000
-- `calamity_grant_seed`: false
+`succession.json` — `stages` (`bare`, `pioneer`, `grass`, `shrub`,
+`woodland`, `forest`), `thresholds`, `seed_bank`, `recovery_pulses`,
+`recovery_real_time_days`, `weather_dependency`, `max_recovery_time_days`,
+`disturbance_resets`.
 
-## `succession.json`
-- `stages`: [`bare`, `pioneer`, `grass`, `shrub`, `woodland`, `forest`]
-- `thresholds`: {}
-- `seed_bank`: {}
-- `recovery_pulses`: {}
-- `recovery_real_time_days`: 3
-- `weather_dependency`: 1
-- `max_recovery_time_days`: 14
-- `disturbance_resets`: {}
-
-## `audio.json`
-- `scheduler_hz`: 10
-- `master_gain`: 0.8
-- `max_voices`: 64
-- `reverb_decay_s`: 3.5
-- `underwater_lowpass_hz`: 900
-- `cave_reverb_scale`: 1.8
-- `layer_gains`: { wind: 0.3, leaves: 0.2, insects: 0.2, water: 0.4, rain: 0.5, thunder: 0.7 }
-- `fauna_voice_budget`: 16
-
----
+`audio.json` — `scheduler_hz`, `master_gain`, `max_voices`,
+`reverb_decay_s`, `underwater_lowpass_hz`, `cave_reverb_scale`,
+`layer_gains` (`wind`, `leaves`, `insects`, `water`, `rain`, `thunder`),
+`fauna_voice_budget`.
 
 # Appendix B — File map (new/modified)
 
