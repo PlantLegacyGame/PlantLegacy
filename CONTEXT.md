@@ -130,7 +130,7 @@ committed; CI installs with `--frozen-lockfile`.
 │   ├── seed-data/             # placeholder (T03)
 │   └── backup/                # placeholder (O02)
 ├── config/                    # 78 tunable files + _meta (count owned by docs/tunables.md)
-├── docs/                      # tunables, tasks, decision log (ADR), programme plan, checklists
+├── docs/                      # tunables, protocol, data model, decisions, history, deploy, tasks, checklists
 ├── ops/
 │   ├── compose.yml            # server + postgres:17-alpine
 │   ├── docker/README.md
@@ -392,9 +392,10 @@ The full rationale log is in [`docs/decisions.md`](./docs/decisions.md).
 ## 7. Invariants enforced today
 
 This table lists invariants with a single guard. The full audit — every implicit
-state machine, every invariant the app relies on but does not enforce, and the
-remediation plan — lives in
-[`docs/state-machines-and-invariants.md`](./docs/state-machines-and-invariants.md).
+state machine and every invariant the app relies on but does not enforce — lives in
+[`docs/state-machines-and-invariants.md`](./docs/state-machines-and-invariants.md),
+which is the only current status source (the retired remediation plan is in
+[`history.md`](./docs/history.md)).
 Update that document, not this table, when an invariant is added or its
 enforcement changes.
 

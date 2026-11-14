@@ -43,7 +43,7 @@ commit that introduced this file.
 | 2026-11-13 | T25: one shared terrain field, inner + 620 m outer patch colliding on drawn vertices, per-plant capsule colliders, sparse 32×32 soil chunks with voids, protocols 32–34. | migration 006 |
 | 2026-11-14 | Abyssal review: nine decisions, ADR-041 to ADR-049 (unified renderer deferred, L2 ellipsoid/L3 atlas, terrain slice, calamity as burial, two water slices, full traits, fauna before volumetric terrain, measurement first, two-document discipline). | `decisions.md` |
 | 2026-11-14 | Documentation consolidated: one home per fact, `deploy.md`, `history.md`, tunables slimmed to an index, duplicate T51 spec removed, `pnpm docs:check` added. | commit `6e535c0` |
-| 2026-11-14 | `history.md` itself compressed to this log; the abyssal config appendix reduced to key names. | this commit |
+| 2026-11-14 | `history.md` itself compressed to this log; the abyssal config appendix reduced to key names. | commit `497317a` |
 
 ## Retired: state-machine remediation
 

@@ -1148,7 +1148,7 @@ Each spec is a block. Feed one to the AI at a time. Every AI session returns imp
 **AI prompt.** "Build Spore currency with configurable earn sources and sink prices. Real-money bundles: $5=500, $20=2500, $50=8000, $100=25000. Store UI exists; real-money integration later. No artificial caps. Purchasable booster tiers capped at common; standard+ earn-only and account-bound. Standard crafting requires earn-only Essence. Include early-access labeling and 'what's working now' list. Spores are consumed currency, not stored value. All rates/prices in config."
 
 ### T51 · Gene Extraction and Graft — `config/fragments.json`, `config/extraction.json`
-*(See Part 4, B4 for full spec. Depends on T15, T13, T06, T16, T08A.)*
+*(Full spec follows. Depends on T15, T13, T06, T16, T08A.)*
 
 **Full spec.** Part 5, T51:
 - **Fragments:** category `fragment`; fields `source_plant_id`, `source_owner_id`, `node_type`, `source_genes[]`, `created_at`, `expires_at`. Sources: pruning own plant; node destroyed by damage pipeline (chance); dead plant leaves remains; later, tools. Pickup by proximity or action. Decay after `fragment_lifetime`. Flags: tradeable, mailable, listable true; not account-bound. No rarity field.
@@ -2325,7 +2325,7 @@ Each row is a decision made (or that follows directly from answers). "Needs appr
 | D-24 | Gate 2 cut list keeps the T14 seller/listing data model and `getSellerReputation` stub if T14 UI is cut; T43 cannot start without seller/listing identity. | Review #4 |
 | D-25 | T02 owns the Root Sight cutaway shader; C03 reuses/refines it. C03 gains T00A in its dependency row. | Review #5 |
 | D-26 | H01 depends on all Gate 3 tasks except the real-money Spore switch. | Review #6 |
-| D-27 | Stale `A…` references replaced with real Part/Task references (see Appendix F). | Review #7 |
+| D-27 | Stale `A…` references replaced with real Part/Task references (full list in [`docs/history.md`](./docs/history.md)). | Review #7 |
 | D-28 | T15 no longer defers extraction to post-MVP; T51 owns extraction/graft, T14 owns gene listing, T22 owns bloodline. | Review #8 |
 | D-29 | Vocabulary rows for heirloom seeds and gene items updated to match built systems. | Review #9 |
 | D-30 | Dependency matrix completed: `C03`, `C05`, `T14`, `T20`, `T43`, `H01` (C02b merged into C02). | Review #10 |

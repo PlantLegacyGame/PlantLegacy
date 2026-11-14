@@ -23,10 +23,10 @@ app relies on but does not enforce.
    - `PARTIAL` — true on the happy path, but at least one bypass exists.
    - `UNENFORCED` — nothing checks it; it holds only by convention.
    - `BROKEN` — verified contradiction in the current code.
-3. Fixes are grouped into phases (P0–P3) at the end. Work top-down; do not start
-   a later phase while an earlier phase has `BROKEN` items.
-4. When an item is fixed: change its status, add the fix location, and append a
-   line to the progress log.
+3. Fixes are tracked in the task records; the retired P0–P3 remediation plan is
+   kept in [`history.md`](./history.md) for the record, not maintained.
+4. When an item is fixed: change its status and add the fix location here. This
+   file is the only current status source.
 5. Rules that follow from this audit:
    - Every implicit machine in Part 1 should become either an explicit module or
      a documented set of fields with a single writer.

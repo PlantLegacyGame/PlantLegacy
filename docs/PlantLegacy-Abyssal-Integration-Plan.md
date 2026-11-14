@@ -1362,7 +1362,7 @@ As in 5.3; plus `biomeId`, `waterBodyId`, `materialRevision`.
 
 Per DESIGN 7.1:
 - `CONTEXT.md` tree/interfaces.
-- `docs/tunables.md` values.
+- `docs/tunables.md` file owner/status/count (the values stay in `config/*.json`).
 - `README.md` status.
 - `docs/tasks/<task>.md` acceptance evidence.
 - `docs/checklists/` manual tests.
@@ -2013,7 +2013,7 @@ As Appendix A and section 11.1.
 - `docs/tasks/T56.md`, `T57.md`, `C10.md`, `T31.md`, `T54.md`, `C11.md`, `T55.md`, `T59.md`, `T20.md`, `T39.md`.
 - `docs/art-bible.md` — atmosphere/palette/water/cave/biome.
 - `docs/partitioning-lod.md` — unified renderer, tiers, budgets.
-- `docs/tunables.md` — every new value.
+- `docs/tunables.md` — the new file, its owner and the count.
 - `docs/decisions.md` — ADRs for renderer, biome config, traits, water.
 - `ATTRIBUTION.md` — AG MIT notice.
 

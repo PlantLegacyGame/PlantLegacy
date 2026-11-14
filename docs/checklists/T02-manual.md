@@ -6,7 +6,7 @@ Run with the local stack (`pnpm dev`). A box is checked only when the command or
 
 - [x] `pnpm config:validate`
   - Expected: 78 file(s), OK.
-  - Observed: 75 files OK, `config/root_sight.json` valid extended-1 schema.
+  - Observed: OK for every file then present (75 at the time; the count is owned by [`docs/tunables.md`](../tunables.md) and is 78 today), `config/root_sight.json` valid extended-1 schema.
 - [x] `curl http://127.0.0.1:8080/config/root_sight`
   - Expected: 200 JSON with `cutaway_radius`, `transition_ms`, `soil_opacity`, `own_root_highlight_color`, `rival_root_highlight_color`, `substrate_multiplier`, `camera_target`.
   - Observed: 200 JSON with values loaded from `config/root_sight.json`.
