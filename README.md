@@ -52,6 +52,7 @@ pnpm verify
 | `pnpm lint` / `pnpm lint:fix` | Biome check / autofix |
 | `pnpm typecheck` | `tsc` across every workspace package |
 | `pnpm config:validate` | Validate all `config/*.json`; **rejects `rarity`** |
+| `pnpm docs:check` | Links, config counts, protocol table and duplicate prose across `docs/` |
 | `pnpm test` | `node --test` in every package |
 | `pnpm build` | Vite production build → `apps/client/dist` |
 | `pnpm start` | Start the server (no watch) |
@@ -63,6 +64,7 @@ apps/client/          Vite 8 + Three.js client (T03P, C01, T00A, T01)
 apps/server/          HTTP + WebSocket server, health/readiness, Postgres probe
 packages/shared/      Types, config loader/validator, protocol, events, ids
 tools/config-validator/  CLI used by CI and `pnpm config:validate`
+tools/docs-check/     Documentation guardrail (`pnpm docs:check`)
 tools/dev.mjs         One-command local stack
 config/               78 tunable files in extended-1 format + _meta (count owned by docs/tunables.md)
 docs/                 Design notes, tunables, task records, checklists

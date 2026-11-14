@@ -537,6 +537,23 @@ here (RULE_3).
 **Acceptance.** Day/night is continuous. Clear, rain and storm are visually distinct. Telegraph is readable. Phone budget met.
 **AI prompt.** "Build C03 environment rendering driven by T00A/T07 data. Cheap shaders. Phone budget respected. All values in render.json."
 
+### C03b · Ground LOD and Relief — `config/terrain.json`, `config/render.json`
+**Status:** added 2026-11-13 with T25; not in the v5.3 plan. Shipped.
+**Depends on:** C03, T25.
+**Must support.** One seeded field shared by server and client. An inner detail
+patch (`terrain_radius` at `terrain_mesh_subdivisions`) covering the walkable
+play area, and a coarser outer patch (`patch_radius_m`, 620 m default) carrying
+the same field to the horizon. Both are separate meshes so a clipmap can replace
+the pair later without changing the field, the collider plan or the camera clamp.
+Physics collides with the **exact drawn vertices** of both as Rapier trimeshes,
+with the planet ball underneath so no seam can be fallen through. Soil colour
+comes from moisture and minerals, never a texture.
+**Acceptance.** The drawn ground and the collision surface agree everywhere in
+both patches; a plant at the outer edge stands on the height the mesh draws; no
+seam or visible rim between patches; each patch's cell size matches its
+configured subdivision.
+**Config.** `terrain_*` keys in `config/render.json`, plus `config/terrain.json`.
+
 ### C04 · HUD and Controls v1 — `config/ui.json`, `config/controls.json`
 **Depends on:** C01, T00A, T07, T08A, T05, T06.
 **Must support.** HUD layout from Part 18; context dock (actions appear only when valid); rebinding screen; text-size slider; resource tooltips; three-line hint card; chat panel with proximity/world tabs; report dialog; notifications; all values read from server data, never written by the client.
@@ -570,6 +587,24 @@ here (RULE_3).
 **Acceptance.** Restore to a clean database from yesterday's backup and the game starts. Migrations roll forward on staging without data loss.
 
 *(Full spec in Part 5, T51 — one copy only, so the two cannot drift.)*
+
+### D01 · Dev Settings Engine — `config/dev.json`
+**Status:** added 2026-11-13 during Phase 1; not in the v5.3 plan. Shipped.
+**Depends on:** T00, C01, T00A, T01.
+**Must support.** A dev-only console behind `?dev=1` (and a key binding) that
+lists every loaded config file and every value with type, range and notes; edits
+apply without touching source; a reset restores the checked-in defaults. The key
+switches are first-class: persistence (off by default), reconnect window,
+auto-growth (off by default), germination gate, germination failure kills the
+seed, plant size class, camera distances and pan speed, resource/photo/upkeep
+rates, WebGPU on/off and LOD thresholds. Dev endpoints exist **only** when
+`NODE_ENV=local`; in production `/dev/config` and `DEV_ACTION` return 404 and
+cannot change config (ADR-029). The console must never be a way to cheat in
+production.
+**Acceptance.** Every config system is listed and editable with `?dev=1`; a
+toggle changes behaviour without editing source; reset restores defaults; a
+non-local server rejects dev endpoints; a normal player cannot reach the panel.
+**Config.** `config/dev.json` (owner D01), plus the fields it exposes.
 
 ### H01 · Hardening and Load
 **Depends on:** every Gate 3 task except the real-money Spore switch.
@@ -710,11 +745,13 @@ T00+O01 (Foundation)
 | T02 | T01, C01 |
 | T07 | T00A, T03 |
 | C03 | C01, T07, T00A |
+| C03b | C03, T25 |
 | T05 | T03, T08C |
 | T04 | T00A, T01, T03 |
 | T06 | T01, T02, T03, T07 |
 | T08A | T03, T08C |
 | C04 | C01, T00A, T07, T08A, T05, T06 |
+| D01 | T00, C01, T00A, T01 |
 | T08 | T03, T08A |
 | T08B | T03, T04, T08A |
 | T16 | T03, T08A |
@@ -783,6 +820,11 @@ T00+O01 (Foundation)
 | **T44** | `guilds.json` | Guilds (name/motto/roster/roles), guild reputation, disband tombstone, no buffs | Guild UI, gift-to-guild stub |
 | **T45** | `mail.json`, `gift_bundles.json` | Inbox (system/player), attachments via T08A, Starter Packs (system only), Gift Bundles | Mail UI, gift bundle UI |
 | **T40** | `compliance.json`, `reports.json` | 5-line policy, admin triage (context snapshots), age gate, ToS, privacy | Admin page, report flow |
+| **T25** | `terrain.json` | Sparse soil chunks, edit log, voids, cavity field, growth resistance, terrain protocols 32–34 | Inner and outer ground meshes with exact trimesh colliders; Root Sight cutaway |
+| **C02b** | `render.json`, `plant_renderer.json` | — (client-only slice) | WebGPU compute cull, 4-tier LOD with hysteresis, storage buffers, WebGL2 fallback |
+| **C02c** | `physics.json` | Collider plan shared with the server's analytic collision | Rapier budgets, per-plant capsules, planet collider |
+| **C03b** | `render.json`, `terrain.json` | Shared seeded terrain field | Inner detail patch plus 620 m outer patch, colliders on the drawn vertices |
+| **D01** | `dev.json` | `/dev/config` GET/POST, `DEV_ACTION`, local-only gate | Dev panel listing every config system; persistence and germination switches |
 | **H01** | `ops.json` | Bot scaling, tick-budget, 24h soak, chaos disconnects, restore drill, security review | Launch readiness |
 | **Real-money** | — | Spore purchase flow, compliance/labeling | Store "coming soon" or live |
 
@@ -3439,11 +3481,11 @@ All item and Spore mutations use row-level locks (RULE_17). Include the duplicat
 
 # Final Sign-Off
 
-v5.3.1 is now complete as the merged master plan: **v5.3 core + the thirteen reviewed corrections + all retained beta specs + corrected cross-references + corrected dependency matrix + corrected checkpoint schedule**. It is standalone for AI sessions. Feed Part 2 + Part 3 + one task spec at a time. Do not feed the secrets file. Build systems, not outcomes. If a gate slips, cut features, never the gate. If a schema field is named `rarity`, it is a bug. If an item moves, it is a server transaction with flags enforced. If a client system touches the world, the server is authoritative and the client corrects without drama. If a report touches player-authored content, only RULE_6 categories are acted on.
+v5.3.2 is current: it is v5.3.1's merged master plan — **v5.3 core + the thirteen reviewed corrections + all retained beta specs + corrected cross-references + corrected dependency matrix + corrected checkpoint schedule**. It is standalone for AI sessions. Feed Part 2 + Part 3 + one task spec at a time. Do not feed the secrets file. Build systems, not outcomes. If a gate slips, cut features, never the gate. If a schema field is named `rarity`, it is a bug. If an item moves, it is a server transaction with flags enforced. If a client system touches the world, the server is authoritative and the client corrects without drama. If a report touches player-authored content, only RULE_6 categories are acted on.
 
 The plan's arithmetic holds: **73 task-weeks across three phases**, with playtest and buffer weeks bringing the total to **80 whole weeks**. Every checkpoint gap is **≤ 4 weeks**. Gate 3 has an explicit playtest week (W78), and its arithmetic is **25 task-weeks + 1 playtest + 2 buffer = 28 weeks (W53–80)**. Every task has a single AI-session scope. Every dependency is resolved before build. Every free-first choice is Docker-portable. Every stale `A…` reference now points to a real section or task.
 
-**End of Plant Legacy — Master Build Plan v5.3.1.**
+**End of Plant Legacy — Master Build Plan v5.3.2.**
 
 
 

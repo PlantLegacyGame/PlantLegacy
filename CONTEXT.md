@@ -43,6 +43,7 @@ pnpm verify           # lint + typecheck + config:validate + test
 pnpm lint             # biome check .
 pnpm typecheck        # tsc -p in every package
 pnpm config:validate  # schema + rarity ban over config/*.json
+pnpm docs:check       # links, config counts, protocol table, duplicate prose
 pnpm test             # node --test in packages/shared and apps/server
 pnpm build            # Vite production build -> apps/client/dist
 pnpm start            # server only
