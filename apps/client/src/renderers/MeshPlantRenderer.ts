@@ -17,6 +17,7 @@ import {
   seedBodyCentreY,
   seedBodyHalfHeight,
 } from '@plant-legacy/shared/growth';
+import { hash01 } from '@plant-legacy/shared/math';
 import * as THREE from 'three';
 import type { PlantNodeData } from './PlantRenderer.js';
 import { segmentStartFor } from './plant/segmentStart.js';
@@ -33,6 +34,10 @@ interface MeshNode {
   isOwnPlant: boolean;
   growthProgress: number;
   spawnTime: number;
+  /** Server node age in seconds, used for post-emergence leaf expansion. */
+  age: number;
+  /** Client time this node first appeared, for nodes the server reports as age 0. */
+  firstSeenMs: number;
   // Animated target position for connected growth
   targetPosition?: THREE.Vector3;
   parentAttachPosition?: THREE.Vector3;
@@ -49,11 +54,14 @@ interface MeshSegmentData {
   mesh: THREE.Mesh;
   jointMesh: THREE.Mesh | null;
   leafMeshes: THREE.Mesh[];
+  ornament: THREE.Group | null;
   parentPosition: THREE.Vector3;
   targetPosition: THREE.Vector3;
   originalRadius0: number;
   originalRadius1: number;
   originalLength: number;
+  /** Mid-segment lateral bow, in metres. */
+  bend: number;
 }
 
 /**
@@ -93,9 +101,18 @@ const barkMaterial: THREE.MeshStandardMaterial = new THREE.MeshStandardMaterial(
   flatShading: false,
 });
 const rootMaterial: THREE.MeshStandardMaterial = new THREE.MeshStandardMaterial({
-  color: 0x2d1b15,
-  roughness: 0.85,
-  metalness: 0.05,
+  // Roots in the cavity were nearly black against the dirt. A warmer, lighter
+  // brown keeps the silhouette and still reads as an underground organ.
+  color: 0x684632,
+  roughness: 0.88,
+  metalness: 0.02,
+  flatShading: false,
+});
+const stemMaterial: THREE.MeshStandardMaterial = new THREE.MeshStandardMaterial({
+  // Young hypocotyls and branches are green-brown, not mature tree bark.
+  color: 0x526b38,
+  roughness: 0.78,
+  metalness: 0.02,
   flatShading: false,
 });
 const leafMaterial: THREE.MeshStandardMaterial = new THREE.MeshStandardMaterial({
@@ -104,6 +121,33 @@ const leafMaterial: THREE.MeshStandardMaterial = new THREE.MeshStandardMaterial(
   metalness: 0.0,
   flatShading: false,
   side: THREE.DoubleSide,
+});
+const cotyledonMaterial: THREE.MeshStandardMaterial = new THREE.MeshStandardMaterial({
+  // Fleshy, yellow-green seed leaves catch light differently from true leaves.
+  color: 0x7fa24d,
+  roughness: 0.58,
+  metalness: 0.0,
+  flatShading: false,
+  side: THREE.DoubleSide,
+});
+const flowerMaterial: THREE.MeshStandardMaterial = new THREE.MeshStandardMaterial({
+  color: 0xd98aaa,
+  roughness: 0.62,
+  metalness: 0.0,
+  flatShading: false,
+  side: THREE.DoubleSide,
+});
+const flowerCentreMaterial: THREE.MeshStandardMaterial = new THREE.MeshStandardMaterial({
+  color: 0xe6c45f,
+  roughness: 0.74,
+  metalness: 0.0,
+  flatShading: false,
+});
+const sporeMaterial: THREE.MeshStandardMaterial = new THREE.MeshStandardMaterial({
+  color: 0xa88752,
+  roughness: 0.85,
+  metalness: 0.0,
+  flatShading: false,
 });
 
 const seedMaterial: THREE.MeshStandardMaterial = new THREE.MeshStandardMaterial({
@@ -120,8 +164,17 @@ function getMaterial(nodeType: string): THREE.MeshStandardMaterial {
     case 'lateral_root':
       return rootMaterial;
     case 'leaf':
-    case 'cotyledon':
       return leafMaterial;
+    case 'cotyledon':
+      return cotyledonMaterial;
+    case 'stem':
+    case 'branch':
+    case 'vine':
+      return stemMaterial;
+    case 'flower':
+      return flowerMaterial;
+    case 'spore_sac':
+      return sporeMaterial;
     case 'seed':
       return seedMaterial;
     default:
@@ -164,8 +217,9 @@ function buildTubeGeometry(
   r1: number,
   length: number,
   quality: MeshQualityConfig,
+  bend = 0,
 ): THREE.BufferGeometry {
-  const key = tubeGeometryCacheKey(r0, r1, length, quality);
+  const key = `${tubeGeometryCacheKey(r0, r1, length, quality)}|${bend.toFixed(3)}`;
   let geo = tubeGeometryCache.get(key);
   if (!geo) {
     geo = new THREE.CylinderGeometry(
@@ -176,11 +230,92 @@ function buildTubeGeometry(
       quality.tubeLengthSegments,
       false,
     );
-    geo.rotateX(Math.PI / 2);
+    // CylinderGeometry is centred on its Y axis. Move the base to the origin
+    // and keep +Y as the growth axis; the old rotateX made the geometry run
+    // along Z while the mesh was aligned from +X, so every tube was off-axis.
+    geo.translate(0, length / 2, 0);
+    if (Math.abs(bend) > 1e-5) {
+      const position = geo.getAttribute('position');
+      for (let i = 0; i < position.count; i += 1) {
+        const t = THREE.MathUtils.clamp(position.getY(i) / Math.max(length, 1e-4), 0, 1);
+        // Bow the middle while keeping both endpoints on the parent/joint, so
+        // roots wander without detaching from the graph.
+        position.setX(i, position.getX(i) + bend * Math.sin(Math.PI * t));
+      }
+      position.needsUpdate = true;
+    }
     geo.computeVertexNormals();
     tubeGeometryCache.set(key, geo);
   }
   return geo;
+}
+
+/**
+ * A leaf blade with its base at the origin and tip along +X.
+ *
+ * PlaneGeometry gave every leaf four sharp corners and put the petiole in the
+ * middle of the blade. This builds a rounded, slightly cupped lamina that starts
+ * at the attachment point, with a raised midrib and (for cotyledons) a broader,
+ * fleshier profile like a bean's seed leaf.
+ */
+function buildLeafGeometry(
+  length: number,
+  width: number,
+  segments: number,
+  isCotyledon: boolean,
+): THREE.BufferGeometry {
+  const rows = Math.max(4, segments * 2);
+  const cols = Math.max(4, segments * 2);
+  const positions: number[] = [];
+  const indices: number[] = [];
+
+  for (let row = 0; row <= rows; row += 1) {
+    const u = row / rows;
+    const profile =
+      Math.sin(Math.PI * u) ** (isCotyledon ? 0.45 : 0.75) *
+      (isCotyledon ? 1 : 0.72 + 0.28 * (1 - u));
+    for (let col = 0; col <= cols; col += 1) {
+      const v = (col / cols) * 2 - 1;
+      const x = length * u;
+      const y = width * 0.5 * profile * v;
+      // Cup the blade toward its normal and raise the midrib slightly. The
+      // centre line catches a highlight, so the leaf reads as a lamina rather
+      // than a flat coloured card.
+      const cup = width * 0.055 * Math.sin(Math.PI * u) * (1 - v * v);
+      const midrib = width * 0.035 * Math.max(0, 1 - Math.abs(v) * 5) * Math.sin(Math.PI * u);
+      const z = cup + midrib - width * 0.02 * Math.abs(v) * profile;
+      positions.push(x, y, z);
+    }
+  }
+
+  const stride = cols + 1;
+  for (let row = 0; row < rows; row += 1) {
+    for (let col = 0; col < cols; col += 1) {
+      const a = row * stride + col;
+      const b = a + 1;
+      const c = a + stride;
+      const d = c + 1;
+      indices.push(a, c, b, b, c, d);
+    }
+  }
+
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setIndex(indices);
+  geometry.computeVertexNormals();
+  return geometry;
+}
+
+/** A deterministic, type-appropriate mid-segment bow. */
+function segmentBend(node: MeshNode, length: number): number {
+  const type = node.nodeType.toLowerCase();
+  const sign = hash01(node.id, 'segment-bend') * 2 - 1;
+  if (type === 'radicle') return sign * length * 0.06;
+  if (type === 'lateral_root') return sign * length * 0.24;
+  if (type === 'root') return sign * length * 0.14;
+  if (type === 'stem' || type === 'branch') return sign * length * 0.05;
+  if (type === 'vine') return sign * length * 0.1;
+  return 0;
 }
 
 export class MeshPlantRenderer {
@@ -190,6 +325,8 @@ export class MeshPlantRenderer {
   private childrenMap = new Map<string, string[]>();
   private segments = new Map<string, MeshSegmentData>();
   private seedMeshes = new Map<string, THREE.Mesh>();
+  private nodeFirstSeen = new Map<string, number>();
+  private hasPlantData = false;
   private structureDirty = true;
   private readonly quality: MeshQualityConfig;
 
@@ -204,7 +341,13 @@ export class MeshPlantRenderer {
     this.nodeMap.clear();
     this.childrenMap.clear();
 
+    const now = performance.now();
+    const firstLoad = !this.hasPlantData;
+    this.hasPlantData = true;
+    const nextFirstSeen = new Map<string, number>();
     for (const n of nodes) {
+      const firstSeen = this.nodeFirstSeen.get(n.id) ?? (firstLoad ? now - 10_000 : now);
+      nextFirstSeen.set(n.id, firstSeen);
       const node: MeshNode = {
         id: n.id,
         position: n.position.clone(),
@@ -217,7 +360,24 @@ export class MeshPlantRenderer {
         isOwnPlant: n.isOwnPlant ?? true,
         growthProgress: n.growthProgress ?? 1.0,
         spawnTime: n.spawnTime ?? 0,
+        age: n.age ?? 0,
+        firstSeenMs: firstSeen,
       };
+      // The attach point is part of the finished skeleton, not just the growth
+      // animation. Keeping it only while growthProgress < 1 made a completed
+      // lateral root start at its parent's tip instead of the spot it actually
+      // budded from, so a third root looked detached from the second.
+      if (
+        n.parentAttachX !== undefined &&
+        n.parentAttachY !== undefined &&
+        n.parentAttachZ !== undefined
+      ) {
+        node.parentAttachPosition = new THREE.Vector3(
+          n.parentAttachX,
+          n.parentAttachY,
+          n.parentAttachZ,
+        );
+      }
       if (
         n.targetX !== undefined &&
         n.targetY !== undefined &&
@@ -226,14 +386,11 @@ export class MeshPlantRenderer {
         n.growthProgress < 1.0
       ) {
         node.targetPosition = new THREE.Vector3(n.targetX, n.targetY, n.targetZ);
-        node.parentAttachPosition = new THREE.Vector3(
-          n.parentAttachX ?? n.position.x,
-          n.parentAttachY ?? n.position.y,
-          n.parentAttachZ ?? n.position.z,
-        );
       }
       this.nodeMap.set(n.id, node);
     }
+
+    this.nodeFirstSeen = nextFirstSeen;
 
     for (const [id, node] of this.nodeMap) {
       if (node.parentId && this.nodeMap.has(node.parentId)) {
@@ -352,12 +509,17 @@ export class MeshPlantRenderer {
       const length = dir.length();
       if (length < 0.001) continue;
 
-      const geo = buildTubeGeometry(tubeStartRadius, tubeEndRadius, length, this.quality);
-      const mat = getMaterial(node.nodeType);
+      const bend = segmentBend(node, length);
+      const geo = buildTubeGeometry(tubeStartRadius, tubeEndRadius, length, this.quality, bend);
+      const mat =
+        node.nodeType === 'flower' || node.nodeType === 'spore_sac'
+          ? stemMaterial
+          : getMaterial(node.nodeType);
       const mesh = new THREE.Mesh(geo, mat);
       mesh.position.copy(segmentStart);
       if (length > 0.001) {
-        mesh.quaternion.setFromUnitVectors(new THREE.Vector3(1, 0, 0), dir.clone().normalize());
+        // The tube geometry grows along +Y from its base now.
+        mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.clone().normalize());
       }
 
       // Joint sphere at segment end
@@ -379,23 +541,27 @@ export class MeshPlantRenderer {
       const leafMeshes: THREE.Mesh[] = [];
       if (node.nodeType === 'leaf' || node.nodeType === 'cotyledon') {
         const isCotyledon = node.nodeType === 'cotyledon';
-        const leafSize = isCotyledon
-          ? THREE.MathUtils.clamp(parentVisualRadius * 2.6, 0.14, this.quality.maxLeafSize)
+        // Cotyledons are seed leaves: fleshy and large enough to read as the
+        // first photosynthetic organs. True leaves start smaller and broaden
+        // as the node matures.
+        const leafLength = isCotyledon
+          ? THREE.MathUtils.clamp(parentVisualRadius * 6.2, 0.3, this.quality.maxLeafSize * 1.2)
           : THREE.MathUtils.clamp(
-              visualRadius(node.nodeType, node.radius, node.biomass) * 8,
-              0.08,
-              this.quality.maxLeafSize,
+              visualRadius(node.nodeType, node.radius, node.biomass) * 14,
+              0.14,
+              Math.min(0.3, this.quality.maxLeafSize),
             );
+        const leafWidth = leafLength * (isCotyledon ? 0.88 : 0.66);
         const leafCount = isCotyledon
           ? 1
           : Math.min(this.quality.maxLeavesPerNode, Math.max(1, Math.floor(node.biomass / 3)));
         const axis = dir.clone().normalize();
         for (let i = 0; i < leafCount; i++) {
-          const leafGeo = new THREE.PlaneGeometry(
-            leafSize * 0.7,
-            leafSize,
+          const leafGeo = buildLeafGeometry(
+            leafLength,
+            leafWidth,
             this.quality.leafSegments,
-            this.quality.leafSegments,
+            isCotyledon,
           );
           const leaf = new THREE.Mesh(leafGeo, getMaterial(node.nodeType));
           const angle = (i / Math.max(1, leafCount)) * Math.PI * 2;
@@ -404,6 +570,14 @@ export class MeshPlantRenderer {
           leafMeshes.push(leaf);
         }
       }
+
+      let ornament: THREE.Group | null = null;
+      if (node.nodeType === 'flower') {
+        ornament = this.buildFlower(node, segmentEnd, dir);
+      } else if (node.nodeType === 'spore_sac') {
+        ornament = this.buildSporeSac(node, segmentEnd, dir);
+      }
+      if (ornament) this.meshGroup.add(ornament);
 
       this.meshGroup.add(mesh);
       this.segments.set(id, {
@@ -419,11 +593,13 @@ export class MeshPlantRenderer {
         mesh,
         jointMesh,
         leafMeshes,
+        ornament,
         parentPosition: segmentStart.clone(),
         targetPosition: segmentEnd.clone(),
         originalRadius0: tubeStartRadius,
         originalRadius1: tubeEndRadius,
         originalLength: length,
+        bend,
       });
     }
 
@@ -445,21 +621,74 @@ export class MeshPlantRenderer {
   ): void {
     const safeAxis = axis.lengthSq() < 1e-6 ? new THREE.Vector3(0, 1, 0) : axis.clone().normalize();
 
-    // Cotyledons open like seed leaves: broad blades roughly facing the sky.
-    // True leaves splay their faces around the shoot axis.
-    let normal: THREE.Vector3;
-    if (isCotyledon) {
-      normal = new THREE.Vector3(0, 1, 0);
-    } else {
-      normal = new THREE.Vector3().crossVectors(safeAxis, new THREE.Vector3(0, 1, 0));
-      if (normal.lengthSq() < 1e-4) normal.set(1, 0, 0);
+    // Build an explicit blade frame instead of using lookAt, whose roll is
+    // arbitrary. Local +X runs from the petiole to the tip, +Z is the upper
+    // face, and +Y is the leaf's width.
+    const forward = new THREE.Vector3(safeAxis.x, 0, safeAxis.z);
+    if (forward.lengthSq() < 1e-4) {
+      forward.set(Math.cos(angle), 0, Math.sin(angle));
     }
-    normal.normalize().applyAxisAngle(safeAxis, angle);
+    forward.normalize();
+    if (!isCotyledon) forward.applyAxisAngle(safeAxis, angle);
 
+    const normal = new THREE.Vector3(0, 1, 0)
+      .addScaledVector(forward, isCotyledon ? 0.1 : 0.2)
+      .normalize();
+    forward.addScaledVector(normal, -forward.dot(normal)).normalize();
+    const side = new THREE.Vector3().crossVectors(normal, forward).normalize();
+    const correctedForward = new THREE.Vector3().crossVectors(side, normal).normalize();
+
+    leaf.quaternion.setFromRotationMatrix(
+      new THREE.Matrix4().makeBasis(correctedForward, side, normal),
+    );
     leaf.position.copy(tip);
-    leaf.lookAt(tip.clone().add(normal));
-    // Tip the blade up a little so it catches light rather than lying dead flat.
-    leaf.rotateX(-0.3);
+  }
+
+  /** A small, readable flower head instead of falling through to a bark tube. */
+  private buildFlower(node: MeshNode, tip: THREE.Vector3, axis: THREE.Vector3): THREE.Group {
+    const group = new THREE.Group();
+    group.position.copy(tip);
+    const safeAxis = axis.lengthSq() < 1e-6 ? new THREE.Vector3(0, 1, 0) : axis.clone().normalize();
+    group.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), safeAxis);
+    const r = THREE.MathUtils.clamp(
+      visualRadius(node.nodeType, node.radius, node.biomass) * 9,
+      0.045,
+      0.1,
+    );
+    const petalGeo = new THREE.SphereGeometry(1, 10, 6);
+    for (let i = 0; i < 6; i += 1) {
+      const angle = (i / 6) * Math.PI * 2;
+      const petal = new THREE.Mesh(petalGeo, flowerMaterial);
+      petal.position.set(Math.cos(angle) * r * 0.62, 0, Math.sin(angle) * r * 0.62);
+      petal.rotation.y = -angle;
+      petal.scale.set(r * 0.62, r * 0.1, r * 0.3);
+      group.add(petal);
+    }
+    const centre = new THREE.Mesh(new THREE.SphereGeometry(1, 12, 8), flowerCentreMaterial);
+    centre.scale.set(r * 0.28, r * 0.16, r * 0.28);
+    group.add(centre);
+    return group;
+  }
+
+  /** A cluster of spore capsules for the non-flowering reproductive node. */
+  private buildSporeSac(node: MeshNode, tip: THREE.Vector3, axis: THREE.Vector3): THREE.Group {
+    const group = new THREE.Group();
+    group.position.copy(tip);
+    const safeAxis = axis.lengthSq() < 1e-6 ? new THREE.Vector3(0, 1, 0) : axis.clone().normalize();
+    group.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), safeAxis);
+    const r = THREE.MathUtils.clamp(
+      visualRadius(node.nodeType, node.radius, node.biomass) * 10,
+      0.04,
+      0.085,
+    );
+    for (let i = 0; i < 4; i += 1) {
+      const angle = (i / 4) * Math.PI * 2;
+      const capsule = new THREE.Mesh(new THREE.SphereGeometry(1, 9, 7), sporeMaterial);
+      capsule.position.set(Math.cos(angle) * r * 0.34, r * 0.1, Math.sin(angle) * r * 0.34);
+      capsule.scale.set(r * 0.27, r * 0.42, r * 0.27);
+      group.add(capsule);
+    }
+    return group;
   }
 
   private murrayTaper(parentRadius: number, totalChildren: number): number {
@@ -498,13 +727,14 @@ export class MeshPlantRenderer {
           seg.originalRadius1 * currentProgress,
           length,
           this.quality,
+          seg.bend * (length / Math.max(seg.originalLength, 1e-4)),
         );
         seg.mesh.geometry.dispose();
         seg.mesh.geometry = newGeo;
         seg.mesh.position.copy(p0);
         if (length > 0.001) {
           seg.mesh.quaternion.setFromUnitVectors(
-            new THREE.Vector3(1, 0, 0),
+            new THREE.Vector3(0, 1, 0),
             dir.clone().normalize(),
           );
         }
@@ -521,10 +751,30 @@ export class MeshPlantRenderer {
           const leaf = seg.leafMeshes[i];
           const angle = (i / Math.max(1, seg.leafMeshes.length)) * Math.PI * 2;
           this.placeLeaf(leaf, currentEnd, leafDir, angle, seg.nodeType === 'cotyledon');
-          leaf.scale.setScalar(0.35 + 0.65 * eased);
         }
 
         needsUpdate = true;
+      }
+
+      // Seed leaves keep expanding after the segment has finished extending.
+      // This is the post-emergence greening/expansion stage, not a second
+      // growth animation: the blade opens and broadens, then holds.
+      const isCotyledon = seg.nodeType === 'cotyledon';
+      const age = node.age > 0.01 ? node.age : (performance.now() - node.firstSeenMs) / 1000;
+      const matureScale = isCotyledon ? 0.62 + 0.58 * THREE.MathUtils.clamp(age / 2.6, 0, 1) : 1;
+      const extended = node.growthProgress ?? 1;
+      const growthScale = 0.35 + 0.65 * extended * extended * (3 - 2 * extended);
+      for (const leaf of seg.leafMeshes) {
+        leaf.scale.setScalar(growthScale * matureScale);
+      }
+      if (seg.ornament) {
+        const ornamentEnd = new THREE.Vector3().lerpVectors(
+          seg.parentPosition,
+          seg.targetPosition,
+          currentProgress * currentProgress * (3 - 2 * currentProgress),
+        );
+        seg.ornament.position.copy(ornamentEnd);
+        seg.ornament.scale.setScalar(growthScale);
       }
     }
 
@@ -552,6 +802,11 @@ export class MeshPlantRenderer {
       seg.mesh.geometry.dispose();
       if (seg.jointMesh) seg.jointMesh.geometry.dispose();
       for (const leaf of seg.leafMeshes) leaf.geometry.dispose();
+      if (seg.ornament) {
+        seg.ornament.traverse((obj) => {
+          if (obj instanceof THREE.Mesh) obj.geometry.dispose();
+        });
+      }
     }
     for (const mesh of this.seedMeshes.values()) {
       mesh.geometry.dispose();

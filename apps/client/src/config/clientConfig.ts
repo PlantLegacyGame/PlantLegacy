@@ -176,6 +176,61 @@ export interface RootSightConfig {
   rivalRootHighlightColor: string;
   substrateMultiplier: number;
   cameraTarget: 'own_plant' | 'camera_position';
+  maxCavityBubbles: number;
+  bubbleMergeCellM: number;
+  bubblePaddingM: number;
+  rivalBubbleBudget: number;
+  cameraBurrowEnabled: boolean;
+  maxBurrowDepthM: number;
+  cavityClearanceM: number;
+  rebuildHz: number;
+  cutRimDitherM: number;
+}
+
+export interface TerrainConfig {
+  seed: number;
+  surfaceAmplitudeM: number;
+  surfaceBaseFrequency: number;
+  surfaceOctaves: number;
+  surfaceLacunarity: number;
+  surfaceGain: number;
+  ridgeStrength: number;
+  patchRadiusM: number;
+  rimFadeFraction: number;
+  tileSizeM: number;
+  tileVertices: number;
+  lodDistancesM: number[];
+  cellSizeM: number;
+  chunkCells: number;
+  maxActiveChunks: number;
+  maxDepthM: number;
+  surfaceBreakDepthM: number;
+  maxEditVolumeM3: number;
+  maxEditsPerTick: number;
+  collapseCadenceHz: number;
+  displacementRingCells: number;
+  growthResistanceMin: number;
+  growthResistanceMax: number;
+  runoffFraction: number;
+  evaporationPerS: number;
+  rainAbsorptionPerS: number;
+}
+
+export interface PhysicsConfig {
+  gravityMps2: number;
+  fixedTimestepS: number;
+  maxCollidersPerPlant: number;
+  maxColliderPlants: number;
+  colliderLodDistanceM: number;
+  chainMergeMinNodes: number;
+  leafColliderMode: 'none' | 'cuboid' | 'hull';
+  jointColliders: boolean;
+  colliderInflationM: number;
+  debrisMaxBodies: number;
+  cameraProbeRadiusM: number;
+  colliderRebuildHz: number;
+  rainDropRadiusM: number;
+  rainDropMassKg: number;
 }
 
 export interface ChatConfig {
@@ -475,6 +530,24 @@ interface RootSightConfigResponse {
   substrateMultiplier?: number;
   camera_target?: 'own_plant' | 'camera_position';
   cameraTarget?: 'own_plant' | 'camera_position';
+  max_cavity_bubbles?: number;
+  maxCavityBubbles?: number;
+  bubble_merge_cell_m?: number;
+  bubbleMergeCellM?: number;
+  bubble_padding_m?: number;
+  bubblePaddingM?: number;
+  rival_bubble_budget?: number;
+  rivalBubbleBudget?: number;
+  camera_burrow_enabled?: boolean;
+  cameraBurrowEnabled?: boolean;
+  max_burrow_depth_m?: number;
+  maxBurrowDepthM?: number;
+  cavity_clearance_m?: number;
+  cavityClearanceM?: number;
+  rebuild_hz?: number;
+  rebuildHz?: number;
+  cut_rim_dither_m?: number;
+  cutRimDitherM?: number;
 }
 
 function normalizeRenderConfig(data: RenderConfigResponse, fallback: RenderConfig): RenderConfig {
@@ -726,6 +799,18 @@ function normalizeRootSightConfig(
     substrateMultiplier:
       data.substrate_multiplier ?? data.substrateMultiplier ?? fallback.substrateMultiplier,
     cameraTarget: data.camera_target ?? data.cameraTarget ?? fallback.cameraTarget,
+    maxCavityBubbles: data.max_cavity_bubbles ?? data.maxCavityBubbles ?? fallback.maxCavityBubbles,
+    bubbleMergeCellM:
+      data.bubble_merge_cell_m ?? data.bubbleMergeCellM ?? fallback.bubbleMergeCellM,
+    bubblePaddingM: data.bubble_padding_m ?? data.bubblePaddingM ?? fallback.bubblePaddingM,
+    rivalBubbleBudget:
+      data.rival_bubble_budget ?? data.rivalBubbleBudget ?? fallback.rivalBubbleBudget,
+    cameraBurrowEnabled:
+      data.camera_burrow_enabled ?? data.cameraBurrowEnabled ?? fallback.cameraBurrowEnabled,
+    maxBurrowDepthM: data.max_burrow_depth_m ?? data.maxBurrowDepthM ?? fallback.maxBurrowDepthM,
+    cavityClearanceM: data.cavity_clearance_m ?? data.cavityClearanceM ?? fallback.cavityClearanceM,
+    rebuildHz: data.rebuild_hz ?? data.rebuildHz ?? fallback.rebuildHz,
+    cutRimDitherM: data.cut_rim_dither_m ?? data.cutRimDitherM ?? fallback.cutRimDitherM,
   };
 }
 
@@ -929,7 +1014,7 @@ export async function loadRenderConfig(serverOrigin: string): Promise<RenderConf
     growthAimTipRadius: 0.014,
     growthAimCurveBend: 0.24,
     growthAimCurveWobble: 0.05,
-    terrainMeshSubdivisions: 48,
+    terrainMeshSubdivisions: 256,
     terrainRadius: 300.0,
     terrainAmplitudeM: 2.4,
     soilDepthM: 1.6,
@@ -937,7 +1022,7 @@ export async function loadRenderConfig(serverOrigin: string): Promise<RenderConf
     playerGravityMps2: 9.81,
     playerSpawnHeightM: 3.5,
     rootAuraRadius: 3.0,
-    webgpuEnabled: true,
+    webgpuEnabled: false,
     webgpuMaxPlants: 10000,
     webgpuTier0Threshold: 300,
     webgpuTier1Threshold: 80,
@@ -995,7 +1080,138 @@ export async function loadRootSightConfig(serverOrigin: string): Promise<RootSig
     rivalRootHighlightColor: '#FF5722',
     substrateMultiplier: 0.5,
     cameraTarget: 'own_plant',
+    maxCavityBubbles: 64,
+    bubbleMergeCellM: 0.6,
+    bubblePaddingM: 0.12,
+    rivalBubbleBudget: 24,
+    cameraBurrowEnabled: true,
+    maxBurrowDepthM: 12,
+    cavityClearanceM: 0.2,
+    rebuildHz: 10,
+    cutRimDitherM: 0.35,
   });
+}
+
+export async function loadTerrainConfig(serverOrigin: string): Promise<TerrainConfig> {
+  const fallback: TerrainConfig = {
+    seed: 1337,
+    surfaceAmplitudeM: 6,
+    surfaceBaseFrequency: 0.045,
+    surfaceOctaves: 4,
+    surfaceLacunarity: 2,
+    surfaceGain: 0.5,
+    ridgeStrength: 0.35,
+    patchRadiusM: 620,
+    rimFadeFraction: 0.28,
+    tileSizeM: 16,
+    tileVertices: 17,
+    lodDistancesM: [48, 120, 280, 620],
+    cellSizeM: 0.5,
+    chunkCells: 32,
+    maxActiveChunks: 64,
+    maxDepthM: 12,
+    surfaceBreakDepthM: 0.8,
+    maxEditVolumeM3: 4,
+    maxEditsPerTick: 16,
+    collapseCadenceHz: 2,
+    displacementRingCells: 3,
+    growthResistanceMin: 0.4,
+    growthResistanceMax: 2.5,
+    runoffFraction: 0.15,
+    evaporationPerS: 0.002,
+    rainAbsorptionPerS: 0.05,
+  };
+  try {
+    const response = await fetch(`${serverOrigin}/config/terrain`, { cache: 'no-store' });
+    if (!response.ok) return fallback;
+    const data = (await response.json()) as Record<string, unknown>;
+    const num = (key: string, value: number): number => {
+      const parsed = Number(data[key]);
+      return Number.isFinite(parsed) ? parsed : value;
+    };
+    const lod = Array.isArray(data.lod_distances_m)
+      ? (data.lod_distances_m as unknown[]).map(Number).filter((n) => Number.isFinite(n))
+      : fallback.lodDistancesM;
+    return {
+      seed: num('seed', fallback.seed),
+      surfaceAmplitudeM: num('surface_amplitude_m', fallback.surfaceAmplitudeM),
+      surfaceBaseFrequency: num('surface_base_frequency', fallback.surfaceBaseFrequency),
+      surfaceOctaves: num('surface_octaves', fallback.surfaceOctaves),
+      surfaceLacunarity: num('surface_lacunarity', fallback.surfaceLacunarity),
+      surfaceGain: num('surface_gain', fallback.surfaceGain),
+      ridgeStrength: num('ridge_strength', fallback.ridgeStrength),
+      patchRadiusM: num('patch_radius_m', fallback.patchRadiusM),
+      rimFadeFraction: num('rim_fade_fraction', fallback.rimFadeFraction),
+      tileSizeM: num('tile_size_m', fallback.tileSizeM),
+      tileVertices: num('tile_vertices', fallback.tileVertices),
+      lodDistancesM: lod.length > 0 ? lod : fallback.lodDistancesM,
+      cellSizeM: num('cell_size_m', fallback.cellSizeM),
+      chunkCells: num('chunk_cells', fallback.chunkCells),
+      maxActiveChunks: num('max_active_chunks', fallback.maxActiveChunks),
+      maxDepthM: num('max_depth_m', fallback.maxDepthM),
+      surfaceBreakDepthM: num('surface_break_depth_m', fallback.surfaceBreakDepthM),
+      maxEditVolumeM3: num('max_edit_volume_m3', fallback.maxEditVolumeM3),
+      maxEditsPerTick: num('max_edits_per_tick', fallback.maxEditsPerTick),
+      collapseCadenceHz: num('collapse_cadence_hz', fallback.collapseCadenceHz),
+      displacementRingCells: num('displacement_ring_cells', fallback.displacementRingCells),
+      growthResistanceMin: num('growth_resistance_min', fallback.growthResistanceMin),
+      growthResistanceMax: num('growth_resistance_max', fallback.growthResistanceMax),
+      runoffFraction: num('runoff_fraction', fallback.runoffFraction),
+      evaporationPerS: num('evaporation_per_s', fallback.evaporationPerS),
+      rainAbsorptionPerS: num('rain_absorption_per_s', fallback.rainAbsorptionPerS),
+    };
+  } catch {
+    return fallback;
+  }
+}
+
+export async function loadPhysicsConfig(serverOrigin: string): Promise<PhysicsConfig> {
+  const fallback: PhysicsConfig = {
+    gravityMps2: 9.81,
+    fixedTimestepS: 1 / 60,
+    maxCollidersPerPlant: 192,
+    maxColliderPlants: 24,
+    colliderLodDistanceM: 70,
+    chainMergeMinNodes: 3,
+    leafColliderMode: 'cuboid',
+    jointColliders: false,
+    colliderInflationM: 0.005,
+    debrisMaxBodies: 24,
+    cameraProbeRadiusM: 0.25,
+    colliderRebuildHz: 10,
+    rainDropRadiusM: 0.03,
+    rainDropMassKg: 0.001,
+  };
+  try {
+    const response = await fetch(`${serverOrigin}/config/physics`, { cache: 'no-store' });
+    if (!response.ok) return fallback;
+    const data = (await response.json()) as Record<string, unknown>;
+    const num = (key: string, value: number): number => {
+      const parsed = Number(data[key]);
+      return Number.isFinite(parsed) ? parsed : value;
+    };
+    const mode = String(data.leaf_collider_mode ?? fallback.leafColliderMode);
+    return {
+      gravityMps2: num('gravity_mps2', fallback.gravityMps2),
+      fixedTimestepS: num('fixed_timestep_s', fallback.fixedTimestepS),
+      maxCollidersPerPlant: num('max_colliders_per_plant', fallback.maxCollidersPerPlant),
+      maxColliderPlants: num('max_collider_plants', fallback.maxColliderPlants),
+      colliderLodDistanceM: num('collider_lod_distance_m', fallback.colliderLodDistanceM),
+      chainMergeMinNodes: num('chain_merge_min_nodes', fallback.chainMergeMinNodes),
+      leafColliderMode:
+        mode === 'none' || mode === 'hull' || mode === 'cuboid' ? mode : fallback.leafColliderMode,
+      jointColliders:
+        typeof data.joint_colliders === 'boolean' ? data.joint_colliders : fallback.jointColliders,
+      colliderInflationM: num('collider_inflation_m', fallback.colliderInflationM),
+      debrisMaxBodies: num('debris_max_bodies', fallback.debrisMaxBodies),
+      cameraProbeRadiusM: num('camera_probe_radius_m', fallback.cameraProbeRadiusM),
+      colliderRebuildHz: num('collider_rebuild_hz', fallback.colliderRebuildHz),
+      rainDropRadiusM: num('rain_drop_radius_m', fallback.rainDropRadiusM),
+      rainDropMassKg: num('rain_drop_mass_kg', fallback.rainDropMassKg),
+    };
+  } catch {
+    return fallback;
+  }
 }
 
 export async function loadNetworkConfig(serverOrigin: string): Promise<NetworkConfig> {
@@ -1056,6 +1272,22 @@ export interface ResourceTileConfig {
   maxLight: number;
   maxMoisture: number;
   maxMinerals: number;
+  /**
+   * The simulation rates the dev panel edits. They are read from the same
+   * config the server boots with, so the panel shows real numbers instead of
+   * hardcoded guesses that disagreed with the running world.
+   */
+  rates: ResourceRates;
+}
+
+export interface ResourceRates {
+  photosynthesisRate: number;
+  diffusionRate: number;
+  maxAbsorptionPerTick: number;
+  rainGainPerS: number;
+  evaporationPerS: number;
+  canopyShadeReduction: number;
+  groundwaterCapacity: number;
 }
 
 /**
@@ -1075,18 +1307,48 @@ export async function loadResourceTileConfig(serverOrigin: string): Promise<Reso
         maxMoisture?: number;
         max_minerals?: number;
         maxMinerals?: number;
+        photosynthesis_rate?: number;
+        diffusion_rate?: number;
+        max_absorption_per_tick?: number;
+        rain_gain_per_s?: number;
+        evaporation_per_s?: number;
+        canopy_shade_reduction?: number;
+        groundwater_capacity?: number;
       };
       return {
         tileLightBase: data.tile_light_base ?? data.tileLightBase ?? 80,
         maxLight: data.max_light ?? data.maxLight ?? 500,
         maxMoisture: data.max_moisture ?? data.maxMoisture ?? 500,
         maxMinerals: data.max_minerals ?? data.maxMinerals ?? 500,
+        rates: {
+          photosynthesisRate: data.photosynthesis_rate ?? 1,
+          diffusionRate: data.diffusion_rate ?? 0.03,
+          maxAbsorptionPerTick: data.max_absorption_per_tick ?? 1,
+          rainGainPerS: data.rain_gain_per_s ?? 1.5,
+          evaporationPerS: data.evaporation_per_s ?? 0.025,
+          canopyShadeReduction: data.canopy_shade_reduction ?? 0.1,
+          groundwaterCapacity: data.groundwater_capacity ?? 400,
+        },
       };
     }
   } catch {
     // Fall through to the documented defaults.
   }
-  return { tileLightBase: 80, maxLight: 500, maxMoisture: 500, maxMinerals: 500 };
+  return {
+    tileLightBase: 80,
+    maxLight: 500,
+    maxMoisture: 500,
+    maxMinerals: 500,
+    rates: {
+      photosynthesisRate: 1,
+      diffusionRate: 0.03,
+      maxAbsorptionPerTick: 1,
+      rainGainPerS: 1.5,
+      evaporationPerS: 0.025,
+      canopyShadeReduction: 0.1,
+      groundwaterCapacity: 400,
+    },
+  };
 }
 
 export async function loadReportsConfig(serverOrigin: string): Promise<ReportsConfig> {

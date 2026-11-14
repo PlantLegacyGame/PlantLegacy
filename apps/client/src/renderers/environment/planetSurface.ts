@@ -1,66 +1,22 @@
 /**
- * Planet surface math (world-as-a-planet, stage 1).
+ * Planet surface math (world-as-a-planet).
  *
- * The world is no longer an infinite flat plane: it is the surface of a sphere
- * with the play area at its pole. Stage 1 keeps the simulation's 2D coordinates
- * (x, z) and treats them as metres measured across the surface from the pole,
- * so every renderer only has to drop a position onto the sphere. Wrapping the
- * tile grid around the whole body, and gravity that points at the centre, are
- * the next stages; the helpers here are the frame they will use.
+ * The world is the surface of a sphere. Stage 1 keeps the simulation's 2D
+ * coordinates (x, z) and treats them as metres measured across the surface from
+ * the pole, so every renderer only has to drop a position onto the sphere.
+ *
+ * Relief now comes from the shared `@plant-legacy/shared/world` terrain field:
+ * the server validates growth against the same function, so the ground the
+ * client draws is the ground the simulation believes in. Only the planet's
+ * curvature is added here.
  */
+import {
+  type TerrainFieldParams,
+  terrainHeightAt,
+  terrainMaterialAt,
+  terrainNormalAt,
+} from '@plant-legacy/shared/world';
 import * as THREE from 'three';
-
-// --- Terrain relief --------------------------------------------------------
-// The surface is the sphere plus a small procedural displacement, so the ground
-// has real shape instead of a perfect curve. Two octaves of value noise in
-// metres: broad swells a few metres across with a finer roll on top. Deliberately
-// cheap — it runs per vertex once when the ground is built and a few times a
-// frame for placement, camera and collision.
-//
-// The same function drives the geometry, plant placement and the camera; a
-// visual-only displacement would leave plants hovering above the swells.
-
-function terrainHash(x: number, z: number): number {
-  const s = Math.sin(x * 127.1 + z * 311.7) * 43758.5453;
-  return s - Math.floor(s);
-}
-
-function terrainSmooth(t: number): number {
-  return t * t * (3 - 2 * t);
-}
-
-/** Bilinear value noise in [0, 1]. */
-export function terrainNoise(x: number, z: number): number {
-  const xi = Math.floor(x);
-  const zi = Math.floor(z);
-  const xf = terrainSmooth(x - xi);
-  const zf = terrainSmooth(z - zi);
-  const top = terrainHash(xi, zi) + (terrainHash(xi + 1, zi) - terrainHash(xi, zi)) * xf;
-  const bottom =
-    terrainHash(xi, zi + 1) + (terrainHash(xi + 1, zi + 1) - terrainHash(xi, zi + 1)) * xf;
-  return top + (bottom - top) * zf;
-}
-
-/**
- * Height offset in metres, symmetric around zero so the ground rises and dips.
- * Returns 0 when relief is disabled.
- */
-export function terrainOffset(x: number, z: number, amplitude: number): number {
-  if (!(amplitude > 0)) return 0;
-  if (!Number.isFinite(x) || !Number.isFinite(z)) return 0;
-  // Wavelengths of roughly 10 m and 3 m. The older 5.5 m/1.6 m pair put the
-  // hills so close together that at eye height the ground still read as flat:
-  // relief only became visible from above, which is not where the player is.
-  const unit = terrainUnit(x, z);
-  return (unit - 0.5) * 2 * amplitude;
-}
-
-/** Relief height in [0, 1] before it is scaled to metres. */
-export function terrainUnit(x: number, z: number): number {
-  const broad = terrainNoise(x * 0.1, z * 0.1);
-  const fine = terrainNoise(x * 0.34 + 31.7, z * 0.34 - 12.3);
-  return broad * 0.7 + fine * 0.3;
-}
 
 /**
  * How far below the tangent plane at the pole a point sits, in metres.
@@ -115,55 +71,30 @@ export function planetSurfaceFrame(
   return { point, normal };
 }
 
-/**
- * Radius of the high-detail terrain patch around the play area.
- *
- * The planet sphere is tessellated for a 100 km body: its vertices are about
- * 2.4 km apart, so hills tens of metres across cannot exist in it at all. The
- * patch is the metre-scale surface the player actually stands on; the planet
- * carries everything beyond it.
- */
-export const TERRAIN_PATCH_RADIUS_M = 90;
+/** Lift that keeps a patch above the sphere it covers, avoiding z-fighting. */
+export const TERRAIN_SKIN_M = 0.02;
 
-/** Lift that keeps the patch above the sphere it covers, avoiding z-fighting. */
-const TERRAIN_SKIN_M = 0.02;
-
-/**
- * Relief fades to zero at the patch rim so the patch meets the planet sphere
- * exactly: no step at the edge, no seam to look at.
- */
-export function terrainReliefScale(x: number, z: number): number {
-  const radius = Math.hypot(x, z);
-  const inner = TERRAIN_PATCH_RADIUS_M * 0.72;
-  if (radius <= inner) return 1;
-  if (radius >= TERRAIN_PATCH_RADIUS_M) return 0;
-  const t = 1 - (radius - inner) / (TERRAIN_PATCH_RADIUS_M - inner);
-  return t * t * (3 - 2 * t);
+/** Relief at a position, from the shared field. */
+export function terrainRelief(x: number, z: number, field: TerrainFieldParams): number {
+  return terrainHeightAt(field, x, z);
 }
 
 /**
- * Relief at a position, faded out towards the patch rim.
- *
- * Raise-only: hills sit on the sphere and nothing cuts below it. The sphere is
- * also the physics floor across the whole planet, so any dip below it would be
- * a hole the player can stand at the bottom of, floating over the visible
- * ground. Bumps above it are covered by the terrain collider; dips under it are
- * not representable without cutting the collider itself.
+ * Surface height at (x, z) including the terrain displacement and the same
+ * skin the detail patch is raised by. Placement code must use this rather than
+ * the bare sphere, or plants sink into the swells and the seed ends up under
+ * the drawn ground by the skin thickness.
  */
-export function terrainRelief(x: number, z: number, amplitude: number): number {
-  const scale = terrainReliefScale(x, z);
-  if (scale <= 0) return 0;
-  const unit = (terrainOffset(x, z, 1) + 1) * 0.5;
-  return unit * amplitude * scale + TERRAIN_SKIN_M;
-}
-
-/**
- * Surface height at (x, z) including the terrain displacement. Placement code
- * must use this rather than the bare sphere, or plants sink into the swells.
- */
-export function planetTerrainY(radius: number, x: number, z: number, amplitude: number): number {
-  const relief = amplitude > 0 ? terrainRelief(x, z, amplitude) : 0;
-  return planetSurfaceY(radius, x, z) + relief;
+export function planetTerrainY(
+  radius: number,
+  x: number,
+  z: number,
+  field: TerrainFieldParams,
+): number {
+  const relief = field.amplitudeM > 0 ? terrainRelief(x, z, field) : 0;
+  // The flat fallback ground has no patch above it, so it needs no skin.
+  const skin = radius > 0 ? TERRAIN_SKIN_M : 0;
+  return planetSurfaceY(radius, x, z) + relief + skin;
 }
 
 /**
@@ -171,11 +102,6 @@ export function planetTerrainY(radius: number, x: number, z: number, amplitude: 
  * at y = 0, which is where the play area's tangent plane is. One sphere means
  * one surface: there is no cap to end, no seam where two grounds meet, and no
  * edge that stops the player.
- *
- * `amplitude` displaces every vertex along its own radius by the shared terrain
- * noise, so the ground has real relief. Tessellation is high because this is
- * the only ground geometry: at 256 × 128 the chords stay far below eye height
- * on a planet-sized radius and the voronoi of the noise is resolved properly.
  */
 export function createPlanetBody(radius: number, material: THREE.Material): THREE.Mesh {
   const geometry = new THREE.SphereGeometry(radius, 256, 128);
@@ -188,19 +114,28 @@ export function createPlanetBody(radius: number, material: THREE.Material): THRE
 }
 
 /**
- * The metre-scale ground of the play area: a grid that follows the sphere and
- * carries the relief, in the planet mesh's own local space. Same material as
- * the planet so the soil shader, the Root Sight cavity and the lighting apply
- * to it identically; it only adds geometry where the player can see it.
+ * One metre-scale ground patch that follows the sphere and carries the relief,
+ * in the planet mesh's own local space. Same material as the planet so the soil
+ * shader, the Root Sight cavity and the lighting apply identically; it only
+ * adds geometry where the player can see it.
+ *
+ * `extentM` is the full width of the square, so a 620 m patch covers the whole
+ * authored play area. `holeExtentM` removes the centre of the square, turning a
+ * coarse outer patch into a ring: the detailed inner patch fills that hole, so
+ * the two LODs never draw the same square metres twice.
  */
 export function createTerrainPatch(
   radius: number,
-  amplitude: number,
+  field: TerrainFieldParams,
   material: THREE.Material,
   segments = 96,
+  extentM = 180,
+  skinM = TERRAIN_SKIN_M,
+  holeExtentM = 0,
 ): THREE.Mesh {
-  const extent = TERRAIN_PATCH_RADIUS_M * 2;
-  const geometry = new THREE.PlaneGeometry(extent, extent, segments, segments);
+  const extent = Math.max(1, extentM);
+  const divisions = Math.max(2, Math.min(256, Math.round(segments)));
+  const geometry = new THREE.PlaneGeometry(extent, extent, divisions, divisions);
   geometry.rotateX(-Math.PI / 2);
   const positions = geometry.getAttribute('position');
   for (let i = 0; i < positions.count; i += 1) {
@@ -211,9 +146,28 @@ export function createTerrainPatch(
     // relief, which is zero past the patch radius, so the rim matches the
     // sphere exactly.
     const sphereY = Math.sqrt(Math.max(radius * radius - horizontal * horizontal, 0));
-    positions.setY(i, sphereY + terrainRelief(x, z, amplitude));
+    positions.setY(i, sphereY + terrainRelief(x, z, field) + skinM);
   }
   positions.needsUpdate = true;
+
+  // Drop fully-inside triangles for a ring patch. Vertices stay allocated (they
+  // are not uploaded as separate draws) so the remaining grid is untouched.
+  const holeHalf = Math.max(0, holeExtentM) / 2;
+  const index = geometry.getIndex();
+  if (holeHalf > 0 && index) {
+    const kept: number[] = [];
+    for (let i = 0; i < index.count; i += 3) {
+      const a = index.getX(i);
+      const b = index.getX(i + 1);
+      const c = index.getX(i + 2);
+      const inside = (vertex: number): boolean =>
+        Math.abs(positions.getX(vertex)) < holeHalf && Math.abs(positions.getZ(vertex)) < holeHalf;
+      if (inside(a) && inside(b) && inside(c)) continue;
+      kept.push(a, b, c);
+    }
+    geometry.setIndex(kept);
+  }
+
   geometry.computeVertexNormals();
   const mesh = new THREE.Mesh(geometry, material);
   mesh.name = 'planet-terrain';
@@ -223,22 +177,53 @@ export function createTerrainPatch(
 }
 
 /**
- * The dirt under the surface: a second sphere one soil depth below the ground,
- * so a Root Sight opening lands on real geometry instead of a shaded hole. It
- * is low-poly and only visible while Root Sight is open — it cannot be seen
- * from the surface, and there is no point paying for it the rest of the time.
+ * The near-field ground: a high-resolution patch for the play area plus a
+ * coarse ring out to the configured radius. Both carry the same field, so a
+ * 500 m walk sees the same hills instead of a smooth ball beyond 90 m. The
+ * outer patch has its centre removed and the inner patch overlaps its rim by a
+ * little, so there is one ground surface everywhere and no coincident sheets.
  */
-export function createSubsoil(radius: number, depth: number, material: THREE.Material): THREE.Mesh {
-  const innerRadius = Math.max(radius * 0.5, radius - Math.max(depth, 0.05));
-  const geometry = new THREE.SphereGeometry(innerRadius, 128, 64);
-  const mesh = new THREE.Mesh(geometry, material);
-  mesh.name = 'planet-subsoil';
-  // Concentric with the planet, not resting its own pole on the surface: the
-  // floor of the dirt layer has to sit `depth` metres below the ground
-  // everywhere, which means the same centre as the planet and a smaller radius.
-  mesh.position.y = -radius;
-  mesh.receiveShadow = false;
-  mesh.castShadow = false;
-  mesh.visible = false;
-  return mesh;
+export function createTerrainPatches(
+  radius: number,
+  field: TerrainFieldParams,
+  material: THREE.Material,
+  innerSegments: number,
+): { inner: THREE.Mesh; outer: THREE.Mesh } {
+  const patchRadius = Math.max(20, field.patchRadiusM);
+  const innerExtent = Math.min(180, patchRadius * 2);
+  const inner = createTerrainPatch(
+    radius,
+    field,
+    material,
+    Math.max(16, innerSegments),
+    innerExtent,
+    TERRAIN_SKIN_M,
+  );
+  inner.name = 'planet-terrain-detail';
+  const outer = createTerrainPatch(
+    radius,
+    field,
+    material,
+    Math.max(24, Math.round(innerSegments * 0.6)),
+    patchRadius * 2,
+    0.004,
+    innerExtent * 0.98,
+  );
+  outer.name = 'planet-terrain-far';
+  return { inner, outer };
+}
+
+/** Material at a depth below the surface, for the strata shading. */
+export function terrainMaterialDepth(field: TerrainFieldParams, depthM: number) {
+  return terrainMaterialAt(field, depthM);
+}
+
+/** Surface normal including relief, in the pole-local frame. */
+export function terrainNormal(
+  field: TerrainFieldParams,
+  x: number,
+  z: number,
+  epsilonM = 0.5,
+): { x: number; y: number; z: number } {
+  return terrainNormalAt(field, x, z, epsilonM);
 }

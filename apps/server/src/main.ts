@@ -4,7 +4,12 @@ import { createServer } from 'node:http';
 import process from 'node:process';
 import { readNumber } from '@plant-legacy/shared/config';
 import { validateMessage } from '@plant-legacy/shared/protocol/messageSchemas';
-import { loadDayNightConfig, loadWeatherConfig, WeatherSystem } from '@plant-legacy/weather';
+import {
+  loadDayNightConfig,
+  loadWeatherConfig,
+  type WeatherStateName,
+  WeatherSystem,
+} from '@plant-legacy/weather';
 import { WebSocket, WebSocketServer } from 'ws';
 import { loadRuntimeConfig } from './core/config.ts';
 import { SERVICE_VERSION } from './core/version.ts';
@@ -57,6 +62,7 @@ import {
   type WelcomePayload,
 } from './ops/net.ts';
 import { PlantPersistence } from './ops/persistence/plantPersistence.ts';
+import { TerrainPersistence } from './ops/persistence/terrainPersistence.ts';
 import { clampPlantStorage, computePlantCapacity } from './ops/plantCapacity.ts';
 import { canAdoptGuestPlant, isAnonymousOwner } from './ops/plantOwnership.ts';
 import { selectVisiblePlants } from './ops/plantVisibility.ts';
@@ -81,6 +87,7 @@ import {
   seasonSnapshot,
   seasonUpdatePayload,
 } from './ops/seasonClock.ts';
+import { TerrainService } from './ops/terrain.ts';
 import { createTickClock, type TickClock, tickClockStart, tickClockStop } from './ops/tickClock.ts';
 import { loadWorldConfig } from './ops/world.ts';
 
@@ -192,6 +199,8 @@ interface RootResourceSnapshot {
   tileAvgLight: number;
   tileAvgMoisture: number;
   tileAvgMinerals: number;
+  /** Share of the local soil cavity filled with water, 0..1. */
+  groundwaterFraction: number;
   coverageTileX: number;
   coverageTileZ: number;
 }
@@ -282,6 +291,7 @@ class World {
   private connectionRegistry: ConnectionRegistry;
   private tickClock: TickClock;
   private plantPersistence: PlantPersistence | null;
+  private terrain: TerrainService | null;
   private maxFrameTimeMs: number;
   private persistenceEnabled: boolean;
   private seasonClock: SeasonClock;
@@ -572,6 +582,7 @@ class World {
     chatConfig: ChatConfig,
     reportConfig: ReportConfig,
     seasonLengthDays = 36,
+    terrain: TerrainService | null = null,
   ) {
     this.config = config;
     this.log = log;
@@ -580,6 +591,7 @@ class World {
     this.weatherSystem = weatherSystem;
     this.interestManager = interestManager;
     this.plantPersistence = plantPersistence;
+    this.terrain = terrain;
     this.maxFrameTimeMs = maxFrameTimeMs;
     this.persistenceEnabled = persistenceEnabled;
     this.itemsConfig = itemsConfig;
@@ -1819,6 +1831,52 @@ class World {
           });
           break;
         }
+        case MESSAGE_TYPE.TERRAIN_REGION_REQUEST: {
+          const player = this.players.get(playerId);
+          if (!player || !this.terrain) break;
+          const request = payload as {
+            worldX: number;
+            worldZ: number;
+            radiusM: number;
+            revision?: number;
+          };
+          if (
+            !Number.isFinite(request.worldX) ||
+            !Number.isFinite(request.worldZ) ||
+            !Number.isFinite(request.radiusM)
+          ) {
+            break;
+          }
+          // A client may ask for a region around any point it can reach; cap the
+          // work and the payload so one request cannot pull the whole world.
+          const radiusM = Math.max(4, Math.min(120, request.radiusM));
+          const region = this.terrain.getRegion(request.worldX, request.worldZ, radiusM);
+          this.send(player.ws, MESSAGE_TYPE.TERRAIN_REGION, {
+            originX: region.originX,
+            originZ: region.originZ,
+            cellSizeM: region.cellSizeM,
+            cols: region.cols,
+            rows: region.rows,
+            revision: region.revision,
+            heightsBase64: Buffer.from(
+              region.heights.buffer,
+              region.heights.byteOffset,
+              region.heights.byteLength,
+            ).toString('base64'),
+            materialBase64: Buffer.from(region.moisture).toString('base64'),
+          });
+          const edits = this.terrain
+            .getEditsSince(Math.max(0, Number(request.revision ?? 0)))
+            .filter(
+              (edit) =>
+                Math.hypot(edit.x - request.worldX, edit.z - request.worldZ) <= radiusM + 32,
+            );
+          this.send(player.ws, MESSAGE_TYPE.TERRAIN_EDITS, {
+            revision: this.terrain.getLatestRevision(),
+            edits,
+          });
+          break;
+        }
         case MESSAGE_TYPE.INVENTORY_REQUEST: {
           const player = this.players.get(playerId);
           if (!player) break;
@@ -1851,6 +1909,9 @@ class World {
   private onTick(tick: number, dt: number): void {
     this.processInputs();
     this.processGrowthIntents(tick);
+    // Soil collapse and drying run slower than the tick and are gated inside.
+    this.terrain?.tick(dt, tick);
+    this.terrain?.dry(dt);
 
     for (const player of this.players.values()) {
       if (player.plantId) {
@@ -2025,6 +2086,8 @@ class World {
         tileAvgLight: coverage.avgLight,
         tileAvgMoisture: coverage.avgMoisture,
         tileAvgMinerals: coverage.avgMinerals,
+        groundwaterFraction:
+          coverage.avgGroundwater / Math.max(1e-6, this.resourceWorld.getGroundwaterCapacity()),
         coverageTileX: coverage.sample?.tileX ?? 0,
         coverageTileZ: coverage.sample?.tileZ ?? 0,
       };
@@ -2082,6 +2145,7 @@ class World {
       prev.tileAvgLight === next.tileAvgLight &&
       prev.tileAvgMoisture === next.tileAvgMoisture &&
       prev.tileAvgMinerals === next.tileAvgMinerals &&
+      prev.groundwaterFraction === next.groundwaterFraction &&
       prev.coverageTileX === next.coverageTileX &&
       prev.coverageTileZ === next.coverageTileZ
     );
@@ -2201,6 +2265,35 @@ class World {
               result.newNode.x,
               result.newNode.z,
             );
+            // Digging is a consequence of root growth (T25). A root segment
+            // displaces its own volume; shallow runs lower the surface and open
+            // a void that Root Sight and the client's cavity field can see.
+            if (result.newNode.layer === 'root' && this.terrain) {
+              const node = result.newNode;
+              const length =
+                Math.hypot(
+                  node.x - (node.parentAttachX ?? node.x),
+                  node.y - (node.parentAttachY ?? node.y),
+                  node.z - (node.parentAttachZ ?? node.z),
+                ) || 0.4;
+              const edit = this.terrain.recordRootTunnel(
+                intent.plantId,
+                node.x,
+                node.y,
+                node.z,
+                node.radius ?? 0.05,
+                length,
+                currentTick,
+              );
+              if (edit) {
+                this.broadcastNear(
+                  MESSAGE_TYPE.TERRAIN_EDITS,
+                  { revision: this.terrain.getLatestRevision(), edits: [edit] },
+                  node.x,
+                  node.z,
+                );
+              }
+            }
           }
           if (result.newNodes) {
             for (const node of result.newNodes) {
@@ -2282,17 +2375,44 @@ class World {
     ws: WebSocket,
     action: { type: string; [key: string]: unknown },
   ): void {
-    const player = this.players.get(playerId);
-    if (!player?.plantId) {
-      this.sendDevResponse(ws, action.type, { ok: false, error: 'no_plant' });
+    // Weather is world state, not plant state, so it is settled before the
+    // plant lookup: a player with no plant still has a sky, and this control
+    // used to answer "no_plant" and change nothing.
+    if (action.type === 'dev_set_weather') {
+      const allowed: WeatherStateName[] = [
+        'clear',
+        'rain',
+        'thunderstorm_telegraph',
+        'thunderstorm_active',
+        'thunderstorm_aftermath',
+      ];
+      const state = String(action.state ?? '');
+      if (!(allowed as string[]).includes(state)) {
+        this.sendDevResponse(ws, action.type, { ok: false, error: 'unknown_weather_state' });
+        return;
+      }
+      const requestedDuration = Number(action.duration_s ?? 180);
+      const durationS =
+        Number.isFinite(requestedDuration) && requestedDuration > 0 ? requestedDuration : 180;
+      this.weatherSystem.forceState(state as WeatherStateName, durationS);
+      // Announce at once: waiting for the next tick left the panel showing the
+      // old sky until the next weather broadcast arrived.
+      const forced = this.weatherSystem.getBroadcast();
+      this.broadcast(MESSAGE_TYPE.WEATHER_UPDATE, { tick: this.getTick(), ...forced });
+      this.sendDevResponse(ws, action.type, { ok: true, state, durationS });
       return;
     }
 
-    const plant = this.plantWorld.getPlant(player.plantId);
-    if (!plant) {
-      this.sendDevResponse(ws, action.type, { ok: false, error: 'plant_not_found' });
-      return;
-    }
+    const player = this.players.get(playerId);
+    // World-scoped actions (resources, tiles, tick rate, simulation, logs,
+    // saves) work whether or not the player currently has a plant. The old
+    // early return made every one of them answer "no_plant" after a death, so
+    // the panel looked broken exactly when it was needed most.
+    const plant = player?.plantId ? this.plantWorld.getPlant(player.plantId) : undefined;
+
+    const noPlant = (): void => {
+      this.sendDevResponse(ws, action.type, { ok: false, error: 'no_plant' });
+    };
 
     try {
       switch (action.type) {
@@ -2333,12 +2453,20 @@ class World {
             if (action.light !== undefined) resources.light = action.light as number;
             if (action.moisture !== undefined) resources.moisture = action.moisture as number;
             if (action.minerals !== undefined) resources.minerals = action.minerals as number;
+            // The water table is a tile resource too; without it there was no way
+            // to raise or drain the cavity pool and see the water surface move.
+            if (action.groundwater !== undefined)
+              resources.groundwater = action.groundwater as number;
             this.resourceWorld.setTileResources(x, z, resources);
           }
           this.sendDevResponse(ws, action.type, { ok: true });
           break;
         }
         case 'dev_set_growth': {
+          if (!plant) {
+            noPlant();
+            break;
+          }
           if (action.growth_cooldown !== undefined) {
             // Ticks, not milliseconds: tryGrow compares this field against the
             // tick counter, so a Date.now() value locked the plant out for good.
@@ -2358,11 +2486,19 @@ class World {
           break;
         }
         case 'dev_fill_energy': {
+          if (!plant) {
+            noPlant();
+            break;
+          }
           plant.totalEnergy = computePlantCapacity(plant, this.plantWorld.getConfig()).energy;
           this.sendDevResponse(ws, action.type, { ok: true });
           break;
         }
         case 'dev_fill_biomass': {
+          if (!plant) {
+            noPlant();
+            break;
+          }
           plant.totalBiomass =
             this.plantWorld.getConfig().maxNodesPerPlant *
             this.plantWorld.getConfig().nodeCostBase *
@@ -2371,6 +2507,10 @@ class World {
           break;
         }
         case 'dev_kill_plant': {
+          if (!plant || !player?.plantId) {
+            noPlant();
+            break;
+          }
           this.plantWorld.killPlant(player.plantId, 'damage');
           // Settle the death now: the broadcast normally waits for the next tick,
           // so with the simulation paused the client never heard about it.
@@ -2384,6 +2524,10 @@ class World {
           break;
         }
         case 'dev_regenerate_plant': {
+          if (!plant || !player?.plantId) {
+            noPlant();
+            break;
+          }
           // Keep the old plant's world id: a literal here would put the new plant
           // in a different world from every other plant and from persistence.
           const worldId = plant.worldId;
@@ -2734,6 +2878,48 @@ async function main(): Promise<void> {
   const chatConfig = loadChatConfig(configs);
   const reportConfig = loadReportConfig(configs);
 
+  // T25 sparse soil. The base surface is the shared field; only edits load.
+  let terrainService: TerrainService | null = null;
+  let terrainPersistence: TerrainPersistence | null = null;
+  const terrainFlat = await readFlatConfig(runtime.configDir, 'terrain');
+  if (terrainFlat) {
+    const value = (key: string, fallback: number): number => {
+      const raw = Number(terrainFlat[key]);
+      return Number.isFinite(raw) ? raw : fallback;
+    };
+    terrainService = new TerrainService(
+      {
+        seed: Math.round(value('seed', 1337)),
+        amplitudeM: value('surface_amplitude_m', 6),
+        baseFrequency: value('surface_base_frequency', 0.045),
+        octaves: Math.round(value('surface_octaves', 4)),
+        lacunarity: value('surface_lacunarity', 2),
+        gain: value('surface_gain', 0.5),
+        ridgeStrength: value('ridge_strength', 0.35),
+        patchRadiusM: value('patch_radius_m', 620),
+        rimFadeFraction: value('rim_fade_fraction', 0.28),
+        maxDepthM: value('max_depth_m', 12),
+        soilDepthM: readNumber(configs, 'render', 'soil_depth_m'),
+      },
+      {
+        cellSizeM: value('cell_size_m', 0.5),
+        chunkCells: Math.round(value('chunk_cells', 32)),
+        surfaceBreakDepthM: value('surface_break_depth_m', 0.8),
+        maxDepthM: value('max_depth_m', 12),
+        maxEditVolumeM3: value('max_edit_volume_m3', 4),
+        maxEditsPerTick: Math.round(value('max_edits_per_tick', 16)),
+        collapseCadenceHz: value('collapse_cadence_hz', 2),
+        displacementRingCells: Math.round(value('displacement_ring_cells', 3)),
+        growthResistanceMin: value('growth_resistance_min', 0.4),
+        growthResistanceMax: value('growth_resistance_max', 2.5),
+        maxActiveChunks: Math.round(value('max_active_chunks', 64)),
+        runoffFraction: value('runoff_fraction', 0.15),
+        evaporationPerS: value('evaporation_per_s', 0.002),
+        rainAbsorptionPerS: value('rain_absorption_per_s', 0.05),
+      },
+    );
+  }
+
   // Plant growth world (T01) with T03 tier support
   const plantWorld = new PlantWorld(
     growthConfig,
@@ -2759,27 +2945,63 @@ async function main(): Promise<void> {
   // The plant radius is what makes the resource cells the planet's lat/lon
   // cells: their neighbours then wrap around the world instead of stopping at
   // the edge of the 256x256 patch. A radius of 0 is the old flat grid.
+  //
+  // The grid is centred on the play area instead of being pinned to the world's
+  // validation corner. `net_proto.world_bounds` is ±1000 m of movement limits,
+  // while the resource grid is only `grid_width * tile_size` metres across (256
+  // m); anchoring it at minX/minZ put every tile at -1000..-744 and left the
+  // plants at the origin with zero covered tiles. The server then skipped their
+  // root update entirely, so the HUD, the dev tile inspector and the water
+  // table froze on their first (or default) values while soil was sampled from
+  // a clamped corner cell.
+  const gridSpanX = resourcesConfig.gridWidth * resourcesConfig.tileSize;
+  const gridSpanZ = resourcesConfig.gridHeight * resourcesConfig.tileSize;
+  const gridCentreX = (netProtoConfig.worldBounds.minX + netProtoConfig.worldBounds.maxX) / 2;
+  const gridCentreZ = (netProtoConfig.worldBounds.minZ + netProtoConfig.worldBounds.maxZ) / 2;
   const resourceWorld = new ResourceWorld(
     resourcesConfig,
     {
-      minX: netProtoConfig.worldBounds.minX,
-      maxX: netProtoConfig.worldBounds.maxX,
-      minZ: netProtoConfig.worldBounds.minZ,
-      maxZ: netProtoConfig.worldBounds.maxZ,
+      minX: gridCentreX - gridSpanX / 2,
+      maxX: gridCentreX + gridSpanX / 2,
+      minZ: gridCentreZ - gridSpanZ / 2,
+      maxZ: gridCentreZ + gridSpanZ / 2,
     },
     readNumber(configs, 'render', 'planet_radius_m'),
   );
+
+  // Groundwater drains along the terrain the world is drawn from, so a storm
+  // fills hollows and pools there instead of raising every tile equally.
+  resourceWorld.setSurfaceHeightProvider((x, z) => terrainService?.heightAt(x, z) ?? 0);
 
   // PlantWorld checks ambient tiles for germination/growth and debits them on
   // uptake, so tile supply and plant-owned stores stay one connected system.
   plantWorld.setResourceProvider((x, z) => resourceWorld.getTileResources(x, z));
   plantWorld.setResourceSink({
-    takeResources: (x, z, water, minerals) => resourceWorld.takeFromTile(x, z, water, minerals),
+    takeResources: (x, z, water, minerals, allowGroundwater) =>
+      resourceWorld.takeFromTile(x, z, water, minerals, allowGroundwater),
   });
 
   // Persistence layer (T03)
   const worldId = 'world_0';
   let plantPersistence: PlantPersistence | null = null;
+  if (database.pool && terrainService) {
+    terrainPersistence = new TerrainPersistence(database.pool, worldId);
+    try {
+      const loadedTerrain = await terrainPersistence.loadAll();
+      if (loadedTerrain) {
+        terrainService.load(loadedTerrain);
+        log.info('loaded terrain edits from database', {
+          chunks: loadedTerrain.chunks.length,
+          edits: loadedTerrain.edits.length,
+          voids: loadedTerrain.voids.length,
+        });
+      }
+    } catch (error) {
+      log.error('terrain load failed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
   if (database.pool) {
     plantPersistence = new PlantPersistence(database.pool, worldId, (error) => {
       log.error('skipping unreadable plant snapshot', {
@@ -2888,7 +3110,11 @@ async function main(): Promise<void> {
     chatConfig,
     reportConfig,
     worldConfig.seasonLengthDays,
+    terrainService,
   );
+  if (terrainService) {
+    plantWorld.setGrowthResistanceProvider((x, y, z) => terrainService.growthResistanceAt(x, y, z));
+  }
 
   // Near and dormant plants are stepped inside PlantWorld, not in the online
   // loop, so they need the same photosynthesis the online loop applies. Without
@@ -2952,6 +3178,13 @@ async function main(): Promise<void> {
           log.error('periodic season-state save failed', {
             error: error instanceof Error ? error.message : String(error),
           });
+        }
+        if (terrainPersistence && terrainService) {
+          await terrainPersistence.save(terrainService.snapshot()).catch((error: unknown) =>
+            log.error('periodic terrain save failed', {
+              error: error instanceof Error ? error.message : String(error),
+            }),
+          );
         }
         log.debug('periodic plant save', { count: result.saved, total: result.total });
       } finally {
@@ -3588,7 +3821,9 @@ async function main(): Promise<void> {
     if (
       url.pathname === '/config/chat' ||
       url.pathname === '/config/reports' ||
-      url.pathname === '/config/network'
+      url.pathname === '/config/network' ||
+      url.pathname === '/config/terrain' ||
+      url.pathname === '/config/physics'
     ) {
       // T05: Serve chat/report tunables so client-side limits mirror server
       // enforcement; the network file also carries the client ping thresholds.
@@ -4010,6 +4245,13 @@ async function main(): Promise<void> {
         }
       }
       log.info('saved plants on shutdown', { count: plants.length });
+      if (terrainPersistence && terrainService) {
+        await terrainPersistence.save(terrainService.snapshot()).catch((error: unknown) =>
+          log.error('shutdown terrain save failed', {
+            error: error instanceof Error ? error.message : String(error),
+          }),
+        );
+      }
       await plantPersistence.saveSeasonState(world.getSeasonState()).catch((error: unknown) =>
         log.error('shutdown season-state save failed', {
           error: error instanceof Error ? error.message : String(error),

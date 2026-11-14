@@ -11,7 +11,9 @@ T03P, C01, T00A** (resource model + onboarding), **T01** (growth simulation),
 **T03** (persistence, offline tiers, interest management, event bus),
 **T08C** (accounts + sessions), **T07** (weather & day/night), **C02** (SDF
 plant renderer), **T02** (Root Sight), **C03** (environment rendering), and
-**C02b slice** (WebGPU compute-driven plant LOD with WebGL2 fallback).
+**C02b slice** (WebGPU compute-driven plant LOD with WebGL2 fallback), and
+**T25** (shared terrain field, LOD ground colliders, plant colliders, sparse
+persistent soil edits; client height-texture application still pending).
 
 ## Quick start
 

@@ -249,6 +249,7 @@ export type DevActionType =
   | 'dev_stress_test'
   | 'dev_regenerate_plant'
   | 'dev_end_season'
+  | 'dev_set_weather'
   | 'dev_set_config';
 
 export interface DevActionPayload {

@@ -46,6 +46,7 @@ Server rejects with `ERROR { code: "VERSION_MISMATCH", ... }` if mismatch.
 | 26 | `INVENTORY_SLOT_SWAP` | `{ fromIndex: number, toIndex: number }` | Swap two inventory slots |
 | 29 | `REPORT` | `ReportPayload` | File a player/message report (rate-limited, T05) |
 | 30 | `BLOCK` | `{ targetPlayerId: string, blocked: boolean }` | Mute or unmute a player's chat (T05) |
+| 32 | `TERRAIN_REGION_REQUEST` | `{ worldX: number, worldZ: number, radiusM: number, revision?: number }` | Ask for sparse soil chunks around a point; radius is capped at 120 m (T25) |
 
 ### Server → Client
 
@@ -67,6 +68,8 @@ Server rejects with `ERROR { code: "VERSION_MISMATCH", ... }` if mismatch.
 | 23 | `CHAT_BROADCAST` | `ChatBroadcastPayload` | Chat or emote from another player |
 | 27 | `INVENTORY_SYNC` | `{ slots: Array<{ itemId: string \| null, count: number \| null }>, maxSlots: number }` | Full inventory |
 | 28 | `INVENTORY_SLOT_UPDATE` | `{ slotIndex: number, itemId: string \| null, count: number \| null }` | One slot changed |
+| 33 | `TERRAIN_REGION` | `{ originX, originZ, cellSizeM, cols, rows, revision, heightsBase64, materialBase64 }` | Height deltas (Float32) and moisture (Uint8) for the requested region (T25) |
+| 34 | `TERRAIN_EDITS` | `{ revision: number, edits: TerrainEdit[] }` | Root tunnels/voids since the client's revision; also broadcast near a new root (T25) |
 | 99 | `DEV_RESPONSE` | `{ ... }` | Dev-panel response (dev builds only) |
 
 Type `10` is `WELCOME`: `REPORT` was moved to `29` after it collided with the

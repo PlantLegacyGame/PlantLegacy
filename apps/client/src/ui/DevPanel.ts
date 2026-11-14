@@ -1,3 +1,4 @@
+import type { ResourceRates } from '../config/clientConfig.js';
 import type { PlantRendererConfig } from '../config/plantRendererConfig.js';
 
 export interface DevPanelAPI {
@@ -37,6 +38,12 @@ export interface DevPanelConfig {
     getSunIntensity: () => number;
   };
   resourceWorld: {
+    /** Real simulation rates, as loaded from config/resources.json. */
+    getRates: () => ResourceRates;
+    /** Apply one rate locally and forward it to the authoritative server. */
+    setRate: (key: keyof ResourceRates, value: number) => void;
+    /** How full the local soil cavity is, 0 dry .. 1 saturated. */
+    getGroundwaterFraction: () => number;
     setTileResources: (
       x: number,
       z: number,
@@ -188,6 +195,10 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
   let dragOffsetX = 0;
   let dragOffsetY = 0;
   let isDragging = false;
+  // Read-only rows keep their getter so the panel can refresh live values
+  // without rebuilding the tab. This is what makes the tile inspector update
+  // about twice a second instead of freezing at the values from tab creation.
+  const readOnlyBindings = new Map<HTMLElement, () => string | number>();
 
   // ===== TAB DEFINITIONS =====
   const tabs: Tab[] = [
@@ -242,15 +253,10 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
               { value: 'thunderstorm_aftermath', label: 'Storm Aftermath' },
             ],
           ),
-          createNumberInput(
-            'Sun Intensity',
-            () => env.getSunIntensity(),
-            (_v) => {},
-            0,
-            2,
-            0.01,
-            'x',
-          ),
+          // Sun intensity is derived (time of day × weather light multiplier),
+          // never an independent knob. An editable field that silently discarded
+          // every edit was worse than no field: show the live value instead.
+          createReadonly('Sun Intensity', () => `${env.getSunIntensity().toFixed(2)}x`),
         ]);
       },
     },
@@ -267,123 +273,71 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
             if (!res) return 'Out of bounds';
             return `Light: ${res.light.toFixed(1)} | Moisture: ${res.moisture.toFixed(1)} | Minerals: ${res.minerals.toFixed(1)}`;
           }),
+          // The water table is the new visible half of the soil model: forcing
+          // rain and watching this rise is how the pooling is verified.
+          createReadonly(
+            'Water Table',
+            () => `${(rw.getGroundwaterFraction() * 100).toFixed(1)}% of cavity`,
+          ),
         ]);
         addSection(container, 'Global Config', [
+          // Values come from config/resources.json (via the rates loader), so
+          // the fields start at what the server actually runs. The light,
+          // moisture and mineral "curves" used to be offered here but the
+          // server has no handler for them: sending one changed nothing, which
+          // made the whole tab look broken. They are gone rather than lying.
           createNumberInput(
             'Photosynthesis Rate',
-            () => 10000,
-            (v) => send(8, { type: 'dev_set_resources', photosynthesis_rate: v }),
+            () => rw.getRates().photosynthesisRate,
+            (v) => rw.setRate('photosynthesisRate', v),
             0,
-            50000,
-            100,
-          ),
-          createSelect(
-            'Light Curve',
-            () => 'default',
-            (v) => send(8, { type: 'dev_set_resources', light_curve: v }),
-            [
-              { value: 'default', label: 'Default' },
-              { value: 'high', label: 'High Efficiency' },
-              { value: 'low', label: 'Low Efficiency' },
-            ],
-          ),
-          createSelect(
-            'Moisture Curve',
-            () => 'default',
-            (v) => send(8, { type: 'dev_set_resources', moisture_curve: v }),
-            [
-              { value: 'default', label: 'Default' },
-              { value: 'high', label: 'High Efficiency' },
-              { value: 'low', label: 'Low Efficiency' },
-            ],
-          ),
-          createSelect(
-            'Mineral Curve',
-            () => 'default',
-            (v) => send(8, { type: 'dev_set_resources', mineral_curve: v }),
-            [
-              { value: 'default', label: 'Default' },
-              { value: 'high', label: 'High Efficiency' },
-              { value: 'low', label: 'Low Efficiency' },
-            ],
+            10,
+            0.1,
           ),
           createNumberInput(
             'Diffusion Rate',
-            () => 0.01,
-            (v) => send(8, { type: 'dev_set_resources', diffusion_rate: v }),
+            () => rw.getRates().diffusionRate,
+            (v) => rw.setRate('diffusionRate', v),
             0,
             0.1,
             0.001,
           ),
           createNumberInput(
             'Max Absorption/Tick',
-            () => 1.0,
-            (v) => send(8, { type: 'dev_set_resources', max_absorption_per_tick: v }),
+            () => rw.getRates().maxAbsorptionPerTick,
+            (v) => rw.setRate('maxAbsorptionPerTick', v),
             0,
             10,
             0.1,
           ),
           createNumberInput(
             'Rain Gain/sec',
-            () => 0.5,
-            (v) => send(8, { type: 'dev_set_resources', rain_gain_per_s: v }),
+            () => rw.getRates().rainGainPerS,
+            (v) => rw.setRate('rainGainPerS', v),
             0,
             5,
             0.1,
           ),
           createNumberInput(
             'Evaporation/sec',
-            () => 0.1,
-            (v) => send(8, { type: 'dev_set_resources', evaporation_per_s: v }),
+            () => rw.getRates().evaporationPerS,
+            (v) => rw.setRate('evaporationPerS', v),
             0,
             1,
             0.01,
           ),
           createNumberInput(
             'Canopy Shade',
-            () => 0.1,
-            (v) => send(8, { type: 'dev_set_resources', canopy_shade_reduction: v }),
+            () => rw.getRates().canopyShadeReduction,
+            (v) => rw.setRate('canopyShadeReduction', v),
             0,
             1,
             0.01,
           ),
-          createButtonGroup('Apply/Reset', [
-            {
-              label: 'Apply to Server',
-              action: () => {
-                send(8, {
-                  type: 'dev_set_resources',
-                  payload: {
-                    photosynthesis_rate: (
-                      document.getElementById('dev-photosynthesis-rate') as HTMLInputElement
-                    )?.value,
-                    light_curve: (document.getElementById('dev-light-curve') as HTMLSelectElement)
-                      ?.value,
-                    moisture_curve: (
-                      document.getElementById('dev-moisture-curve') as HTMLSelectElement
-                    )?.value,
-                    mineral_curve: (
-                      document.getElementById('dev-mineral-curve') as HTMLSelectElement
-                    )?.value,
-                    diffusion_rate: (
-                      document.getElementById('dev-diffusion-rate') as HTMLInputElement
-                    )?.value,
-                    max_absorption_per_tick: (
-                      document.getElementById('dev-max-absorption') as HTMLInputElement
-                    )?.value,
-                    rain_gain_per_s: (document.getElementById('dev-rain-gain') as HTMLInputElement)
-                      ?.value,
-                    evaporation_per_s: (
-                      document.getElementById('dev-evaporation') as HTMLInputElement
-                    )?.value,
-                    canopy_shade_reduction: (
-                      document.getElementById('dev-canopy-shade') as HTMLInputElement
-                    )?.value,
-                  },
-                });
-              },
-              primary: true,
-            },
+          // No "Apply to Server" button: each field already applies on change, and
+          // the old button read DOM ids that the inputs do not have while also
+          // nesting the payload one level too deep - it sent nothing useful.
+          createButtonGroup('Reset', [
             { label: 'Reset Defaults', action: () => send(8, { type: 'dev_reset_resources' }) },
           ]),
         ]);
@@ -433,6 +387,32 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
                     light: 500,
                     moisture: 500,
                     minerals: 500,
+                  });
+                }
+              },
+            },
+            {
+              label: 'Fill Groundwater',
+              action: () => {
+                if (state.currentTile) {
+                  send(8, {
+                    type: 'dev_set_tile',
+                    x: state.currentTile.x,
+                    z: state.currentTile.z,
+                    groundwater: 400,
+                  });
+                }
+              },
+            },
+            {
+              label: 'Drain Groundwater',
+              action: () => {
+                if (state.currentTile) {
+                  send(8, {
+                    type: 'dev_set_tile',
+                    x: state.currentTile.x,
+                    z: state.currentTile.z,
+                    groundwater: 0,
                   });
                 }
               },
@@ -1139,7 +1119,7 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
       // Start from the live value: something else may have changed it (jumping
       // Time freezes the clock), and a stale local state left the thumb one
       // click out of step with the setting it controls.
-      state = !Boolean(getter());
+      state = !getter();
       update();
       setter(state);
     };
@@ -1171,6 +1151,7 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
       'flex:1;text-align:right;color:var(--bark-100);font-family:inherit;font-size:11px;min-width:100px';
     roRow.appendChild(roLabelEl);
     roRow.appendChild(val);
+    readOnlyBindings.set(val, getter);
     return roRow;
   }
 
@@ -1259,6 +1240,7 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
 
   function renderContent(): void {
     contentEl.innerHTML = '';
+    readOnlyBindings.clear();
     const tab = tabs.find((t) => t.id === activeTab);
     if (!tab) return;
 
@@ -1421,6 +1403,17 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
   // Initial render
   renderTabs();
   renderContent();
+
+  // Refresh live read-only values while the panel is open. 500 ms is fast
+  // enough to track a per-second server update without making the numbers
+  // flicker; values are only written when the rendered text changes.
+  window.setInterval(() => {
+    if (!visible) return;
+    for (const [element, getter] of readOnlyBindings) {
+      const next = String(getter());
+      if (element.textContent !== next) element.textContent = next;
+    }
+  }, 500);
 
   return { panel, show, hide, toggle, isVisible, updateTileInfo, loadConfig, resetToDefaults };
 }

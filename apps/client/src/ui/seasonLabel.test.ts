@@ -20,6 +20,6 @@ describe('season label', () => {
   });
 
   it('builds the whole chip from one season number and a countdown', () => {
-    assert.equal(formatSeasonChip(3, 86_400), 'Season 3 · 1 d 0 h');
+    assert.equal(formatSeasonChip(3, 86_400), 'Season 3   1 d 0 h');
   });
 });

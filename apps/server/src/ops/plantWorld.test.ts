@@ -74,6 +74,13 @@ function makeTestResourcesConfig(): ReturnType<typeof loadResourcesConfig> {
       consumption_trigger_fertilizer_item: { type: 'boolean', value: false },
       diffusion_rate: { type: 'number', value: 0.1, range: [0, 1] },
       max_absorption_per_tick: { type: 'number', value: 10, range: [0, 100] },
+      groundwater_base: { type: 'integer', value: 0, range: [0, 10000] },
+      groundwater_capacity: { type: 'integer', value: 400, range: [0, 10000] },
+      groundwater_infiltration_fraction: { type: 'number', value: 0.55, range: [0, 1] },
+      groundwater_percolation_rate: { type: 'number', value: 0.04, range: [0, 1] },
+      groundwater_capillary_rise_per_s: { type: 'number', value: 0.15, range: [0, 10] },
+      groundwater_root_uptake_fraction: { type: 'number', value: 0.25, range: [0, 1] },
+      groundwater_root_reserve_fraction: { type: 'number', value: 0.05, range: [0, 0.9] },
       canopy_shade_reduction: { type: 'number', value: 0.5, range: [0, 1] },
       max_light: { type: 'integer', value: 100, range: [50, 200] },
       max_moisture: { type: 'integer', value: 100, range: [50, 200] },
@@ -1203,6 +1210,137 @@ describe('PlantWorld', () => {
     assert.ok(
       (after.lastTick ?? Number.POSITIVE_INFINITY) <= 39,
       `the mark should track the current tick, got ${after.lastTick}`,
+    );
+  });
+
+  it('rebuilds structural biomass from surviving nodes after a dormant resume', () => {
+    const world = makeDormantTestWorld();
+    const plant = world.createPlant('player_zeroed', 'world_0', 0, 0);
+    const nodeMass = [...plant.nodes.values()].reduce(
+      (sum, node) => sum + Math.max(0, node.biomass),
+      0,
+    );
+    const nodeUpkeep = [...plant.nodes.values()].reduce(
+      (sum, node) => sum + node.upkeepBiomassPerSecond,
+      0,
+    );
+    assert.ok(nodeMass > 0, 'the seed itself is living tissue');
+    // This is the saved state that produced a live plant with a 0 biomass HUD
+    // and zero upkeep: the nodes survived, the separate accumulator did not.
+    plant.totalBiomass = 0;
+    plant.totalUpkeep = 0;
+    plant.lastTick = 1;
+
+    for (let i = 0; i < 5; i++) world.step(1, new Set(), 10 + i);
+
+    const after = world.getPlant(plant.id);
+    assert(after, 'a plant with surviving nodes must not vanish');
+    assert.ok(after.totalBiomass > 0, 'biomass must be recovered from the nodes');
+    assert.equal(
+      after.totalUpkeep,
+      nodeUpkeep,
+      'upkeep must be derived from the surviving structure',
+    );
+  });
+
+  it('adds exactly the quoted structural mass, not the whole carbon budget', () => {
+    const yieldFraction = 0.5;
+    const world = makeTestPlantWorld({
+      growth_biomass_yield: { type: 'number', value: yieldFraction, range: [0.2, 1.0] },
+    });
+    const plant = world.createPlant('player_1', 'world_0', 0, 0);
+    const seedId = plant.rootNodeId ?? Array.from(plant.nodes.keys())[0];
+    assert(seedId);
+    world.setResourceProvider(() => ({ light: 50, moisture: 50, minerals: 50 }));
+    plant.totalEnergy = 5000;
+    plant.storedWater = 5000;
+    plant.storedMinerals = 5000;
+
+    assert(
+      world.tryGrow(
+        {
+          plantId: plant.id,
+          nodeId: seedId,
+          direction: { x: 0, y: -1, z: 0 },
+          nodeType: 'radicle',
+          tick: 1,
+        },
+        1,
+      ).success,
+    );
+
+    for (let i = 0; i < 400; i++) world.step(0.05, new Set([plant.id]), 2 + i);
+
+    const grown = [...plant.nodes.values()].find((node) => node.type === 'radicle');
+    assert(grown, 'the radicle should have finished');
+    const budget = world.getConfig().radicleNode.biomass_cost;
+    const quoted = budget * yieldFraction;
+    assert.ok(
+      Math.abs(grown.biomass - quoted) < 0.01,
+      `part stored ${grown.biomass.toFixed(3)} biomass for a ${quoted.toFixed(3)} quote`,
+    );
+    assert.ok(
+      grown.biomass < budget,
+      'a part may not store the entire carbon budget it respired to build',
+    );
+  });
+
+  it('spends stored water and minerals on upkeep and wilts when they run out', () => {
+    const world = makeTestPlantWorld({
+      upkeep_water_per_biomass_per_s: { type: 'number', value: 0.05, range: [0, 0.05] },
+      upkeep_mineral_per_biomass_per_s: { type: 'number', value: 0.02, range: [0, 0.05] },
+      water_deficit_biomass_loss: { type: 'number', value: 1, range: [0, 2] },
+      mineral_deficit_biomass_loss: { type: 'number', value: 1, range: [0, 2] },
+    });
+    const plant = world.createPlant('player_1', 'world_0', 0, 0);
+    const seedId = plant.rootNodeId ?? Array.from(plant.nodes.keys())[0];
+    assert(seedId);
+    world.setResourceProvider(() => ({ light: 50, moisture: 50, minerals: 50 }));
+    plant.totalEnergy = 5000;
+    plant.storedWater = 5000;
+    plant.storedMinerals = 5000;
+    assert(
+      world.tryGrow(
+        {
+          plantId: plant.id,
+          nodeId: seedId,
+          direction: { x: 0, y: -1, z: 0 },
+          nodeType: 'radicle',
+          tick: 1,
+        },
+        1,
+      ).success,
+    );
+    for (let i = 0; i < 400; i++) world.step(0.05, new Set([plant.id]), 2 + i);
+
+    // Tissue exists now, so the lone-seed exemption no longer applies.
+    plant.storedWater = 10;
+    plant.storedMinerals = 4;
+    plant.totalEnergy = 10_000;
+    for (let i = 0; i < 100; i++) world.step(0.05, new Set([plant.id]), 500 + i);
+
+    const after = world.getPlant(plant.id);
+    assert(after, 'the plant should still exist');
+    assert.ok(
+      after.storedWater < 10,
+      `upkeep must actually consume stored water, still ${after.storedWater.toFixed(3)}`,
+    );
+    assert.ok(
+      after.storedMinerals < 4,
+      `upkeep must actually consume stored minerals, still ${after.storedMinerals.toFixed(3)}`,
+    );
+
+    // With nothing left to spend, the shortfall has to cost structure.
+    after.storedWater = 0;
+    after.storedMinerals = 0;
+    after.totalEnergy = 10_000;
+    const starved = after.totalBiomass;
+    for (let i = 0; i < 60; i++) world.step(0.05, new Set([after.id]), 900 + i);
+    const wilted = world.getPlant(after.id);
+    assert(wilted, 'the plant should survive a short wilt');
+    assert.ok(
+      wilted.totalBiomass < starved,
+      `wilting should cost structure, ${starved.toFixed(2)} -> ${wilted.totalBiomass.toFixed(2)}`,
     );
   });
 });

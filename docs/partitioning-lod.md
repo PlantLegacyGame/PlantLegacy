@@ -76,7 +76,7 @@ The system uses a **dual rendering path**:
 
 | Config | Default | Notes |
 |--------|---------|-------|
-| `webgpu_enabled` | `true` | Enable WebGPU path when available |
+| `webgpu_enabled` | `false` | Enable the WebGPU overlay; off because its separate depth buffer cannot sort against terrain |
 | `webgpu_max_plants` | 10000 | Capacity of plant/render storage buffers |
 | `webgpu_tier0_threshold` | 300 | Projected pixel size for tier 0 |
 | `webgpu_tier1_threshold` | 80 | Projected pixel size for tier 1 |

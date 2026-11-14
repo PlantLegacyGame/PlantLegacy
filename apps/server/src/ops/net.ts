@@ -97,6 +97,11 @@ export const MESSAGE_TYPE = {
   INVENTORY_SYNC: 27, // Server -> Client: full inventory state
   INVENTORY_SLOT_UPDATE: 28, // Server -> Client: single slot changed
 
+  // T25 terrain (sparse soil edits)
+  TERRAIN_REGION_REQUEST: 32, // Client -> Server: chunks around a point
+  TERRAIN_REGION: 33, // Server -> Client: height deltas and moisture
+  TERRAIN_EDITS: 34, // Server -> Client: tunnels/voids since a revision
+
   // Dev commands (server -> client)
   DEV_RESPONSE: 99,
 } as const;

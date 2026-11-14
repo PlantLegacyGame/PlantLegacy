@@ -177,7 +177,6 @@ class PlantRenderer {
   private emergenceStartTime = 0;
   private isEmerging = false;
   private deltaTimeAccumulator = 0;
-  private rootSightEnabled = false;
   /** Centre of the drawn plant, for LOD distance. */
   private readonly plantCenter = new THREE.Vector3();
   // Root Sight SDF aura
@@ -421,13 +420,16 @@ class PlantRenderer {
   }
 
   /** Set Root Sight mode. */
-  setRootSightState(enabled: boolean, progress: number, center: THREE.Vector3): void {
-    this.rootSightEnabled = enabled;
-
+  setRootSightState(
+    enabled: boolean,
+    progress: number,
+    center: THREE.Vector3,
+    radiusM?: number,
+  ): void {
     this.uniforms.uRootSightEnabled.value = enabled;
     this.uniforms.uRootSightProgress.value = progress;
     this.uniforms.uRootSightCenter.value.copy(center);
-    this.uniforms.uRootSightRadius.value = this.config.rootSightCutawayRadius;
+    this.uniforms.uRootSightRadius.value = radiusM ?? this.config.rootSightCutawayRadius;
     // Enable aura when root sight is active
     this.uniforms.uRootSightAuraEnabled.value = enabled;
     this.uniforms.uRootAuraNodeCount.value = this.rootAuraNodeCount;
@@ -555,15 +557,16 @@ class PlantRenderer {
 
     this.updateLOD(this.camera.position);
 
-    // The mesh renderer is the plant's primary visual for close plants. Root
-    // Sight always forces the mesh path so the player's plant never disappears
-    // while the underground view is active.
-    const useMesh =
-      this.useMeshL0L1 &&
-      this.meshRenderer &&
-      (this.currentLOD === 0 || this.currentLOD === 1 || this.rootSightEnabled);
-    if (useMesh) {
-      this.meshRenderer?.render(deltaTime);
+    // Always draw the real mesh, at every distance. The SDF path is a fullscreen
+    // quad with depth testing disabled, so its plant was composited over the
+    // terrain no matter where it stood: the player could see roots and stems
+    // through hills, and the plant always looked like it sat in a layer above
+    // the dirt. Mesh geometry is depth-tested by the scene, so terrain, the
+    // Root Sight cavity and the plant sort in one 3D buffer. The plant is a
+    // handful of instanced meshes even at distance, so the LOD saving is not
+    // worth losing correct occlusion.
+    if (this.useMeshL0L1 && this.meshRenderer) {
+      this.meshRenderer.render(deltaTime);
       if (this.fullscreenQuad) {
         this.fullscreenQuad.visible = false;
       }

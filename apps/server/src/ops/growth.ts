@@ -104,6 +104,15 @@ export function loadGrowthConfig(configs: Map<string, ConfigFile>): GrowthConfig
       'growth_nutrient_consumption_rate',
     ),
     growthMineralConsumptionRate: readNumber(configs, 'growth', 'growth_mineral_consumption_rate'),
+    // Carbon-to-mass conversion and tissue maintenance. Optional so older
+    // configs keep working; the defaults are the documented growth.json values.
+    growthBiomassYield: optionalNumber(configs, 'growth', 'growth_biomass_yield') ?? 1,
+    upkeepWaterPerBiomass: optionalNumber(configs, 'growth', 'upkeep_water_per_biomass_per_s') ?? 0,
+    upkeepMineralPerBiomass:
+      optionalNumber(configs, 'growth', 'upkeep_mineral_per_biomass_per_s') ?? 0,
+    waterDeficitBiomassLoss: optionalNumber(configs, 'growth', 'water_deficit_biomass_loss') ?? 0.5,
+    mineralDeficitBiomassLoss:
+      optionalNumber(configs, 'growth', 'mineral_deficit_biomass_loss') ?? 0.35,
     growthMinWater: readNumber(configs, 'growth', 'growth_min_water'),
     growthMinNutrients: readNumber(configs, 'growth', 'growth_min_nutrients'),
     growthMinMinerals: readNumber(configs, 'growth', 'growth_min_minerals'),

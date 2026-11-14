@@ -147,6 +147,32 @@ describe('ResourceWorld', () => {
     }
   });
 
+  it('recharges groundwater from rain and limits deep-root uptake per step', () => {
+    const world = makeWorld();
+    world.setRaining(true);
+    for (let i = 0; i < 40; i += 1) world.step(0.25, new Map(), 0, 1.0, 0.5);
+    world.setRaining(false);
+
+    const afterStorm = world.getTileResourcesAt(0, 0);
+    assert.ok(afterStorm, 'tile should exist');
+    assert.ok(
+      (afterStorm.groundwater ?? 0) > 0,
+      `rain should collect in the groundwater cavity, got ${afterStorm.groundwater}`,
+    );
+
+    // Isolate the two water stores: a shallow root sees only soil moisture,
+    // while a deep root can also reach the cavity, but cannot empty it at once.
+    const tile = world.getTileCoordinates(0, 0);
+    world.setTileResources(tile.tileX, tile.tileZ, { moisture: 0, groundwater: 100 });
+    const shallow = world.takeFromTile(0, 0, 10, 0, false);
+    assert.equal(shallow.water, 0, 'surface roots must not drink the water table');
+    const deep = world.takeFromTile(0, 0, 100, 0, true);
+    assert.ok(deep.water > 0, 'deep roots should reach the cavity');
+    assert.ok(deep.water <= 25, `deep uptake must stay fractional, got ${deep.water}`);
+    const remaining = world.getTileResourcesAt(tile.tileX, tile.tileZ);
+    assert.ok((remaining?.groundwater ?? 0) > 0, 'a deep root must not drain the cavity dry');
+  });
+
   it('dayNightCurve index never exceeds bounds (no NaN light)', () => {
     const world = makeWorld();
     for (let timeOfDay = 0; timeOfDay <= 1.0; timeOfDay += 0.01) {

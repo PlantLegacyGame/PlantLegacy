@@ -142,7 +142,11 @@ export class ClientWeatherStateMachine {
    * Request a weather state change. Begins transition if different from current.
    */
   requestStateChange(newState: ClientWeatherState): boolean {
-    if (newState === this.state && this.transitionProgress >= 1) return false;
+    // The same state is already the destination, whether the transition into it
+    // finished or is still running. Restarting the fade on a repeat request made
+    // a weather broadcast (about once a second) reset it forever: progress never
+    // passed the 0.5 mark where isRaining flips, so a storm never drew rain.
+    if (newState === this.state) return false;
 
     this.state = newState;
     this.transitionProgress = 0;

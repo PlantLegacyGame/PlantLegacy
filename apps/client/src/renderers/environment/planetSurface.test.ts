@@ -1,21 +1,28 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
+import { DEFAULT_TERRAIN_FIELD } from '@plant-legacy/shared/world';
 import * as THREE from 'three';
 import {
   createPlanetBody,
   createTerrainPatch,
+  createTerrainPatches,
   planetGravity,
   planetSurfaceDrop,
   planetSurfaceFrame,
   planetSurfaceY,
   planetTerrainY,
   planetUp,
-  TERRAIN_PATCH_RADIUS_M,
-  terrainOffset,
+  TERRAIN_SKIN_M,
   terrainRelief,
 } from './planetSurface.ts';
 
 const RADIUS = 300;
+const FIELD = {
+  ...DEFAULT_TERRAIN_FIELD,
+  amplitudeM: 2.4,
+  patchRadiusM: 300,
+  rimFadeFraction: 0.35,
+};
 
 describe('planet surface', () => {
   it('puts the pole at the tangent plane and drops away from it', () => {
@@ -47,7 +54,7 @@ describe('planet surface', () => {
       [10, -5],
       [40, 40],
     ]) {
-      const { point, normal } = planetSurfaceFrame(RADIUS, x, z);
+      const { point, normal } = planetSurfaceFrame(RADIUS, x as number, z as number);
       const centre = { y: -RADIUS };
       const distance = Math.hypot(point.x, point.y - centre.y, point.z);
       assert.ok(Math.abs(distance - RADIUS) < 1e-6);
@@ -77,38 +84,48 @@ describe('planet surface', () => {
     assert.ok(Math.abs(dot - 1) < 1e-9);
   });
 
-  it('adds relief that is deterministic, bounded and actually varied', () => {
-    assert.equal(terrainOffset(12.5, -3.25, 0.35), terrainOffset(12.5, -3.25, 0.35));
-    assert.equal(terrainOffset(10, 10, 0), 0);
+  it('adds deterministic, bounded relief that actually varies', () => {
+    assert.equal(terrainRelief(12.5, -3.25, FIELD), terrainRelief(12.5, -3.25, FIELD));
+    assert.equal(terrainRelief(10, 10, { ...FIELD, amplitudeM: 0 }), 0);
 
     let min = Number.POSITIVE_INFINITY;
     let max = Number.NEGATIVE_INFINITY;
     for (let i = -40; i <= 40; i += 1) {
       for (let j = -40; j <= 40; j += 1) {
-        const offset = terrainOffset(i * 3.7, j * 2.9, 0.35);
-        assert.ok(Math.abs(offset) <= 0.35 + 1e-9);
-        min = Math.min(min, offset);
-        max = Math.max(max, offset);
+        const relief = terrainRelief(i * 3.7, j * 2.9, FIELD);
+        assert.ok(relief >= 0);
+        assert.ok(relief <= FIELD.amplitudeM + 1e-9);
+        min = Math.min(min, relief);
+        max = Math.max(max, relief);
       }
     }
-    assert.ok(max - min > 0.2, 'terrain has no relief');
+    assert.ok(max - min > FIELD.amplitudeM * 0.5, 'terrain has no relief');
   });
 
   it('puts the relief on top of the sphere drop and fades it out at the rim', () => {
     const x = 5;
     const z = -3;
-    const expected = planetSurfaceY(RADIUS, x, z) + terrainRelief(x, z, 2.4);
-    assert.ok(Math.abs(planetTerrainY(RADIUS, x, z, 2.4) - expected) < 1e-12);
-    assert.equal(planetTerrainY(RADIUS, x, z, 0), planetSurfaceY(RADIUS, x, z));
+    const expected = planetSurfaceY(RADIUS, x, z) + terrainRelief(x, z, FIELD) + TERRAIN_SKIN_M;
+    assert.ok(Math.abs(planetTerrainY(RADIUS, x, z, FIELD) - expected) < 1e-12);
+    assert.equal(
+      planetTerrainY(RADIUS, x, z, { ...FIELD, amplitudeM: 0 }),
+      planetSurfaceY(RADIUS, x, z) + TERRAIN_SKIN_M,
+    );
     // Past the patch the ground is the sphere again, so the patch rim is seamless.
-    assert.equal(terrainRelief(TERRAIN_PATCH_RADIUS_M + 5, 0, 2.4), 0);
+    assert.equal(terrainRelief(FIELD.patchRadiusM + 5, 0, FIELD), 0);
   });
 
   it('carries the relief on a metre-scale patch instead of the planet sphere', () => {
-    const amplitude = 2.4;
-    const patch = createTerrainPatch(RADIUS, amplitude, new THREE.MeshBasicMaterial());
-    const cellSize =
-      (TERRAIN_PATCH_RADIUS_M * 2) / (Math.sqrt(patch.geometry.getAttribute('position').count) - 1);
+    const extent = 180;
+    const segments = 96;
+    const patch = createTerrainPatch(
+      RADIUS,
+      FIELD,
+      new THREE.MeshBasicMaterial(),
+      segments,
+      extent,
+    );
+    const cellSize = extent / segments;
     assert.ok(cellSize < 3, `terrain cells are ${cellSize.toFixed(1)} m across`);
 
     const positions = patch.geometry.getAttribute('position');
@@ -116,14 +133,15 @@ describe('planet surface', () => {
     for (let i = 0; i < positions.count; i += 1) {
       const x = positions.getX(i);
       const z = positions.getZ(i);
-      const relief = positions.getY(i) - Math.sqrt(Math.max(RADIUS ** 2 - (x * x + z * z), 0));
+      const relief =
+        positions.getY(i) - Math.sqrt(Math.max(RADIUS ** 2 - (x * x + z * z), 0)) - 0.02; // the patch skin
       // Raise-only: the sphere stays the physics floor, so no vertex may dip
       // below it, and none may exceed the configured amplitude.
       assert.ok(relief >= -1e-3, `terrain dips ${relief.toFixed(3)} m below the sphere`);
-      assert.ok(relief <= amplitude + 0.05, `terrain rises ${relief.toFixed(2)} m`);
+      assert.ok(relief <= FIELD.amplitudeM + 0.05, `terrain rises ${relief.toFixed(2)} m`);
       spread = Math.max(spread, relief);
     }
-    assert.ok(spread > amplitude * 0.8, `patch only rises ${spread.toFixed(2)} m`);
+    assert.ok(spread > FIELD.amplitudeM * 0.5, `patch only rises ${spread.toFixed(2)} m`);
 
     const planet = createPlanetBody(RADIUS, new THREE.MeshBasicMaterial());
     const planetPositions = planet.geometry.getAttribute('position');
@@ -137,6 +155,48 @@ describe('planet surface', () => {
       if (Math.abs(length - RADIUS) > 1e-3) offSphere += 1;
     }
     assert.equal(offSphere, 0);
+  });
+
+  it('builds a detailed inner patch and a coarse outer patch on the same field', () => {
+    const material = new THREE.MeshBasicMaterial();
+    const { inner, outer } = createTerrainPatches(RADIUS, FIELD, material, 64);
+    const innerVerts = inner.geometry.getAttribute('position').count;
+    const outerVerts = outer.geometry.getAttribute('position').count;
+    assert.ok(innerVerts > 0 && outerVerts > 0);
+    assert.ok(inner.name !== outer.name);
+    // The outer patch reaches the configured play radius in each direction.
+    outer.geometry.computeBoundingBox();
+    const box = outer.geometry.boundingBox;
+    assert.ok(box);
+    if (box) {
+      assert.ok(Math.abs(box.max.x - FIELD.patchRadiusM) < 1e-3);
+      assert.ok(Math.abs(box.min.x + FIELD.patchRadiusM) < 1e-3);
+    }
+
+    // The outer patch is a ring: its centre is cut away where the detailed
+    // patch sits, so the two LODs never draw coincident ground surfaces.
+    const innerExtent = 180;
+    const outerIndex = outer.geometry.getIndex();
+    assert.ok(outerIndex);
+    const positions = outer.geometry.getAttribute('position');
+    let centreTriangles = 0;
+    if (outerIndex) {
+      for (let i = 0; i < outerIndex.count; i += 3) {
+        let inside = true;
+        for (let corner = 0; corner < 3; corner += 1) {
+          const vertex = outerIndex.getX(i + corner);
+          if (
+            Math.abs(positions.getX(vertex)) >= innerExtent / 2 ||
+            Math.abs(positions.getZ(vertex)) >= innerExtent / 2
+          ) {
+            inside = false;
+            break;
+          }
+        }
+        if (inside) centreTriangles += 1;
+      }
+    }
+    assert.equal(centreTriangles, 0, 'outer patch still covers the detailed patch');
   });
 
   it('uses one sphere as the whole ground, with its pole on the play plane', () => {
@@ -154,8 +214,6 @@ describe('planet surface', () => {
   });
 
   it('covers the planet continuously instead of stopping at an edge', () => {
-    // A cap had a rim the player could reach; a sphere has none, so the surface
-    // runs all the way round and the far side is covered too.
     const mesh = createPlanetBody(RADIUS, new THREE.MeshBasicMaterial());
     const positions = mesh.geometry.getAttribute('position');
     let lowest = Number.POSITIVE_INFINITY;

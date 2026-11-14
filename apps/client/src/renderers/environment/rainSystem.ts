@@ -39,12 +39,21 @@ const RAIN_VERTEX_SHADER = /* glsl */ `
     p.y = uBoxHeight - fallen;
     p.x += uSlant * fallen;
 
-    vec4 mv = modelViewMatrix * vec4(p, 1.0);
-    mv.xy += vec2(position.x * uWidth + position.y * aLength * uSlant, position.y * aLength);
+    // Build the streak in world space along the fall direction and give it a
+    // screen-facing width. The old shader stretched the quad in view-space XY,
+    // so from above a streak became a horizontal bar and from the side it was a
+    // long cyan stripe. A world fall axis projects to a short dash overhead and
+    // a vertical streak from the side, which is what falling water does.
+    vec3 fall = normalize(vec3(uSlant, 1.0, 0.0));
+    vec3 toEye = cameraPosition - p;
+    vec3 side = cross(fall, toEye);
+    if (dot(side, side) < 1e-6) side = vec3(1.0, 0.0, 0.0);
+    side = normalize(side);
+    vec3 world = p + fall * (position.y * aLength) + side * (position.x * uWidth);
 
     vUv = uv;
     vFade = 0.45 + 0.55 * aPhase;
-    gl_Position = projectionMatrix * mv;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(world, 1.0);
   }
 `;
 
@@ -84,9 +93,15 @@ export function createRainSystem(
 
   const rand = mulberry32(RAIN_SEED);
   for (let i = 0; i < count; i++) {
-    offsets[i * 3 + 0] = (rand() - 0.5) * w;
+    // Bias the field towards the viewer. A uniform 60 m box put most drops far
+    // enough away to be sub-pixel, so rain looked like it was not falling at
+    // all. The cube-root weighting keeps a full depth of drops while packing
+    // more of them into the metres around the eye, where they are visible.
+    const radius = rand() ** 0.65 * 0.5 * w;
+    const angle = rand() * Math.PI * 2;
+    offsets[i * 3 + 0] = Math.cos(angle) * radius;
     offsets[i * 3 + 1] = rand() * h;
-    offsets[i * 3 + 2] = (rand() - 0.5) * w;
+    offsets[i * 3 + 2] = Math.sin(angle) * radius;
     speeds[i] = config.rainParticleSpeed * (0.85 + rand() * 0.3);
     lengths[i] = config.rainStreakLength * (0.5 + rand() * 0.7);
     phases[i] = rand();
@@ -107,9 +122,11 @@ export function createRainSystem(
     uniforms: {
       uTime: { value: 0 },
       uBoxHeight: { value: h },
-      uWidth: { value: config.rainStreakWidth },
-      uColor: { value: new THREE.Color(0xa8c2d4) },
-      uOpacity: { value: 0.5 },
+      // Twice the configured width: 2 cm at a few metres subtends a fraction
+      // of a pixel, which is why the rain read as invisible even when it ran.
+      uWidth: { value: config.rainStreakWidth * 2 },
+      uColor: { value: new THREE.Color(0xcfe2ee) },
+      uOpacity: { value: 0.42 },
       uSlant: { value: config.rainSlant },
     },
     vertexShader: RAIN_VERTEX_SHADER,
@@ -134,7 +151,10 @@ export function createRainSystem(
       mesh.visible = visible;
     },
     follow(position: THREE.Vector3) {
-      mesh.position.set(position.x, 0, position.z);
+      // Keep the drop box around the eye, not around world y=0. Otherwise a
+      // player standing on a hill or looking down from above sees the rain only
+      // as a distant band at the horizon.
+      mesh.position.set(position.x, position.y - h * 0.5, position.z);
     },
   };
 }

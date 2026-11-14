@@ -108,6 +108,21 @@ export interface GrowthConfig {
   growthWaterConsumptionRate: number;
   growthNutrientConsumptionRate: number;
   growthMineralConsumptionRate: number;
+  /**
+   * Share of a part's configured carbon budget that ends up as structural
+   * biomass. The rest is respired as construction cost, so a grown part never
+   * stores more mass than the energy and materials spent building it. Optional
+   * so configs written before this key keep the old 1:1 behaviour.
+   */
+  growthBiomassYield?: number;
+  /** Water respired per unit of standing biomass per second. */
+  upkeepWaterPerBiomass?: number;
+  /** Minerals respired per unit of standing biomass per second. */
+  upkeepMineralPerBiomass?: number;
+  /** Biomass lost per unit of unmet water upkeep (drought wilting). */
+  waterDeficitBiomassLoss?: number;
+  /** Biomass lost per unit of unmet mineral upkeep. */
+  mineralDeficitBiomassLoss?: number;
   // Minimum resource levels required for growth to proceed
   growthMinWater: number;
   growthMinNutrients: number;

@@ -1,4 +1,17 @@
 export {
+  buildCavityField,
+  type CavityBubble,
+  type CavityField,
+  type CavityFieldOptions,
+  type CavityNodeInput,
+  type CavityPoint,
+  cavityContains,
+  cavityDistance,
+  cavityRayRange,
+  coveringSphereOf,
+  DEFAULT_CAVITY_OPTIONS,
+} from './cavityField.ts';
+export {
   angleOfReposeRad,
   bulkDensityKgM3,
   cavityCollapseRatePerS,
@@ -18,3 +31,17 @@ export {
   SphericalTileGrid,
   type SurfacePoint,
 } from './sphericalGrid.ts';
+export {
+  DEFAULT_TERRAIN_FIELD,
+  sampleTerrain,
+  type TerrainFieldParams,
+  type TerrainMaterial,
+  type TerrainSample,
+  terrainHeightAt,
+  terrainMaterialAt,
+  terrainNormalAt,
+  terrainRimScale,
+  terrainSlopeAt,
+  terrainUnitAt,
+  terrainValueNoise,
+} from './terrainField.ts';

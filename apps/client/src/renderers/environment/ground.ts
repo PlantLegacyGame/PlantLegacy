@@ -10,12 +10,15 @@
  */
 import * as THREE from 'three';
 import type { RenderConfig } from '../../config/clientConfig.js';
-import { createPlanetBody, createTerrainPatch } from './planetSurface.js';
+import { getTerrainParams } from '../terrain/terrainState.js';
+import { createPlanetBody, createTerrainPatches } from './planetSurface.js';
 import type { RootSightUniforms } from './rootSightUniforms.js';
 
 export interface Ground {
   mesh: THREE.Mesh | null;
   material: THREE.MeshStandardMaterial;
+  /** Near-field LOD patches, exposed so physics collides with the drawn ground. */
+  terrainMeshes: THREE.Mesh[];
 }
 
 /** Uniform bag the soil shader exposes after it compiles. */
@@ -42,6 +45,19 @@ export function updateGroundSun(
   (uniforms.uSunDir.value as THREE.Vector3).copy(sunDir);
   (uniforms.uSunColor.value as THREE.Color).copy(sunColor);
   uniforms.uSunIntensity.value = sunIntensity;
+}
+
+/** Push the sky fill into the soil shader so slopes read without direct sun. */
+export function updateGroundFill(
+  material: THREE.MeshStandardMaterial,
+  skyColor: THREE.Color,
+  intensity: number,
+): void {
+  const uniforms = getGroundShader(material)?.uniforms;
+  if (!uniforms) return;
+  const color = uniforms.uGroundSkyColor?.value as THREE.Color | undefined;
+  if (color) color.copy(skyColor);
+  if (uniforms.uGroundSkyIntensity) uniforms.uGroundSkyIntensity.value = intensity;
 }
 
 /** Set the soil moisture the shader tints with, 0 dry .. 1 saturated. */
@@ -98,12 +114,17 @@ export function createGround(
     // Root Sight values are shared by reference with the transition update.
     shader.uniforms.uRootSightProgress = soilUniforms.uRootSightProgress;
     shader.uniforms.uRootSightCenter = soilUniforms.uRootSightCenter;
+    shader.uniforms.uRootSightApertureCenter = soilUniforms.uRootSightApertureCenter;
     shader.uniforms.uRootSightRadius = soilUniforms.uRootSightRadius;
-    shader.uniforms.uRootSightSeedPad = soilUniforms.uRootSightSeedPad;
+    shader.uniforms.uRootSightApertureRadius = soilUniforms.uRootSightApertureRadius;
     shader.uniforms.uRootSightWallColor = soilUniforms.uRootSightWallColor;
     shader.uniforms.uRootSightCamera = soilUniforms.uRootSightCamera;
     shader.uniforms.uRootSightNodes = soilUniforms.uRootSightNodes;
     shader.uniforms.uRootSightNodeCount = soilUniforms.uRootSightNodeCount;
+    // Set from the camera's height above the actual displaced terrain, not from
+    // the bare planet sphere. Relief can put the eye below a hill while it is
+    // still outside the mean sphere, which left this shader in surface mode.
+    shader.uniforms.uEyeUnderGround = { value: 0.0 };
     shader.uniforms.uSoilDryColor = { value: soilDry };
     shader.uniforms.uSoilWetColor = { value: soilWet };
     shader.uniforms.uSoilMineralColor = { value: soilMineral };
@@ -113,6 +134,10 @@ export function createGround(
     shader.uniforms.uSunDir = { value: new THREE.Vector3(0, 1, 0) };
     shader.uniforms.uSunColor = { value: new THREE.Color(0xffffee) };
     shader.uniforms.uSunIntensity = { value: 1.0 };
+    // A sky fill keeps slopes readable when the sun is low or below the
+    // horizon; without it the hills flatten into one dark sheet at night.
+    shader.uniforms.uGroundSkyColor = { value: new THREE.Color(0x70879a) };
+    shader.uniforms.uGroundSkyIntensity = { value: 0.4 };
     // Resource grid uniforms for per-tile ground lighting
     shader.uniforms.uResourceGrid = { value: null };
     shader.uniforms.uResourceGridSize = { value: new THREE.Vector2(1, 1) };
@@ -128,10 +153,17 @@ export function createGround(
     shader.uniforms.uPlanetEnabled = { value: onPlanet ? 1.0 : 0.0 };
 
     shader.vertexShader = shader.vertexShader
-      .replace('#include <common>', '#include <common>\nvarying vec3 vSoilWorldPos;')
+      .replace(
+        '#include <common>',
+        '#include <common>\nattribute float aSurfaceCut;\nvarying float vSurfaceCut;\nvarying vec3 vSoilWorldPos;\nvarying vec3 vSoilNormal;',
+      )
       .replace(
         '#include <begin_vertex>',
-        '#include <begin_vertex>\nvSoilWorldPos = (modelMatrix * vec4(position, 1.0)).xyz;',
+        '#include <begin_vertex>\nvSurfaceCut = aSurfaceCut;\nvSoilWorldPos = (modelMatrix * vec4(position, 1.0)).xyz;',
+      )
+      .replace(
+        '#include <beginnormal_vertex>',
+        '#include <beginnormal_vertex>\nvSoilNormal = normalize(mat3(modelMatrix) * objectNormal);',
       );
 
     shader.fragmentShader = shader.fragmentShader
@@ -139,16 +171,20 @@ export function createGround(
         '#include <common>',
         `#include <common>
 varying vec3 vSoilWorldPos;
+varying vec3 vSoilNormal;
+varying float vSurfaceCut;
 uniform float uRootSightProgress;
 uniform vec3 uRootSightCenter;
+uniform vec3 uRootSightApertureCenter;
 uniform float uRootSightRadius;
-uniform float uRootSightSeedPad;
+uniform float uRootSightApertureRadius;
 uniform vec3 uRootSightWallColor;
 uniform vec3 uRootSightCamera;
 // T02 organic envelope: every subterranean root node, fused with a smooth
 // minimum so the cut follows the branching root paths instead of one sphere.
 uniform vec4 uRootSightNodes[64];
 uniform int uRootSightNodeCount;
+uniform float uEyeUnderGround;
 uniform vec3 uSoilDryColor;
 uniform vec3 uSoilWetColor;
 uniform vec3 uSoilMineralColor;
@@ -159,6 +195,8 @@ uniform float uSoilMineralStrength;
 uniform vec3 uSunDir;
 uniform vec3 uSunColor;
 uniform float uSunIntensity;
+uniform vec3 uGroundSkyColor;
+uniform float uGroundSkyIntensity;
 // Resource grid for per-tile lighting
 uniform sampler2D uResourceGrid;
 uniform vec2 uResourceGridSize;
@@ -224,17 +262,17 @@ vec3 soilBumpNormal(vec3 normal, vec2 uv, float strength) {
   // the dug earth inside stays readable at night instead of going pure black.
   // Is the eye buried? Decides whether this is a surface view or a view from
   // inside the earth, which need completely different shading.
-  bool eyeIsUnder =
-    uPlanetEnabled > 0.5 &&
-    distance(uRootSightCamera, uPlanetCenter) < uPlanetRadius - 0.02;
-  if (uRootSightProgress > 0.01) {
+  bool eyeIsUnder = uEyeUnderGround > 0.5;
+  if (vSurfaceCut > 0.5 && uRootSightProgress > 0.01) {
     // Each node supplies its own bubble radius (w), so the cavity is sized by
     // the underground elements themselves rather than one global sphere.
     // The whole bubble is cut, not one camera-facing half: a half-cut bubble
     // put the opening off to one side of the plant and made the cavity slide
     // around as the camera moved. The interior is dirt anyway — the shader
     // marches its far wall — so the full sphere is what reads as a bubble.
-    float sminK = max(0.15, uRootSightRadius * 0.5);
+    // A fixed fraction of the cavity radius made the fused surface bulge far
+    // past the roots; keep the soft blend to a hand-sized fillet instead.
+    float sminK = clamp(uRootSightRadius * 0.12, 0.06, 0.32);
     for (int i = 0; i < 64; i++) {
       if (i >= uRootSightNodeCount) break;
       vec4 node = uRootSightNodes[i];
@@ -247,14 +285,32 @@ vec3 soilBumpNormal(vec3 normal, vec2 uv, float strength) {
     }
     // Inside the fused envelope the soil is gone; outside it the rim darkens
     // into packed earth so the cavity reads as a dug cavity, not a cut-out.
-    cutMask = 1.0 - smoothstep(-sminK * 0.35, sminK * 0.35, envelope);
-    // The seed keeps the earth it was planted in. Without this plug the cavity
-    // opened directly under the seed, so the plant looked like it was hovering
-    // over its own hole; the soil now holds a small mound around it.
-    if (uRootSightSeedPad > 0.001) {
-      float seedPadDist = distance(vSoilWorldPos.xz, uRootSightCenter.xz);
-      cutMask *= smoothstep(uRootSightSeedPad * 0.55, uRootSightSeedPad, seedPadDist);
-    }
+    float bubbleMask = 1.0 - smoothstep(-sminK * 0.35, sminK * 0.35, envelope);
+
+    // A root bubble can sit wholly below the surface, especially a deep root
+    // system or a seed that settled into a divot. Cutting only the bubbles then
+    // leaves Root Sight closed from above, so the view has to be lowered until
+    // the camera itself is underground. This aperture is cut in the terrain
+    // surface around the seed, in plan view: every fragment keeps its own
+    // terrain height, so the visible lip follows slopes and dips instead of
+    // being a horizontal disc. The cavity bowl sits underneath it.
+    // One radius, owned by the client and handed to both this shader and the
+    // bowl. It used to be recomputed here with a hard 1.8 m cap while the bowl
+    // used the full cutaway radius: a 1.8 m hole over a 4.9 m mouth left the
+    // bowl's buried rim crossing the sightline through the opening, which is
+    // what painted dirt across the hole from some angles.
+    float apertureRadius = max(0.05, uRootSightApertureRadius);
+    // Open with the transition. The bowl is scaled by the same progress; a
+    // full-size aperture over a half-size bowl leaves a void ring around the
+    // opening for the first frames.
+    apertureRadius *= clamp(uRootSightProgress, 0.0, 1.0);
+    float apertureDist = distance(vSoilWorldPos.xz, uRootSightApertureCenter.xz);
+    float apertureMask =
+      1.0 - smoothstep(apertureRadius * 0.82, apertureRadius, apertureDist);
+    // The aperture is the only hole in the surface. Cutting the root bubbles
+    // here as well opened sky outside the bowl whenever a bubble reached past
+    // the bowl mouth; the bowl is real geometry and already exposes the roots.
+    cutMask = apertureMask;
   }
 
   // Surface coordinates: metres of arc from the planet's pole, in the azimuth
@@ -318,14 +374,25 @@ vec3 soilBumpNormal(vec3 normal, vec2 uv, float strength) {
   );
 
   // Apply lighting to ground (use existing normal from standard material)
-  vec3 groundNormal = normalize(vNormal);
-  if (!gl_FrontFacing) groundNormal = -groundNormal;
+  vec3 macroNormal = normalize(vSoilNormal);
+  if (!gl_FrontFacing) macroNormal = -macroNormal;
   // Clod-scale relief, strongest on bare soil: this is what makes the surface
   // read as loose dirt rather than a coloured plane.
-  groundNormal = soilBumpNormal(groundNormal, vSoilWorldPos.xz * 3.2, 0.55);
+  vec3 groundNormal = soilBumpNormal(macroNormal, vSoilWorldPos.xz * 3.2, 0.55);
   // uSunDir points FROM the ground TOWARD the sun, so use it directly.
   float NdotL = max(dot(groundNormal, normalize(uSunDir)), 0.0);
-  vec3 lightColor = uSunColor * uSunIntensity * NdotL;
+  // Sky fill and the hill-shading curve use the macro normal, not the bump
+  // normal: the bump is deliberately mostly vertical, so using it here erased
+  // every slope and left the terrain looking flat no matter how it was lit.
+  vec3 skyFill =
+    uGroundSkyColor *
+    uGroundSkyIntensity *
+    (0.35 + 0.65 * clamp(macroNormal.y, 0.0, 1.0));
+  // Existing relief is gentle (a metre over ten), so plain Lambert barely
+  // separates a slope from the flat. A steep power curve on the up component
+  // makes those small normal changes read as hills without moving geometry.
+  float slopeLight = mix(0.65, 1.12, pow(clamp(macroNormal.y, 0.0, 1.0), 24.0));
+  vec3 lightColor = (uSunColor * uSunIntensity * NdotL + skyFill) * slopeLight;
 
   // Modulate light intensity by tile light level
   lightColor *= mix(0.3, 1.0, tileLight);
@@ -340,7 +407,7 @@ vec3 soilBumpNormal(vec3 normal, vec2 uv, float strength) {
   // darkest at the bubble centre, easing back into surface soil at the rim — so
   // the opening, the dirt behind it and the edge all come from one surface and
   // nothing can leak sky or a second ground layer.
-  if (uRootSightProgress > 0.01) {
+  if (vSurfaceCut > 0.5 && uRootSightProgress > 0.01) {
     // The earthen rim belongs to the surface view. Seen from under the soil it
     // drew a bright ring around the opening, which is half of what made the cut
     // read as a lit dome instead of a hole.
@@ -349,34 +416,12 @@ vec3 soilBumpNormal(vec3 normal, vec2 uv, float strength) {
       : 1.0 - smoothstep(0.0, max(0.4, uRootSightRadius * 0.6), envelope);
     dynamicSoil = mix(dynamicSoil, uRootSightWallColor, rim);
 
-    // Sight-line window. A bubble is a sphere buried in the dirt, so from most
-    // angles the soil between the eye and the sphere hides it completely. This
-    // circular cut runs from the eye to the cavity and fades out at both ends,
-    // so the line of sight into the roots stays open as the camera moves.
-    vec3 eyeToCentre = uRootSightCenter - uRootSightCamera;
-    float sightSpan = max(dot(eyeToCentre, eyeToCentre), 1e-4);
-    float along = clamp(
-      dot(vSoilWorldPos - uRootSightCamera, eyeToCentre) / sightSpan,
-      0.0,
-      1.0
-    );
-    vec3 onSightLine = uRootSightCamera + eyeToCentre * along;
-    float sightRadius = max(0.3, uRootSightRadius * 0.8);
-    float sightFade =
-      smoothstep(0.0, 0.18, along) * (1.0 - smoothstep(0.85, 1.0, along));
-    // Only while the eye is under the surface. From above, the bubble already
-    // opens a clean hole; the window exists to give the buried camera a way to
-    // see the roots instead of a wall of soil.
-    float eyeUnder = uPlanetEnabled > 0.5
-      ? 1.0 - smoothstep(uPlanetRadius - 0.5, uPlanetRadius + 0.05, distance(uRootSightCamera, uPlanetCenter))
-      : step(uRootSightCamera.y, 0.0);
-    float sightMask =
-      (1.0 - smoothstep(sightRadius * 0.7, sightRadius, distance(vSoilWorldPos, onSightLine))) *
-      sightFade *
-      eyeUnder *
-      smoothstep(0.05, 0.6, uRootSightProgress);
-
-    float cavityMask = max(cutMask, sightMask);
+    // A second camera-to-root corridor used to be cut through this same surface.
+    // Because the ground is a skin, that corridor exposed the sky behind it and
+    // appeared as gaps between the surface and the bowl. The aperture (backed by
+    // the solid bowl) is now the only opening; side views see dirt, and the sky
+    // is visible only by looking up through the aperture.
+    float cavityMask = cutMask;
     // The opening is a hole, and the earth inside it is real geometry (the
     // cavity bowl), so the surface has nothing left to shade here: it simply
     // stops. Faking the inside in this shader is what produced the dome, the
@@ -404,28 +449,57 @@ vec3 soilBumpNormal(vec3 normal, vec2 uv, float strength) {
   };
   material.customProgramCacheKey = () => SOIL_PATCH_MARKER;
 
+  // The cutaway is a property of the surface patch, not every mesh that uses
+  // the soil material. A per-vertex flag keeps the planet and outer ring solid
+  // without relying on draw order: onBeforeRender cannot safely switch a
+  // uniform on a material shared by several meshes, and from below the stale
+  // value left the opening covered by dirt.
+  const setSurfaceCut = (target: THREE.Mesh, enabled: boolean): void => {
+    const count = target.geometry.getAttribute('position')?.count ?? 0;
+    const values = new Float32Array(count);
+    if (enabled) values.fill(1);
+    target.geometry.setAttribute('aSurfaceCut', new THREE.BufferAttribute(values, 1));
+  };
+
   let mesh: THREE.Mesh | null = null;
+  const terrainMeshes: THREE.Mesh[] = [];
   if (showGround) {
     if (onPlanet) {
       mesh = createPlanetBody(planetRadius, material);
-      // The planet's own vertices are kilometres apart, so the play area gets a
-      // metre-scale patch that carries the relief. A child of the planet mesh
-      // shares its local space, so the two surfaces line up by construction.
+      setSurfaceCut(mesh, false);
+      // The planet's own vertices are kilometres apart, so the play area gets
+      // two metre-scale patches that carry the relief: a detailed inner patch
+      // and a coarser outer one out to the configured radius. A child of the
+      // planet mesh shares its local space, so the surfaces line up by
+      // construction. 500 m of walking sees real hills instead of the smooth
+      // ball that used to begin 90 m from the seed.
       if (config.terrainAmplitudeM > 0) {
-        mesh.add(createTerrainPatch(planetRadius, config.terrainAmplitudeM, material));
+        const patches = createTerrainPatches(
+          planetRadius,
+          getTerrainParams(),
+          material,
+          config.terrainMeshSubdivisions,
+        );
+        mesh.add(patches.inner);
+        mesh.add(patches.outer);
+        setSurfaceCut(patches.inner, true);
+        setSurfaceCut(patches.outer, false);
+        terrainMeshes.push(patches.inner, patches.outer);
       }
     } else {
       mesh = new THREE.Mesh(geometry as THREE.BufferGeometry, material);
+      setSurfaceCut(mesh, true);
     }
     // Only the fallback plane has to be laid down from its default XY
     // orientation; the planet body is already built around its own centre.
     if (!onPlanet) {
       mesh.rotation.x = -Math.PI / 2;
       mesh.position.y = 0;
+      terrainMeshes.push(mesh);
     }
     mesh.receiveShadow = true;
     scene.add(mesh);
   }
 
-  return { mesh, material };
+  return { mesh, material, terrainMeshes };
 }

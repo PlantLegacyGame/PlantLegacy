@@ -237,7 +237,6 @@ export class WebGPURenderer {
 
   private computePipeline: GPUComputePipeline | null = null;
   private meshPipeline: GPURenderPipeline | null = null;
-  private outlinePipeline: GPURenderPipeline | null = null;
   private sharedPipelineLayout: GPUPipelineLayout | null = null;
   private billboardPipeline: GPURenderPipeline | null = null;
   private rainPipeline: GPURenderPipeline | null = null;
@@ -277,8 +276,6 @@ export class WebGPURenderer {
   private vertexCount = 0;
   private indexCount = 0;
   private plantCount = 0;
-  private outlineIndexOffset = 0;
-  private outlineIndexCount = 0;
   private rainParticleCount = 0;
 
   private pendingNodes: PlantNodeData[] = [];
@@ -315,9 +312,6 @@ export class WebGPURenderer {
   // so anchor frame.time to the same clock instead of starting at zero.
   private time = performance.now() / 1000;
   private deltaTime = 0;
-
-  // Selected node for outline highlight
-  private selectedNodeId: string | null = null;
 
   constructor(device: WebGPUDevice, config: Partial<WebGPURendererConfig> = {}) {
     this.device = device;
@@ -552,7 +546,7 @@ export class WebGPURenderer {
       compute: { module: cullModule, entryPoint: 'main' },
     });
 
-    // Create shared pipeline layout for mesh and outline pipelines
+    // Create the shared pipeline layout for the mesh pipelines
     // Both use the same shader module with the same bind group layout
     this.sharedPipelineLayout = device.createPipelineLayout({
       label: 'Plant shared pipeline layout',
@@ -650,59 +644,6 @@ export class WebGPURenderer {
         format: 'depth24plus',
         depthWriteEnabled: true,
         depthCompare: 'less',
-      },
-    });
-
-    // Outline pipeline (for selected node highlight) - transparent, renders in pass 2
-    this.outlinePipeline = device.createRenderPipeline({
-      label: 'Plant outline pipeline',
-      layout: this.sharedPipelineLayout,
-      vertex: {
-        module: meshModule,
-        entryPoint: 'vs_main',
-        buffers: [
-          {
-            arrayStride: VERTEX_STRIDE,
-            attributes: [
-              { shaderLocation: 0, offset: 0, format: 'float32x3' }, // position
-              { shaderLocation: 1, offset: 12, format: 'float32x3' }, // normal
-              { shaderLocation: 2, offset: 24, format: 'float32x2' }, // uv
-              { shaderLocation: 3, offset: 32, format: 'uint32' }, // packed
-              { shaderLocation: 4, offset: 36, format: 'float32' }, // spawnTime
-              { shaderLocation: 5, offset: 40, format: 'float32' }, // growthProgress
-              // C02b: GPU skinning - joint indices and weights
-              { shaderLocation: 6, offset: 44, format: 'uint32x4' }, // jointIndices
-              { shaderLocation: 7, offset: 60, format: 'float32x4' }, // jointWeights
-            ],
-          },
-        ],
-      },
-      fragment: {
-        module: meshModule,
-        entryPoint: 'fs_main',
-        targets: [
-          {
-            format: presentationFormat,
-            blend: {
-              color: {
-                srcFactor: 'one',
-                dstFactor: 'one-minus-src-alpha',
-                operation: 'add',
-              },
-              alpha: {
-                srcFactor: 'one',
-                dstFactor: 'one-minus-src-alpha',
-                operation: 'add',
-              },
-            },
-          },
-        ],
-      },
-      primitive: { topology: 'triangle-list', cullMode: 'none' },
-      depthStencil: {
-        format: 'depth24plus',
-        depthWriteEnabled: false,
-        depthCompare: 'less-equal',
       },
     });
 
@@ -1230,14 +1171,6 @@ export class WebGPURenderer {
     this.rootSightSoilOpacity = THREE.MathUtils.clamp(soilOpacity, 0, 1);
   }
 
-  /** Set the node ID to highlight with an outline. */
-  setSelectedNode(nodeId: string | null): void {
-    if (this.selectedNodeId === nodeId) return;
-    this.selectedNodeId = nodeId;
-    // Force mesh rebuild on next frame to include outline
-    this.lastBuildTimeMs = Number.NEGATIVE_INFINITY;
-  }
-
   /**
    * Queue a plant upload. Rebuilds are throttled while new nodes are growing so
    * the mesh follows the 0.9 s emergence animation without rebuilding every
@@ -1284,7 +1217,6 @@ export class WebGPURenderer {
       rootSides: this.config.rootSides,
       now: this.pendingNowMs,
       sunDirection: this.sunDirection,
-      selectedNodeId: this.selectedNodeId,
       mutationBarkThicknessScale: this.config.mutationBarkThicknessScale,
     });
 
@@ -1294,8 +1226,6 @@ export class WebGPURenderer {
 
     this.vertexCount = built.vertices.byteLength / VERTEX_STRIDE;
     this.indexCount = built.indices.length;
-    this.outlineIndexOffset = built.outlineIndexOffset;
-    this.outlineIndexCount = built.outlineIndexCount;
     this.plantCount = Math.min(built.plantData.length, this.config.maxPlants);
     this.plantRenderData = built.plantData;
 
@@ -1967,21 +1897,6 @@ export class WebGPURenderer {
       renderPass.draw(6, this.plantCount);
     }
 
-    // 4. Outline for selected node - transparent, renders on top
-    if (
-      this.outlinePipeline &&
-      this.meshBindGroup &&
-      this.vertexBuffer &&
-      this.indexBuffer &&
-      this.outlineIndexCount > 0
-    ) {
-      renderPass.setPipeline(this.outlinePipeline);
-      renderPass.setBindGroup(0, this.meshBindGroup);
-      renderPass.setVertexBuffer(0, this.vertexBuffer);
-      renderPass.setIndexBuffer(this.indexBuffer, 'uint32');
-      renderPass.drawIndexed(this.outlineIndexCount, 1, this.outlineIndexOffset);
-    }
-
     // 5. No soil dome. It was a second sphere under the surface whose rings
     //    read as radial bands and which hid the roots from every angle except
     //    straight above. Root Sight now cuts a corridor through the terrain
@@ -2469,7 +2384,6 @@ export class WebGPURenderer {
     this.computePipeline = null;
     this.meshPipeline = null;
     this.billboardPipeline = null;
-    this.outlinePipeline = null;
     this.rainPipeline = null;
     this.impostorPipeline = null;
     this.computeBindGroup = null;
@@ -2488,8 +2402,6 @@ export class WebGPURenderer {
     this.vertexCount = 0;
     this.indexCount = 0;
     this.plantCount = 0;
-    this.outlineIndexOffset = 0;
-    this.outlineIndexCount = 0;
     this.rainParticleCount = 0;
     this.pendingNodes = [];
     this.lastBuildNodeCount = -1;

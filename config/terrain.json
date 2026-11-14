@@ -1,11 +1,168 @@
 {
   "_meta": {
     "system": "terrain",
-    "version": "0.1.0",
+    "version": "1.0.0",
     "schema": "extended-1",
     "owner_task": "T25",
-    "status": "stub",
-    "notes": "Declared by T00. Populated by T25 per DESIGN.md Part 5."
+    "status": "active",
+    "notes": "T25 terrain interaction: shared deterministic surface field, sparse soil chunks, root tunnels and voids, displacement, collapse and growth resistance."
   },
-  "values": {}
+  "values": {
+    "seed": {
+      "type": "integer",
+      "value": 1337,
+      "range": [0, 2147483647],
+      "notes": "World terrain seed. The same seed produces the same base surface on server and client; only edits are streamed."
+    },
+    "surface_amplitude_m": {
+      "type": "number",
+      "value": 6.0,
+      "range": [0, 40],
+      "notes": "Peak relief above the base planet surface, in metres."
+    },
+    "surface_base_frequency": {
+      "type": "number",
+      "value": 0.045,
+      "range": [0.001, 0.5],
+      "notes": "Base noise frequency in cycles per metre."
+    },
+    "surface_octaves": {
+      "type": "integer",
+      "value": 4,
+      "range": [1, 6],
+      "notes": "Octaves of value noise. More octaves add finer clods."
+    },
+    "surface_lacunarity": {
+      "type": "number",
+      "value": 2.0,
+      "range": [1.1, 4],
+      "notes": "Frequency multiplier per octave."
+    },
+    "surface_gain": {
+      "type": "number",
+      "value": 0.5,
+      "range": [0, 1],
+      "notes": "Amplitude multiplier per octave."
+    },
+    "ridge_strength": {
+      "type": "number",
+      "value": 0.35,
+      "range": [0, 1],
+      "notes": "0 = rolling hills, 1 = sharp crests."
+    },
+    "patch_radius_m": {
+      "type": "number",
+      "value": 620.0,
+      "range": [50, 1200],
+      "notes": "Radius of the authored detailed ground. Relief fades to zero at the rim so it meets the smooth planet without a seam."
+    },
+    "rim_fade_fraction": {
+      "type": "number",
+      "value": 0.28,
+      "range": [0.02, 0.9],
+      "notes": "Fraction of the patch radius over which relief fades out at the rim."
+    },
+    "tile_size_m": {
+      "type": "number",
+      "value": 16.0,
+      "range": [4, 64],
+      "notes": "L0 terrain tile edge. Renders tile holes as chunks; physics collides per tile."
+    },
+    "tile_vertices": {
+      "type": "integer",
+      "value": 17,
+      "range": [5, 65],
+      "notes": "Vertices per tile edge at L0 (17 = 1 m spacing on a 16 m tile)."
+    },
+    "lod_distances_m": {
+      "type": "array",
+      "item_type": "number",
+      "value": [48, 120, 280, 620],
+      "notes": "Outer radius of each LOD ring. Ring 0 is the near field; the last ring is the patch rim."
+    },
+    "cell_size_m": {
+      "type": "number",
+      "value": 0.5,
+      "range": [0.25, 2],
+      "notes": "Editable soil cell size. Soil physics and tunnels run on this grid."
+    },
+    "chunk_cells": {
+      "type": "integer",
+      "value": 32,
+      "range": [8, 64],
+      "notes": "Cells per terrain chunk edge. 32 x 0.5 m = a 16 m chunk."
+    },
+    "max_active_chunks": {
+      "type": "integer",
+      "value": 64,
+      "range": [16, 256],
+      "notes": "Most chunks the server simulates or persists at once."
+    },
+    "max_depth_m": {
+      "type": "number",
+      "value": 12.0,
+      "range": [1, 100],
+      "notes": "Deepest soil a root may reach. Below this is bedrock and no growth is allowed."
+    },
+    "surface_break_depth_m": {
+      "type": "number",
+      "value": 0.8,
+      "range": [0.05, 5],
+      "notes": "A tunnel this close to the surface lowers the surface instead of leaving a buried void."
+    },
+    "max_edit_volume_m3": {
+      "type": "number",
+      "value": 4.0,
+      "range": [0.01, 100],
+      "notes": "Largest soil volume one edit may remove."
+    },
+    "max_edits_per_tick": {
+      "type": "integer",
+      "value": 16,
+      "range": [1, 64],
+      "notes": "Server-side budget on soil edits per tick."
+    },
+    "collapse_cadence_hz": {
+      "type": "number",
+      "value": 2.0,
+      "range": [0.5, 8],
+      "notes": "How often unsupported cavities are checked for collapse."
+    },
+    "displacement_ring_cells": {
+      "type": "integer",
+      "value": 3,
+      "range": [1, 8],
+      "notes": "Width of the displaced-soil ring around a tunnel, in cells."
+    },
+    "growth_resistance_min": {
+      "type": "number",
+      "value": 0.4,
+      "range": [0.1, 1],
+      "notes": "Cheapest growth multiplier in loose, damp soil."
+    },
+    "growth_resistance_max": {
+      "type": "number",
+      "value": 2.5,
+      "range": [1, 10],
+      "notes": "Most expensive growth multiplier in compacted, dry soil."
+    },
+    "runoff_fraction": {
+      "type": "number",
+      "value": 0.15,
+      "range": [0, 1],
+      "notes": "Fraction of surface water that moves to a lower neighbouring cell per soil step."
+    },
+    "evaporation_per_s": {
+      "type": "number",
+      "value": 0.002,
+      "range": [0, 0.1],
+      "notes": "Surface water lost per second when it is not raining."
+    },
+    "rain_absorption_per_s": {
+      "type": "number",
+      "value": 0.05,
+      "range": [0, 1],
+      "notes": "Surface moisture gained per second during rain."
+    }
+  }
 }

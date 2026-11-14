@@ -67,6 +67,8 @@ export interface ResourceSink {
     worldZ: number,
     waterDemand: number,
     mineralDemand: number,
+    /** Deep roots may also draw from the groundwater cavity. */
+    allowGroundwater?: boolean,
   ): { water: number; minerals: number };
 }
 
@@ -99,6 +101,7 @@ export class PlantWorld {
 
   private resourceProvider: ((x: number, z: number) => TileResources) | null = null;
   private resourceSink: ResourceSink | null = null;
+  private growthResistanceProvider: ((x: number, y: number, z: number) => number) | null = null;
   /**
    * Photosynthesis for one plant over a span of seconds.
    *
@@ -189,6 +192,14 @@ export class PlantWorld {
       consumptionTriggerFertilizerItem: false,
       diffusionRate: 0.1,
       maxAbsorptionPerTick: 10,
+      groundwaterBase: 0,
+      groundwaterCapacity: 400,
+      groundwaterRechargeFraction: 0.5,
+      groundwaterInfiltrationFraction: 0.55,
+      groundwaterPercolationRate: 0.04,
+      groundwaterCapillaryRisePerS: 0.15,
+      groundwaterRootUptakeFraction: 0.25,
+      groundwaterRootReserveFraction: 0.05,
       canopyShadeReduction: 0.2,
       maxLight: 100,
       maxMoisture: 100,
@@ -237,6 +248,15 @@ export class PlantWorld {
 
   setResourceProvider(provider: (x: number, z: number) => TileResources): void {
     this.resourceProvider = provider;
+  }
+
+  /**
+   * Wire soil strength into growth. Compact, dry, deep soil costs more energy
+   * and takes longer to push a root through; the return value is a multiplier
+   * already clamped by the terrain config.
+   */
+  setGrowthResistanceProvider(provider: (x: number, y: number, z: number) => number): void {
+    this.growthResistanceProvider = provider;
   }
 
   /**
@@ -442,12 +462,26 @@ export class PlantWorld {
         if (waterDemand <= 0 && mineralDemand <= 0) continue;
 
         const tile = resourceProvider(node.x, node.z);
-        const availableWater = Math.min(waterDemand, Math.max(0, tile?.moisture ?? 0));
+        // Only roots below the surface layer reach the water table. Surface
+        // roots keep using the moisture in the root zone, while a deep root can
+        // keep the plant alive from a storm-filled cavity.
+        const allowGroundwater = node.y < -0.05;
+        const availableWater = Math.min(
+          waterDemand,
+          Math.max(0, tile?.moisture ?? 0) +
+            (allowGroundwater ? Math.max(0, tile?.groundwater ?? 0) : 0),
+        );
         const availableMinerals = Math.min(mineralDemand, Math.max(0, tile?.minerals ?? 0));
         if (availableWater <= 0 && availableMinerals <= 0) continue;
 
         const taken = this.resourceSink
-          ? this.resourceSink.takeResources(node.x, node.z, availableWater, availableMinerals)
+          ? this.resourceSink.takeResources(
+              node.x,
+              node.z,
+              availableWater,
+              availableMinerals,
+              allowGroundwater,
+            )
           : { water: availableWater, minerals: availableMinerals };
         gainedWater += taken.water;
         gainedMinerals += taken.minerals;
@@ -559,7 +593,29 @@ export class PlantWorld {
     }
   }
 
+  /**
+   * Structural biomass is the sum of the parts, not a separate counter that can
+   * silently lose them. A saved or resumed plant used to come back with
+   * totalBiomass 0 while its seed and leaves were still alive; upkeep then cost
+   * nothing, so it could neither grow nor die and the HUD was correct about a
+   * number that meant nothing. Recover the accumulator from the surviving parts
+   * when it has been zeroed, and keep upkeep in step with the graph as well.
+   */
+  private reconcileStructuralMass(plant: Plant): void {
+    let nodeBiomass = 0;
+    let nodeUpkeep = 0;
+    for (const node of plant.nodes.values()) {
+      nodeBiomass += Math.max(0, node.biomass ?? 0);
+      nodeUpkeep += node.upkeepBiomassPerSecond;
+    }
+    plant.totalUpkeep = nodeUpkeep;
+    if ((!Number.isFinite(plant.totalBiomass) || plant.totalBiomass <= 0) && nodeBiomass > 0) {
+      plant.totalBiomass = nodeBiomass;
+    }
+  }
+
   private processDormantPlant(plant: Plant, _dt: number, currentTick: number): void {
+    this.reconcileStructuralMass(plant);
     // A plant that has never been simulated has no backlog to settle; record
     // the mark and let the next dormant step measure from here.
     if (plant.lastTick === undefined || plant.lastTick === null) {
@@ -606,6 +662,8 @@ export class PlantWorld {
           return;
         }
       }
+      this.applyTissueUpkeep(plant, elapsedSeconds);
+      if (!this.plants.has(plant.id)) return;
     }
 
     // Offline plants still finish a node the player had already started: growth
@@ -640,6 +698,7 @@ export class PlantWorld {
   }
 
   private processPlantUpkeep(plant: Plant, dt: number): void {
+    this.reconcileStructuralMass(plant);
     // First, shed cotyledons if threshold reached
     let trueLeafCount = 0;
     for (const node of plant.nodes.values()) {
@@ -688,9 +747,56 @@ export class PlantWorld {
         plant.totalBiomass = Math.max(0, plant.totalBiomass - energyUpkeepCost);
         if (plant.totalBiomass <= 0) {
           this.killPlant(plant.id, 'starvation');
+          return;
         }
       }
+      this.applyTissueUpkeep(plant, dt);
     }
+  }
+
+  /**
+   * Respiration beyond energy: living tissue also spends water and minerals.
+   *
+   * Upkeep used to cost energy only, so a plant could sit at full water and
+   * minerals forever while its roots pulled in more every tick. Transpiration
+   * and the mineral cost of maintaining cell walls are real drains, and making
+   * them real is what gives stored water a reason to matter after germination.
+   * A shortfall is not silently forgiven: it is paid for out of structural mass,
+   * which is what wilting is. Rates are per unit biomass per second and come
+   * from growth.json, so the numbers are tunable rather than invented here.
+   */
+  private applyTissueUpkeep(plant: Plant, dt: number): void {
+    if (plant.totalBiomass <= 0 || dt <= 0) return;
+    const waterRate = this.config.upkeepWaterPerBiomass ?? 0;
+    const mineralRate = this.config.upkeepMineralPerBiomass ?? 0;
+
+    if (waterRate > 0) {
+      const need = plant.totalBiomass * waterRate * dt;
+      const paid = Math.min(plant.storedWater, need);
+      plant.storedWater = Math.max(0, plant.storedWater - paid);
+      const deficit = need - paid;
+      if (deficit > 0) {
+        plant.totalBiomass = Math.max(
+          0,
+          plant.totalBiomass - deficit * (this.config.waterDeficitBiomassLoss ?? 0),
+        );
+      }
+    }
+
+    if (mineralRate > 0) {
+      const need = plant.totalBiomass * mineralRate * dt;
+      const paid = Math.min(plant.storedMinerals, need);
+      plant.storedMinerals = Math.max(0, plant.storedMinerals - paid);
+      const deficit = need - paid;
+      if (deficit > 0) {
+        plant.totalBiomass = Math.max(
+          0,
+          plant.totalBiomass - deficit * (this.config.mineralDeficitBiomassLoss ?? 0),
+        );
+      }
+    }
+
+    if (plant.totalBiomass <= 0) this.killPlant(plant.id, 'starvation');
   }
 
   /**
@@ -782,7 +888,10 @@ export class PlantWorld {
       // Accrue biomass proportionally as the node grows so totalBiomass reflects
       // live growth progress instead of flatlining until completion. Upkeep still
       // drains in processUpkeep, so net biomass = growth accrual minus upkeep.
-      const biomassThisTick = nodeDef.biomass_cost * progressThisTick;
+      // The final mass is the quoted (yield-limited) gain, not the raw carbon
+      // budget: mass may never exceed what the part is actually drawn as.
+      const targetMass = computeGrowthCostQuote(this.config, nodeDef).biomassGain;
+      const biomassThisTick = targetMass * progressThisTick;
       plant.totalBiomass += biomassThisTick;
       node.biomass = (node.biomass ?? 0) + biomassThisTick;
 
@@ -806,9 +915,9 @@ export class PlantWorld {
 
       if (node.growthProgress >= 1.0) {
         // Snap to exact final biomass to prevent accumulation drift beyond cost
-        const overage = Math.max(0, node.biomass - nodeDef.biomass_cost);
+        const overage = Math.max(0, node.biomass - targetMass);
         plant.totalBiomass -= overage;
-        node.biomass = nodeDef.biomass_cost;
+        node.biomass = targetMass;
         node.upkeepBiomassPerSecond = nodeDef.upkeep_biomass_per_second;
         plant.totalUpkeep += nodeDef.upkeep_biomass_per_second;
         node.targetX = node.targetY = node.targetZ = undefined;
@@ -923,7 +1032,14 @@ export class PlantWorld {
     }
 
     const costs = computeGrowthCostQuote(this.config, nodeDef);
-    const energyCost = costs.energyCost;
+    // Roots pay for the soil they open; canopy growth is in air. The provider
+    // returns a multiplier clamped by `growth_resistance_min/max`.
+    const resistance =
+      targetLayer === 'root'
+        ? Math.max(0.25, this.growthResistanceProvider?.(newX, newY, newZ) ?? 1)
+        : 1;
+    const energyCost = costs.energyCost * resistance;
+    const growthTimeSeconds = costs.growthTimeSeconds * resistance;
 
     if (plant.totalEnergy < energyCost) {
       return { success: false, reason: 'insufficient_energy' };
@@ -965,7 +1081,6 @@ export class PlantWorld {
     }
 
     const newNodeId = nodeName(plant.id, parentNode, targetType, (id) => plant.nodes.has(id));
-    const growthTimeSeconds = costs.growthTimeSeconds;
     const newNode: PlantNode = {
       id: newNodeId,
       plantId: plant.id,
@@ -1273,6 +1388,9 @@ export class PlantWorld {
         node.isSeed = node.type === 'seed';
       }
     }
+    // A resumed plant must not carry a zeroed structural total with intact
+    // nodes: that made upkeep free and starved the death path of a cause.
+    this.reconcileStructuralMass(plant);
     // Restored geometry is the one thing that can predate the current placement
     // rule, so it is repaired before it is validated or drawn.
     const repaired = this.repairSegmentLengths(plant);

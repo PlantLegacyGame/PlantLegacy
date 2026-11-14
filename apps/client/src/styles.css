@@ -454,16 +454,6 @@ body {
   margin: 14px 0;
 }
 
-.hud-group-title {
-  font-size: 0.62rem;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--leaf-400);
-  margin: 18px 0 10px;
-  padding-left: 3px;
-}
-
 /* Toasts — warm, soft, close to bottom center */
 .ui-toast {
   position: fixed;
@@ -506,69 +496,365 @@ body {
   }
 }
 
-/* Growth option — compact, visual-first */
-.hud-grow-option {
-  border: 1.5px solid var(--hud-border-muted);
-  border-radius: var(--hud-radius-sm);
-  background: rgba(10, 12, 8, 0.45);
-  padding: 10px 12px;
-  margin: 10px 0;
-  cursor: pointer;
-  transition: var(--hud-transition);
-  overflow: hidden;
+/* Growth options — individual floating cards, three per row, remainder centred */
+#growth-selection-panel {
+  --grow-card-max: 196px;
+}
+
+#growth-options {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: flex-start;
+  gap: 12px;
+  width: 100%;
+  pointer-events: none;
+}
+
+#growth-options > * {
+  pointer-events: auto;
+}
+
+.hud-grow-note {
+  padding: 9px 16px;
+  border: 1px solid var(--hud-border-muted);
+  border-radius: 999px;
+  background: rgba(13, 17, 10, 0.9);
   box-shadow: var(--hud-shadow-sm);
+  backdrop-filter: blur(8px);
+  color: var(--bark-300);
+  font-size: 0.72rem;
+  letter-spacing: 0.02em;
+  animation: cozyFadeIn 0.18s ease;
 }
 
-.hud-grow-option:hover:not([disabled]) {
-  border-color: var(--hud-border-focus);
-  background: rgba(26, 34, 20, 0.62);
-  box-shadow: 0 0 0 2px var(--leaf-glow);
+.hud-grow-empty {
+  flex: 0 0 calc((100% - 24px) / 3);
+  max-width: var(--grow-card-max, 196px);
+  min-width: 0;
+  padding: 18px 14px;
+  text-align: center;
+  border: 1.5px dashed var(--hud-border-muted);
+  border-radius: 14px;
+  background: linear-gradient(160deg, rgba(28, 35, 21, 0.9), rgba(12, 16, 9, 0.94));
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(8px);
 }
 
-.hud-grow-option:active:not([disabled]) {
-  transform: scale(0.97);
+/* Growth option card */
+.hud-grow-option {
+  flex: 0 0 calc((100% - 24px) / 3);
+  max-width: var(--grow-card-max, 196px);
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 12px 12px 11px;
+  border: 1px solid rgba(140, 170, 100, 0.28);
+  border-radius: 14px;
+  background:
+    radial-gradient(120% 90% at 50% 0%, rgba(125, 184, 61, 0.1), transparent 60%),
+    linear-gradient(160deg, rgba(30, 38, 23, 0.94), rgba(12, 16, 9, 0.96));
+  box-shadow:
+    0 10px 24px rgba(0, 0, 0, 0.4),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  backdrop-filter: blur(8px);
+  cursor: pointer;
+  position: relative;
+  z-index: 0;
+  /* The hover drawer sits above the card, so it must not be clipped and must
+     paint over its neighbours. */
+  overflow: visible;
+  transition:
+    border-color 0.16s ease,
+    box-shadow 0.16s ease;
+  animation: cozyFadeIn 0.16s ease;
 }
 
-.hud-grow-option[disabled] {
-  opacity: 0.5;
+.hud-grow-option:hover,
+.hud-grow-option.selected {
+  z-index: 3;
+}
+
+.hud-grow-option:hover:not(.is-unavailable) {
+  border-color: var(--leaf-400);
+  box-shadow:
+    0 16px 32px rgba(0, 0, 0, 0.5),
+    0 0 0 2px var(--leaf-glow);
+}
+
+.hud-grow-option.is-unavailable {
   cursor: not-allowed;
-  filter: grayscale(0.7);
-  border-color: var(--bark-600);
+  opacity: 0.72;
+  border-color: rgba(120, 130, 105, 0.2);
+  background: linear-gradient(160deg, rgba(22, 27, 18, 0.9), rgba(10, 13, 8, 0.94));
+}
+
+.hud-grow-option.is-unavailable:hover {
+  transform: none;
+}
+
+.hud-grow-option.is-unavailable .hud-badge {
+  background: rgba(120, 130, 105, 0.14);
+  border-color: rgba(120, 130, 105, 0.28);
+  color: var(--ink-muted);
 }
 
 .hud-grow-option.selected {
-  border-color: var(--leaf-500);
-  background: rgba(125, 184, 61, 0.18);
-  box-shadow: 0 0 0 2px var(--leaf-glow);
+  border-color: var(--leaf-400);
+  box-shadow:
+    0 0 0 2px var(--leaf-glow),
+    0 14px 30px rgba(0, 0, 0, 0.45);
 }
 
-.hud-grow-option__name {
-  font-weight: 800;
-  font-size: 0.88rem;
-  color: var(--leaf-300);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+#growth-options .hud-grow-option__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+#growth-options .hud-grow-option__head .hud-badge {
+  flex: 0 0 auto;
+  font-size: 0.55rem;
+  padding: 2px 6px;
 }
 
 .hud-grow-option__cost {
   font-size: 0.7rem;
   color: var(--warm-ink);
-  margin-top: 4px;
-  white-space: nowrap;
+  padding-top: 6px;
+  /* Wraps inside the card. A nowrap cost line ("8.0 energy · +4.8 biomass ·
+     8 seconds") ran straight out of a narrow card when the window was
+     squashed, printing text over the neighbouring cards. */
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.45;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
+}
+
+/* Narrow viewports: two columns, then one. Three fixed thirds leave each card
+   too slim for a label, a cost line and a requirements list to sit inside. */
+@media (max-width: 560px) {
+  #growth-options .hud-grow-option,
+  #growth-options .hud-grow-empty {
+    flex-basis: calc((100% - 12px) / 2);
+  }
+}
+
+@media (max-width: 380px) {
+  #growth-options .hud-grow-option,
+  #growth-options .hud-grow-empty {
+    flex-basis: 100%;
+    max-width: 100%;
+  }
+}
+
+/* Read-only card for another player's plant: identity and size only. */
+#plant-info-card {
+  position: fixed;
+  right: var(--hud-corner, 12px);
+  bottom: clamp(96px, 16vh, 150px);
+  z-index: 260;
+  display: none;
+  min-width: 168px;
+  padding: 10px 12px;
+  border: 1px solid var(--hud-border-muted);
+  border-radius: 12px;
+  background: linear-gradient(160deg, rgba(28, 35, 21, 0.94), rgba(12, 16, 9, 0.96));
+  box-shadow: var(--hud-shadow-sm);
+  backdrop-filter: blur(8px);
+  color: var(--warm-ink);
+  font-size: 0.68rem;
+  line-height: 1.4;
+}
+
+#plant-info-card .plant-info-card__title {
+  margin-bottom: 6px;
+  color: var(--bone-100);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+#plant-info-card .plant-info-card__row {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+#plant-info-card .plant-info-card__row span {
+  opacity: 0.65;
+  text-transform: capitalize;
+}
+
+#plant-info-card .plant-info-card__hint {
+  margin-top: 7px;
+  padding-top: 6px;
+  border-top: 1px solid rgba(239, 233, 216, 0.12);
+  color: var(--ink-muted);
+  font-size: 0.6rem;
+}
+
+/* Detail drawer: absolutely positioned above the card, so opening it never
+   reflows the row or moves the other cards. */
+#growth-options .hud-grow-option__details {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(100% + 8px);
+  z-index: 1;
+  margin: 0;
+  /* On a short window the drawer would climb past the top of the screen; the
+     panel clips it instead of letting it run off. */
+  max-height: 46vh;
+  overflow: hidden;
+  padding: 10px 12px;
+  border: 1px solid var(--hud-border);
+  border-radius: 12px;
+  background: linear-gradient(160deg, #1d2417, #0d1209);
+  box-shadow: 0 14px 30px rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(10px);
+  font-size: 0.7rem;
+  line-height: 1.5;
+  color: var(--warm-ink);
+  white-space: normal;
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(10px);
+  transform-origin: bottom center;
+  transition:
+    opacity 0.16s ease,
+    transform 0.22s cubic-bezier(0.2, 0.8, 0.3, 1),
+    visibility 0s linear 0.22s;
+}
+
+/* Small notch so the drawer reads as attached to its card. */
+#growth-options .hud-grow-option__details::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: -5px;
+  width: 10px;
+  height: 10px;
+  background: #0d1209;
+  border-right: 1px solid var(--hud-border);
+  border-bottom: 1px solid var(--hud-border);
+  transform: translateX(-50%) rotate(45deg);
+}
+
+.hud-grow-option__requires-label {
+  margin-bottom: 3px;
+  color: var(--leaf-300);
+  font-size: 0.58rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.hud-grow-option__requires {
+  display: grid;
+  gap: 2px;
+  margin: 0 0 7px 14px;
+  padding: 0;
+  color: var(--bone-200);
+  font-size: 0.65rem;
+  line-height: 1.35;
+}
+
+.hud-grow-option__requires li::marker {
+  color: var(--leaf-400);
+}
+
+.hud-grow-option__info {
+  color: var(--ink-muted);
+  font-size: 0.62rem;
+  line-height: 1.4;
+}
+
+.hud-grow-option__warning {
+  margin-top: 6px;
+  color: var(--ember-400);
+  font-size: 0.62rem;
+  line-height: 1.35;
+}
+
+#growth-options .hud-grow-option:hover .hud-grow-option__details,
+#growth-options .hud-grow-option.selected .hud-grow-option__details {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
+  transition:
+    opacity 0.18s ease,
+    transform 0.24s cubic-bezier(0.2, 0.8, 0.3, 1),
+    visibility 0s;
 }
 
 .hud-grow-option__chip {
   display: inline-flex;
   align-items: center;
   gap: 3px;
-  padding: 2px 7px;
+  max-width: 100%;
+  padding: 3px 8px;
   border-radius: 999px;
   font-size: 0.62rem;
   font-weight: 800;
   border: 1px solid var(--hud-border-muted);
   white-space: nowrap;
-  margin-top: 3px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+#growth-aim-controls {
+  display: flex;
+  justify-content: center;
+  width: fit-content;
+  max-width: 100%;
+  pointer-events: auto;
+  animation: cozyFadeIn 0.18s ease;
+}
+
+#growth-aim-controls .hud-button {
+  min-width: 116px;
+  padding: 8px 26px;
+  border: 1px solid var(--leaf-500);
+  border-radius: 999px;
+  background: linear-gradient(180deg, var(--leaf-400), var(--leaf-600));
+  color: var(--bark-900);
+  font-family: inherit;
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  box-shadow:
+    0 4px 12px rgba(125, 184, 61, 0.25),
+    inset 0 1px 0 rgba(255, 255, 255, 0.3);
+  transition:
+    filter 0.15s ease,
+    transform 0.15s ease;
+}
+
+#growth-aim-controls .hud-button:hover {
+  filter: brightness(1.08);
+  transform: translateY(-1px);
+}
+
+#growth-aim-controls .hud-button:disabled,
+#growth-aim-controls .hud-button.is-disabled {
+  cursor: not-allowed;
+  opacity: 0.42;
+  filter: saturate(0.35);
+  transform: none;
+}
+
+#growth-aim-controls .hud-button:active {
+  transform: translateY(0) scale(0.97);
 }
 
 .hud-grow-option__chip-root {
@@ -587,12 +873,6 @@ body {
   background: rgba(191, 232, 118, 0.2);
   color: var(--leaf-300);
   border-color: rgba(191, 232, 118, 0.4);
-}
-
-.hud-grow-option__status {
-  font-size: 0.64rem;
-  font-weight: 700;
-  margin-top: 3px;
 }
 
 .hud-cue {

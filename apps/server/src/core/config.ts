@@ -89,7 +89,12 @@ export async function loadRuntimeConfig(
   const ops = configs.get('ops');
   if (!ops) throw new Error('Missing config file: ops.json');
 
-  const portOverride = env.PORT ? Number.parseInt(env.PORT, 10) : Number.NaN;
+  // `PORT=0` means "pick an ephemeral port" to the OS, but this server is
+  // reached by a fixed client URL and rejects 0. Some launchers export PORT=0
+  // globally just to mean "unset", which used to crash every startup; treat an
+  // empty or zero override as unset and fall back to ops.port.
+  const rawPort = env.PORT?.trim();
+  const portOverride = rawPort && rawPort !== '0' ? Number.parseInt(rawPort, 10) : Number.NaN;
   const portEntry = ops.values.port;
   if (!portEntry || (portEntry.type !== 'number' && portEntry.type !== 'integer')) {
     throw new Error('Config "ops.port" is missing or not numeric.');

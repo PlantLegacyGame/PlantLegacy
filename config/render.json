@@ -313,7 +313,7 @@
     },
     "rain_particle_count": {
       "type": "integer",
-      "value": 1500,
+      "value": 4000,
       "range": [0, 5000],
       "notes": "Number of precipitation particles simulated in camera volume."
     },
@@ -343,14 +343,14 @@
     },
     "rain_streak_length": {
       "type": "number",
-      "value": 25.0,
-      "range": [5.0, 100.0],
+      "value": 1.1,
+      "range": [0.2, 4.0],
       "notes": "Length of rain streaks in world units."
     },
     "rain_streak_width": {
       "type": "number",
-      "value": 0.02,
-      "range": [0.005, 0.1],
+      "value": 0.012,
+      "range": [0.002, 0.05],
       "notes": "Width of rain streaks in world units."
     },
     "rain_max_velocity": {
@@ -436,15 +436,45 @@
     },
     "terrain_mesh_subdivisions": {
       "type": "integer",
-      "value": 48,
-      "range": [8, 128],
-      "notes": "Subdivision radial segments of the terrain ground mesh."
+      "value": 256,
+      "range": [8, 256],
+      "notes": "Subdivision segments of the detailed inner terrain patch. At 180 m width, 256 gives ~0.70 m cells, enough to resolve the terrain field instead of flattening its divots and burying the seed."
     },
     "terrain_radius": {
       "type": "number",
       "value": 620.0,
       "range": [50.0, 800.0],
       "notes": "World radius of the ground terrain mesh."
+    },
+    "terrain_amplitude_m": {
+      "type": "number",
+      "value": 6.0,
+      "range": [0, 40],
+      "notes": "Peak procedural relief above the base surface, in metres. The shared terrain field reads the same value server-side."
+    },
+    "soil_depth_m": {
+      "type": "number",
+      "value": 1.6,
+      "range": [0.1, 8],
+      "notes": "Depth of the topsoil layer below the surface; below it is subsoil, then bedrock."
+    },
+    "camera_ground_clearance_m": {
+      "type": "number",
+      "value": 0.3,
+      "range": [0, 3],
+      "notes": "Minimum eye height above the local ground when Root Sight is closed."
+    },
+    "player_gravity_mps2": {
+      "type": "number",
+      "value": 9.81,
+      "range": [0, 30],
+      "notes": "Downward acceleration of the observer rig onto the terrain."
+    },
+    "player_spawn_height_m": {
+      "type": "number",
+      "value": 3.5,
+      "range": [0, 20],
+      "notes": "Height the observer rig is dropped from when it spawns."
     },
     "root_aura_radius": {
       "type": "number",
@@ -454,8 +484,8 @@
     },
     "webgpu_enabled": {
       "type": "boolean",
-      "value": true,
-      "notes": "Enable WebGPU renderer with compute-driven architecture. Falls back to WebGL2 if unavailable."
+      "value": false,
+      "notes": "Enable the WebGPU plant overlay. Off by default because it draws to a second canvas with its own depth buffer, so plants cannot be occluded by terrain or dirt; the WebGL renderer shares the scene depth and sorts correctly."
     },
     "webgpu_max_plants": {
       "type": "integer",

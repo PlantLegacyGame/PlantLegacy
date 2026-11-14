@@ -47,6 +47,59 @@
       "value": "own_plant",
       "enum": ["own_plant", "camera_position"],
       "notes": "Default cutaway target reference; the camera is an independent entity"
+    },
+    "max_cavity_bubbles": {
+      "type": "integer",
+      "value": 64,
+      "range": [8, 256],
+      "notes": "Bubbles uploaded to the soil and plant shaders. Nearby roots are clustered to fit this budget."
+    },
+    "bubble_merge_cell_m": {
+      "type": "number",
+      "value": 0.6,
+      "range": [0.1, 2],
+      "notes": "Grid cell used to merge nearby root nodes into one cavity bubble."
+    },
+    "bubble_padding_m": {
+      "type": "number",
+      "value": 0.12,
+      "range": [0, 1],
+      "notes": "Clearance added around each root bubble so bark is not clipped by the soil wall."
+    },
+    "rival_bubble_budget": {
+      "type": "integer",
+      "value": 24,
+      "range": [0, 128],
+      "notes": "Bubbles reserved for rival plants after the player's own roots are placed."
+    },
+    "camera_burrow_enabled": {
+      "type": "boolean",
+      "value": true,
+      "notes": "Allow the eye to travel below the surface while Root Sight is open."
+    },
+    "max_burrow_depth_m": {
+      "type": "number",
+      "value": 12.0,
+      "range": [0, 50],
+      "notes": "Deepest the Root Sight camera may descend below the local surface."
+    },
+    "cavity_clearance_m": {
+      "type": "number",
+      "value": 0.2,
+      "range": [0.02, 2],
+      "notes": "Distance the camera keeps from the cavity wall while burrowing."
+    },
+    "rebuild_hz": {
+      "type": "number",
+      "value": 10.0,
+      "range": [1, 30],
+      "notes": "How often the cavity bubble set is rebuilt from root data."
+    },
+    "cut_rim_dither_m": {
+      "type": "number",
+      "value": 0.35,
+      "range": [0.05, 2],
+      "notes": "Width of the dithered rim where the soil cut fades out instead of ending on a hard discard."
     }
   }
 }

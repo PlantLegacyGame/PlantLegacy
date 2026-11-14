@@ -15,7 +15,11 @@ export function formatSeasonRemaining(totalSeconds: number): string {
   return `${seconds} s`;
 }
 
-/** "Season 3 · 34 d 12 h" — the whole chip, so the HUD has one source of truth. */
+/**
+ * "Season 3" and its countdown, for callers that need one string. The HUD draws
+ * them as two aligned columns instead (label and value in the resource grid), so
+ * there is no separator dot to shift the number column.
+ */
 export function formatSeasonChip(season: number, remainingSeconds: number): string {
-  return `Season ${season} · ${formatSeasonRemaining(remainingSeconds)}`;
+  return `Season ${season}   ${formatSeasonRemaining(remainingSeconds)}`;
 }

@@ -218,6 +218,66 @@
             "range": [0, 10],
             "notes": "Maximum absorption per tick"
         },
+        "groundwater_base": {
+            "type": "integer",
+            "value": 0,
+            "range": [0, 10000],
+            "notes": "Initial water held in the deep soil cavity, in the same units as tile moisture. This is the water table roots reach below the surface layer."
+        },
+        "groundwater_capacity": {
+            "type": "integer",
+            "value": 400,
+            "range": [0, 10000],
+            "notes": "Maximum water a soil cell can hold below the surface. Storm recharge fills this store; capillary rise returns it to the root zone."
+        },
+        "groundwater_recharge_fraction": {
+            "type": "number",
+            "value": 0.5,
+            "range": [0, 1],
+            "notes": "Share of rainfall that reaches the deep store directly (macropores and preferential flow), on top of the runoff that exceeds surface infiltration. This is what makes a storm raise the water table in tens of seconds instead of hours, so the pooled water in a dug cavity is observable."
+        },
+        "groundwater_infiltration_fraction": {
+            "type": "number",
+            "value": 0.55,
+            "range": [0, 1],
+            "notes": "Fraction of rain that exceeds the surface infiltration capacity and becomes deep recharge. Based on a soil-water bucket / Green-Ampt partition: wet soil accepts less rain and sends more to runoff and groundwater."
+        },
+        "groundwater_percolation_rate": {
+            "type": "number",
+            "value": 0.2,
+            "range": [0, 1],
+            "notes": "Fraction per second of soil water above field capacity that drains into the groundwater store."
+        },
+        "groundwater_capillary_rise_per_s": {
+            "type": "number",
+            "value": 0.15,
+            "range": [0, 10],
+            "notes": "Moisture units per second drawn upward from groundwater when the root zone is below field capacity."
+        },
+        "groundwater_root_uptake_fraction": {
+            "type": "number",
+            "value": 0.25,
+            "range": [0, 1],
+            "notes": "Maximum share of a cell's accessible groundwater a deep root can draw per absorption step. Keeps a root system from draining an entire cavity in one tick."
+        },
+        "groundwater_root_reserve_fraction": {
+            "type": "number",
+            "value": 0.05,
+            "range": [0, 0.9],
+            "notes": "Share of a full cavity that roots cannot draw down. The last of the water stays as a reserve for the soil and for future capillary rise."
+        },
+        "groundwater_flow_per_s": {
+            "type": "number",
+            "value": 0.35,
+            "range": [0, 2],
+            "notes": "Fraction of the water-table head difference that flows downhill per second, from a cell to a lower neighbour. Water finds the low ground of the real terrain, so hollows pool and slopes drain instead of every tile rising together."
+        },
+        "groundwater_table_depth_m": {
+            "type": "number",
+            "value": 2.5,
+            "range": [0.3, 20],
+            "notes": "Depth of an empty water table below the local surface. A full cavity raises the table to the surface, which is what pools visible water in low ground after a storm."
+        },
         "canopy_shade_reduction": {
             "type": "number",
             "value": 0.1,

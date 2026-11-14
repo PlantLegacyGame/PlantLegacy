@@ -95,10 +95,6 @@ export class RapierWorld {
       case 'cylinder':
         shapeDesc = RAPIER.ColliderDesc.cylinder(def.shape.halfHeight, def.shape.radius);
         break;
-      case 'soft_body':
-        // Soft bodies not exposed in Rapier JS bindings v0.12.0.
-        // Leaf physics uses rigid-body collision + visual deformation instead.
-        throw new Error('Soft bodies not available in Rapier 0.12.0 JS bindings');
       default:
         shapeDesc = RAPIER.ColliderDesc.ball(0.1);
     }

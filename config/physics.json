@@ -1,0 +1,95 @@
+{
+  "_meta": {
+    "system": "physics",
+    "version": "1.0.0",
+    "schema": "extended-1",
+    "owner_task": "C02c",
+    "status": "active",
+    "notes": "Client cosmetic physics and collider budgets. Gameplay collision is analytic on the server; these values size the Rapier layer and its LOD."
+  },
+  "values": {
+    "gravity_mps2": {
+      "type": "number",
+      "value": 9.81,
+      "range": [0, 30],
+      "notes": "Downward acceleration for debris and rain on the client."
+    },
+    "fixed_timestep_s": {
+      "type": "number",
+      "value": 0.0166666667,
+      "range": [0.001, 0.1],
+      "notes": "Rapier step size. 1/60 by default."
+    },
+    "max_colliders_per_plant": {
+      "type": "integer",
+      "value": 192,
+      "range": [16, 512],
+      "notes": "Hard cap on colliders for one plant. Degree-2 runs merge beyond this."
+    },
+    "max_collider_plants": {
+      "type": "integer",
+      "value": 24,
+      "range": [1, 100],
+      "notes": "How many nearby plants get real colliders at once."
+    },
+    "collider_lod_distance_m": {
+      "type": "number",
+      "value": 70.0,
+      "range": [5, 500],
+      "notes": "Past this distance a plant's segments merge into chains or lose colliders entirely."
+    },
+    "chain_merge_min_nodes": {
+      "type": "integer",
+      "value": 3,
+      "range": [2, 8],
+      "notes": "Shortest degree-2 run worth merging when the budget is tight."
+    },
+    "leaf_collider_mode": {
+      "type": "enum",
+      "enum": ["none", "cuboid", "hull"],
+      "value": "cuboid",
+      "notes": "Leaf collision: no blade, a thin box, or a convex hull."
+    },
+    "joint_colliders": {
+      "type": "boolean",
+      "value": false,
+      "notes": "Add a sphere at every segment joint. Off: capsules already cover the tip."
+    },
+    "collider_inflation_m": {
+      "type": "number",
+      "value": 0.005,
+      "range": [0, 0.05],
+      "notes": "Clearance added to every organ radius so thin tubes still collide."
+    },
+    "debris_max_bodies": {
+      "type": "integer",
+      "value": 24,
+      "range": [0, 128],
+      "notes": "Dynamic clod/rain bodies allowed on the client at once."
+    },
+    "camera_probe_radius_m": {
+      "type": "number",
+      "value": 0.25,
+      "range": [0.05, 1],
+      "notes": "Sphere cast radius for camera collision against plant capsules."
+    },
+    "collider_rebuild_hz": {
+      "type": "number",
+      "value": 10.0,
+      "range": [1, 30],
+      "notes": "How often collider data is checked for growth changes."
+    },
+    "rain_drop_radius_m": {
+      "type": "number",
+      "value": 0.03,
+      "range": [0.005, 0.2],
+      "notes": "Cosmetic rain droplet radius."
+    },
+    "rain_drop_mass_kg": {
+      "type": "number",
+      "value": 0.001,
+      "range": [0.0001, 0.1],
+      "notes": "Cosmetic rain droplet mass."
+    }
+  }
+}

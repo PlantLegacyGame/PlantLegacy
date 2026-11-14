@@ -531,6 +531,29 @@ export const MESSAGE_SCHEMAS: Record<number, Record<string, FieldRule>> = {
     },
     maxSlots: { type: 'integer', required: true },
   },
+  32: {
+    // TERRAIN_REGION_REQUEST (client -> server)
+    worldX: { type: 'number', required: true },
+    worldZ: { type: 'number', required: true },
+    radiusM: { type: 'number', required: true },
+    revision: { type: 'number' },
+  },
+  33: {
+    // TERRAIN_REGION (server -> client)
+    originX: { type: 'number', required: true },
+    originZ: { type: 'number', required: true },
+    cellSizeM: { type: 'number', required: true },
+    cols: { type: 'integer', required: true },
+    rows: { type: 'integer', required: true },
+    revision: { type: 'number', required: true },
+    heightsBase64: { type: 'string', required: true },
+    materialBase64: { type: 'string', required: true },
+  },
+  34: {
+    // TERRAIN_EDITS (server -> client)
+    revision: { type: 'number', required: true },
+    edits: { type: 'array', required: true },
+  },
   28: {
     // INVENTORY_SLOT_UPDATE
     slotIndex: { type: 'integer', required: true },

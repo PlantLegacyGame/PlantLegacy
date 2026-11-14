@@ -19,9 +19,13 @@ import {
   nodeRenderRadius,
   resolveAttachFraction,
 } from '@plant-legacy/shared/growth';
-import { nodeTypeToPhysicsShape } from '@plant-legacy/shared/physics';
 import { PROTOCOL_VERSION } from '@plant-legacy/shared/protocol';
 import { validateMessage } from '@plant-legacy/shared/protocol/messageSchemas';
+import {
+  buildCavityField,
+  type CavityField,
+  type CavityNodeInput,
+} from '@plant-legacy/shared/world';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { ensureFreshSession, signIn, signOut, signUp } from './auth/authClient.js';
@@ -34,12 +38,16 @@ import {
   loadDayNightConfig,
   loadGrowthSegmentConfig,
   loadNetworkConfig,
+  loadPhysicsConfig,
   loadRenderConfig,
   loadReportsConfig,
   loadResourceTileConfig,
   loadRootSightConfig,
+  loadTerrainConfig,
   loadUIConfig,
+  type PhysicsConfig,
   type RenderConfig,
+  type ResourceRates,
   type ResourceTileConfig,
   type RootSightConfig,
 } from './config/clientConfig.js';
@@ -49,10 +57,13 @@ import { playerWorldY, spawnPlayer, stepPlayerVertical } from './physics/playerP
 import { plantPhysicsSync, rapierWorld } from './physics/RapierPhysicsManager.js';
 import { createQualityController, type QualityController } from './render/QualityController.js';
 import { createRootSightUniforms, EnvironmentRenderer } from './renderers/EnvironmentRenderer.js';
+import { CAVITY_MOUTH_FRACTION } from './renderers/environment/cavityBowl.js';
 import { planetTerrainY } from './renderers/environment/planetSurface.js';
+import { aimDirectionFromScreenDrag } from './renderers/growthAimMath.js';
 import { DEFAULT_CONFIG, type PlantNodeData, PlantRenderer } from './renderers/PlantRenderer.js';
 import { toClientSpace } from './renderers/plant/clientSpace.js';
 import { readServerMutationMask } from './renderers/plant/mutations.js';
+import { PlantColliderManager } from './renderers/plant/PlantColliders.js';
 import {
   createRootSightStateMachine,
   type RootSightStateMachine,
@@ -62,6 +73,7 @@ import {
   rootSightStateMachineUpdate,
 } from './renderers/RootSightStateMachine.js';
 import { plantExtent, resolveCutawayRadius } from './renderers/rootSight/rootSightCutaway.js';
+import { configureTerrain, getTerrainParams } from './renderers/terrain/terrainState.js';
 import {
   resolveDrawnNodePosition,
   visualRadiusForNode,
@@ -100,7 +112,7 @@ import {
   growthSelectionStateMachineSelectOption,
   growthSelectionStateMachineStartDrawing,
 } from './ui/GrowthSelectionStateMachine.js';
-import { formatSeasonChip } from './ui/seasonLabel.js';
+import { formatSeasonRemaining } from './ui/seasonLabel.js';
 import { createUIShell, type UIShell } from './ui/UIShell.js';
 import './styles.css';
 
@@ -388,6 +400,9 @@ const MESSAGE_TYPE = {
   SEASON_UPDATE: 31,
   GROWTH_OPTIONS_RESULT: 22,
   CHAT_BROADCAST: 23,
+  TERRAIN_REGION_REQUEST: 32,
+  TERRAIN_REGION: 33,
+  TERRAIN_EDITS: 34,
   BLOCK: 30,
   DEV_RESPONSE: 99,
 } as const;
@@ -395,10 +410,12 @@ const MESSAGE_TYPE = {
 let ws: WebSocket | null = null;
 let playerId: string | null = null;
 let serverTick = 0;
-// The tick readout is rewritten at most this often (in server ticks). At 20 Hz
-// it was rewritten on every packet; the panel is informational, so 5 Hz is
-// plenty and stops the text reflowing several times a second.
-let lastDetailTick = -1;
+// Diagnostics for the dev handle below: how often the authoritative root update
+// actually reaches this client, and how fresh it is. A frozen dev readout is
+// either "the server stopped sending" or "the panel stopped refreshing", and
+// these numbers are what tell the two apart.
+let resourceUpdateCount = 0;
+let lastResourceUpdateAt = 0;
 
 // The server sends the season and its remaining seconds on join and on every
 // rollover; between messages the HUD counts down on its own, so the calendar
@@ -407,6 +424,7 @@ let seasonNumber = 0;
 let seasonEndsAtMs = 0;
 let seasonTickerStarted = false;
 let resSeasonEl: HTMLSpanElement | null = null;
+let resSeasonLabelEl: HTMLSpanElement | null = null;
 
 // Per-node-type emergence delay (ms) for staggered growth animation.
 // Roots/radicles emerge first, then stems, then leaves/cotyledons.
@@ -435,6 +453,10 @@ const tempCameraOffset = new THREE.Vector3();
 let connecting = false;
 let plantId: string | null = null;
 let plantReady = false;
+// A death broadcast can be missed while the tab is background-throttled. STATE
+// always includes the owner's plant, so its absence is a second, authoritative
+// death signal; a couple of seconds avoids treating a one-frame gap as death.
+let ownPlantMissingSince = 0;
 // Framing is a first-spawn convenience, not a reconnect behaviour: a socket
 // blip re-delivers WELCOME, and re-framing there yanked the camera out and
 // centered the plant while the player was orbiting. The camera is re-framed
@@ -548,6 +570,9 @@ const DEBUG_WS_LOG = new URLSearchParams(window.location.search).has('wslog');
 // Last authoritative tile readings, so growth events never zero the HUD.
 let tileLight = 0;
 let tileWater = 40; // Default base moisture from config (tile_moisture_base)
+// Share of the local soil cavity filled with water, from the server's root
+// update. Drives the cavity pool and the dev panel's water-table reading.
+let localGroundwaterFraction = 0;
 let tileMinerals = 0;
 
 // Controls config loaded from server /config/controls endpoint.
@@ -677,9 +702,64 @@ function removeGrowthDirectionLine(): void {
   if (growthAimOverlay) growthAimOverlay.domElement.style.visibility = 'hidden';
 }
 
+/** Hide the gizmo when the selected node or another plant part is in front of it. */
+function updateGrowthAimOcclusion(): void {
+  const group = growthAimGroup;
+  const ring = growthAimRing;
+  const tube = growthAimTube;
+  const head = growthAimHead;
+  const tip = growthAimTip;
+  if (!group || !ring || !tube || !head || !tip || !group.visible) return;
+  const data = growthSelectionStateMachineGetDrawingData(growthSelectionMachine);
+  if (!data) return;
+  const toRing = growthAimRingAnchor.clone().sub(camera.position);
+  const ringDistance = toRing.length();
+  if (ringDistance <= 1e-4) return;
+  const ray = new THREE.Raycaster(camera.position, toRing.normalize(), 0, ringDistance - 0.02);
+  let occluded = false;
+  for (const [id, node] of plantNodes) {
+    if (!node.isOwnPlant) continue;
+    const radius = Math.max(
+      0.02,
+      visualRadiusForNode(node.nodeType, node.radius ?? 0.05, node.biomass),
+    );
+    const centre = growthAimNodeDrawCentre(node);
+    // The selected node is the ring's host. Only hide the ring when it has been
+    // carried to the far hemisphere; a ring sitting on the near surface (or the
+    // default attachment point, which can be slightly inside the seed's drawn
+    // ellipsoid) must stay visible.
+    if (id === data.nodeId) {
+      // The default cap sits at the attachment point and has always been drawn
+      // over the part. Only a ring the player moved onto the node is tested for
+      // far-side occlusion.
+      if (!growthAimAnchorOnNodeSurface) continue;
+      const toCentre = centre.clone().sub(camera.position).normalize();
+      const ringOffset = growthAimRingAnchor.clone().sub(centre);
+      // `toCentre` points away from the camera, so a ring on the far hemisphere
+      // has a positive offset along it. A near-side or side ring must stay up.
+      if (ringOffset.dot(toCentre) <= radius * 0.25) continue;
+    }
+    const hit = new THREE.Vector3();
+    if (
+      ray.ray.intersectSphere(
+        new THREE.Sphere(centre, radius * (id === data.nodeId ? 1.08 : 0.92)),
+        hit,
+      )
+    ) {
+      occluded = true;
+      break;
+    }
+  }
+  ring.visible = !occluded;
+  tube.visible = !occluded;
+  head.visible = !occluded;
+  tip.visible = !occluded;
+}
+
 /** Draw the aim gizmo above the plant/ground overlay canvas. */
 function renderGrowthAimOverlay(): void {
   if (!growthAimOverlay || !growthAimScene || !growthAimGroup?.visible) return;
+  updateGrowthAimOcclusion();
   const size = growthAimOverlay.getSize(new THREE.Vector2());
   if (size.x !== window.innerWidth || size.y !== window.innerHeight) {
     growthAimOverlay.setSize(window.innerWidth, window.innerHeight, false);
@@ -692,6 +772,10 @@ const smoothedGrowthDir = new THREE.Vector3(0, -1, 0);
 let smoothedGrowthDist = 1.0;
 let isGrowthAtMaxReach = false;
 let isGrowthAngleClamped = false;
+// Optional point on the selected node where the player last placed the ring.
+// It is an offset from the drawn node centre, so it follows the node as it grows.
+const growthAimSurfaceOffset = new THREE.Vector3();
+let growthAimAnchorOnNodeSurface = false;
 
 /** Rebuild the ring and curved arrow for the current aim. */
 function updateGrowthDirectionLine(
@@ -733,6 +817,13 @@ function updateGrowthDirectionLine(
   const isSeedNode = node ? node.isSeed === true || node.nodeType === 'seed' : false;
   const origin = new THREE.Vector3(start.x, start.y, start.z);
   if (isSeedNode) origin.y += visualRadius * getSeedBodyHeightRatio();
+  if (growthAimAnchorOnNodeSurface && node) {
+    // The player clicked a spot on the node. Use that exact surface point so the
+    // ring can sit on the side, underside or back of the seed instead of always
+    // riding the default attachment cap.
+    origin.copy(growthAimNodeDrawCentre(node));
+    origin.add(growthAimSurfaceOffset);
+  }
 
   // The ring is the cross-section the new segment starts from: the emerging
   // part's own thickness (never fatter than the node it leaves).
@@ -747,9 +838,14 @@ function updateGrowthDirectionLine(
   // its plane faces the way the new segment leaves, so it reads as the hole the
   // sprout comes out of rather than a band around the middle.
   const surfaceNormal = smoothedGrowthDir.clone().normalize();
-  const ringCentre = origin.clone().addScaledVector(surfaceNormal, visualRadius);
+  const ringCentre = growthAimAnchorOnNodeSurface
+    ? origin.clone().addScaledVector(surfaceNormal, 0.003)
+    : origin.clone().addScaledVector(surfaceNormal, visualRadius);
   growthAimRingAnchor.copy(ringCentre);
   growthAimRingNormal.copy(surfaceNormal);
+
+  // Visibility against the plant is decided every frame in
+  // `updateGrowthAimOcclusion`, where the live camera position is available.
 
   // Keep the tube a real world thickness: scaling a fat torus down to a small
   // radius would make the ring vanish into a sub-pixel hairline.
@@ -831,6 +927,15 @@ let tileConfig: ResourceTileConfig = {
   maxLight: 500,
   maxMoisture: 500,
   maxMinerals: 500,
+  rates: {
+    photosynthesisRate: 1,
+    diffusionRate: 0.03,
+    maxAbsorptionPerTick: 1,
+    rainGainPerS: 1.5,
+    evaporationPerS: 0.025,
+    canopyShadeReduction: 0.1,
+    groundwaterCapacity: 400,
+  },
 };
 const ROOT_OPTION_TYPES = new Set(['radicle', 'root', 'lateral_root']);
 let growthAimYaw = 0;
@@ -838,6 +943,9 @@ let growthAimPitch = 0;
 let growthAimDragging = false;
 let growthAimLastX = 0;
 let growthAimLastY = 0;
+// A press that starts a growth drag must not also be read as a click on the
+// canvas, or releasing the arrow would close the panel it is aiming from.
+let suppressGrowthClickUntil = 0;
 
 // A lateral root or branch buds part-way along its parent's own segment, so the
 // aim gizmo has to start where the server will attach it, not at the parent's
@@ -859,6 +967,60 @@ function branchAttachAnchor(position: THREE.Vector3, nodeId: string): THREE.Vect
     anchor.copy(segmentStart.lerp(position, fraction));
   }
   return anchor;
+}
+
+/** Centre of the drawn node mesh, including the seed's raised body. */
+function growthAimNodeDrawCentre(node: PlantNodeData): THREE.Vector3 {
+  const centre = new THREE.Vector3(node.position.x, node.position.y, node.position.z);
+  const isSeed = node.isSeed === true || node.nodeType === 'seed';
+  if (isSeed) {
+    const radius = visualRadiusForNode(node.nodeType, node.radius ?? 0.05, node.biomass);
+    centre.y += radius * getSeedBodyHeightRatio();
+  }
+  return centre;
+}
+
+/**
+ * Pick the point under the pointer on the selected node, or null on a miss.
+ * The node is approximated by its drawn sphere, which is exact for the seed and
+ * conservative for a stem or root segment.
+ */
+function pickGrowthAimNodePoint(clientX: number, clientY: number): THREE.Vector3 | null {
+  const data = growthSelectionStateMachineGetDrawingData(growthSelectionMachine);
+  const node = data ? plantNodes.get(data.nodeId) : undefined;
+  if (!node) return null;
+  const rect = renderer.domElement.getBoundingClientRect();
+  if (rect.width <= 0 || rect.height <= 0) return null;
+  const radius = Math.max(
+    0.025,
+    // The seed is drawn as an ovoid taller than its radius; a tight sphere only
+    // let the player grab the middle band of it. A slightly generous pick sphere
+    // reaches the coat's top and buried base too.
+    visualRadiusForNode(node.nodeType, node.radius ?? 0.05, node.biomass) * 1.6,
+  );
+  const raycaster = new THREE.Raycaster();
+  raycaster.setFromCamera(
+    new THREE.Vector2(
+      ((clientX - rect.left) / rect.width) * 2 - 1,
+      -((clientY - rect.top) / rect.height) * 2 + 1,
+    ),
+    camera,
+  );
+  const hit = new THREE.Vector3();
+  return raycaster.ray.intersectSphere(new THREE.Sphere(growthAimNodeDrawCentre(node), radius), hit)
+    ? hit
+    : null;
+}
+
+/** Put the aim ring at the point under the pointer on the selected node. */
+function placeGrowthAimRingFromScreen(clientX: number, clientY: number): boolean {
+  const data = growthSelectionStateMachineGetDrawingData(growthSelectionMachine);
+  const node = data ? plantNodes.get(data.nodeId) : undefined;
+  const hit = pickGrowthAimNodePoint(clientX, clientY);
+  if (!node || !hit) return false;
+  growthAimSurfaceOffset.copy(hit).sub(growthAimNodeDrawCentre(node));
+  growthAimAnchorOnNodeSurface = true;
+  return true;
 }
 
 function growthAimDirectionFromAngles(): THREE.Vector3 {
@@ -901,6 +1063,8 @@ function applyGrowthAimAngles(): void {
 function beginGrowthAiming(nodeId: string, optionType: string, optionLabel: string): boolean {
   const node = plantNodes.get(nodeId);
   if (!node) return false;
+  growthAimSurfaceOffset.set(0, 0, 0);
+  growthAimAnchorOnNodeSurface = false;
   const constraints =
     NODE_GROWTH_CONSTRAINTS[optionType as NodeType] ?? NODE_GROWTH_CONSTRAINTS.stem;
   const parent = node.parentId ? plantNodes.get(node.parentId) : undefined;
@@ -941,19 +1105,43 @@ function beginGrowthAiming(nodeId: string, optionType: string, optionLabel: stri
     optionType,
     optionLabel,
   );
-  webgpuRenderer?.setSelectedNode(nodeId);
   // Camera controls stay live: orbiting must never be captured by the aim gizmo.
   // Only a drag that starts on the part itself turns the arrow.
   applyGrowthAimAngles();
-  showGrowthAimControls(optionLabel);
+  showGrowthAimControls();
   setDetail(`${optionLabel}: drag to turn the direction, then Grow.`);
   return true;
 }
 
 /** Turn the aim from a pointer delta (yaw around the part, pitch up/down). */
+const growthAimCameraRight = new THREE.Vector3();
+const growthAimCameraUp = new THREE.Vector3();
+
+/**
+ * Turn the aimed direction from a screen-space drag.
+ *
+ * The old version subtracted dx from a world yaw and added dy to a world
+ * pitch. That is only correct for a camera looking down +Z: from any other
+ * orbit, dragging right swung the arrow left and dragging down pushed it up.
+ * Mapping the drag through the camera's own right/up vectors makes the arrow
+ * follow the cursor from every angle.
+ */
 function rotateGrowthAim(dx: number, dy: number): void {
-  growthAimYaw -= dx * 0.006;
-  growthAimPitch = THREE.MathUtils.clamp(growthAimPitch + dy * 0.005, -1.45, 1.45);
+  growthAimCameraRight.setFromMatrixColumn(camera.matrixWorld, 0).normalize();
+  growthAimCameraUp.setFromMatrixColumn(camera.matrixWorld, 1).normalize();
+  const next = aimDirectionFromScreenDrag(
+    growthAimDirectionFromAngles(),
+    growthAimCameraRight,
+    growthAimCameraUp,
+    dx,
+    dy,
+  );
+  growthAimYaw = Math.atan2(next.x, next.z);
+  growthAimPitch = THREE.MathUtils.clamp(
+    Math.asin(THREE.MathUtils.clamp(next.y, -1, 1)),
+    -1.45,
+    1.45,
+  );
   applyGrowthAimAngles();
 }
 
@@ -969,30 +1157,50 @@ function commitGrowthAim(): void {
   confirmGrowth(data.nodeId, data.selectedOptionType, dir);
 }
 
-/** Footer under the option list while aiming: the single commit action. */
-function showGrowthAimControls(optionLabel: string): void {
+let growthGrowButton: HTMLButtonElement | null = null;
+
+/**
+ * One Grow control for the whole panel. It exists before an option is chosen
+ * (disabled), so the player never has to wonder where the action went, and it
+ * only becomes active once an available option is being aimed.
+ */
+function ensureGrowthFooter(): HTMLButtonElement | null {
   const panel = growthSelectionPanel;
-  if (!panel) return;
-  panel.querySelector('#growth-aim-controls')?.remove();
-  const footer = document.createElement('div');
-  footer.id = 'growth-aim-controls';
-  footer.style.cssText =
-    'display:flex; align-items:center; gap:8px; margin-top:8px; padding-top:8px; border-top:1px solid var(--hud-border);';
-  const hint = document.createElement('div');
-  hint.style.cssText = 'flex:1; font-size:0.7rem; color:var(--bark-300); line-height:1.25;';
-  hint.textContent = `Drag to turn the ${optionLabel} direction`;
-  const growBtn = document.createElement('button');
-  growBtn.type = 'button';
-  growBtn.textContent = 'Grow';
-  growBtn.className = 'hud-button hud-button--primary';
-  growBtn.style.cssText = 'cursor:pointer; font-weight:700; padding:6px 16px;';
-  growBtn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    commitGrowthAim();
-  });
-  footer.appendChild(hint);
-  footer.appendChild(growBtn);
-  panel.appendChild(footer);
+  if (!panel) return null;
+  let footer = panel.querySelector<HTMLElement>('#growth-aim-controls');
+  if (!footer) {
+    footer = document.createElement('div');
+    footer.id = 'growth-aim-controls';
+    const growBtn = document.createElement('button');
+    growBtn.type = 'button';
+    growBtn.textContent = 'Grow';
+    growBtn.className = 'hud-button hud-button--primary';
+    growBtn.title = 'Choose a growth option first';
+    growBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (!growBtn.disabled) commitGrowthAim();
+    });
+    footer.appendChild(growBtn);
+    panel.appendChild(footer);
+  }
+  growthGrowButton = footer.querySelector<HTMLButtonElement>('button');
+  return growthGrowButton;
+}
+
+function setGrowthGrowEnabled(enabled: boolean, reason = ''): void {
+  const growBtn = ensureGrowthFooter();
+  if (!growBtn) return;
+  growBtn.disabled = !enabled;
+  growBtn.classList.toggle('is-disabled', !enabled);
+  growBtn.setAttribute('aria-disabled', String(!enabled));
+  growBtn.title = enabled
+    ? 'Grow this part along the arrow'
+    : reason || 'Choose a growth option first';
+}
+
+/** Footer under the option cards while aiming: one plain commit button. */
+function showGrowthAimControls(): void {
+  setGrowthGrowEnabled(true);
 }
 
 // Growth debug readout (F2). Covers every growth-side value that decides how a
@@ -1241,13 +1449,16 @@ const keyboardZoomState = {
 // Smooth camera focus and zoom animation
 let targetCameraDistance = -1; // Desired distance from target; smoothly lerps when > 0
 
-function focusCameraOnNode(nodeData: PlantNodeData): void {
+function focusCameraOnNode(
+  nodeData: PlantNodeData,
+  lookup: Map<string, PlantNodeData> = plantNodes,
+): void {
   // The local framing distance has no meaning while orbiting the whole planet.
   if (planetViewActive) return;
   // Frame the node where it is drawn, not where the model puts it: stubbed
   // nodes (cotyledons, crown stem) are drawn offset from their parent.
-  const parentNode = nodeData.parentId ? plantNodes.get(nodeData.parentId) : undefined;
-  const nodePos = resolveDrawnNodePosition(nodeData, parentNode, plantNodes.values()).clone();
+  const parentNode = nodeData.parentId ? lookup.get(nodeData.parentId) : undefined;
+  const nodePos = resolveDrawnNodePosition(nodeData, parentNode, lookup.values()).clone();
   // If it's a seed, offset to visual seed center
   if (nodeData.isSeed || nodeData.nodeType === 'seed') {
     nodePos.y += (nodeData.radius || 0.08) * 0.25;
@@ -1279,9 +1490,6 @@ function focusCameraOnNode(nodeData: PlantNodeData): void {
   horizontal.y = underground ? -0.3 : 0.3;
   horizontal.normalize();
 
-  controls.target.copy(nodePos);
-  camera.position.copy(nodePos).addScaledVector(horizontal, frameDist);
-
   // Allow camera to go below the horizon for underground nodes,
   // but do NOT auto-enable Root Sight - that is a manual player toggle (R key).
   if (underground) {
@@ -1289,7 +1497,57 @@ function focusCameraOnNode(nodeData: PlantNodeData): void {
   } else {
     controls.maxPolarAngle = renderConfig?.cameraMaxPolarAngle ?? Math.PI / 2 - 0.05;
   }
-  controls.update();
+
+  // Ease into the framing instead of teleporting. A jump straight to the new
+  // position leaves no cue about which way the view turned, especially between
+  // two nodes on opposite sides of a plant; a short eased travel reads as the
+  // camera moving rather than the world being replaced.
+  const destination = nodePos.clone().addScaledVector(horizontal, frameDist);
+  startCameraFocus(nodePos, destination);
+}
+
+/**
+ * A short eased camera travel, applied in the render loop.
+ *
+ * Both the orbit target and the eye are interpolated, so the look angle turns
+ * with the camera instead of snapping at the end. Any player input cancels it
+ * through cancelCameraAutoMove, which keeps the camera from fighting the hand.
+ */
+interface CameraFocusTween {
+  fromTarget: THREE.Vector3;
+  fromPosition: THREE.Vector3;
+  toTarget: THREE.Vector3;
+  toPosition: THREE.Vector3;
+  elapsedMs: number;
+  durationMs: number;
+}
+let cameraFocusTween: CameraFocusTween | null = null;
+
+function startCameraFocus(toTarget: THREE.Vector3, toPosition: THREE.Vector3): void {
+  const travel = camera.position.distanceTo(toPosition) + controls.target.distanceTo(toTarget);
+  // Long hops get a little longer, but never so long that the camera feels
+  // stuck: 260 ms for a nudge between two leaves, capped at 620 ms.
+  const durationMs = Math.min(620, 260 + travel * 14);
+  cameraFocusTween = {
+    fromTarget: controls.target.clone(),
+    fromPosition: camera.position.clone(),
+    toTarget: toTarget.clone(),
+    toPosition: toPosition.clone(),
+    elapsedMs: 0,
+    durationMs,
+  };
+}
+
+function updateCameraFocus(deltaTime: number): void {
+  const tween = cameraFocusTween;
+  if (!tween) return;
+  tween.elapsedMs += deltaTime * 1000;
+  const t = Math.min(1, tween.elapsedMs / tween.durationMs);
+  // Ease-in-out: the view accelerates away, then settles onto the node.
+  const eased = t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2;
+  controls.target.lerpVectors(tween.fromTarget, tween.toTarget, eased);
+  camera.position.lerpVectors(tween.fromPosition, tween.toPosition, eased);
+  if (t >= 1) cameraFocusTween = null;
 }
 
 // Growth animation tracking - nodes with growthProgress < 1.0
@@ -1328,15 +1586,23 @@ let renderConfig: RenderConfig | null = null;
  */
 function surfacePosition(x: number, z: number, y: number): THREE.Vector3 {
   const radius = renderConfig?.planetRadiusM ?? 0;
-  const amplitude = renderConfig?.terrainAmplitudeM ?? 0;
-  return new THREE.Vector3(x, y + planetTerrainY(radius, x, z, amplitude), z);
+  return new THREE.Vector3(x, y + planetTerrainY(radius, x, z, getTerrainParams()), z);
+}
+
+/** True for a node the soil can open around: roots, the seed and buried parts. */
+function isUndergroundNode(node: PlantNodeData): boolean {
+  return (
+    node.layer === 'root' ||
+    node.isSeed === true ||
+    node.nodeType === 'seed' ||
+    (node.position?.y ?? 0) < -0.01 ||
+    node.type === 0
+  );
 }
 
 /** Server height (metres above the soil) as a client world height. */
 function clientSurfaceY(x: number, z: number, y: number): number {
-  return (
-    y + planetTerrainY(renderConfig?.planetRadiusM ?? 0, x, z, renderConfig?.terrainAmplitudeM ?? 0)
-  );
+  return y + planetTerrainY(renderConfig?.planetRadiusM ?? 0, x, z, getTerrainParams());
 }
 
 /**
@@ -1400,15 +1666,16 @@ function frameCameraOnPlant(x: number, y: number, z: number): void {
   cancelCameraAutoMove();
   const distance = plantFrameDistance();
   tempTarget.set(x, y, z);
-  controls.target.copy(tempTarget);
 
   // Shallow side view, not a high orbit. A young plant is only a seed or a
   // seedling, so looking down on it at 40°+ read as a bird's-eye view of a dot;
   // a normal side view shows the whole plant and is what players expect.
   // Elevation is ~15° above the target, azimuth slightly forward and right.
   tempDirection.set(0.3, 0.27, 0.92).normalize();
-  camera.position.copy(tempTarget).addScaledVector(tempDirection, distance);
-  controls.update();
+  const destination = tempTarget.clone().addScaledVector(tempDirection, distance);
+  // Recentring uses the same eased travel as a node focus: a Space press that
+  // teleported the view was as disorienting as a node double-click was.
+  startCameraFocus(tempTarget.clone(), destination);
 }
 
 // The up vector for the current view. Planet view looks at the whole globe, so
@@ -1446,6 +1713,7 @@ function rebuildControls(): void {
     enabled: previous.enabled,
     minDistance: previous.minDistance,
     maxDistance: previous.maxDistance,
+    minPolarAngle: previous.minPolarAngle,
     maxPolarAngle: previous.maxPolarAngle,
     dampingFactor: previous.dampingFactor,
     enableDamping: previous.enableDamping,
@@ -1460,6 +1728,7 @@ function rebuildControls(): void {
   controls.enabled = carried.enabled;
   controls.minDistance = carried.minDistance;
   controls.maxDistance = carried.maxDistance;
+  controls.minPolarAngle = carried.minPolarAngle;
   controls.maxPolarAngle = carried.maxPolarAngle;
   controls.dampingFactor = carried.dampingFactor;
   controls.enableDamping = carried.enableDamping;
@@ -1497,6 +1766,7 @@ function recenterCamera(): void {
 // double-click focus can never keep dragging the view around afterwards.
 function cancelCameraAutoMove(): void {
   targetCameraDistance = -1;
+  cameraFocusTween = null;
 }
 
 // Screen-space pick radius for double-clicking a plant node, in CSS pixels.
@@ -1603,12 +1873,8 @@ function respawnPlayer(): void {
 function settlePlayerOnGround(deltaTime: number): void {
   const planetRadius = renderConfig?.planetRadiusM ?? 0;
   if (planetRadius <= 0) return;
-  const groundY = planetTerrainY(
-    planetRadius,
-    controls.target.x,
-    controls.target.z,
-    renderConfig?.terrainAmplitudeM ?? 0,
-  );
+  const field = getTerrainParams();
+  const groundY = planetTerrainY(planetRadius, controls.target.x, controls.target.z, field);
   playerVertical = stepPlayerVertical(
     playerVertical,
     deltaTime,
@@ -1619,17 +1885,55 @@ function settlePlayerOnGround(deltaTime: number): void {
   controls.target.y = wantedY;
   camera.position.y += delta;
 
-  // Keep the eye above the dirt, not inside a hill. The orbit target is a point
-  // on the surface, so a low orbit angle can otherwise put the camera under a
-  // slope that rises between it and the plant.
-  const eyeGroundY = planetTerrainY(
+  const eyeGroundY = planetTerrainY(planetRadius, camera.position.x, camera.position.z, field);
+  // Root Sight is the one mode that may put the eye underground. The floor
+  // clamp ran unconditionally, so the camera could never follow the roots it
+  // had just opened the ground for. While burrowing, clamp to a configured
+  // depth instead and let the cavity shader's sight window keep the view clear.
+  // Progress, not the on/off state, decides: while the cutaway is closing the
+  // eye is still allowed under the soil, so the ground does not shove it up in
+  // the middle of the transition.
+  const rootSightEngaged = (rootSightMachine?.progress ?? 0) > 0.001;
+  if (rootSightEngaged && (rootSightConfig?.cameraBurrowEnabled ?? false)) {
+    const floor = eyeGroundY - Math.max(0, rootSightConfig?.maxBurrowDepthM ?? 12);
+    if (camera.position.y < floor) camera.position.y = floor;
+    controls.maxPolarAngle = Math.PI - 0.05;
+    return;
+  }
+
+  // Keep the eye above the dirt by limiting the orbit angle instead of jerking
+  // the camera up after OrbitControls has already moved it. The old post-hoc
+  // clamp fought every frame of a downward drag, which is the near-terrain
+  // up/down vibration: rotate, clamp, rotate, clamp. A ground-aware polar limit
+  // stops the rotation before it can happen, so the camera settles.
+  const clearance = renderConfig?.cameraGroundClearanceM ?? 0.25;
+  const offset = camera.position.clone().sub(controls.target);
+  const distance = Math.max(1e-3, offset.length());
+  offset.y = 0;
+  if (offset.lengthSq() < 1e-8) offset.set(0, 0, 1);
+  offset.normalize();
+  // At the horizontal end of the orbit the eye sits roughly `distance` away
+  // from the target, so sample the hill under that spot. Taking the higher of
+  // the target and eye ground keeps the camera out of a slope as well as out of
+  // the flat dirt.
+  const groundUnderEye = planetTerrainY(
     planetRadius,
-    camera.position.x,
-    camera.position.z,
-    renderConfig?.terrainAmplitudeM ?? 0,
+    controls.target.x + offset.x * distance,
+    controls.target.z + offset.z * distance,
+    field,
   );
-  const eyeFloorY = eyeGroundY + (renderConfig?.cameraGroundClearanceM ?? 0.25);
-  if (camera.position.y < eyeFloorY) camera.position.y = eyeFloorY;
+  const floorY = Math.max(groundY, groundUnderEye) + clearance;
+  const cosLimit = THREE.MathUtils.clamp((floorY - controls.target.y) / distance, -1, 1);
+  const groundLimit = Math.acos(cosLimit);
+  const configuredLimit = renderConfig?.cameraMaxPolarAngle ?? Math.PI / 2 - 0.05;
+  // Keep the limit above the pole floor. The old post-hoc position clamp fought
+  // OrbitControls every frame at the terrain edge: it moved the eye without
+  // moving the orbit target, which changed the orbit again on the next frame.
+  // The polar limit alone is stable and leaves the camera offset intact.
+  controls.maxPolarAngle = Math.max(
+    controls.minPolarAngle + 0.001,
+    Math.min(configuredLimit, groundLimit),
+  );
 }
 
 // T01: Plant Renderer
@@ -1643,6 +1947,20 @@ let environmentRenderer: EnvironmentRenderer | null = null;
 let rootSightConfig: RootSightConfig | null = null;
 let rootSightMachine: RootSightStateMachine | null = null;
 const rootSightTarget = new THREE.Vector3();
+// The one cavity field Root Sight, the soil cut and plant occlusion share. It
+// is rebuilt at `root_sight.rebuild_hz`, not per frame: clustering a thousand
+// root nodes every frame was the expensive part of the old per-node upload.
+let rootSightCavityField: CavityField = {
+  bubbles: [],
+  coveringSphere: { x: 0, y: 0, z: 0, radius: 0 },
+  dropped: 0,
+};
+let lastCavityBuildMs = Number.NEGATIVE_INFINITY;
+// Tunnels and voids reported by the server. They are real air in the soil, so
+// Root Sight treats them as cavity alongside the root bubbles.
+let terrainEdits: Array<{ x: number; y: number; z: number; radiusM: number }> = [];
+let terrainRevision = 0;
+let lastTerrainRequestMs = Number.NEGATIVE_INFINITY;
 
 // Shared by the soil cutaway shader and the per-frame transition update.
 const soilCutawayUniforms = createRootSightUniforms({ radius: 50, soilOpacity: 0.3 });
@@ -1719,47 +2037,89 @@ function updateRootSight(deltaTime: number): void {
     eased,
     rootSightConfig.cutawayRadius,
   );
+  // Root Sight belongs to this plant. The cavity is centred on its seed/root
+  // crown and sized from its own underground reach; a nearby rival root or an
+  // old tunnel must not drag the whole cavity off the player.
+  const sightRadius = cutawayRadius;
 
-  // T02 organic envelope: hand the soil shader every subterranean node, own and
-  // rival, so the cutaway follows the branching root paths.
+  // T02 organic envelope: one cavity field feeds the soil cut, plant occlusion
+  // and the camera's idea of "inside the opening". Clustering caps the uniform
+  // upload, keeps the own plant's roots first and merges nearby nodes so a
+  // thousand fine roots describe the same cavity as a few dozen bubbles.
   const envelopeNodes = soilCutawayUniforms.uRootSightNodes.value;
-  // T02 cavity sizing: every underground node gets its own bubble, scaled by
-  // that node's own radius relative to the largest one, capped by the configured
-  // cutaway radius. Any underground element can carry Root Sight.
-  const undergroundList: PlantNodeData[] = [];
-  const collectUnderground = (node: PlantNodeData): void => {
-    const underground =
-      node.layer === 'root' ||
-      node.isSeed === true ||
-      node.nodeType === 'seed' ||
-      (node.position && node.position.y < -0.01) ||
-      node.type === 0;
-    if (underground) undergroundList.push(node);
-  };
-  for (const node of plantNodes.values()) collectUnderground(node);
-  for (const otherPlant of otherPlayerPlants.values()) {
-    for (const node of otherPlant.values()) collectUnderground(node);
+  const nowMs = performance.now();
+  const rebuildMs = 1000 / Math.max(1, rootSightConfig.rebuildHz);
+  if (nowMs - lastCavityBuildMs >= rebuildMs) {
+    lastCavityBuildMs = nowMs;
+    const own: CavityNodeInput[] = [];
+    const rival: CavityNodeInput[] = [];
+    const grownFraction = (node: PlantNodeData): number =>
+      Math.min(1, Math.max(0, node.growthProgress ?? 1));
+    const input = (node: PlantNodeData): CavityNodeInput => {
+      const grown = grownFraction(node);
+      return {
+        id: node.id,
+        x: node.position.x,
+        y: node.position.y,
+        z: node.position.z,
+        // Wait for the node to actually emerge before its envelope opens soil.
+        radius: Math.max(0.02, node.radius || 0) * grown,
+      };
+    };
+    for (const node of plantNodes.values()) {
+      if (isUndergroundNode(node) && grownFraction(node) > 0.02) own.push(input(node));
+    }
+    // Only rivals near the opening earn a bubble; a plant on the far side of
+    // the planet used to widen the shared sphere until the whole ground was
+    // considered "inside" and every buried root became visible through dirt.
+    const rivalRangeSq = Math.max(1, rootSightConfig.cutawayRadius) ** 2;
+    for (const otherPlant of otherPlayerPlants.values()) {
+      for (const node of otherPlant.values()) {
+        if (!isUndergroundNode(node) || grownFraction(node) <= 0.02) continue;
+        const dx = node.position.x - rootSightTarget.x;
+        const dz = node.position.z - rootSightTarget.z;
+        if (dx * dx + dz * dz <= rivalRangeSq) rival.push(input(node));
+      }
+    }
+    // Dug tunnels are air too. A root that opened the soil should be visible in
+    // that tunnel after a reconnect, not only while the growth event is live.
+    for (const edit of terrainEdits) {
+      const dx = edit.x - rootSightTarget.x;
+      const dz = edit.z - rootSightTarget.z;
+      if (dx * dx + dz * dz > rivalRangeSq) continue;
+      // Terrain edits carry a height relative to the surface (the server stores
+      // negative metres below it); the cavity field works in client world space.
+      // Dropping the raw value here put every tunnel several metres below its
+      // actual depth and pulled the whole Root Sight cavity down with it.
+      rival.push({
+        x: edit.x,
+        y: clientSurfaceY(edit.x, edit.z, edit.y),
+        z: edit.z,
+        radius: Math.max(0.12, edit.radiusM * 1.8),
+      });
+    }
+    rootSightCavityField = buildCavityField(own, rival, {
+      maxBubbles: rootSightConfig.maxCavityBubbles,
+      mergeCellM: rootSightConfig.bubbleMergeCellM,
+      paddingM: rootSightConfig.bubblePaddingM,
+      rivalBudget: rootSightConfig.rivalBubbleBudget,
+      // A single root cannot open a tunnel as wide as the whole configured
+      // cutaway. Cap the fused bubbles independently so a thick taproot still
+      // reads as a root-sized void.
+      maxBubbleRadiusM: Math.min(1.25, Math.max(0.2, rootSightConfig.cutawayRadius * 0.2)),
+    });
   }
-  // Share of each bubble that sits below the soil line. A bubble centred on a
-  // node at the surface is half above it, which from below reads as a dome of
-  // sky standing on the ground. Burying it turns the same sphere into a dug
-  // cavity whose mouth is at the surface and whose interior is dirt.
-  const CAVITY_BURY_FACTOR = 0.7;
-  let maxNodeRadius = 0;
-  for (const node of undergroundList) maxNodeRadius = Math.max(maxNodeRadius, node.radius || 0);
+
   let envelopeCount = 0;
-  for (const node of undergroundList) {
+  for (const bubble of rootSightCavityField.bubbles) {
     if (envelopeCount >= envelopeNodes.length) break;
-    const share = maxNodeRadius > 0 ? (node.radius || 0) / maxNodeRadius : 1;
-    // The shader multiplies by the eased progress itself, so the stored radius
-    // is the open-cavity size.
-    const bubbleRadius = Math.max(0.12, cutawayRadius * Math.min(1, Math.max(0.35, share)));
-    envelopeNodes[envelopeCount].set(
-      node.position.x,
-      node.position.y - bubbleRadius * CAVITY_BURY_FACTOR,
-      node.position.z,
-      bubbleRadius,
-    );
+    // Keep every bubble whose outer surface is inside the bowl mouth. A bubble
+    // outside it would cut a hole in the terrain that the bowl cannot back, so
+    // the opening would show sky through a ring of missing dirt.
+    const lateralReach =
+      Math.hypot(bubble.x - rootSightTarget.x, bubble.z - rootSightTarget.z) + bubble.radius;
+    if (lateralReach > sightRadius * CAVITY_MOUTH_FRACTION) continue;
+    envelopeNodes[envelopeCount].set(bubble.x, bubble.y, bubble.z, bubble.radius);
     envelopeCount += 1;
   }
   for (let i = envelopeCount; i < envelopeNodes.length; i += 1) envelopeNodes[i].w = 0;
@@ -1767,26 +2127,47 @@ function updateRootSight(deltaTime: number): void {
 
   soilCutawayUniforms.uRootSightProgress.value = eased;
   soilCutawayUniforms.uRootSightCenter.value.copy(rootSightTarget);
-  soilCutawayUniforms.uRootSightRadius.value = cutawayRadius;
-  // Keep the dirt the seed stands on. Sized from the seed itself so a bigger
-  // seed gets a wider mound, and floored so the cavity never eats the last of
-  // the ground under a small one.
-  const seedNode = Array.from(plantNodes.values()).find((node) => node.parentId === null);
-  // A seed a few centimetres across needs half a metre of ground around it
-  // before the cavity starts, or the only earth left under it is a sliver and
-  // the seed reads as hovering over its own hole.
-  soilCutawayUniforms.uRootSightSeedPad.value = seedNode
-    ? Math.max(0.5, (seedNode.radius ?? 0.12) * 6)
-    : 0.5;
+  // The seed/root crown is where the cavity must reach daylight.
+  soilCutawayUniforms.uRootSightApertureCenter.value.copy(rootSightTarget);
+  soilCutawayUniforms.uRootSightRadius.value = sightRadius;
+  // The one radius the hole and the bowl's mouth both read. It used to be
+  // recomputed in two places with different clamps, which is how the bowl ended
+  // up wider than the opening and its buried rim showed dirt in the hole.
+  soilCutawayUniforms.uRootSightApertureRadius.value = Math.max(
+    0.28,
+    sightRadius * CAVITY_MOUTH_FRACTION,
+  );
   soilCutawayUniforms.uRootSightSoilOpacity.value = rootSightConfig.soilOpacity;
 
   const isEnabled = rootSightStateMachineIsEnabled(rootSightMachine);
-  plantRenderer?.setRootSightState(isEnabled, eased, rootSightTarget);
+  // While the ground is open, refresh the sparse-soil edits so tunnels dug
+  // since the last request (by this plant or a nearby rival) are in the cavity.
+  if (isEnabled && ws && ws.readyState === WebSocket.OPEN) {
+    const now = performance.now();
+    if (now - lastTerrainRequestMs > 10_000) {
+      lastTerrainRequestMs = now;
+      ws.send(
+        JSON.stringify({
+          type: MESSAGE_TYPE.TERRAIN_REGION_REQUEST,
+          payload: {
+            worldX: controls.target.x,
+            worldZ: controls.target.z,
+            radiusM: 60,
+            revision: terrainRevision,
+          },
+        }),
+      );
+    }
+  }
+  // Plant occlusion and the root aura use the same player-centred sphere as
+  // the soil cut, so a root near the edge cannot disappear from one pass while
+  // still opening a hole in the other.
+  plantRenderer?.setRootSightState(isEnabled, eased, rootSightTarget, sightRadius);
   webgpuRenderer?.setRootSight(
     isEnabled,
     eased,
     rootSightTarget,
-    cutawayRadius,
+    sightRadius,
     3.0,
     rootSightConfig.soilOpacity,
   );
@@ -1805,6 +2186,8 @@ async function initC01(): Promise<void> {
     loadedGrowthSegmentConfig,
     loadedDayNightConfig,
     loadedResourceTileConfig,
+    loadedTerrainConfig,
+    loadedPhysicsConfig,
   ] = await Promise.all([
     loadRenderConfig(httpOrigin),
     loadControlsConfig(httpOrigin),
@@ -1816,6 +2199,8 @@ async function initC01(): Promise<void> {
     loadGrowthSegmentConfig(httpOrigin),
     loadDayNightConfig(httpOrigin),
     loadResourceTileConfig(httpOrigin),
+    loadTerrainConfig(httpOrigin),
+    loadPhysicsConfig(httpOrigin),
   ]);
 
   renderConfig = loadedRenderConfig;
@@ -1828,6 +2213,8 @@ async function initC01(): Promise<void> {
   chatConfig = loadedChatConfig;
   reportConfig = loadedReportsConfig;
   networkConfig = loadedNetworkConfig;
+  configureTerrain(loadedTerrainConfig, loadedRenderConfig.soilDepthM);
+  physicsConfig = loadedPhysicsConfig;
 
   // Build input bus
   inputBus = createInputBus({ bindings: controlsConfig.bindings });
@@ -1866,17 +2253,18 @@ async function initC01(): Promise<void> {
         },
         getTimeScale: () => environmentRenderer?.getTimeScale() ?? 1,
         setWeatherState: (stateName: string) => {
-          if (environmentRenderer) {
-            environmentRenderer.handleWeatherUpdate({
-              weatherState: stateName,
-              timeOfDay: environmentRenderer.getTimeOfDay(),
-              sunIntensity: environmentRenderer.getSunIntensity(),
-              isDay:
-                environmentRenderer.getTimeOfDay() > 0.2 &&
-                environmentRenderer.getTimeOfDay() < 0.8,
-              conditionToken: '',
-              stateTimeRemainingS: 300,
-            });
+          // Change the world's weather, not just this screen's. The server
+          // broadcasts its own state roughly once a tick, so a client-only
+          // change was overwritten immediately - the select did nothing, and
+          // no rain ever fell because the authoritative state was still clear.
+          environmentRenderer?.setWeatherState(stateName);
+          if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(
+              JSON.stringify({
+                type: MESSAGE_TYPE.DEV_ACTION,
+                payload: { type: 'dev_set_weather', state: stateName, duration_s: 240 },
+              }),
+            );
           }
         },
         getTimeOfDay: () => environmentRenderer?.getTimeOfDay() ?? 0,
@@ -1884,6 +2272,38 @@ async function initC01(): Promise<void> {
         getSunIntensity: () => environmentRenderer?.getSunIntensity() ?? 1.0,
       },
       resourceWorld: {
+        getRates: () =>
+          tileConfig?.rates ?? {
+            photosynthesisRate: 1,
+            diffusionRate: 0.03,
+            maxAbsorptionPerTick: 1,
+            rainGainPerS: 1.5,
+            evaporationPerS: 0.025,
+            canopyShadeReduction: 0.1,
+            groundwaterCapacity: 400,
+          },
+        setRate: (key, value) => {
+          // Keep the panel's own reading in step with what was just applied, then
+          // hand the change to the authoritative simulation.
+          if (tileConfig) tileConfig.rates[key] = value;
+          const wireKey: Record<keyof ResourceRates, string> = {
+            photosynthesisRate: 'photosynthesis_rate',
+            diffusionRate: 'diffusion_rate',
+            maxAbsorptionPerTick: 'max_absorption_per_tick',
+            rainGainPerS: 'rain_gain_per_s',
+            evaporationPerS: 'evaporation_per_s',
+            canopyShadeReduction: 'canopy_shade_reduction',
+            groundwaterCapacity: 'groundwater_capacity',
+          };
+          if (!ws || ws.readyState !== WebSocket.OPEN) return;
+          ws.send(
+            JSON.stringify({
+              type: MESSAGE_TYPE.DEV_ACTION,
+              payload: { type: 'dev_set_resources', [wireKey[key]]: value },
+            }),
+          );
+        },
+        getGroundwaterFraction: () => localGroundwaterFraction,
         setTileResources: (
           _x: number,
           _z: number,
@@ -2072,7 +2492,7 @@ async function initC01(): Promise<void> {
 
   // Initialize Rapier physics world (client-side cosmetic simulation)
   try {
-    await rapierWorld.init({ x: 0, y: -9.81, z: 0 });
+    await rapierWorld.init({ x: 0, y: -(physicsConfig?.gravityMps2 ?? 9.81), z: 0 });
 
     // Static soil collider: the camera is a physical observer, so it cannot
     // pass through the ground. There is no cap on the planet any more, so the
@@ -2096,12 +2516,11 @@ async function initC01(): Promise<void> {
 
     // The visible ground is the sphere plus hills, and the sphere alone would
     // leave anything physical standing at the sphere while the hills rise above
-    // it — the player ends up buried up to the waist in a mound. The patch is
-    // the exact geometry that is drawn, so collide with that as well. The ball
-    // stays for the rest of the planet and as the floor under the relief, which
-    // is raise-only.
-    const terrainPatch = environmentRenderer?.terrainPatch ?? null;
-    if (terrainPatch) {
+    // it — the player ends up buried up to the waist in a mound. Every drawn
+    // ground patch is collided exactly: the detail patch near the play area and
+    // the coarse patch out to the horizon. The ball stays for the rest of the
+    // planet and as the floor under the relief, which is raise-only.
+    for (const terrainPatch of environmentRenderer?.terrainMeshes ?? []) {
       const geometry = terrainPatch.geometry;
       const positions = geometry.getAttribute('position');
       const vertices = new Float32Array(positions.count * 3);
@@ -2114,11 +2533,17 @@ async function initC01(): Promise<void> {
       const indices = index
         ? Uint32Array.from(index.array as ArrayLike<number>)
         : Uint32Array.from({ length: positions.count }, (_, i) => i);
-      terrainColliderRef.current = rapierWorld
-        .getWorld()
-        .createCollider(RAPIER.ColliderDesc.trimesh(vertices, indices), soilBody);
+      terrainColliderRefs.push(
+        rapierWorld
+          .getWorld()
+          .createCollider(RAPIER.ColliderDesc.trimesh(vertices, indices), soilBody),
+      );
     }
 
+    if (physicsConfig) {
+      plantColliders = new PlantColliderManager();
+      plantColliders.configure(physicsConfig);
+    }
     physicsReady = true;
     setDetail('Physics initialized');
   } catch (err) {
@@ -2683,48 +3108,28 @@ async function initC01(): Promise<void> {
 
   const startGrowthDragFromEvent = (e: MouseEvent | PointerEvent): boolean => {
     const gState = growthSelectionStateMachineGetState(growthSelectionMachine);
-    if (gState !== 'option_selected' && gState !== 'drawing') return false;
-    if (gState === 'drawing') {
-      // Dragging the part or the arrow turns the aim; anywhere else the camera
-      // orbits as usual.
-      const grabRadiusPx = Math.max(renderConfig?.growthAimGrabPx ?? 34, aimTargetScreenRadius());
-      const onPart = aimTargetScreenDistance(e.clientX, e.clientY) <= grabRadiusPx;
-      const onArrow = aimArrowScreenDistance(e.clientX, e.clientY) <= grabRadiusPx;
-      if (!onPart && !onArrow) return false;
-      growthAimDragging = true;
-      growthAimLastX = e.clientX;
-      growthAimLastY = e.clientY;
-      return true;
+    // Only an active aim can be grabbed. Starting an aim from option_selected
+    // used to happen on any canvas press, so clicking off the panel silently
+    // re-armed the gizmo instead of closing it.
+    if (gState !== 'drawing') return false;
+    // Dragging the part or the arrow turns the aim; anywhere else the camera
+    // orbits as usual.
+    const grabRadiusPx = Math.max(renderConfig?.growthAimGrabPx ?? 34, aimTargetScreenRadius());
+    const onPart =
+      aimTargetScreenDistance(e.clientX, e.clientY) <= grabRadiusPx ||
+      pickGrowthAimNodePoint(e.clientX, e.clientY) !== null;
+    const onArrow = aimArrowScreenDistance(e.clientX, e.clientY) <= grabRadiusPx;
+    if (!onPart && !onArrow) return false;
+    // A press on the node itself also chooses where the golden ring sits. The
+    // old gizmo always used the node's cap; this lets the player carry it to the
+    // side, underside or back of the selected part before steering the arrow.
+    if (onPart) {
+      placeGrowthAimRingFromScreen(e.clientX, e.clientY);
+      applyGrowthAimAngles();
     }
-    const selectedNodeId = growthSelectionMachine.selectedNodeId;
-    if (!selectedNodeId) return false;
-    const nodeData = plantNodes.get(selectedNodeId);
-    if (!nodeData) {
-      console.warn('[PlantLegacy] Growth drag: selected node not found locally', {
-        selectedNodeId,
-      });
-      setDetail('Selected growth node not found. Click the node again.');
-      return false;
-    }
-    const optionType =
-      growthSelectionMachine.selectedOptionType ??
-      growthSelectionMachine.drawingData?.selectedOptionType ??
-      '';
-    const optionLabel = growthSelectionMachine.selectedOptionLabel ?? optionType;
-    if (!optionType) {
-      console.warn('[PlantLegacy] Growth drag: no selected option type');
-      return false;
-    }
-
-    if (!beginGrowthAiming(selectedNodeId, optionType, optionLabel)) return false;
     growthAimDragging = true;
     growthAimLastX = e.clientX;
     growthAimLastY = e.clientY;
-    console.log('[PlantLegacy] Growth aiming started', {
-      nodeId: selectedNodeId,
-      optionType,
-      state: growthSelectionStateMachineGetState(growthSelectionMachine),
-    });
     try {
       (e.target as HTMLElement)?.setPointerCapture?.((e as PointerEvent).pointerId);
     } catch {}
@@ -2765,15 +3170,7 @@ async function initC01(): Promise<void> {
   // Click to select node for growth (ADR-018 two-step growth)
   canvas.addEventListener('click', (e) => {
     if (e.button !== 0) return; // Left click only
-
-    // Ignore if growth drawing is/was active or an option is selected (handled by pointer handlers)
-    const gState = growthSelectionStateMachineGetState(growthSelectionMachine);
-    if (gState === 'option_selected') {
-      // Clicking on canvas while an option is selected cancels growth and re-enables controls
-      hideGrowthSelection();
-      return;
-    }
-    if (gState === 'drawing') return;
+    if (performance.now() < suppressGrowthClickUntil) return;
 
     // Ignore clicks on UI elements (buttons, inputs, etc.)
     if (
@@ -2801,84 +3198,104 @@ async function initC01(): Promise<void> {
     const raycaster = new THREE.Raycaster();
     raycaster.setFromCamera(mouse, camera);
 
-    // Find closest own plant node. The pick sphere has a configurable world
-    // radius floor so a tiny seed is still clickable from the close camera.
+    // Pick any visible node, own plant or a rival's. The pick sphere has a
+    // configurable world radius floor so a tiny seed is still clickable from
+    // the close camera.
     const nodeObjects: THREE.Object3D[] = [];
-    const nodeMap = new Map<THREE.Object3D, string>();
+    interface PickTarget {
+      plantId: string;
+      nodeId: string;
+      isOwn: boolean;
+      nodes: Map<string, PlantNodeData>;
+    }
+    const nodeMap = new Map<THREE.Object3D, PickTarget>();
     const cameraBelowGround = camera.position.y < 0;
     const isRootSightEnabled = rootSightMachine
       ? rootSightStateMachineIsEnabled(rootSightMachine)
       : false;
-    for (const [id, nodeData] of plantNodes.entries()) {
-      if (!nodeData.isOwnPlant) continue;
-      // Allow picking:
-      // - All canopy nodes (type >= 1)
-      // - Seed node (isSeed === true) always
-      // - Root nodes (type === 0) when in Root Sight mode OR camera is below ground
-      if (nodeData.type === 0 && !nodeData.isSeed && !isRootSightEnabled && !cameraBelowGround)
-        continue;
-      const sphere = new THREE.Mesh(
-        new THREE.SphereGeometry(Math.max(nodeData.radius * 1.5, 0.35), 8, 8),
-        new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }),
-      );
-      sphere.position.copy(nodeData.position);
-      sphere.updateMatrixWorld(true);
-      nodeObjects.push(sphere);
-      nodeMap.set(sphere, id);
+    const addPickable = (
+      id: string,
+      nodes: Map<string, PlantNodeData>,
+      isOwn: boolean,
+      onlyOwnNodes: boolean,
+    ): void => {
+      for (const [nodeId, nodeData] of nodes.entries()) {
+        if (onlyOwnNodes && !nodeData.isOwnPlant) continue;
+        // Allow picking:
+        // - All canopy nodes (type >= 1)
+        // - Seed node (isSeed === true) always
+        // - Root nodes (type === 0) when in Root Sight mode OR camera is below ground
+        if (nodeData.type === 0 && !nodeData.isSeed && !isRootSightEnabled && !cameraBelowGround)
+          continue;
+        const sphere = new THREE.Mesh(
+          new THREE.SphereGeometry(Math.max(nodeData.radius * 1.5, 0.35), 8, 8),
+          new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }),
+        );
+        sphere.position.copy(nodeData.position);
+        sphere.updateMatrixWorld(true);
+        nodeObjects.push(sphere);
+        nodeMap.set(sphere, { plantId: id, nodeId, isOwn, nodes });
+      }
+    };
+    addPickable(plantId ?? 'own', plantNodes, true, true);
+    for (const [rivalPlantId, nodes] of otherPlayerPlants.entries()) {
+      addPickable(rivalPlantId, nodes, false, false);
     }
 
-    console.debug(
-      '[Click] plantNodes:',
-      plantNodes.size,
-      'own nodes for picking:',
-      nodeObjects.length,
-      'rootSightEnabled:',
-      isRootSightEnabled,
-    );
-
     if (nodeObjects.length === 0) {
-      console.debug('[Click] No nodes to pick');
       hideGrowthSelection();
+      hidePlantInfoCard();
       return;
     }
 
     const intersects = raycaster.intersectObjects(nodeObjects);
-    console.debug('[Click] intersects:', intersects.length);
     if (intersects.length === 0) {
       // Clicked off-plant (but not on UI) -> close growth panel
       hideGrowthSelection();
+      hidePlantInfoCard();
       return;
     }
 
-    const clickedNodeId = nodeMap.get(intersects[0].object);
-    console.debug('[Click] clicked node:', clickedNodeId);
+    const picked = nodeMap.get(intersects[0].object);
+    const clickedNodeId = picked?.nodeId;
 
-    // If we have a growth option selected, start drawing from this node on click/drag
+    // Someone else's plant is inspected, never grown and never framed: a single
+    // click is a look, and the growth panel belongs to your own plant. Its
+    // detailed readout (stored water, minerals, options) is yours alone, so a
+    // rival node gets basic identity only - the same rule in both modes.
+    if (picked && !picked.isOwn) {
+      hideGrowthSelection();
+      showPlantInfoCard(picked.plantId, picked.nodeId, picked.nodes);
+      return;
+    }
+    hidePlantInfoCard();
+
     const growthState = growthSelectionStateMachineGetState(growthSelectionMachine);
-    if (growthState === 'option_selected') {
-      console.log('[Click] option_selected state, aiming from node:', clickedNodeId);
-      const selectedNodeId = growthSelectionMachine.selectedNodeId;
-      if (clickedNodeId && selectedNodeId && clickedNodeId === selectedNodeId) {
-        const optionType =
-          growthSelectionMachine.selectedOptionType ??
-          growthSelectionMachine.drawingData?.selectedOptionType ??
-          '';
-        const optionLabel = growthSelectionMachine.selectedOptionLabel ?? optionType;
-        if (optionType && beginGrowthAiming(clickedNodeId, optionType, optionLabel)) return;
-      }
-      // Click elsewhere while waiting for drag cancels the pending option selection
-      growthSelectionStateMachineHide(growthSelectionMachine);
-      removeGrowthDirectionLine();
-      controls.enabled = true;
+    const selectedNodeId = growthSelectionMachine.selectedNodeId;
+    const sameNode = clickedNodeId !== undefined && clickedNodeId === selectedNodeId;
+
+    if (growthState === 'option_selected' && sameNode) {
+      const optionType =
+        growthSelectionMachine.selectedOptionType ??
+        growthSelectionMachine.drawingData?.selectedOptionType ??
+        '';
+      const optionLabel = growthSelectionMachine.selectedOptionLabel ?? optionType;
+      if (optionType && beginGrowthAiming(clickedNodeId, optionType, optionLabel)) return;
+    }
+    if (growthState === 'drawing' && sameNode) return; // Keep the current aim.
+    if ((growthState === 'options_visible' || growthState === 'loading') && sameNode) {
+      // Clicking the node the panel already belongs to must not re-request its
+      // options; that was the flash where the panel closed and re-opened.
       return;
     }
 
-    if (clickedNodeId) {
-      // Single-click never moves the camera; it only requests growth options
-      // in Grow Mode.
-      if (isGrowMode) {
-        requestGrowthOptions(clickedNodeId);
-      }
+    // A different node starts a fresh selection; clicking off the plant already
+    // returned above. Close the old panel/aim before opening the new one.
+    if (growthState !== 'hidden' && growthState !== 'options_visible' && !sameNode) {
+      hideGrowthSelection();
+    }
+    if (clickedNodeId && isGrowMode) {
+      requestGrowthOptions(clickedNodeId);
     }
   });
 
@@ -2903,28 +3320,34 @@ async function initC01(): Promise<void> {
     const camBelowGround = camera.position.y < 0;
 
     // Pick the node whose projected centre is nearest the click, in screen
-    // space, so no invisible pick meshes are needed.
+    // space, so no invisible pick meshes are needed. Rivals are pickable too:
+    // double-clicking another player's part frames that part, because a click
+    // that visibly lands on it and then frames your own plant reads as a bug.
     let picked: PlantNodeData | null = null;
+    let pickedLookup: Map<string, PlantNodeData> = plantNodes;
     let pickedPx = NODE_DOUBLE_CLICK_PICK_PX;
-    for (const node of plantNodes.values()) {
-      if (!node.isOwnPlant) continue;
-      // Underground nodes are only visible (and pickable) in the root layer.
-      if (node.type === 0 && !node.isSeed && !rootSightOn && !camBelowGround) continue;
-      const parent = node.parentId ? plantNodes.get(node.parentId) : undefined;
-      nodePickVector
-        .copy(resolveDrawnNodePosition(node, parent, plantNodes.values()))
-        .project(camera);
-      if (nodePickVector.z > 1) continue; // behind the camera
-      const px = ((nodePickVector.x + 1) / 2) * rect.width;
-      const py = ((-nodePickVector.y + 1) / 2) * rect.height;
-      const distancePx = Math.hypot(px - localX, py - localY);
-      if (distancePx < pickedPx) {
-        pickedPx = distancePx;
-        picked = node;
+    const consider = (nodes: Map<string, PlantNodeData>, onlyOwnNodes: boolean): void => {
+      for (const node of nodes.values()) {
+        if (onlyOwnNodes && !node.isOwnPlant) continue;
+        // Underground nodes are only visible (and pickable) in the root layer.
+        if (node.type === 0 && !node.isSeed && !rootSightOn && !camBelowGround) continue;
+        const parent = node.parentId ? nodes.get(node.parentId) : undefined;
+        nodePickVector.copy(resolveDrawnNodePosition(node, parent, nodes.values())).project(camera);
+        if (nodePickVector.z > 1) continue; // behind the camera
+        const px = ((nodePickVector.x + 1) / 2) * rect.width;
+        const py = ((-nodePickVector.y + 1) / 2) * rect.height;
+        const distancePx = Math.hypot(px - localX, py - localY);
+        if (distancePx < pickedPx) {
+          pickedPx = distancePx;
+          picked = node;
+          pickedLookup = nodes;
+        }
       }
-    }
+    };
+    consider(plantNodes, true);
+    for (const nodes of otherPlayerPlants.values()) consider(nodes, false);
 
-    if (picked) focusCameraOnNode(picked);
+    if (picked) focusCameraOnNode(picked, pickedLookup);
     else recenterCamera();
   });
 
@@ -2954,6 +3377,9 @@ async function initC01(): Promise<void> {
     if ((e as MouseEvent).button !== 0) return;
     if (!growthAimDragging) return;
     growthAimDragging = false;
+    // The browser follows a drag with a click. Swallow that click so releasing
+    // the arrow does not close the growth panel.
+    suppressGrowthClickUntil = performance.now() + 350;
     try {
       (e.target as HTMLElement)?.releasePointerCapture?.((e as PointerEvent).pointerId);
     } catch {}
@@ -2976,7 +3402,6 @@ async function initC01(): Promise<void> {
       controls.enabled = true;
       controls.enableRotate = true;
       controls.enablePan = true;
-      webgpuRenderer?.setSelectedNode(null);
       const panel = growthSelectionPanel;
       if (panel) panel.style.display = 'none';
       setDetail('Growth cancelled.');
@@ -2989,7 +3414,7 @@ async function initC01(): Promise<void> {
     if (e.key === 'Escape') {
       growthAimDragging = false;
       growthSelectionStateMachineCancelDrawing(growthSelectionMachine);
-      growthSelectionPanel?.querySelector('#growth-aim-controls')?.remove();
+      setGrowthGrowEnabled(false, 'Choose a growth option first');
       removeGrowthDirectionLine();
       controls.enabled = true;
       controls.enableRotate = true;
@@ -3540,7 +3965,7 @@ function createResourceReadout(): void {
     el.innerHTML = `
     <span style="display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: ${row.color}; flex-shrink: 0;"></span>
     <span style="color: var(--warm-ink); opacity: 0.72; text-transform: capitalize; min-width: 58px;">${row.label}</span>
-    <span id="${row.id}" style="color: var(--bone-100); font-variant-numeric: tabular-nums; display: inline-block; min-width: 7ch; text-align: right;">0</span>
+    <span id="${row.id}" style="color: var(--bone-100); font-variant-numeric: tabular-nums; display: inline-block; width: 9ch; text-align: right;">0</span>
   `;
     resourceBody.appendChild(el);
     // Scope the lookup to the row: the panel is still detached from the document
@@ -3560,22 +3985,30 @@ function createResourceReadout(): void {
   // The season is a date, not a resource: it gets its own row under a rule so
   // the readout's five resource rows keep lining up with each other.
   const seasonRow = document.createElement('div');
+  // The countdown is a reading, like every resource above it, so it uses the
+  // same three-column row: dot, fixed-width label, right-aligned value. The old
+  // single line put the countdown wherever the season word ended, so the column
+  // of numbers was ragged; a bullet between them added noise to a value that
+  // already has its own label.
   seasonRow.style.cssText = `
     display: flex;
     align-items: baseline;
     gap: 6px;
-    padding: 4px 0 0;
+    padding: 5px 0 2px;
     margin-top: 2px;
     border-top: 1px solid var(--hud-border, rgba(239,233,216,0.12));
-    font-size: 0.68rem;
+    font-size: 0.72rem;
     color: var(--warm-ink);
+    white-space: nowrap;
   `;
   seasonRow.innerHTML = `
-    <span style="color: var(--warm-ink); opacity: 0.72; text-transform: capitalize; min-width: 58px;">season</span>
-    <span id="res-season" style="color: var(--bone-100); font-variant-numeric: tabular-nums; display: inline-block; min-width: 21ch; text-align: right;">\u2014</span>
+    <span style="display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: #8FC7E8; flex-shrink: 0;"></span>
+    <span id="res-season-label" style="color: var(--warm-ink); opacity: 0.72; min-width: 58px;">Season</span>
+    <span id="res-season" style="color: var(--bone-100); font-variant-numeric: tabular-nums; display: inline-block; width: 9ch; text-align: right;">\u2014</span>
   `;
   resourceBody.appendChild(seasonRow);
   resSeasonEl = seasonRow.querySelector<HTMLSpanElement>('#res-season');
+  resSeasonLabelEl = seasonRow.querySelector<HTMLSpanElement>('#res-season-label');
 
   // Remove last border
   const last = resourceReadoutElement.lastElementChild;
@@ -3647,12 +4080,65 @@ function plantIdLabel(): string {
 function updateSeasonChip(): void {
   if (!resSeasonEl || seasonNumber <= 0) return;
   const remainingSeconds = Math.max(0, (seasonEndsAtMs - performance.now()) / 1000);
-  resSeasonEl.textContent = formatSeasonChip(seasonNumber, remainingSeconds);
+  if (resSeasonLabelEl) resSeasonLabelEl.textContent = `Season ${seasonNumber}`;
+  resSeasonEl.textContent = formatSeasonRemaining(remainingSeconds);
   resSeasonEl.title = `Season ${seasonNumber}. At the end of the season the calamity takes every plant.`;
+  if (resSeasonLabelEl) {
+    resSeasonLabelEl.title = `Season ${seasonNumber}. Remaining in the season: ${formatSeasonRemaining(remainingSeconds)}.`;
+  }
 
   if (seasonTickerStarted) return;
   seasonTickerStarted = true;
   setInterval(updateSeasonChip, 1000);
+}
+
+// Basic identity of a plant that is not yours, keyed by world plant id. Filled
+// from PLANT_CREATED, which is the message that carries the owner.
+const plantOwners = new Map<string, string>();
+
+// A small read-only card for someone else's plant. Deliberately shallow: the
+// growth panel's stored water, minerals and options belong to the player's own
+// plant, and showing them for a rival would have been our numbers, not theirs.
+let plantInfoCard: HTMLDivElement | null = null;
+
+function ensurePlantInfoCard(): HTMLDivElement | null {
+  if (plantInfoCard) return plantInfoCard;
+  const layer = uiShell?.getLayer('hud');
+  if (!layer) return null;
+  const card = document.createElement('div');
+  card.id = 'plant-info-card';
+  card.style.pointerEvents = 'none';
+  layer.appendChild(card);
+  plantInfoCard = card;
+  return card;
+}
+
+function showPlantInfoCard(
+  plantId: string,
+  nodeId: string,
+  nodes: Map<string, PlantNodeData>,
+): void {
+  const node = nodes.get(nodeId);
+  const card = ensurePlantInfoCard();
+  if (!node || !card) return;
+
+  const owner = plantOwners.get(plantId);
+  const part = (node.nodeType ?? 'part').replace(/_/g, ' ');
+  const progress = Math.round((node.growthProgress ?? 1) * 100);
+  card.innerHTML = `
+    <div class="plant-info-card__title">Another plant</div>
+    <div class="plant-info-card__row"><span>part</span><b>${part}</b></div>
+    <div class="plant-info-card__row"><span>biomass</span><b>${node.biomass.toFixed(1)}</b></div>
+    <div class="plant-info-card__row"><span>grown</span><b>${progress}%</b></div>
+    ${owner ? `<div class="plant-info-card__row"><span>owner</span><b>${owner.slice(0, 12)}</b></div>` : ''}
+    <div class="plant-info-card__hint">Double-click to look at it</div>
+  `;
+  card.style.display = 'block';
+}
+
+function hidePlantInfoCard(): void {
+  if (!plantInfoCard) return;
+  plantInfoCard.style.display = 'none';
 }
 
 // Two-step growth selection UI (ADR-018)
@@ -3664,29 +4150,26 @@ function createGrowthSelectionUI(): void {
 
   const panel = document.createElement('div');
   panel.id = 'growth-selection-panel';
-  panel.className = 'hud-panel';
+  // No panel chrome: the options are individual floating cards, so the plant
+  // and the aim gizmo stay visible behind the gaps between them.
   panel.style.cssText = `
     position: fixed;
-    /* Middle bottom of the screen: chat lives top-left, so the bottom band is
-       free and the plant stays visible. */
-    bottom: clamp(40px, 8vh, 90px);
+    bottom: clamp(56px, 10vh, 96px);
     left: 50%;
     transform: translateX(-50%);
     z-index: 300;
-    width: auto;
-    max-width: min(560px, 88vw);
-    max-height: var(--hud-panel-max-h);
-    overflow-y: auto;
-    pointer-events: auto;
+    width: min(660px, 96vw);
+    pointer-events: none;
     display: none;
-    padding: var(--hud-pad-y) var(--hud-pad-x);
-    margin-bottom: var(--hud-gap);
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
   `;
 
   panel.addEventListener('click', (e) => e.stopPropagation());
 
   panel.innerHTML = `
-    <div id="growth-options" style="display: flex; flex-direction: column; gap: 6px;"></div>
+    <div id="growth-options"></div>
   `;
 
   layer.appendChild(panel);
@@ -3697,8 +4180,6 @@ function requestGrowthOptions(nodeId: string): void {
   if (!ws || ws.readyState !== WebSocket.OPEN || !plantId) return;
 
   growthSelectionStateMachineRequestOptions(growthSelectionMachine, nodeId);
-  // WebGPU selection outline
-  webgpuRenderer?.setSelectedNode(nodeId);
   showGrowthPanelMessage(nodeId, '…');
 
   // Set timeout to prevent "loading forever" if server doesn't respond
@@ -3723,7 +4204,7 @@ function prepareGrowthPanel(_nodeId: string): {
   const optionsEl = document.getElementById('growth-options');
   if (!panel || !optionsEl) return null;
 
-  panel.style.display = 'block';
+  panel.style.display = 'flex';
   setGrowthPanelOpen(true);
   return { optionsEl };
 }
@@ -3733,9 +4214,49 @@ function showGrowthPanelMessage(nodeId: string, message: string): void {
   if (!parts) return;
   parts.optionsEl.innerHTML = '';
   const note = document.createElement('div');
-  note.style.cssText = 'color: var(--bark-300); font-size: 0.72rem; padding: 8px 10px;';
+  note.className = 'hud-grow-note';
   note.textContent = message;
   parts.optionsEl.appendChild(note);
+  setGrowthGrowEnabled(false, 'Choose a growth option first');
+}
+
+const GROWTH_PART_INFO: Record<string, string> = {
+  radicle: 'The first root. Anchors the seedling and starts drawing water from the soil.',
+  root: 'A thick taproot. Holds the plant steady and stores water and minerals.',
+  lateral_root: 'A fine side root. Spreads through new soil for water and nutrients.',
+  stem: 'The main stem. Lifts new leaves toward the light.',
+  branch: 'A side branch. Opens more space for leaves and flowers.',
+  cotyledon: 'A seed leaf. Feeds the seedling until true leaves can take over.',
+  leaf: 'A true leaf. Turns light, water and minerals into energy.',
+  vine: 'A climbing vine. Reaches new light without building a thick trunk.',
+  flower: 'A flower. The next step toward seed and a new generation.',
+  spore_sac: "A spore sac. Releases the plant's spores when it matures.",
+};
+
+function describeGrowthReason(reason?: string): string {
+  switch (reason) {
+    case 'insufficient_stored_resources':
+    case 'insufficient_water':
+      return 'Needs more stored water.';
+    case 'insufficient_minerals':
+      return 'Needs more stored minerals.';
+    case 'insufficient_energy':
+    case 'insufficient_energy_for_node':
+      return 'Needs more energy.';
+    case 'insufficient_biomass':
+    case 'insufficient_biomass_for_node':
+      return 'Needs more biomass.';
+    case 'growth_on_cooldown':
+      return 'Wait a moment before growing again.';
+    case 'max_nodes_reached':
+      return 'The plant has reached its part limit.';
+    case 'max_cotyledons_reached':
+      return 'The seedling already has both seed leaves.';
+    case 'out_of_bounds':
+      return 'There is no soil or space left in that direction.';
+    default:
+      return reason ? reason.replace(/_/g, ' ') : 'This part cannot grow yet.';
+  }
 }
 
 function renderGrowthOptions(result: GrowthOptionsView): void {
@@ -3754,10 +4275,11 @@ function renderGrowthOptions(result: GrowthOptionsView): void {
   if (!parts) return;
 
   parts.optionsEl.innerHTML = '';
+  setGrowthGrowEnabled(false, 'Choose a growth option first');
   if (result.options.length === 0) {
+    setGrowthGrowEnabled(false, 'This node has no growth options');
     const empty = document.createElement('div');
-    empty.className = 'hud-card';
-    empty.style.cssText = 'text-align: center; padding: 16px 10px; border-style: dashed;';
+    empty.className = 'hud-grow-empty';
     empty.innerHTML = `
       <div style="font-size: 2rem; line-height: 1; margin-bottom: 8px; opacity: 0.5;">Seed</div>
       <div class="hud-label">No growth available</div>
@@ -3785,41 +4307,13 @@ function renderGrowthOptions(result: GrowthOptionsView): void {
     (a, b) => (typeOrder[a.type] ?? 99) - (typeOrder[b.type] ?? 99),
   );
 
-  // Section headers by group
-  const groupOf = (t: string) => {
-    const tl = t.toLowerCase();
-    if (tl === 'radicle' || tl === 'root' || tl === 'lateral_root') return 'roots';
-    if (tl === 'stem' || tl === 'branch') return 'stem';
-    if (tl === 'cotyledon' || tl === 'leaf' || tl === 'vine') return 'foliage';
-    if (tl === 'flower' || tl === 'spore_sac') return 'bloom';
-    return 'other';
-  };
-
-  let lastGroup: string | null = null;
+  // No group headings: each card carries its own type chip, and wrapping at
+  // three per row keeps the layout readable without a background panel.
   for (const opt of sorted) {
-    const group = groupOf(opt.type);
-    if (group !== lastGroup) {
-      lastGroup = group;
-      const groupLabels: Record<string, string> = {
-        roots: 'Roots (grow down & sideways)',
-        stem: 'Stem & Branches (grow up)',
-        foliage: 'Leaves (photosynthesize light)',
-        bloom: 'Flowers & Spores (reproduce)',
-        other: 'Other',
-      };
-      const section = document.createElement('div');
-      section.className = 'hud-group-title';
-      section.textContent = groupLabels[group] ?? group;
-      parts.optionsEl.appendChild(section);
-    }
-
     const card = document.createElement('div');
     card.className = 'hud-grow-option';
-    card.style.cssText = `cursor: ${opt.available ? 'pointer' : 'default'};`;
-    card.style.opacity = opt.available ? '1' : '0.6';
-    card.style.filter = opt.available ? '' : 'grayscale(0.5)';
-
-    // Type chip (removed — using flowing text instead)
+    if (!opt.available) card.classList.add('is-unavailable');
+    if (!opt.available) card.title = describeGrowthReason(opt.reason);
 
     const waterCost = opt.waterCost ?? 0;
     const nutrientCost = opt.nutrientCost ?? 0;
@@ -3828,84 +4322,120 @@ function renderGrowthOptions(result: GrowthOptionsView): void {
     // Type-specific description + upkeep
     const typeChipClass = (() => {
       const tl = opt.type.toLowerCase();
-      if (tl === 'radicle' || tl === 'root' || tl === 'lateral_root') return 'option-chip-root';
-      if (tl === 'stem' || tl === 'branch') return 'option-chip-stem';
-      if (tl === 'cotyledon' || tl === 'leaf' || tl === 'vine') return 'option-chip-leaf';
-      return 'option-chip';
+      if (tl === 'radicle' || tl === 'root' || tl === 'lateral_root')
+        return 'hud-grow-option__chip-root';
+      if (tl === 'stem' || tl === 'branch') return 'hud-grow-option__chip-stem';
+      if (tl === 'cotyledon' || tl === 'leaf' || tl === 'vine') return 'hud-grow-option__chip-leaf';
+      return '';
     })();
 
+    const requirements = [
+      `${opt.energyCost.toFixed(1)} energy`,
+      waterCost > 0 ? `${waterCost.toFixed(1)} water` : '',
+      nutrientCost > 0 ? `${nutrientCost.toFixed(1)} nutrients` : '',
+      mineralCost > 0 ? `${mineralCost.toFixed(1)} minerals` : '',
+    ].filter(Boolean);
+    const reasonText = !opt.available ? describeGrowthReason(opt.reason) : '';
     card.innerHTML = `
-      <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 4px;">
+      <div class="hud-grow-option__head">
         <span class="hud-grow-option__chip ${typeChipClass}">${opt.label}</span>
-        ${
-          !opt.available && opt.reason
-            ? `<span class="hud-badge hud-badge-low">${opt.reason}</span>`
-            : opt.available
-              ? '<span class="hud-badge hud-badge-ok">Ready</span>'
-              : ''
-        }
       </div>
-      <div style="font-size: 0.72rem; color: var(--warm-ink); line-height: 1.3;">
-        ${opt.energyCost.toFixed(1)}E &nbsp;•&nbsp; +${opt.biomassGain.toFixed(1)}B &nbsp;•&nbsp; ~${opt.expectedSeconds.toFixed(0)}s
-        ${waterCost > 0 || nutrientCost > 0 || mineralCost > 0 ? '&nbsp;•&nbsp; ' : ''}
-        ${waterCost > 0 ? `${waterCost.toFixed(1)}W` : ''}
-        ${nutrientCost > 0 ? `${waterCost > 0 ? ', ' : ''}${nutrientCost.toFixed(1)}N` : ''}
-        ${mineralCost > 0 ? `${waterCost > 0 || nutrientCost > 0 ? ', ' : ''}${mineralCost.toFixed(1)}M` : ''}
+      <div class="hud-grow-option__cost">
+        ${opt.energyCost.toFixed(1)} energy &nbsp;·&nbsp; +${opt.biomassGain.toFixed(1)} biomass &nbsp;·&nbsp; ${opt.expectedSeconds.toFixed(0)} seconds
+      </div>
+      <div class="hud-grow-option__details">
+        <div class="hud-grow-option__requires-label">Requires</div>
+        <ul class="hud-grow-option__requires">
+          ${requirements.map((requirement) => `<li>${requirement}</li>`).join('')}
+        </ul>
+        <div class="hud-grow-option__info">${GROWTH_PART_INFO[opt.type] ?? 'A new part for your plant.'}</div>
+        ${reasonText ? `<div class="hud-grow-option__warning">${reasonText}</div>` : ''}
       </div>
     `;
 
-    if (opt.available) {
-      card.onmouseenter = () => {
-        if (!card.classList.contains('selected')) {
-          card.style.borderColor = 'var(--leaf-400)';
-          card.style.background = 'rgba(159, 200, 96, 0.12)';
-        }
-      };
-      card.onmouseleave = () => {
-        if (!card.classList.contains('selected')) {
-          card.style.borderColor = 'var(--hud-border)';
-          card.style.background = 'var(--hud-bg)';
-        }
-      };
-      card.onclick = (e) => {
-        e.stopPropagation();
-        growthSelectionStateMachineSelectOption(growthSelectionMachine, opt.type, opt.label);
+    card.onclick = (e) => {
+      e.stopPropagation();
+      parts.optionsEl.querySelectorAll('.hud-grow-option').forEach((c) => {
+        (c as HTMLElement).classList.remove('selected');
+      });
+      card.classList.add('selected');
 
-        // Mark selected visually
-        parts.optionsEl.querySelectorAll('.hud-grow-option').forEach((c) => {
-          const cc = c as HTMLElement;
-          cc.classList.remove('selected');
-          cc.style.borderColor = 'var(--hud-border)';
-          cc.style.background = 'var(--hud-bg)';
-        });
-        card.classList.add('selected');
-        card.style.borderColor = 'var(--leaf-400)';
-        card.style.background = 'rgba(159, 200, 96, 0.18)';
-        card.style.boxShadow = '0 0 0 2px rgba(159, 200, 96, 0.25)';
+      if (!opt.available) {
+        setGrowthGrowEnabled(false, reasonText);
+        setDetail(`${opt.label}: ${reasonText}`);
+        return;
+      }
 
-        // Start aiming straight away: ring on the surface, arrow to turn.
-        beginGrowthAiming(result.nodeId, opt.type, opt.label);
-        uiShell?.toast({
-          message: `Aiming ${opt.label} - drag to turn, then Grow`,
-          kind: 'info',
-          durationMs: 2000,
-        });
-      };
-    }
+      growthSelectionStateMachineSelectOption(growthSelectionMachine, opt.type, opt.label);
+      // Start aiming straight away: ring on the surface, arrow to turn. The
+      // persistent Grow button becomes active only now.
+      beginGrowthAiming(result.nodeId, opt.type, opt.label);
+      uiShell?.toast({
+        message: `Aiming ${opt.label} - drag to turn, then Grow`,
+        kind: 'info',
+        durationMs: 2000,
+      });
+    };
     parts.optionsEl.appendChild(card);
   }
+}
+
+function clearOwnPlantMissing(): void {
+  ownPlantMissingSince = 0;
+}
+
+function markOwnPlantMissing(): void {
+  if (!plantId || !plantReady) return;
+  const now = performance.now();
+  if (ownPlantMissingSince === 0) {
+    ownPlantMissingSince = now;
+    return;
+  }
+  if (now - ownPlantMissingSince < 2500) return;
+  handleOwnPlantLoss();
+}
+
+/** One reset path for a live death and a missed PLANT_REMOVED. */
+function handleOwnPlantLoss(cause?: string): void {
+  const lostPlantId = plantId;
+  if (!lostPlantId) return;
+  plantNodes.clear();
+  otherPlayerPlants.clear();
+  plantId = null;
+  plantReady = false;
+  clearOwnPlantMissing();
+  resetPlantMirror();
+  clearPlantIdentity();
+  hideGrowthSelection();
+  setRootSightEnabled(false, lostPlantId);
+  hideLossReport();
+  plantBiomass = 0;
+  plantEnergy = 0;
+  updateResourceReadout(
+    tileLight,
+    tileWater,
+    tileMinerals,
+    plantBiomass,
+    plantEnergy,
+    undefined,
+    undefined,
+  );
+  if (plantRenderer) plantRenderer.updatePlantData([]);
+  if (webgpuRenderer) webgpuRenderer.updatePlants([], performance.now());
+  setDetail('Your plant died.');
+  entryFlowPlantLost(entryFlow, cause && cause !== 'removed' ? describeDeathCause(cause) : null);
+  entryScreen.render(entryFlow);
 }
 
 function hideGrowthSelection(): void {
   growthSelectionStateMachineHide(growthSelectionMachine);
   growthAimDragging = false;
+  suppressGrowthClickUntil = 0;
   growthSelectionPanel?.querySelector('#growth-aim-controls')?.remove();
   removeGrowthDirectionLine();
   controls.enabled = true;
   controls.enableRotate = true;
   controls.enablePan = true;
-  // Clear WebGPU selection outline
-  webgpuRenderer?.setSelectedNode(null);
   const panel = growthSelectionPanel;
   if (panel) panel.style.display = 'none';
   setGrowthPanelOpen(false);
@@ -4832,6 +5362,14 @@ const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerH
 camera.position.set(0, 18, 26);
 camera.lookAt(0, 0, 0);
 
+/**
+ * Smallest polar angle the orbit may reach. At exactly zero the view direction
+ * and the camera up vector are parallel, so OrbitControls has no stable roll and
+ * a drag over the pole flips the view. A few degrees keeps the overhead view
+ * while removing the singularity.
+ */
+const CAMERA_MIN_POLAR_ANGLE = 0.06;
+
 /** Settings every OrbitControls instance starts with, including rebuilt ones. */
 function createControls(): OrbitControls {
   const created = new OrbitControls(camera, renderer.domElement);
@@ -4854,11 +5392,70 @@ function createControls(): OrbitControls {
   // camera_min_distance / camera_max_distance take over during init.
   created.minDistance = 1;
   created.maxDistance = camera.far * 0.9;
+  created.minPolarAngle = CAMERA_MIN_POLAR_ANGLE;
   created.maxPolarAngle = Math.PI / 2 - 0.05;
   return created;
 }
 
 let controls = createControls();
+
+// Dev-only handle for on-screen verification (`?dev=1`). The game is normally
+// driven by mouse and keys; placing the camera exactly over, beside and under a
+// cavity is impossible to do repeatably that way, and reading the water table
+// needs the same numbers the HUD uses rather than a screenshot guess.
+if (isDevMode) {
+  (
+    window as unknown as {
+      __pl: {
+        camera: THREE.PerspectiveCamera;
+        controls: OrbitControls;
+        setCamera: (px: number, py: number, pz: number, tx: number, ty: number, tz: number) => void;
+        rootSight: (on: boolean) => void;
+        weather: (state: string) => void;
+        stats: () => Record<string, number | boolean | null>;
+        rain: () => Record<string, number | boolean> | null;
+        nodes: () => Array<{ id: string; type: string; x: number; y: number; z: number }>;
+      };
+    }
+  ).__pl = {
+    camera,
+    controls,
+    setCamera: (px, py, pz, tx, ty, tz) => {
+      cameraFocusTween = null;
+      camera.position.set(px, py, pz);
+      controls.target.set(tx, ty, tz);
+      controls.update();
+    },
+    rootSight: (on) => setRootSightEnabled(on),
+    weather: (state) => environmentRenderer?.setWeatherState(state),
+    rain: () => environmentRenderer?.getRainDebug() ?? null,
+    stats: () => ({
+      serverTick,
+      resourceUpdates: resourceUpdateCount,
+      lastResourceUpdateAgeMs:
+        lastResourceUpdateAt === 0 ? -1 : Math.round(performance.now() - lastResourceUpdateAt),
+      groundwaterFraction: localGroundwaterFraction,
+      tileLight,
+      tileWater,
+      tileMinerals,
+      cameraX: camera.position.x,
+      cameraY: camera.position.y,
+      cameraZ: camera.position.z,
+      rootSight: rootSightMachine ? rootSightStateMachineIsEnabled(rootSightMachine) : false,
+      plantNodes: plantNodes.size,
+      apertureRadius: soilCutawayUniforms.uRootSightApertureRadius.value,
+      cutawayRadius: soilCutawayUniforms.uRootSightRadius.value,
+    }),
+    nodes: () =>
+      [...plantNodes.values()].map((node) => ({
+        id: node.id,
+        type: String(node.nodeType ?? node.type),
+        x: node.position.x,
+        y: node.position.y,
+        z: node.position.z,
+      })),
+  };
+}
 
 // Planet view pulls the camera out to orbit the whole body. The normal camera
 // is a local observer standing at the pole: it is clamped to a few hundred
@@ -4915,55 +5512,15 @@ function setPlanetView(enabled: boolean): void {
 
 // Physics (Rapier) - client-side cosmetic simulation, server-authoritative state
 let physicsReady = false;
+let physicsConfig: PhysicsConfig | null = null;
+let plantColliders: PlantColliderManager | null = null;
 // The ground collider, kept so the spring arm can ignore it: the camera orbits a
 // target that sits on that surface, so treating the ground as an obstruction
 // only ever produced grazing hits that yanked the camera in and out.
 const soilColliderRef: { current: unknown } = { current: null };
-// The relief collider is ground too: the camera is not pulled in by a hill it
+// Relief colliders are ground too: the camera is not pulled in by a hill it
 // orbits over, for the same reason it is not pulled in by the sphere.
-const terrainColliderRef: { current: unknown } = { current: null };
-
-function registerNodePhysics(node: PlantNodeData): void {
-  if (!physicsReady || !rapierWorld.isReady) return;
-  const shape = nodeTypeToPhysicsShape(node.nodeType ?? 'stem', node.biomass ?? 0);
-  const scale = Math.min(1.0, Math.sqrt(node.biomass ?? 0 / 5.0));
-
-  let radius = 0.1;
-  let height = 0.5;
-  let halfHeight = 0.5;
-  if (shape.kind === 'sphere') radius = shape.radius * scale;
-  else if (shape.kind === 'capsule') {
-    height = shape.height * scale;
-    radius = shape.radius * scale;
-  } else if (shape.kind === 'cylinder') {
-    halfHeight = shape.halfHeight * scale;
-    radius = shape.radius * scale;
-  }
-
-  const bodyDesc = RAPIER.RigidBodyDesc.dynamic()
-    .setTranslation(node.position.x, node.position.y, node.position.z)
-    .setLinearDamping(0.5)
-    .setAngularDamping(0.5)
-    .setCanSleep(true);
-  const body = rapierWorld.getWorld().createRigidBody(bodyDesc);
-
-  let colliderDesc: RAPIER.ColliderDesc;
-  switch (shape.kind) {
-    case 'sphere':
-      colliderDesc = RAPIER.ColliderDesc.ball(radius);
-      break;
-    case 'capsule':
-      colliderDesc = RAPIER.ColliderDesc.capsule(height / 2, radius);
-      break;
-    case 'cylinder':
-      colliderDesc = RAPIER.ColliderDesc.cylinder(halfHeight, radius);
-      break;
-    default:
-      colliderDesc = RAPIER.ColliderDesc.ball(0.1);
-  }
-  colliderDesc.setFriction(0.6).setRestitution(0.2);
-  rapierWorld.getWorld().createCollider(colliderDesc, body);
-}
+const terrainColliderRefs: unknown[] = [];
 
 // Lighting
 const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
@@ -5104,7 +5661,23 @@ async function connect(): Promise<void> {
           playerId = welcome.playerId;
           plantId = welcome.plantId;
           plantReady = true;
+          clearOwnPlantMissing();
           serverTick = welcome.tick;
+          // Pull the soil edits around the spawn so a restart shows the tunnels
+          // that were dug before it.
+          if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(
+              JSON.stringify({
+                type: MESSAGE_TYPE.TERRAIN_REGION_REQUEST,
+                payload: {
+                  worldX: welcome.rootNode?.x ?? 0,
+                  worldZ: welcome.rootNode?.z ?? 0,
+                  radiusM: 60,
+                  revision: 0,
+                },
+              }),
+            );
+          }
 
           // Reload controls config now that the server is reachable.
           // initC01() fetches /config/controls before WebSocket connects;
@@ -5217,7 +5790,6 @@ async function connect(): Promise<void> {
                   ...clientTarget(node.targetX, node.targetY, node.targetZ),
                 };
                 plantNodes.set(node.id, nodeData);
-                registerNodePhysics(nodeData);
               } catch (err) {
                 console.warn('[PlantLegacy] Skipping malformed node in WELCOME:', {
                   nodeId: node.id,
@@ -5252,7 +5824,6 @@ async function connect(): Promise<void> {
               spawnTime: performance.now(),
             };
             plantNodes.set(welcome.rootNode.id, fallbackRoot);
-            registerNodePhysics(fallbackRoot);
             plantBiomass = welcome.totalBiomass;
             plantEnergy = welcome.totalEnergy;
             // Don't call updateResourceReadout with zeros - wait for first RESOURCE_UPDATE
@@ -5319,6 +5890,30 @@ async function connect(): Promise<void> {
             break;
           }
           serverTick = state.tick;
+          // STATE/KEYFRAME is authoritative for the owner's totals. RESOURCE_UPDATE
+          // is throttled to changes, so after a dormant resume the HUD could keep
+          // showing its placeholder 0 biomass while the plant was still alive.
+          const ownState = state.plants?.find((plant) => plant.id === plantId);
+          if (ownState) {
+            clearOwnPlantMissing();
+            if (Number.isFinite(ownState.totalBiomass)) plantBiomass = ownState.totalBiomass;
+            const stateEnergy = (ownState as { totalEnergy?: number }).totalEnergy;
+            if (stateEnergy !== undefined && Number.isFinite(stateEnergy))
+              plantEnergy = stateEnergy;
+            updateResourceReadout(
+              tileLight,
+              tileWater,
+              tileMinerals,
+              plantBiomass,
+              plantEnergy,
+              plantWater,
+              plantMinerals,
+              plantWaterCapacity,
+              plantMineralCapacity,
+            );
+          } else {
+            markOwnPlantMissing();
+          }
           if (DEBUG_WS_LOG)
             console.debug('[PlantLegacy] STATE/KEYFRAME received:', {
               type,
@@ -5328,24 +5923,24 @@ async function connect(): Promise<void> {
           if (debugOverlay) {
             debugOverlay.recordBytes(0, event.data.length);
           }
-          // Live tick readout, throttled. Updating it on every packet meant
-          // rewriting a multi-line block 20 times a second; the numbers still
-          // move at a readable pace and the panel keeps one layout.
-          const stateTick = typeof state.tick === 'number' ? state.tick : serverTick;
-          if (stateTick - lastDetailTick >= 4) {
-            lastDetailTick = stateTick;
-            updateTickDetail(
-              `Server tick: ${serverTick}\n` +
-                `Biomass: ${plantBiomass.toFixed(1)} | Energy: ${plantEnergy.toFixed(1)}\n` +
-                `Water: ${plantWater.toFixed(1)}/${plantWaterCapacity.toFixed(0)} | ` +
-                `Minerals: ${plantMinerals.toFixed(1)}/${plantMineralCapacity.toFixed(0)}\n` +
-                `Plants: ${state.plants?.length ?? 0} | Own plant: ${plantIdLabel()}`,
-            );
-          }
+          // The server sends STATE at its full 20 Hz tick rate. Show the exact
+          // tick from every packet instead of only redrawing every fourth one:
+          // the old gate made the readout jump 4, 8, then 12 ticks at a time
+          // even though no server ticks were missed. The readout uses tabular
+          // numerals, so the extra updates do not reflow the panel.
+          updateTickDetail(
+            `Server tick: ${serverTick}\n` +
+              `Biomass: ${plantBiomass.toFixed(1)} | Energy: ${plantEnergy.toFixed(1)}\n` +
+              `Water: ${plantWater.toFixed(1)}/${plantWaterCapacity.toFixed(0)} | ` +
+              `Minerals: ${plantMinerals.toFixed(1)}/${plantMineralCapacity.toFixed(0)}\n` +
+              `Plants: ${state.plants?.length ?? 0} | Own plant: ${plantIdLabel()}`,
+          );
           break;
         }
 
         case MESSAGE_TYPE.RESOURCE_UPDATE: {
+          resourceUpdateCount += 1;
+          lastResourceUpdateAt = performance.now();
           const update = payload as {
             tick: number;
             tiles: Array<{
@@ -5369,6 +5964,8 @@ async function connect(): Promise<void> {
             tileAvgLight?: number;
             tileAvgMoisture?: number;
             tileAvgMinerals?: number;
+            /** Share of the local soil cavity filled with water, 0..1. */
+            groundwaterFraction?: number;
             /** One covered tile, for the dev panel readout. */
             coverageTileX?: number;
             coverageTileZ?: number;
@@ -5468,6 +6065,11 @@ async function connect(): Promise<void> {
             if (isLocalTileUpdate) {
               // Sky grade follows the light reaching the local tiles.
               environmentRenderer?.setLocalTileLight(tileLight);
+              // The cavity's water table follows the same soil the roots are in.
+              if (typeof update.groundwaterFraction === 'number') {
+                localGroundwaterFraction = update.groundwaterFraction;
+                environmentRenderer?.setGroundwaterLevel(update.groundwaterFraction);
+              }
               // Update dev panel tile info
               if (devPanel?.updateTileInfo) {
                 devPanel.updateTileInfo(
@@ -5553,6 +6155,47 @@ async function connect(): Promise<void> {
           break;
         }
 
+        case MESSAGE_TYPE.TERRAIN_REGION: {
+          // The height/moisture payload is the authoritative soil snapshot. The
+          // renderer derives its base surface from the same shared field, so
+          // only the revision is needed here until the chunk texture path lands.
+          const region = payload as { revision?: number };
+          terrainRevision = Math.max(terrainRevision, Number(region.revision ?? 0));
+          break;
+        }
+        case MESSAGE_TYPE.TERRAIN_EDITS: {
+          const update = payload as {
+            revision?: number;
+            edits?: Array<{
+              id?: number;
+              x?: number;
+              y?: number;
+              z?: number;
+              radiusM?: number;
+              kind?: string;
+            }>;
+          };
+          for (const edit of update.edits ?? []) {
+            if (
+              typeof edit.x !== 'number' ||
+              typeof edit.y !== 'number' ||
+              typeof edit.z !== 'number'
+            ) {
+              continue;
+            }
+            terrainEdits.push({
+              x: edit.x,
+              y: edit.y,
+              z: edit.z,
+              radiusM: Math.max(0.1, Number(edit.radiusM ?? 0.2)),
+            });
+          }
+          // Tunnels are small and bounded; keep the newest few hundred so a
+          // long session cannot grow the cavity input without limit.
+          if (terrainEdits.length > 256) terrainEdits = terrainEdits.slice(-256);
+          terrainRevision = Math.max(terrainRevision, Number(update.revision ?? 0));
+          break;
+        }
         case MESSAGE_TYPE.SEASON_UPDATE: {
           const season = payload as {
             season: number;
@@ -5704,7 +6347,6 @@ async function connect(): Promise<void> {
             for (const node of incomingNodes) {
               const nodeData = toNodeData(node, true);
               plantNodes.set(node.id, nodeData);
-              registerNodePhysics(nodeData);
               // Track growing nodes for client-side animation.
               // Use server-authoritative growthTimeSeconds for duration.
               // Staggered emergence per node type (roots first, leaves last).
@@ -5729,8 +6371,6 @@ async function connect(): Promise<void> {
             }
             if (updatedParent) {
               plantNodes.set(updatedParent.id, toNodeData(updatedParent, true));
-              const updatedNode = plantNodes.get(updatedParent.id);
-              if (updatedNode) registerNodePhysics(updatedNode);
               // For germination, the updated parent (seed->root) should have the new children
               if (updatedParent.children) {
                 const parentNode = plantNodes.get(updatedParent.id);
@@ -5796,7 +6436,6 @@ async function connect(): Promise<void> {
             for (const node of incomingNodes) {
               const nodeData = toNodeData(node, false);
               otherPlant.set(node.id, nodeData);
-              registerNodePhysics(nodeData);
               // Track growing animation for other players' newly grown nodes
               if ((nodeData.growthProgress ?? 1.0) < 1.0 && node.growthTimeSeconds) {
                 const durationMs = node.growthTimeSeconds * 1000;
@@ -5820,8 +6459,6 @@ async function connect(): Promise<void> {
             }
             if (updatedParent) {
               otherPlant.set(updatedParent.id, toNodeData(updatedParent, false));
-              const updatedNode = otherPlant.get(updatedParent.id);
-              if (updatedNode) registerNodePhysics(updatedNode as PlantNodeData);
               // For germination, the updated parent should have the new children
               if (updatedParent.children) {
                 const parentNode = otherPlant.get(updatedParent.id);
@@ -6179,7 +6816,6 @@ async function connect(): Promise<void> {
               plantNodes.clear();
               for (const [id, node] of target) {
                 plantNodes.set(id, node);
-                registerNodePhysics(node);
               }
               plantBiomass = plant.totalBiomass;
               plantEnergy = plant.totalEnergy;
@@ -6217,9 +6853,6 @@ async function connect(): Promise<void> {
                 }
               }
               otherPlayerPlants.set(plant.id, target);
-              for (const node of target.values()) {
-                registerNodePhysics(node);
-              }
             }
           }
           // Update renderer with all plants
@@ -6337,9 +6970,7 @@ async function connect(): Promise<void> {
             });
           }
           otherPlayerPlants.set(created.plant.id, otherPlant);
-          for (const node of otherPlant.values()) {
-            registerNodePhysics(node);
-          }
+          if (created.plant.ownerId) plantOwners.set(created.plant.id, created.plant.ownerId);
           // Update renderer with all plants
           if (plantRenderer) {
             const otherNodes: PlantNodeData[] = [];
@@ -6370,42 +7001,7 @@ async function connect(): Promise<void> {
           if (removed.plantId === plantId) {
             // Failed germination or removal with persistence off. There is no
             // implicit restore: the player reloads to start a fresh seed.
-            plantNodes.clear();
-            otherPlayerPlants.clear();
-            plantId = null;
-            plantReady = false;
-            // Reset plant mirror (Phase 1.5)
-            resetPlantMirror();
-            // Keep the account session: losing a plant must not sign the player
-            // out, or the next seed silently belongs to nobody.
-            clearPlantIdentity();
-            hideGrowthSelection();
-            setRootSightEnabled(false, removed.plantId);
-            plantBiomass = 0;
-            plantEnergy = 0;
-            updateResourceReadout(
-              tileLight,
-              tileWater,
-              tileMinerals,
-              plantBiomass,
-              plantEnergy,
-              undefined,
-              undefined,
-            );
-            if (plantRenderer) plantRenderer.updatePlantData([]);
-            if (webgpuRenderer) webgpuRenderer.updatePlants([], performance.now());
-            setDetail('Your plant died.');
-            // Reloading was the only way to get a seed back; offer it explicitly.
-            // A cause we do not recognise falls back to the neutral line rather
-            // than printing the raw enum, and `removed` is administrative rather
-            // than something that happened to the plant.
-            entryFlowPlantLost(
-              entryFlow,
-              removed.cause && removed.cause !== 'removed'
-                ? describeDeathCause(removed.cause)
-                : null,
-            );
-            entryScreen.render(entryFlow);
+            handleOwnPlantLoss(removed.cause);
             break;
           }
           if (otherPlayerPlants.delete(removed.plantId)) {
@@ -6483,7 +7079,14 @@ async function connect(): Promise<void> {
         cameraFramed = true;
         framedPlantId = welcome.plantId;
         if (welcome.rootNode) {
-          frameCameraOnPlant(welcome.rootNode.x, welcome.rootNode.y, welcome.rootNode.z);
+          // rootNode.y is surface-relative (usually 0); framing on it directly
+          // put the initial camera inside the hill. Map it to the drawn surface
+          // exactly as the plant nodes are mapped.
+          frameCameraOnPlant(
+            welcome.rootNode.x,
+            clientSurfaceY(welcome.rootNode.x, welcome.rootNode.z, welcome.rootNode.y),
+            welcome.rootNode.z,
+          );
         } else {
           // Frame on the first own node (seed/root) when rootNode is omitted
           const firstNode = Array.from(plantNodes.values()).find((n) => n.isOwnPlant);
@@ -6667,7 +7270,7 @@ function resolveCameraCollision(): void {
   // The ground never blocks the view: it is a surface the orbit target sits on,
   // not an obstacle between the eye and the subject.
   if (soilColliderRef.current && hitRecord.collider === soilColliderRef.current) return;
-  if (terrainColliderRef.current && hitRecord.collider === terrainColliderRef.current) return;
+  if (terrainColliderRefs.includes(hitRecord.collider)) return;
   const travel = hitRecord.timeOfImpact ?? hitRecord.toi ?? distance;
   if (travel >= distance) return;
 
@@ -6727,6 +7330,9 @@ function renderFrame(deltaTime: number): void {
       targetCameraDistance = -1;
     }
   }
+
+  // An eased node focus owns the camera until it settles or a hand moves it.
+  updateCameraFocus(deltaTime);
 
   // Camera up follows the surface normal at the look-at point. The orbit/pan
   // math is kept in that frame too, otherwise the controls rotate around world
@@ -6849,6 +7455,13 @@ function renderFrame(deltaTime: number): void {
     // Keep WebGPU plant/ground lighting in sync with the visual sun every frame.
     webgpuRenderer?.setSunDirection(environmentRenderer.getSunDirection());
     webgpuRenderer?.setSoilMoisture(environmentRenderer.getSoilMoisture());
+  }
+
+  // Plant colliders follow the drawn skeleton, not a biomass guess. The
+  // manager does real work at the configured rebuild rate and rebuilds only a
+  // plant whose node signature changed.
+  if (physicsReady && plantColliders) {
+    plantColliders.sync(plantId, plantNodes, otherPlayerPlants, camera.position, performance.now());
   }
 
   // Step Rapier physics and sync body transforms to Three.js meshes
@@ -7166,28 +7779,34 @@ function showLossReport(cause: string, secondsAgo: number): void {
   const panel = document.createElement('div');
   panel.id = 'loss-report';
   panel.className = 'hud-panel';
+  panel.setAttribute('role', 'dialog');
+  panel.setAttribute('aria-label', 'Your plant died');
   panel.style.cssText = `
     position: fixed;
     left: 50%;
-    top: var(--hud-top);
-    transform: translateX(-50%);
-    z-index: 206;
-    width: min(340px, 88vw);
-    padding: 10px 12px;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 400;
+    width: min(360px, 90vw);
+    padding: 18px;
     display: grid;
-    gap: 6px;
+    gap: 10px;
     border-left: 3px solid var(--ember-500);
+    box-shadow: 0 24px 80px rgba(0, 0, 0, 0.55);
     pointer-events: auto;
   `;
 
   const title = document.createElement('div');
-  title.textContent = 'Your plant died while you were away';
-  title.style.cssText = `font-size: var(--hud-font-sm); font-weight: 700;
+  title.textContent = 'Your plant died';
+  title.style.cssText = `font-size: 1.05rem; font-weight: 700;
     letter-spacing: 0.04em; color: var(--ember-400);`;
   const body = document.createElement('div');
   body.textContent = `${describeDeathCause(cause)} It died ${formatAway(secondsAgo)} ago.`;
-  body.style.cssText = `font-size: var(--hud-font-sm); color: var(--bone-300); line-height: 1.45;`;
-  panel.append(title, body, chipButton('Dismiss', hideLossReport));
+  body.style.cssText = `font-size: var(--hud-font-sm); color: var(--bone-300); line-height: 1.5;`;
+  const next = document.createElement('div');
+  next.textContent = 'A new seed is ready in the soil. Take it and begin again.';
+  next.style.cssText = `font-size: var(--hud-font-sm); color: var(--leaf-300); line-height: 1.45;`;
+  panel.append(title, body, next, chipButton('Continue with new seed', hideLossReport));
 
   if (uiShell) uiShell.attachTo('panel', panel);
   else document.body.appendChild(panel);

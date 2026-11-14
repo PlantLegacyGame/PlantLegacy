@@ -47,6 +47,12 @@ const SKY_FRAGMENT_SHADER = /* glsl */ `
     return fract(p.x * p.y);
   }
 
+  float hash31(vec3 p) {
+    p = fract(p * 0.1031);
+    p += dot(p, p.yzx + 33.33);
+    return fract((p.x + p.y) * p.z);
+  }
+
   float valueNoise2(vec2 p) {
     vec2 i = floor(p);
     vec2 f = fract(p);
@@ -60,7 +66,12 @@ const SKY_FRAGMENT_SHADER = /* glsl */ `
 
   void main() {
     vec3 dir = normalize(vDirection);
-    if (uEyeUnderGround > 0.5 && dir.y < -0.02) {
+    // A buried eye is surrounded by soil, not by a sky that happens to be below
+    // the horizon. Keep the cone overhead open for the Root Sight aperture; all
+    // other directions are the inside of the earth. This also prevents the sky
+    // from leaking between the remaining detail patch and the hidden distant
+    // shells when the camera is underground.
+    if (uEyeUnderGround > 0.5 && dir.y < 0.35) {
       gl_FragColor = vec4(uEarthColor, 1.0);
       #include <colorspace_fragment>
       return;
@@ -72,18 +83,36 @@ const SKY_FRAGMENT_SHADER = /* glsl */ `
     // Soft haze right at the horizon.
     sky = mix(sky, uHorizonColor, (1.0 - smoothstep(0.0, 0.18, h)) * 0.35);
 
-    // Stars appear only at night and only above the horizon. Distribute them in
-    // spherical angle space and draw small round points instead of filling whole
-    // grid cells (which looked like white squares).
+    // Space above the atmosphere. During the day the sky colour still fills
+    // the view; at night the high sky becomes the near-black of space while the
+    // horizon retains a little airglow, so the planet reads as a body inside
+    // space rather than a flat painted dome.
     float night = 1.0 - smoothstep(-0.15, 0.20, uSunDir.y);
-    if (night > 0.01 && dir.y > 0.0) {
-      vec2 starUV = vec2(atan(dir.z, dir.x) * 5.0, asin(clamp(dir.y, -1.0, 1.0)) * 10.0);
-      vec2 cell = floor(starUV);
-      vec2 local = fract(starUV) - 0.5;
-      float present = step(0.965, hash21(cell));
-      float point = smoothstep(0.16, 0.0, length(local));
-      float twinkle = 0.6 + 0.4 * sin(hash21(cell + 7.0) * 40.0);
-      sky += vec3(0.82, 0.87, 1.0) * present * point * twinkle * night * 0.85;
+    float spaceMask = smoothstep(0.02, 0.52, h) * night;
+    sky = mix(sky, vec3(0.003, 0.005, 0.012), spaceMask * 0.97);
+
+    // Stars are sampled in a 3D direction lattice. The old 2D atan/asin grid
+    // collapsed near the celestial poles and stretched into large sideways
+    // discs; a direction-space lattice keeps every star round and stable as the
+    // camera turns. Star points are deliberately sub-pixel-small.
+    if (night > 0.01 && dir.y > 0.005) {
+      // Fewer, slightly larger cells than the first pass: at a normal orbit the
+      // sky occupies only a narrow band above the horizon, and sub-pixel stars
+      // disappeared there. These stay round points rather than the old stretched
+      // 2D-polar discs.
+      vec3 starSpace = dir * 105.0;
+      vec3 cell = floor(starSpace);
+      vec3 local = fract(starSpace) - 0.5;
+      float present = smoothstep(0.972, 0.994, hash31(cell));
+      vec3 jitter = vec3(
+        hash31(cell + 1.7),
+        hash31(cell + 9.1),
+        hash31(cell + 17.3)
+      ) - 0.5;
+      float point = 1.0 - smoothstep(0.04, 0.12, length(local - jitter * 0.55));
+      float twinkle = 0.65 + 0.35 * sin(hash31(cell + 3.0) * 80.0);
+      vec3 starTint = mix(vec3(0.62, 0.75, 1.0), vec3(1.0, 0.9, 0.72), hash31(cell + 5.3));
+      sky += starTint * present * point * twinkle * night * 1.35;
     }
 
     // Light, procedural cloud bands projected on a virtual plane.

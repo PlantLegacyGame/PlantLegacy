@@ -4,8 +4,7 @@ export type ColliderShape =
   | { kind: 'sphere'; radius: number }
   | { kind: 'capsule'; height: number; radius: number }
   | { kind: 'cuboid'; halfExtents: { x: number; y: number; z: number } }
-  | { kind: 'cylinder'; radius: number; halfHeight: number }
-  | { kind: 'soft_body'; vertices: number[]; indices: number[] };
+  | { kind: 'cylinder'; radius: number; halfHeight: number };
 
 export interface PhysicsBodyDef {
   id: string;
@@ -85,17 +84,3 @@ export interface WaterDropDef {
 
 export const PHYSICS_TICK_RATE = 20;
 export const PHYSICS_SUBSTEPS = 4;
-
-export const NODE_PHYSICS_SHAPES: Record<string, ColliderShape> = {
-  seed: { kind: 'sphere', radius: 0.25 },
-  radicle: { kind: 'capsule', height: 0.6, radius: 0.08 },
-  root: { kind: 'capsule', height: 1.0, radius: 0.12 },
-  lateral_root: { kind: 'capsule', height: 0.8, radius: 0.09 },
-  stem: { kind: 'cylinder', radius: 0.15, halfHeight: 1.0 },
-  branch: { kind: 'capsule', height: 0.8, radius: 0.1 },
-  vine: { kind: 'capsule', height: 0.6, radius: 0.07 },
-  leaf: { kind: 'soft_body', vertices: [], indices: [] },
-  cotyledon: { kind: 'soft_body', vertices: [], indices: [] },
-  flower: { kind: 'sphere', radius: 0.18 },
-  spore_sac: { kind: 'sphere', radius: 0.2 },
-};

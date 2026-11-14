@@ -378,10 +378,10 @@ Twenty-one files carry values today. The other 56 are deliberate stubs.
 | `soil_dry_color` | color | — | `#4A4536` | Terrain soil tint when moisture is low. |
 | `soil_wet_color` | color | — | `#1B2014` | Terrain soil tint when moisture is high or after rain. |
 | `soil_mineral_tint` | color | — | `#5A8FA8` | Subtle mineral accent tone on ground terrain. |
-| `terrain_mesh_subdivisions` | integer | 8–128 | `48` | Subdivision radial segments of the terrain ground mesh. |
+| `terrain_mesh_subdivisions` | integer | 8–256 | `256` | Subdivision segments of the detailed inner terrain patch (~0.7 m cells at 180 m width). Higher values resolve terrain divots instead of flattening them. |
 | `terrain_radius` | number | 50–800 | `300` | World radius of the ground terrain mesh. |
 | `root_aura_radius` | number | 0.5–20 | `6` | 3D proximity aura radius around root nodes for subterranean sight cutaway. |
-| `webgpu_enabled` | boolean | — | `true` | Enable WebGPU renderer with compute-driven architecture. Falls back to WebGL2 if unavailable. |
+| `webgpu_enabled` | boolean | — | `false` | Enable the WebGPU plant overlay. Off by default: it draws to a second canvas with a separate depth buffer, so plants cannot be occluded by terrain. The WebGL mesh path shares scene depth. |
 | `webgpu_max_plants` | integer | 1000–20000 | `10000` | Maximum plants supported by WebGPU compute-driven renderer. |
 | `webgpu_tier0_threshold` | integer | 100–500 | `300` | Projected pixel size threshold for Tier 0 (full mesh). |
 | `webgpu_tier1_threshold` | integer | 40–150 | `80` | Projected pixel size threshold for Tier 1 (mid mesh). |
@@ -467,7 +467,7 @@ Twenty-one files carry values today. The other 56 are deliberate stubs.
 | `camera_recenter_distance` | number | 5–200 | `18` | Camera distance when Space is pressed to recenter on plant. |
 | `camera_pan_speed` | number | 0.5–50 | `5` | Camera pan speed in units per second for WASD/arrow keys. |
 | `resource_rates` | object | — | see file | Runtime-adjustable resource and growth rates |
-| `webgpu_enabled` | boolean | — | `true` | Enable WebGPU render path when available |
+| `webgpu_enabled` | boolean | — | `false` | Enable the WebGPU overlay; off because its separate depth buffer cannot sort against terrain |
 | `webgpu_tier0_threshold` | integer | 100–500 | `300` | Projected pixel size for tier 0 (full mesh) |
 | `webgpu_tier1_threshold` | integer | 40–150 | `80` | Projected pixel size for tier 1 (mid mesh) |
 | `webgpu_tier2_threshold` | integer | 6–30 | `12` | Projected pixel size for tier 2 (billboard) |
@@ -595,6 +595,7 @@ owning task fills it.
 | `paid_spawn` | T21 | stub | 0 |
 | `parasitism` | T10 | stub | 0 |
 | `persistence` | T26 | stub | 0 |
+| `physics` | T25 | active | 14 |
 | `plant_renderer` | C02 | active | 26 |
 | `prestige` | T08B | stub | 0 |
 | `profiles` | T47 | stub | 0 |
@@ -604,7 +605,7 @@ owning task fills it.
 | `reproduction` | T53 | stub | 0 |
 | `reputation` | T43 | stub | 0 |
 | `resources` | T00A | draft | 40 |
-| `root_sight` | T02 | active | 7 |
+| `root_sight` | T02 | active | 16 |
 | `session` | T08 | stub | 0 |
 | `spectating` | T30 | stub | 0 |
 | `spectating_ui` | T36 | stub | 0 |
@@ -612,7 +613,7 @@ owning task fills it.
 | `spores` | T13 | stub | 0 |
 | `status` | T46 | stub | 0 |
 | `symbiosis` | T09 | stub | 0 |
-| `terrain` | T25 | stub | 0 |
+| `terrain` | T25 | active | 26 |
 | `territory` | T49 | stub | 0 |
 | `tumbling` | T06 | stub | 0 |
 | `tutorial` | T33 | stub | 0 |

@@ -18,6 +18,11 @@ import type { RenderConfig } from '../config/clientConfig.js';
 import type { ClientWeatherState, ClientWeatherStateMachine } from './ClientWeatherStateMachine.js';
 import { createCavityBowl, updateCavityBowl } from './environment/cavityBowl.js';
 import {
+  type CavityWater,
+  createCavityWater,
+  updateCavityWater,
+} from './environment/cavityWater.js';
+import {
   applyCelestialLighting,
   type CelestialBodies,
   updateCelestialBodies,
@@ -26,9 +31,10 @@ import {
   createGround,
   getGroundShader,
   setGroundMoisture,
+  updateGroundFill,
   updateGroundSun,
 } from './environment/ground.js';
-import { createSubsoil } from './environment/planetSurface.js';
+import { planetTerrainY } from './environment/planetSurface.js';
 import { createRainSystem, type RainSystem } from './environment/rainSystem.js';
 import {
   createResourceGrid,
@@ -43,12 +49,15 @@ import {
 } from './environment/rootSightUniforms.js';
 import { createSkyDome, type SkyDome } from './environment/skyDome.js';
 import { createEnvironmentWeatherMachine } from './environment/weatherPresets.js';
+import { getTerrainParams } from './terrain/terrainState.js';
 
 export type { RootSightUniforms as EnvironmentUniforms } from './environment/rootSightUniforms.js';
 export { createRootSightUniforms } from './environment/rootSightUniforms.js';
 
 /** Fallback day/night cycle when the server value could not be loaded. */
 const DEFAULT_DAY_LENGTH_SECONDS = 3600;
+/** Depth of an empty water table, matching resources.json. */
+const WATER_TABLE_DEPTH_M = 2.5;
 
 /**
  * Everything the environment needs from config that is not in `render.json`.
@@ -91,12 +100,26 @@ export class EnvironmentRenderer {
   private readonly rain: RainSystem;
   private readonly groundMaterial: THREE.MeshStandardMaterial;
   private groundMesh: THREE.Mesh | null;
-  // Dirt layer under the surface, shown only while Root Sight opens the ground.
-  private subsoil: THREE.Mesh | null = null;
-  /** Metre-scale ground patch, exposed so physics can collide with the relief. */
-  terrainPatch: THREE.Mesh | null = null;
+  /** Metre-scale ground patches, exposed so physics can collide with the relief. */
+  terrainMeshes: THREE.Mesh[] = [];
+  /**
+   * Coarse ground shells behind the detailed play-area patch: the distant planet
+   * body and the outer LOD ring. A buried eye sees them as nested dark backfaces,
+   * so they are hidden while underground; the detail patch and cavity bowl are
+   * then the single dirt surface around the camera.
+   */
+  private readonly surfaceShells: THREE.Mesh[] = [];
+  /** The base planet sphere; its detail patches are children and stay visible. */
+  private planetBodyMesh: THREE.Mesh | null = null;
+  private planetBodyDrawCount = 0;
   // The cavity as real geometry: a dug bowl of earth under the opening.
   private cavityBowl: THREE.Mesh | null = null;
+  /** Water pooled in the cavity at the local water table. */
+  private cavityWater: CavityWater | null = null;
+  /** How full the local soil cavity is, 0 dry .. 1 saturated (from the server). */
+  private groundwaterFraction = 0;
+  /** Seconds since start, for ripple animation. */
+  private elapsedSeconds = 0;
   private planetRadiusM = 0;
   private readonly planetCenter = new THREE.Vector3();
   private readonly resourceGrid: ResourceGrid;
@@ -180,7 +203,21 @@ export class EnvironmentRenderer {
     const ground = createGround(scene, config, soilUniforms, tuning.showGround ?? true);
     this.groundMaterial = ground.material;
     this.groundMesh = ground.mesh;
-    this.terrainPatch = (ground.mesh?.getObjectByName('planet-terrain') as THREE.Mesh) ?? null;
+    this.terrainMeshes = ground.terrainMeshes;
+    ground.mesh?.traverse((object) => {
+      if (!(object instanceof THREE.Mesh)) return;
+      if (object.name === 'planet-surface') {
+        // Do not put the body in surfaceShells and do not clear its layers:
+        // the renderer stops traversing a mesh's children when the parent's
+        // visibility/layers fail, which also hid planet-terrain-detail. Emptying
+        // only the body's draw range leaves the child patch in the scene.
+        this.planetBodyMesh = object;
+        this.planetBodyDrawCount =
+          object.geometry.index?.count ?? object.geometry.getAttribute('position')?.count ?? 0;
+      } else if (object.name === 'planet-terrain-far') {
+        this.surfaceShells.push(object);
+      }
+    });
 
     // 2a. The earth inside the Root Sight opening. Real geometry instead of
     //     shading faked in the soil shader, so the pit has parallax and looks
@@ -191,23 +228,17 @@ export class EnvironmentRenderer {
         new THREE.Color(config.undergroundViewColor).multiplyScalar(1.6),
       );
       scene.add(this.cavityBowl);
+      // Rain has to land somewhere: this is the pool it fills.
+      this.cavityWater = createCavityWater();
+      scene.add(this.cavityWater.mesh);
     }
-    // 2b. The dirt under the surface. A real sphere one soil depth down, so an
-    //     opening lands on geometry rather than on a shaded hole; kept hidden
-    //     until Root Sight needs it, which costs nothing while it is closed.
-    if (config.planetRadiusM > 0 && (tuning.showGround ?? true)) {
+    // The cavity bowl is the only underground backdrop. There used to be a
+    // second, concentric "subsoil" sphere below the ground as well; from above
+    // it showed through the opening as another shell, which is what made the
+    // terrain read as layered onion paper instead of one mass of dirt.
+    if (config.planetRadiusM > 0) {
       this.planetRadiusM = config.planetRadiusM;
       this.planetCenter.set(0, -config.planetRadiusM, 0);
-      this.subsoil = createSubsoil(
-        config.planetRadiusM,
-        config.soilDepthM,
-        new THREE.MeshStandardMaterial({
-          color: new THREE.Color(config.soilWetColor).multiplyScalar(0.3),
-          roughness: 1,
-          metalness: 0,
-        }),
-      );
-      scene.add(this.subsoil);
     }
     this.resourceGrid = createResourceGrid(() => getGroundShader(this.groundMaterial), this.tiles);
 
@@ -217,6 +248,43 @@ export class EnvironmentRenderer {
     // Initial weather state and lighting, before the first render.
     this.weatherMachine.requestStateChange('clear');
     this.updateSunPosition();
+  }
+
+  /**
+   * Dev diagnostic: the rain field's actual draw state. "It is raining but I
+   * see nothing" is otherwise indistinguishable from "the field is hidden" and
+   * from "the streaks are too small to see", and the three need different fixes.
+   */
+  public getRainDebug(): Record<string, number | boolean> {
+    const geometry = this.rain.mesh.geometry as THREE.InstancedBufferGeometry;
+    const lengths = geometry.getAttribute('aLength') as THREE.InstancedBufferAttribute | undefined;
+    return {
+      visible: this.rain.mesh.visible,
+      inScene: this.rain.mesh.parent === this.scene,
+      instances: geometry.instanceCount,
+      width: this.rain.material.uniforms.uWidth?.value ?? -1,
+      opacity: this.rain.material.uniforms.uOpacity?.value ?? -1,
+      slant: this.rain.material.uniforms.uSlant?.value ?? -1,
+      firstLength: lengths ? lengths.getX(0) : -1,
+      time: this.rain.material.uniforms.uTime?.value ?? -1,
+      machineRaining: this.weatherMachine.isRaining(),
+      transitioning: this.weatherMachine.isTransitioning(),
+    };
+  }
+
+  /** How full the local soil cavity is (0 dry .. 1 saturated). */
+  public setGroundwaterLevel(fraction: number): void {
+    if (!Number.isFinite(fraction)) return;
+    this.groundwaterFraction = Math.min(1, Math.max(0, fraction));
+  }
+
+  /**
+   * Dev control: change the weather now. The server is the authority and pushes
+   * the same state to every client on its next broadcast; this only removes the
+   * round-trip so the select does not look inert.
+   */
+  public setWeatherState(state: string): void {
+    this.weatherMachine.requestStateChange(state as ClientWeatherState);
   }
 
   /** Set the full resource grid from the server for per-tile ground lighting. */
@@ -293,33 +361,77 @@ export class EnvironmentRenderer {
     // place sky can appear is through the opening, which is exactly what
     // looking up out of the hole should show.
     this.sky.mesh.visible = true;
-    if (this.subsoil) {
-      // Drawn whenever the eye is above the floor of the dirt layer, above the
-      // surface or just under it. Measured radially from the planet centre so
-      // it is correct anywhere on the planet, and never while the eye is at or
-      // below the floor itself: from inside, that sphere's own surface would
-      // wrap the whole view and read as a horizon (the dome that kept coming
-      // back).
-      const depthBelowSurface =
-        this.planetRadiusM - this.camera.position.distanceTo(this.planetCenter);
-      const eyeUnder = this.planetRadiusM > 0 && depthBelowSurface > 0.02;
-      // Above the surface only: down there the eye is inside the soil layer and
-      // this sphere is a plane a hand's width below it, which is exactly the
-      // wall-to-wall dirt horizon that must not happen. The sky dome paints
-      // earth below the horizon instead, so the view is enclosed without it.
-      this.subsoil.visible = this.soilUniforms.uRootSightProgress.value > 0.01 && !eyeUnder;
+    // Only the sky grade needs to know the eye went under the surface; the
+    // ground and cavity bowl are the surrounding dirt. Measuring radially from
+    // the planet centre keeps it correct anywhere on the planet.
+    if (this.planetRadiusM > 0) {
+      // Compare with the drawn terrain height, not the bare sphere. The relief
+      // can be metres above the sphere, so a camera below a hill was still
+      // classified as above ground: the sky painted under it and every ground
+      // shell stayed visible, producing the nested "layers of hell".
+      const terrain = getTerrainParams();
+      const surfaceY = planetTerrainY(
+        this.planetRadiusM,
+        this.camera.position.x,
+        this.camera.position.z,
+        terrain,
+      );
+      const eyeUnder = this.camera.position.y < surfaceY - 0.02;
       const skyUniforms = this.sky.material.uniforms;
       if (skyUniforms?.uEyeUnderGround) {
         skyUniforms.uEyeUnderGround.value = eyeUnder ? 1 : 0;
       }
+      const groundUniforms = this.groundMaterial.userData.shader?.uniforms;
+      if (groundUniforms?.uEyeUnderGround) {
+        groundUniforms.uEyeUnderGround.value = eyeUnder ? 1 : 0;
+      }
+      // Keep the detailed play-area patch visible as the dirt ceiling around a
+      // buried eye. The base sphere draws no triangles from below, but its
+      // children are still traversed, so the detail patch remains the enclosing
+      // dirt. The outer LOD ring is hidden normally because it has no children.
+      if (this.planetBodyMesh) {
+        this.planetBodyMesh.geometry.setDrawRange(0, eyeUnder ? 0 : this.planetBodyDrawCount);
+      }
+      for (const shell of this.surfaceShells) shell.visible = !eyeUnder;
     }
+    this.elapsedSeconds += dt;
     if (this.cavityBowl) {
+      const terrain = getTerrainParams();
       updateCavityBowl(
         this.cavityBowl,
         this.soilUniforms.uRootSightCenter.value,
         this.soilUniforms.uRootSightRadius.value,
         this.soilUniforms.uRootSightProgress.value,
+        (x, z) => planetTerrainY(this.planetRadiusM, x, z, terrain),
+        this.camera.position,
+        this.soilUniforms.uRootSightApertureRadius.value,
       );
+      // The water level follows the soil cavity the roots are actually in, and
+      // fills the deepest part of the pit first, because that is where gravity
+      // puts it.
+      if (this.cavityWater) {
+        const centre = this.soilUniforms.uRootSightCenter.value;
+        const surfaceY = planetTerrainY(this.planetRadiusM, centre.x, centre.z, terrain);
+        updateCavityWater(
+          this.cavityWater,
+          centre,
+          this.soilUniforms.uRootSightRadius.value,
+          this.groundwaterFraction,
+          surfaceY,
+          // Mirrors resources.json groundwater_table_depth_m: the depth a dry
+          // cavity's water table sits at. Only the rendering uses it here; the
+          // simulation reads the configured value directly.
+          WATER_TABLE_DEPTH_M,
+          this.elapsedSeconds,
+        );
+        // No bowl, no pool: a disc floating in hidden geometry would show
+        // through the aperture as a blue patch on the dirt.
+        if (!this.cavityBowl.visible) this.cavityWater.mesh.visible = false;
+        const waterMaterial = this.cavityWater.material.uniforms;
+        (waterMaterial.uSunDir.value as THREE.Vector3).copy(this.bodies.sunDir);
+        (waterMaterial.uSunColor.value as THREE.Color).copy(this.sunLight.color);
+        (waterMaterial.uSkyColor.value as THREE.Color).copy(this.sky.horizonColor);
+      }
     }
     this.soilUniforms.uRootSightCamera.value.copy(this.camera.position);
 
@@ -372,6 +484,11 @@ export class EnvironmentRenderer {
       this.bodies.sunDir,
       this.sunLight.color,
       this.sunLight.intensity,
+    );
+    updateGroundFill(
+      this.groundMaterial,
+      this.hemisphereLight.color,
+      Math.max(0.38, this.hemisphereLight.intensity * 0.9),
     );
 
     // 4. Root Sight envelope nodes are uploaded by the main loop (it owns the

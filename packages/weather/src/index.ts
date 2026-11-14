@@ -16,6 +16,7 @@ export {
   type WeatherStateMachine,
   type WeatherStateName,
   weatherStateMachineAdvance,
+  weatherStateMachineForceState,
   weatherStateMachineGetBroadcast,
   weatherStateMachineGetLightMultiplier,
   weatherStateMachineGetMoistureGainPerS,

@@ -46,6 +46,19 @@ export interface ResourcesConfig {
   consumptionTriggerFertilizerItem: boolean;
   diffusionRate: number;
   maxAbsorptionPerTick: number;
+  groundwaterBase: number;
+  groundwaterCapacity: number;
+  groundwaterInfiltrationFraction: number;
+  /** Share of rainfall that reaches the deep store directly. */
+  groundwaterRechargeFraction: number;
+  groundwaterPercolationRate: number;
+  groundwaterCapillaryRisePerS: number;
+  groundwaterRootUptakeFraction: number;
+  groundwaterRootReserveFraction: number;
+  /** Fraction per second of the water-table head difference that flows downhill. */
+  groundwaterFlowPerS?: number;
+  /** Depth of an empty water table below the surface, in metres. */
+  groundwaterTableDepthM?: number;
   canopyShadeReduction: number;
   maxLight: number;
   maxMoisture: number;
@@ -56,6 +69,8 @@ export interface TileResources {
   light: number;
   moisture: number;
   minerals: number;
+  /** Water held below the root zone, in the same units as moisture. */
+  groundwater?: number;
 }
 
 export interface DirtyTile {
@@ -88,6 +103,8 @@ export interface PlantTileCoverage {
   avgLight: number;
   avgMoisture: number;
   avgMinerals: number;
+  /** Water held below the root zone, averaged over the covered tiles. */
+  avgGroundwater: number;
   /** First covered tile, for the dev panel's tile readout. */
   sample: { tileX: number; tileZ: number } | null;
 }
@@ -99,6 +116,20 @@ export interface PhotosynthesisResult {
   waterCost: number;
   /** Stored minerals consumed as enzyme cofactors, deducted by the caller. */
   mineralCost: number;
+}
+
+/**
+ * Optional config read. New physical tunables must not stop a config that
+ * predates them from booting, so they fall back to the documented default.
+ */
+function optionalNumber(
+  configs: Map<string, ConfigFile>,
+  system: string,
+  key: string,
+): number | undefined {
+  const entry = configs.get(system)?.values[key];
+  if (!entry || (entry.type !== 'number' && entry.type !== 'integer')) return undefined;
+  return entry.value as number;
 }
 
 export function loadResourcesConfig(configs: Map<string, ConfigFile>): ResourcesConfig {
@@ -179,6 +210,34 @@ export function loadResourcesConfig(configs: Map<string, ConfigFile>): Resources
     ),
     diffusionRate: readNumber(configs, 'resources', 'diffusion_rate'),
     maxAbsorptionPerTick: readNumber(configs, 'resources', 'max_absorption_per_tick'),
+    groundwaterBase: readInteger(configs, 'resources', 'groundwater_base'),
+    groundwaterCapacity: readInteger(configs, 'resources', 'groundwater_capacity'),
+    groundwaterInfiltrationFraction: readNumber(
+      configs,
+      'resources',
+      'groundwater_infiltration_fraction',
+    ),
+    groundwaterPercolationRate: readNumber(configs, 'resources', 'groundwater_percolation_rate'),
+    groundwaterCapillaryRisePerS: readNumber(
+      configs,
+      'resources',
+      'groundwater_capillary_rise_per_s',
+    ),
+    groundwaterRootUptakeFraction: readNumber(
+      configs,
+      'resources',
+      'groundwater_root_uptake_fraction',
+    ),
+    groundwaterRootReserveFraction: readNumber(
+      configs,
+      'resources',
+      'groundwater_root_reserve_fraction',
+    ),
+    groundwaterRechargeFraction:
+      optionalNumber(configs, 'resources', 'groundwater_recharge_fraction') ?? 0.5,
+    groundwaterFlowPerS: optionalNumber(configs, 'resources', 'groundwater_flow_per_s') ?? 0.35,
+    groundwaterTableDepthM:
+      optionalNumber(configs, 'resources', 'groundwater_table_depth_m') ?? 2.5,
     canopyShadeReduction: readNumber(configs, 'resources', 'canopy_shade_reduction'),
     maxLight: readInteger(configs, 'resources', 'max_light'),
     maxMoisture: readInteger(configs, 'resources', 'max_moisture'),
@@ -261,6 +320,12 @@ export class ResourceWorld {
   private lastBroadcastLight = new Map<number, number>();
   private lastBroadcastMoisture = new Map<number, number>();
   private lastBroadcastMinerals = new Map<number, number>();
+  /**
+   * Terrain height at a world point. Groundwater flow needs the real shape of
+   * the ground, otherwise "downhill" is meaningless; 0 is a flat fallback for
+   * tests and for a world whose terrain has not been configured yet.
+   */
+  private surfaceHeightProvider: ((x: number, z: number) => number) | null = null;
 
   constructor(config: ResourcesConfig, worldBounds: TileBounds, planetRadiusM = 0) {
     this.config = config;
@@ -276,6 +341,15 @@ export class ResourceWorld {
     );
     this.tileCells = new Int32Array(this.width * this.height);
     this.buildCells();
+  }
+
+  /** Inject the terrain field the water table drains along. */
+  setSurfaceHeightProvider(provider: (x: number, z: number) => number): void {
+    this.surfaceHeightProvider = provider;
+  }
+
+  private surfaceHeightAt(x: number, z: number): number {
+    return this.surfaceHeightProvider?.(x, z) ?? 0;
   }
 
   /** One resource record per cell, plus the lattice tiles that sample each. */
@@ -319,6 +393,7 @@ export class ResourceWorld {
       light: clamp(this.config.tileLightBase, 0, this.config.maxLight),
       moisture: clamp(this.config.tileMoistureBase, 0, this.config.maxMoisture),
       minerals: clamp(this.config.tileMineralsBase, 0, this.config.maxMinerals),
+      groundwater: clamp(this.config.groundwaterBase, 0, this.config.groundwaterCapacity),
     };
   }
 
@@ -458,7 +533,7 @@ export class ResourceWorld {
   setTileResources(
     tileX: number,
     tileZ: number,
-    resources: { light?: number; moisture?: number; minerals?: number },
+    resources: { light?: number; moisture?: number; minerals?: number; groundwater?: number },
   ): void {
     if (tileX < 0 || tileX >= this.width || tileZ < 0 || tileZ >= this.height) {
       return;
@@ -471,8 +546,15 @@ export class ResourceWorld {
       tile.moisture = clamp(resources.moisture, 0, this.config.maxMoisture);
     if (resources.minerals !== undefined)
       tile.minerals = clamp(resources.minerals, 0, this.config.maxMinerals);
+    if (resources.groundwater !== undefined)
+      tile.groundwater = clamp(resources.groundwater, 0, this.config.groundwaterCapacity);
     this.sunIntensityCache = null;
     this.markCellDirty(cell);
+  }
+
+  /** Maximum water a soil cell can hold below the surface. */
+  getGroundwaterCapacity(): number {
+    return this.config.groundwaterCapacity;
   }
 
   getTileSize(): number {
@@ -574,15 +656,20 @@ export class ResourceWorld {
     let light = 0;
     let moisture = 0;
     let minerals = 0;
+    let groundwater = 0;
     let sample: { tileX: number; tileZ: number } | null = null;
 
     for (const node of plant.nodes.values()) {
       const radius = Math.max(0, node.radius ?? 0);
       const tileSize = this.config.tileSize;
-      const minTileX = this.worldToTileX(node.x - radius);
-      const maxTileX = this.worldToTileX(node.x + radius);
-      const minTileZ = this.worldToTileZ(node.z - radius);
-      const maxTileZ = this.worldToTileZ(node.z + radius);
+      // Clamped to the grid, not dropped: a plant outside the resource patch (or
+      // a node whose coordinates are momentarily unusable) must still report the
+      // nearest cell instead of vanishing from the root update. A zero-coverage
+      // plant silently stopped every soil/water reading for its owner.
+      const minTileX = this.clampTileX(this.worldToTileX(node.x - radius));
+      const maxTileX = this.clampTileX(this.worldToTileX(node.x + radius));
+      const minTileZ = this.clampTileZ(this.worldToTileZ(node.z - radius));
+      const maxTileZ = this.clampTileZ(this.worldToTileZ(node.z + radius));
 
       for (let tileZ = minTileZ; tileZ <= maxTileZ; tileZ += 1) {
         if (tileZ < 0 || tileZ >= this.height) continue;
@@ -612,19 +699,28 @@ export class ResourceWorld {
           light += tile.light;
           moisture += tile.moisture;
           minerals += tile.minerals;
+          groundwater += tile.groundwater ?? 0;
           if (!sample) sample = { tileX, tileZ };
         }
       }
     }
 
     if (count === 0) {
-      return { count: 0, avgLight: 0, avgMoisture: 0, avgMinerals: 0, sample: null };
+      return {
+        count: 0,
+        avgLight: 0,
+        avgMoisture: 0,
+        avgMinerals: 0,
+        avgGroundwater: 0,
+        sample: null,
+      };
     }
     return {
       count,
       avgLight: light / count,
       avgMoisture: moisture / count,
       avgMinerals: minerals / count,
+      avgGroundwater: groundwater / count,
       sample,
     };
   }
@@ -647,6 +743,9 @@ export class ResourceWorld {
     this.soilAccumulatorS = 0;
     this.updateMoisture(soilDt, plants, weatherMoistureRate, weatherLightMult);
     this.updateMinerals(soilDt, plants);
+    // Gravity before smoothing: water finds the low ground of the real terrain,
+    // then diffusion evens out the remainder.
+    this.flowGroundwater(soilDt);
     this.diffuseResources();
   }
 
@@ -731,15 +830,34 @@ export class ResourceWorld {
     const transpirationRate =
       this.config.transpirationFactor * totalLeafNodes * evaporationTempFactor * sunIntensity;
 
+    const fieldCapacity = this.config.maxMoisture * 0.65;
+    const groundwaterCapacity = this.config.groundwaterCapacity;
+
     for (let cell = 0; cell < this.cells.length; cell += 1) {
       const tile = this.cells[cell];
       let moisture = tile.moisture;
+      let groundwater = Math.max(0, tile.groundwater ?? 0);
       const centre = this.cellCentres[cell];
 
-      // Rain adds moisture
+      // Rainfall is partitioned like a soil-water bucket (the simple form of
+      // Green-Ampt infiltration): a drier surface accepts most of the shower,
+      // while a saturated surface rejects more of it. The rejected water is the
+      // runoff that recharges the deeper groundwater cavity. This makes storms
+      // refill the soil and the water table instead of painting every tile with
+      // the same amount of moisture.
       if (this.isRaining || weatherMoistureRate > 0) {
         const rainGain = weatherMoistureRate > 0 ? weatherMoistureRate : this.config.rainGainPerS;
-        moisture += rainGain * dt;
+        const rainfall = rainGain * dt;
+        const saturation = clamp(moisture / Math.max(1e-6, this.config.maxMoisture), 0, 1);
+        const infiltrated = rainfall * (1 - 0.65 * saturation);
+        const runoff = Math.max(0, rainfall - infiltrated);
+        moisture += infiltrated;
+        groundwater += runoff * this.config.groundwaterInfiltrationFraction;
+        // Direct deep recharge: a share of every shower bypasses the topsoil
+        // bucket through macropores. Without it the table only filled from
+        // runoff, which a dry, unsaturated surface produces almost none of, so
+        // a storm left the cavity pool dry for the whole session.
+        groundwater += rainfall * this.config.groundwaterRechargeFraction;
       }
 
       // Temperature-driven evaporation (soil surface)
@@ -763,11 +881,91 @@ export class ResourceWorld {
         moisture -= transpirationRate * dt * Math.min(1, canopyShade * 10);
       }
 
+      // Drainage below field capacity: gravity moves the surplus down into the
+      // groundwater store instead of leaving the topsoil permanently flooded.
+      if (moisture > fieldCapacity) {
+        const drain =
+          (moisture - fieldCapacity) * Math.min(1, this.config.groundwaterPercolationRate * dt);
+        moisture -= drain;
+        groundwater += drain;
+      }
+
+      // Capillary rise: a dry root zone pulls water back up from the cavity, so
+      // a plant can survive a dry spell by having grown down to the water table.
+      if (moisture < fieldCapacity && groundwater > 0.001) {
+        const rise = Math.min(
+          groundwater,
+          this.config.groundwaterCapillaryRisePerS * dt,
+          fieldCapacity - moisture,
+        );
+        moisture += rise;
+        groundwater -= rise;
+      }
+
       // Root uptake is handled by PlantWorld.absorbResourcesFromTiles via
       // takeFromTile(), which both credits the plant and debits this tile.
 
       tile.moisture = clamp(moisture, 0, this.config.maxMoisture);
+      tile.groundwater = clamp(groundwater, 0, groundwaterCapacity);
       this.markCellDirty(cell);
+    }
+  }
+
+  /**
+   * Groundwater obeys gravity.
+   *
+   * A water table is not a flat number per tile: it has an elevation, and water
+   * moves from a higher table to a lower one. Using the terrain the world is
+   * actually drawn from means a hollow fills first, a slope drains, and a storm
+   * leaves visible pools in the low ground instead of raising every tile by the
+   * same amount. Flow is capped by the donor's water, by the receiving cell's
+   * capacity and by the head difference, so the pass conserves mass and cannot
+   * oscillate.
+   */
+  private flowGroundwater(dt: number): void {
+    const rate = this.config.groundwaterFlowPerS ?? 0;
+    const capacity = this.config.groundwaterCapacity;
+    if (rate <= 0 || capacity <= 0 || dt <= 0) return;
+
+    const maxDepth = Math.max(0.1, this.config.groundwaterTableDepthM ?? 2.5);
+    const elevations = new Float64Array(this.cells.length);
+    for (let cell = 0; cell < this.cells.length; cell += 1) {
+      const centre = this.cellCentres[cell];
+      const level = clamp((this.cells[cell].groundwater ?? 0) / capacity, 0, 1);
+      // A full cell has its table at the surface; an empty one has it maxDepth
+      // below. That is what makes a filled hollow pool and a dry rise stay dry.
+      elevations[cell] = this.surfaceHeightAt(centre.x, centre.z) - (1 - level) * maxDepth;
+    }
+
+    const transferFactor = Math.min(1, rate * dt);
+    for (let cell = 0; cell < this.cells.length; cell += 1) {
+      const neighbours = this.cellNeighbours[cell];
+      if (!neighbours) continue;
+      const source = this.cells[cell];
+      let sourceWater = source.groundwater ?? 0;
+      for (const other of neighbours) {
+        if (sourceWater <= 0) break;
+        const head = elevations[cell] - elevations[other];
+        if (head <= 1e-4) continue;
+        const target = this.cells[other];
+        const targetWater = target.groundwater ?? 0;
+        const room = Math.max(0, capacity - targetWater);
+        const flow = Math.min(
+          sourceWater * 0.5,
+          (sourceWater - targetWater) * transferFactor,
+          room,
+        );
+        if (flow <= 1e-4) continue;
+        sourceWater -= flow;
+        target.groundwater = targetWater + flow;
+        // The column rose on the receiving side, so its table is higher now.
+        elevations[other] += (flow / capacity) * maxDepth;
+        this.markCellDirty(other);
+      }
+      if (sourceWater !== (source.groundwater ?? 0)) {
+        source.groundwater = sourceWater;
+        this.markCellDirty(cell);
+      }
     }
   }
 
@@ -1024,6 +1222,7 @@ export class ResourceWorld {
     worldZ: number,
     waterDemand: number,
     mineralDemand: number,
+    allowGroundwater = false,
   ): { water: number; minerals: number } {
     const tx = this.clampTileX(this.worldToTileX(worldX));
     const tz = this.clampTileZ(this.worldToTileZ(worldZ));
@@ -1031,9 +1230,28 @@ export class ResourceWorld {
     const tile = this.cells[cell];
     if (!tile) return { water: 0, minerals: 0 };
 
-    const water = Math.max(0, Math.min(waterDemand, tile.moisture));
+    let remainingWater = Math.max(0, waterDemand);
+    const surfaceWater = Math.min(remainingWater, tile.moisture);
+    tile.moisture -= surfaceWater;
+    remainingWater -= surfaceWater;
+
+    // Only a root deep enough to reach the cavity can tap the groundwater.
+    // The fraction cap is per absorption step, so a large root system cannot
+    // empty a whole water pocket instantly.
+    let groundwaterWater = 0;
+    if (allowGroundwater && remainingWater > 0) {
+      const groundwater = Math.max(0, tile.groundwater ?? 0);
+      const reserve = this.config.groundwaterCapacity * this.config.groundwaterRootReserveFraction;
+      const accessible = Math.max(0, groundwater - reserve);
+      groundwaterWater = Math.min(
+        remainingWater,
+        accessible * this.config.groundwaterRootUptakeFraction,
+      );
+      tile.groundwater = groundwater - groundwaterWater;
+    }
+
+    const water = surfaceWater + groundwaterWater;
     const minerals = Math.max(0, Math.min(mineralDemand, tile.minerals));
-    tile.moisture -= water;
     tile.minerals -= minerals;
     if (water > 0 || minerals > 0) {
       this.markCellDirty(cell);

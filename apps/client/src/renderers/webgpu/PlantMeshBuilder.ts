@@ -9,7 +9,7 @@ import {
 import { hash01 } from '@plant-legacy/shared/math';
 import * as THREE from 'three';
 import type { PlantNodeData } from '../PlantRenderer';
-import { MUTATION_BIT, nodeMutationMask } from '../plant/mutations.js';
+import { MUTATION_BIT, nodeMutationMask } from '../plant/mutations.ts';
 
 /** C02b: GPU skinning configuration */
 export const MAX_JOINTS_PER_VERTEX = 4;
@@ -57,7 +57,6 @@ export interface PlantMeshBuildOptions {
   rootSides: number;
   now: number;
   sunDirection: THREE.Vector3;
-  selectedNodeId?: string | null;
   /** Radius multiplier applied to nodes with the thickened-bark mutation. */
   mutationBarkThicknessScale?: number;
 }
@@ -76,8 +75,6 @@ export interface BuiltPlantMesh {
   vertices: Float32Array;
   indices: Uint32Array;
   plantData: PlantRenderPlant[];
-  outlineIndexOffset: number;
-  outlineIndexCount: number;
 }
 
 const OWN_PLANT_COLOR: [number, number, number] = [0.3, 0.62, 0.24];
@@ -1110,10 +1107,6 @@ export function buildPlantMesh(
 
   const now = options.now;
 
-  // Track outline index range (for separate outline pass)
-  let outlineIndexOffset = 0;
-  let outlineIndexCount = 0;
-
   for (let plantIndex = 0; plantIndex < groups.length; plantIndex += 1) {
     const group = groups[plantIndex];
     const root = group.find((node) => node.parentId === null) ?? group[0];
@@ -1513,115 +1506,15 @@ export function buildPlantMesh(
       mutationMask: plantMutationMask,
     });
 
-    // Add outline for selected node in this plant (visual type 8 = gold outline)
-    let plantOutlineIndexOffset = 0;
-    let plantOutlineIndexCount = 0;
-    if (options.selectedNodeId) {
-      const selectedNode = group.find((n) => n.id === options.selectedNodeId);
-      if (selectedNode) {
-        const outlineRadius = Math.max(selectedNode.radius * 1.3, 0.12);
-        const outlinePos = new THREE.Vector3(
-          selectedNode.position.x,
-          selectedNode.position.y,
-          selectedNode.position.z,
-        );
-        plantOutlineIndexOffset = mesh.indices.length;
-        // Render outline as a thin ring (tube) instead of a solid sphere joint
-        // This avoids the "yellow sphere" appearance while still marking the node
-        const ringRadius = outlineRadius;
-        const tubeRadius = Math.max(0.008, outlineRadius * 0.06); // Thin wire
-        // Create a horizontal ring at node position
-        const ringCenter = outlinePos.clone();
-        const up = new THREE.Vector3(0, 1, 0);
-        const { u, v } = perpendicularBasis(up);
-        const ringSides = 16;
-        const ringStart = mesh.vertexCount;
-        for (let side = 0; side <= ringSides; side += 1) {
-          const angle = (side / ringSides) * Math.PI * 2;
-          const offset = u
-            .clone()
-            .multiplyScalar(Math.cos(angle))
-            .addScaledVector(v, Math.sin(angle));
-          const position = ringCenter.clone().addScaledVector(offset, ringRadius);
-          const normal = offset.clone().normalize();
-          mesh.pushVertex(
-            position,
-            normal,
-            side / ringSides,
-            0,
-            packNode(plantIndex, 8, isOwn),
-            0,
-            1,
-          );
-        }
-        for (let side = 0; side < ringSides; side += 1) {
-          const a0 = ringStart + side;
-          const a1 = ringStart + side + 1;
-          const b0 = ringStart + ringSides + 1 + side;
-          const b1 = ringStart + ringSides + 1 + side + 1;
-          mesh.addTriangle(a0, b0, a1);
-          mesh.addTriangle(a1, b0, b1);
-        }
-        // Add second ring slightly offset for thickness
-        const ringCenter2 = ringCenter.clone().addScaledVector(up, tubeRadius * 2);
-        const ringStart2 = mesh.vertexCount;
-        for (let side = 0; side <= ringSides; side += 1) {
-          const angle = (side / ringSides) * Math.PI * 2;
-          const offset = u
-            .clone()
-            .multiplyScalar(Math.cos(angle))
-            .addScaledVector(v, Math.sin(angle));
-          const position = ringCenter2.clone().addScaledVector(offset, ringRadius);
-          const normal = offset.clone().normalize();
-          mesh.pushVertex(
-            position,
-            normal,
-            side / ringSides,
-            1,
-            packNode(plantIndex, 8, isOwn),
-            0,
-            1,
-          );
-        }
-        for (let side = 0; side < ringSides; side += 1) {
-          const a0 = ringStart2 + side;
-          const a1 = ringStart2 + side + 1;
-          const b0 = ringStart2 + ringSides + 1 + side;
-          const b1 = ringStart2 + ringSides + 1 + side + 1;
-          mesh.addTriangle(a0, b0, a1);
-          mesh.addTriangle(a1, b0, b1);
-        }
-        // Connect the two rings (tube walls)
-        for (let side = 0; side < ringSides; side += 1) {
-          const a0 = ringStart + side;
-          const a1 = ringStart + side + 1;
-          const b0 = ringStart2 + side;
-          const b1 = ringStart2 + side + 1;
-          mesh.addTriangle(a0, b0, a1);
-          mesh.addTriangle(a1, b0, b1);
-        }
-        plantOutlineIndexCount = mesh.indices.length - plantOutlineIndexOffset;
-        box.expandByPoint(
-          outlinePos.clone().add(new THREE.Vector3(0, outlineRadius + tubeRadius, 0)),
-        );
-        box.expandByPoint(
-          outlinePos.clone().add(new THREE.Vector3(0, -outlineRadius - tubeRadius, 0)),
-        );
-      }
-    }
-
-    // Track outline range for the plant containing the selected node
-    if (plantOutlineIndexCount > 0) {
-      outlineIndexOffset = plantOutlineIndexOffset;
-      outlineIndexCount = plantOutlineIndexCount;
-    }
+    // Selection is communicated by the growth panel. There is deliberately no
+    // separate gold ring geometry: the old ring sat on the node like a sticker,
+    // and its broken second index loop was the rainbow cone. Adding geometry
+    // just to say "this node is selected" is not worth either problem.
   }
 
   return {
     vertices: mesh.toVertexArray(),
     indices: new Uint32Array(mesh.indices),
     plantData,
-    outlineIndexOffset,
-    outlineIndexCount,
   };
 }

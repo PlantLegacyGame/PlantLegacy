@@ -413,6 +413,35 @@ reprojects them). Persistence has no idea about cells. Spherical physics and
 local gravity need server-side work. The local far plane is 2500 m so the sky
 dome (930 m) is not clipped into a faceted wall above the horizon.
 
+## T25: shared terrain, colliders and physical dirt (2026-11-13)
+
+- **One ground field.** `packages/shared/src/world/terrainField.ts` is a seeded
+  integer-hash fBm shared by the server and every client renderer. The client
+  draws an inner detail patch and a 620 m outer patch as children of the planet
+  body, and Rapier collides with the exact drawn vertices of both.
+- **One cavity field.** `cavityField.ts` clusters underground nodes (own plant
+  first, rival budget 24, ≤64 bubbles) and is the single answer for the soil
+  cut, plant occlusion and the camera's underground limit. The WebGPU frame
+  still carries one covering sphere rather than a bubble array; that is a
+  deliberate conservative bound (documented in `docs/tasks/T25.md`).
+- **Plant colliders.** One fixed body per plant, capsule per drawn segment,
+  seed ball, leaf boxes, group masks and a 24-plant/192-collider budget. The
+  same planning function backs the server's analytic collision, so the client
+  never invents geometry the simulation disagrees with.
+- **Physical dirt.** Sparse 32×32 chunks store height delta, moisture,
+  compaction and voids. Root growth digs its own tunnel, lowers shallow
+  ground, spreads a displacement ring, compacts the wall and leaves a void
+  that collapses when dry and loose. Growth resistance raises root energy and
+  time in compact/deep soil. Chunks, append-only edits and voids persist in
+  PostgreSQL (`006_create_terrain_tables.sql`) and reload at boot.
+- **Protocol 32–34.** `TERRAIN_REGION_REQUEST`, `TERRAIN_REGION` and
+  `TERRAIN_EDITS`. Tunnels are replayed on request and broadcast near the new
+  root, so a reconnecting Root Sight still sees them.
+
+Not yet: height deltas are not written into a chunk texture on the client, so
+the lit ground does not yet show a surface sink; debris bodies, rain-on-leaf
+droop and the dev collider overlay are also pending.
+
 ## Next
 
 Per the audited priority order (ADR-023): P0 blockers and C02b gaps resolved;

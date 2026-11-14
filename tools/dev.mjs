@@ -129,6 +129,7 @@ setTimeout(() => {
   openBrowser(`http://localhost:4173/PlantLegacy/`);
 }, 3000);
 
-console.log(
-  `dev: server on http://127.0.0.1:${process.env.PORT ?? '8080'}, client on http://localhost:4173`,
-);
+// PORT=0 is treated as unset by the server (it cannot bind a zero port for a
+// fixed client URL), so report the port the server will actually use.
+const reportedPort = process.env.PORT && process.env.PORT !== '0' ? process.env.PORT : '8080';
+console.log(`dev: server on http://127.0.0.1:${reportedPort}, client on http://localhost:4173`);

@@ -210,6 +210,32 @@ export function weatherStateMachineUpdate(
   return null;
 }
 
+/**
+ * Put the machine into a chosen state now.
+ *
+ * The world weather is autonomous, so a developer control that only changed the
+ * client's visuals was reverted by the next broadcast - the select looked
+ * broken because it was. Forcing the authoritative machine is the only way the
+ * sky, the rain, the light multiplier and the groundwater recharge all agree
+ * that it is raining. `durationS` holds the state for that long before the
+ * normal transition resumes; without it the state keeps its own configured
+ * duration and then advances as usual.
+ */
+export function weatherStateMachineForceState(
+  machine: WeatherStateMachine,
+  state: WeatherStateName,
+  durationS?: number,
+): WeatherStateName {
+  machine.currentState = state;
+  machine.stateTimerS = 0;
+  machine.currentDurationS =
+    typeof durationS === 'number' && Number.isFinite(durationS) && durationS > 0
+      ? durationS
+      : getRandomDuration(machine.rng, state, machine.config);
+  machine.nextState = pickNextState(state, machine.rng);
+  return machine.currentState;
+}
+
 export function weatherStateMachineAdvance(machine: WeatherStateMachine): WeatherStateName {
   const currentConfig = WEATHER_STATE_MACHINE.get(machine.currentState);
   if (!currentConfig) return machine.currentState;

@@ -17,6 +17,7 @@ import type {
 } from './weatherStateMachine.ts';
 import {
   createWeatherStateMachine,
+  weatherStateMachineForceState,
   weatherStateMachineGetBroadcast,
   weatherStateMachineGetLightMultiplier,
   weatherStateMachineGetMoistureGainPerS,
@@ -48,6 +49,15 @@ export class WeatherSystem {
     const target = weatherStateMachineGetLightMultiplier(this.machine);
     const blend = 1 - Math.exp(-dtSeconds / this.lightTransitionS);
     this.smoothedLightMultiplier += (target - this.smoothedLightMultiplier) * blend;
+  }
+
+  /**
+   * Dev control: make this the authoritative weather now. The smoothed light
+   * follows on the next update, so the sky and the tile lighting change together
+   * instead of one of them snapping.
+   */
+  forceState(state: WeatherStateName, durationS?: number): void {
+    weatherStateMachineForceState(this.machine, state, durationS);
   }
 
   getBroadcast() {
