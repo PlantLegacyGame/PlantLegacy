@@ -768,3 +768,180 @@ All changes are backward-compatible (new migrations, no protocol change).
 `argon2_parallelism`). `bcryptjs` remains a dependency only to verify legacy
 `$2*` rows, which are rehashed to Argon2id on the next successful login. The
 bcrypt references above describe the state when this record was written.
+
+---
+
+## ADR-041 — The unified renderer waits for volumetric terrain
+
+**Context.** DESIGN C02 specifies a *transparent WebGPU canvas layered over the
+Three.js environment*. That split cannot share depth, so a plant is never
+occluded by nearby relief, and light shafts and water refraction cannot read
+plant depth. A proposal (`PlantLegacy-Abyssal-Integration-Plan.md` §4.3) called
+this split a defect and described a single-frame renderer as already locked by
+DESIGN. It is not: C02 is the locked spec.
+
+**Decision.** The split canvas stays. A unified single-API frame is a
+**proposed reversal**, deferred until T56 gives the world geometry tall enough
+to occlude a plant. Unification is the gate for shipping caves, arches and sea — not a Wave 0
+task.
+
+**Consequences.** C02 keeps its authority and no C02 amendment is needed yet.
+Shafts and water are built for the WebGL environment pass first. When T56 lands,
+the unification work needs its own ADR and a C02 amendment, plus a WebGL2
+fallback that is complete enough to play.
+
+---
+
+## ADR-042 — L2 is an ellipsoid SDF; the L3 atlas is colour-only
+
+**Context.** DESIGN contradicted itself. C02 says the distant plant is a single
+analytic ellipsoid SDF with "no billboards, no atlas generation"; 14.2.1 budgeted
+~170 MB of multi-view atlases; 14.2.6 required impostors baked as
+albedo/normal/emission. The shipped renderer followed the atlas. At three
+surfaces per view the atlas costs ~504 MB — more than the 800 MB render budget.
+
+**Decision.** Tier L2 (12–80 px) is a single ellipsoid SDF per plant: no VRAM
+beyond the plant header. Tier L3 (2–12 px) is a colour-only atlas billboard at
+~37 MB for 9k plants, rebaked only on shape change under a per-frame cap. Below
+~2 px a plant is a coloured point. Part 14.2.0 owns tier numbering.
+
+**Consequences.** The 170 MB and 504 MB figures are recorded as superseded in
+14.2.1. `docs/partitioning-lod.md` and the plan point at Part 14.2.0 instead of
+restating tiers. The shipped billboard path becomes L3-only; L2 needs
+`impostor.wgsl`. Plants relight correctly at any time of day with no popping,
+at the cost of 3–5× the arithmetic of a texture fetch in a screen band bounded
+by the far field.
+
+---
+
+## ADR-043 — Volumetric terrain's first slice is one authored region
+
+**Context.** v5.4 approval 10 accepts full multi-layer terrain (Option B) from
+the first release. The plan proposed planet-wide 3D generation across ~30.7 M
+surface columns at once. Abyssal Garden's achievement came from one 384 m box,
+not a planet.
+
+**Decision.** Keep 3D terrain. The first slice is a single authored region around
+spawn (a handful of chunks), proving surface nets, welding, materials,
+revisioning, collision and persistence on real gameplay before planet-wide
+generation is attempted. T25's height field and its persisted deltas remain the
+surface truth underneath during the slice.
+
+**Consequences.** Streaming becomes a later, separable problem. AL-08 acceptance
+is scoped to the region, not the planet. The migration path from T25 deltas is
+still required and still owned by AL-08.
+
+---
+
+## ADR-044 — A calamity is a burial; dead biomass becomes organic matter
+
+**Context.** RULE_8 (clarified 2026-11-09) says a season-end calamity is a burial,
+not a wipe, and that the planet is never returned to a blank state. The shipped
+tick kills every plant and the next season starts from bare soil, so the bodies
+of a whole world's flora vanish. T59 already specifies dead matter → organic
+matter → soil minerals; there was no field to put it in.
+
+**Decision.** The death pipeline converts structural biomass into an
+**organic-matter soil field** at the plant's position. Terrain edits, tunnels and
+voids persist as they already do. The planet is never regenerated. Organic matter
+is a soil/environment field, **not** a fourth player resource — T00A's light,
+moisture and minerals are unchanged.
+
+**Consequences.** The current bare-soil calamity is recorded in
+`what-works-now.md` as a known divergence, not a design change. The existing
+single death queue is the hook. `season_length_days` stays owned by `world.json`
+(and `world_state` persists the countdown); `deep_time.json` owns only
+transformations.
+
+---
+
+## ADR-045 — Water ships in two slices
+
+**Context.** `config/water.json` is a stub with no T31 spec. The plan proposed a
+full sea — global sea level, salinity, pressure, coastal and deep-ocean biomes,
+underwater plants, caustics — which is a new habitat, not an extension of one.
+An oceanless planet also undercuts the planet-scale fantasy and the existing
+Orbit Planet view.
+
+**Decision.** First slice: lakes, rivers and rain-filled pools — water volume,
+surface rendering, buoyancy, shoreline blend, fed by T25 basins and T07 rain.
+Second slice, after caves and fauna: global ocean, salinity, pressure, depth
+biomes and underwater plant traits.
+
+**Consequences.** AL-09 splits. The dug-channel moment ("water flows into a
+channel you dug", living-world acceptance) lands in slice one. Deep-water
+tolerance traits wait for the second slice and for AL-17.
+
+---
+
+## ADR-046 — Full trait model; chemosynthesis is a tunable, not a cap
+
+**Context.** No mutation or trait system exists; T04/T24 are config stubs. The
+plan's habitat matrix depends on traits everywhere but no work package owned
+building them. Light is the game's central scarcity, and chemosynthesis is a
+second income channel that could make the sun optional.
+
+**Decision.** Build the full general trait model (`kind: tolerance | metabolism |
+structure | attachment | reproduction | defense`) with all five metabolisms —
+photosynthesis, chemosynthesis, saprotrophy, parasitism, symbiosis — on equal
+footing, all through the existing biomass/energy pipeline. Chemosynthesis rate
+is a config tunable `chemosynthesis_ratio` (default 1.0 = parity with
+photosynthesis, range 0–2), not a hard-coded cap.
+
+**Consequences.** A new work package (AL-17) owns the trait and mutation rules
+before any habitat consumes them. T09/T10 are required for the attachment half.
+The light economy stays adjustable by config if cave flora out-competes canopy
+flora; the balance risk is recorded rather than designed around.
+
+---
+
+## ADR-047 — Reactive fauna ships before volumetric terrain
+
+**Context.** T54 is the only v5.4 system that needs no 3D terrain, water,
+materials or traits — v5.4's own dependency note says it needs only T01, T03,
+T06 and T07, all built. The plan filed it in Wave 3 behind AL-07/AL-08 anyway.
+
+**Decision.** T54/C11 moves ahead of volumetric terrain.
+
+**Consequences.** Fauna ships on the existing height field with the existing
+damage pipeline (RULE_22 is already target-agnostic). Cave fauna later becomes a
+spawn-table and habitat change rather than a new system. AL-11 no longer depends
+on AL-08.
+
+---
+
+## ADR-048 — Measurement precedes visible polish
+
+**Context.** `QualityController` scales pixel ratio from CPU fps and triangles.
+At 60 Hz vsync that cannot detect headroom. There are no fixed visual poses and
+no benchmark, so "is this better?" has no baseline.
+
+**Decision.** Full AL-01 (benchmark, six fixed poses, GPU timing, zero-alloc
+audit) then AL-03 (GPU-band controller) before atmosphere, audio or scatter
+polish.
+
+**Consequences.** 5–7 weeks of infrastructure before a visible change. Every
+later visual and performance claim has a repeatable baseline. Atmosphere follows
+immediately in Wave 0 and is expected to be the largest visible gain.
+
+---
+
+## ADR-049 — Documentation is two documents with reference-only discipline
+
+**Context.** Four documents described terrain, tiers and config counts, and they
+disagreed. `DESIGN.md` contradicted itself on impostors and used three tier
+schemes. Merging everything would put week estimates into the document read most
+often and mix a living spec with dated approval records.
+
+**Decision.** `DESIGN.md` owns rules and task specs. The Abyssal integration plan
+stays a programme document but **never restates a spec or a config value** — it
+references the owner. Decisions become ADRs here. The AG technique catalogue
+lives in `docs/abyssal-mechanisms.md`. `docs/tunables.md` owns the config file
+count; other documents link rather than quote a number. The standalone v5.4 approval record was folded into
+`docs/PlantLegacy-Abyssal-Integration-Plan.md` §0.3 on 2026-11-14, after its
+77-file count was corrected to 78 with a pointer to `docs/tunables.md`. No
+decision in it was altered.
+
+**Consequences.** Adding a fact means choosing one owner and linking the rest.
+The failure mode to watch is duplication, not file count: a single document that
+restates config values drifts exactly as fast as four documents do.

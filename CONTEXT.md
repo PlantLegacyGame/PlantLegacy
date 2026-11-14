@@ -4,7 +4,12 @@ Current context for any human or AI session working in this repository. Keep it
 current at the end of every task (DESIGN.md, Session Protocol). `DESIGN.md` wins
 over this file whenever they disagree.
 
-**Phase:** 1 — The Living Sprout (in progress). **Implemented:** T00, O01, T03P, C01, **T00A** (resource model + onboarding), T01 (growth simulation), **T03** (persistence, offline tiers, interest management, event bus), **T08C** (accounts + sessions), **C02** (Raymarched SDF procedural organism renderer with `smin` organic fusion, Murray's law allometric tapering, thin-lamina foliage, and 0.9s real-time emergence animation), **T02** (Root Sight unified organism integration), **T25** (shared terrain field, two-patch LOD ground with exact trimesh colliders, bounded Rapier plant colliders, one cavity field for Root Sight, sparse persistent soil edits with root tunnels, collapse and growth resistance; client height-texture application still pending), **T07** (Weather state machine, day/night cycle, forecast broadcast, ResourceWorld integration), **C03** (Environment rendering: sky dome gradient, sun/moon arcs, atmospheric fog, rain particle system, storm lightning flashes, soil moisture tinting, Root Sight cutaway refinement), **C02b slice** (WebGPU v1 compute-driven plant renderer: transparent overlay canvas, merged mesh tiers 0/1, billboard tiers 2–4, per-plant culling/LOD with hysteresis, Root Sight highlight, WebGL2 fallback; impostor baking, GPU skinning, texture arrays), **D01** (dev settings engine: `?dev=1` gate, server `/dev/config` endpoints, `config/dev.json`, DevPanel wired to server, persistence switch wired to disconnect logic, key binding added). **Added:** config/resources.json, config/world.json, config/network.json, config/accounts.json, config/plant_renderer.json, config/root_sight.json, config/weather.json, config/daynight.json, config/render.json (expanded), config/dev.json, server resource model, PlantPersistence (versioned binary snapshot + event log with CRC32), PlantWorld tiers, InterestManager, EventBus, AccountsService (Argon2id, JWT rotation, atomic rate limits, lockout), WeatherSystem, EnvironmentRenderer, WebGPU renderer (`apps/client/src/renderers/webgpu/`), seeded RNG (`hash32`, `hash01`, `mulberry32`). **Approved 2026-11-09 (not built): v5.4 extension program** — T54 reactive non-sapient fauna, T55 material simulation, T56 volumetric terrain, C10 terrain/material rendering, T57 parametric terrain features, T58 world-object streaming and behaviour, T59 ecological succession, C11 fauna rendering, O04 cloud-native World orchestration. Rule amendments (RULE_2, RULE_8, RULE_19, RULE_22) and task specs are in `DESIGN.md` Part 11 and Part 16; the index is [`docs/v5.4-extension-plan.md`](./docs/v5.4-extension-plan.md). **Last updated:** 2026-11-13.
+**Phase:** 1 — The Living Sprout (in progress). **Implemented:** T00, O01, T03P, C01, **T00A** (resource model + onboarding), T01 (growth simulation), **T03** (persistence, offline tiers, interest management, event bus), **T08C** (accounts + sessions), **C02** (Raymarched SDF procedural organism renderer with `smin` organic fusion, Murray's law allometric tapering, thin-lamina foliage, and 0.9s real-time emergence animation), **T02** (Root Sight unified organism integration), **T25** (shared terrain field, two-patch LOD ground with exact trimesh colliders, bounded Rapier plant colliders, one cavity field for Root Sight, sparse persistent soil edits with root tunnels, collapse and growth resistance; client height-texture application still pending), **T07** (Weather state machine, day/night cycle, forecast broadcast, ResourceWorld integration), **C03** (Environment rendering: sky dome gradient, sun/moon arcs, atmospheric fog, rain particle system, storm lightning flashes, soil moisture tinting, Root Sight cutaway refinement), **C02b slice** (WebGPU v1 compute-driven plant renderer: transparent overlay canvas, merged mesh tiers 0/1, billboard tiers 2–4, per-plant culling/LOD with hysteresis, Root Sight highlight, WebGL2 fallback; impostor baking, GPU skinning, texture arrays), **D01** (dev settings engine: `?dev=1` gate, server `/dev/config` endpoints, `config/dev.json`, DevPanel wired to server, persistence switch wired to disconnect logic, key binding added). **Added:** config/resources.json, config/world.json, config/network.json, config/accounts.json, config/plant_renderer.json, config/root_sight.json, config/weather.json, config/daynight.json, config/render.json (expanded), config/dev.json, server resource model, PlantPersistence (versioned binary snapshot + event log with CRC32), PlantWorld tiers, InterestManager, EventBus, AccountsService (Argon2id, JWT rotation, atomic rate limits, lockout), WeatherSystem, EnvironmentRenderer, WebGPU renderer (`apps/client/src/renderers/webgpu/`), seeded RNG (`hash32`, `hash01`, `mulberry32`). **Approved 2026-11-09 (not built): v5.4 extension program** — T54 reactive non-sapient fauna, T55 material simulation, T56 volumetric terrain, C10 terrain/material rendering, T57 parametric terrain features, T58 world-object streaming and behaviour, T59 ecological succession, C11 fauna rendering, O04 cloud-native World orchestration. Rule amendments (RULE_2, RULE_8, RULE_19, RULE_22) and task specs are in `DESIGN.md` Part 11 and Part 16; the programme is [`docs/PlantLegacy-Abyssal-Integration-Plan.md`](./docs/PlantLegacy-Abyssal-Integration-Plan.md). **Last updated:** 2026-11-13.
+
+**Also implemented since the list above:** **T05** (proximity/world chat, data-driven
+emotes, block and report) and **C03b** (inner detail + 620 m outer ground patch
+from one shared field, exact trimesh colliders). **T08A** inventory is partial and
+non-compliant — in-memory only; see `docs/tasks/T08A.md`.
 
 ## 1. Stack
 
@@ -124,8 +129,8 @@ committed; CI installs with `--frozen-lockfile`.
 │   ├── load-test/             # placeholder (O03)
 │   ├── seed-data/             # placeholder (T03)
 │   └── backup/                # placeholder (O02)
-├── config/                    # 77 tunable files + _meta
-├── docs/                      # tunables, tasks, checklists, design notes
+├── config/                    # 78 tunable files + _meta (count owned by docs/tunables.md)
+├── docs/                      # tunables, tasks, decision log (ADR), programme plan, checklists
 ├── ops/
 │   ├── compose.yml            # server + postgres:17-alpine
 │   ├── docker/README.md
@@ -206,7 +211,7 @@ interface HealthReport {
   uptime_s: number;           // floor(seconds since start)
   checks: {
     config: 'ok';
-    config_files: number;     // 77
+    config_files: number;     // 78, per docs/tunables.md
     database: 'ok' | 'down' | 'skipped';
   };
 }
@@ -405,9 +410,9 @@ enforcement changes.
 ## 8. Not built yet
 
 Economy, marketplace/mail/trade, admin/compliance tooling, and the full damage
-pipeline. Chat, emotes, player reports and inventory are implemented.
+pipeline. Chat, emotes and reports are implemented; inventory is partial and non-compliant — see [`docs/tasks/T08A.md`](./docs/tasks/T08A.md).
 
-**V5.4 extension program (approved 2026-11-09, not built):** T54 reactive fauna, T55 material simulation, T56 volumetric terrain, C10 terrain/material rendering, T57 parametric terrain features, T58 world-object streaming, T59 ecological succession, C11 fauna rendering, O04 cloud-native orchestration. Nothing in this list exists in code. See [`docs/v5.4-extension-plan.md`](./docs/v5.4-extension-plan.md).
+**V5.4 extension program (approved 2026-11-09, not built; the integration plan schedules T54/C11 before volumetric terrain — ADR-047):** T54 reactive fauna, T55 material simulation, T56 volumetric terrain, C10 terrain/material rendering, T57 parametric terrain features, T58 world-object streaming, T59 ecological succession, C11 fauna rendering, O04 cloud-native orchestration. Nothing in this list exists in code. See the programme in [`docs/PlantLegacy-Abyssal-Integration-Plan.md`](./docs/PlantLegacy-Abyssal-Integration-Plan.md).
 
 
 **C02 procedural plant renderer** is completed using **Raymarched Signed Distance Fields (SDF) with smooth minimum (`smin`) organic fusion** inspired by the procedural creature architecture of *Hatched* by SublimeOrange (`https://www.reddit.com/r/IndieDev/comments/1x9mmly/im_a_solo_dev_building_hatched_a/`). Instead of floating primitive cylinders clipping with flat caps, the organism's tapered capsule segments, joint spheres, root crown, and parametric foliage melt into a continuous living membrane with smooth branch collars and seamless root-to-canopy transition at $y = 0$.
@@ -424,7 +429,7 @@ client readout connected). **T03 complete** (binary snapshot + event log persist
 Active/Near/Dormant offline tiers, interest management, event bus, tick-budget metrics,
 PLANT_SYNC/PLANT_CREATED/PLANT_SYNC_REQUEST).
 
-## 10. Planet world (stage 1)
+## 9. Planet world (stage 1)
 
 The play area is the surface of a sphere, not a plane. `config/render.json`
 `planet_radius_m` (100000) sets the radius; `0` restores the flat plane.
@@ -485,7 +490,19 @@ Still flat: physics and persistence treat the pole as a plane, and plant nodes
 stay in the pole-local coordinate frame. Spherical physics is planned stage 2
 (see the decisions in this session's record).
 
-## 9. Keeping this file current
+## 10. Notes for future sessions
+
+- **Read config through the helpers.** `readNumber`, `readInteger`, `readString`,
+  `readBoolean`, `readStringArray`, `readObject` from
+  `@plant-legacy/shared/config`. Never inline a gameplay number (RULE_3).
+- **The validator runs at server startup.** Invalid config exits before
+  `listen`, so a boot failure is usually a config error.
+- **Movement is not server-validated.** `validateMovement` has no call sites;
+  WASD pans the camera. See `docs/protocol.md`.
+- **Known RULE_3 gaps:** WASD bindings and camera limits in
+  `apps/client/src/main.ts`. The RULE rows in §7 name the enforcement.
+
+## 11. Keeping this file current
 
 Update this file in the same change as any of:
 

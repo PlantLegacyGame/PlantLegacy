@@ -3,15 +3,17 @@
 A multiplayer plant-organism simulation. One server, one world, one Postgres.
 Phase 1 foundation is in place, together with the Gate 0 networking gate and a
 first procedural-rendering prototype. Growth simulation, persistence, accounts,
-weather and day/night are implemented. Economy is not built yet.
+chat, weather and day/night are implemented. Economy is not built yet.
 
 **Source of truth:** [`DESIGN.md`](./DESIGN.md) (Master Build Plan v5.3.1). Every
 task, rule and tunable comes from there. This repository implements **T00, O01,
 T03P, C01, T00A** (resource model + onboarding), **T01** (growth simulation),
 **T03** (persistence, offline tiers, interest management, event bus),
 **T08C** (accounts + sessions), **T07** (weather & day/night), **C02** (SDF
-plant renderer), **T02** (Root Sight), **C03** (environment rendering), and
-**C02b slice** (WebGPU compute-driven plant LOD with WebGL2 fallback), and
+plant renderer), **T02** (Root Sight), **T05** (chat, emotes, block, report),
+**C03** (environment rendering) and **C03b** (ground LOD), the
+**C02b slice** (WebGPU compute-driven plant LOD with WebGL2 fallback), **D01**
+(dev settings), and
 **T25** (shared terrain field, LOD ground colliders, plant colliders, sparse
 persistent soil edits; client height-texture application still pending).
 
@@ -38,11 +40,6 @@ To run the checks CI runs:
 pnpm verify
 ```
 
-## Recent improvements (2026-11-09)
-
-- **Versioned plant saves with CRC32:** Binary snapshot format now includes magic bytes (`PLNT`), version, payload length, and CRC32 checksum. Growable buffer handles arbitrary node counts. Event log column is now persisted per save.
-- **Seeded deterministic RNG:** Added `hash32`, `hash01`, `mulberry32` to shared math package. Plant mesh builder uses node IDs as seeds for deterministic leaf normals and branch curvature — no more `Math.random()`.
-- **Auth hardening:** Refresh token rotation inserts new session before revoking old (no window for reuse). Rate limiting uses atomic upsert with unique constraint (migration `004`). JWT secret now required in production. Lockout extends on failed attempts during lockout. Pool errors are logged, not swallowed.
 
 ## Scripts
 
@@ -67,7 +64,7 @@ apps/server/          HTTP + WebSocket server, health/readiness, Postgres probe
 packages/shared/      Types, config loader/validator, protocol, events, ids
 tools/config-validator/  CLI used by CI and `pnpm config:validate`
 tools/dev.mjs         One-command local stack
-config/               77 tunable files in extended-1 format + _meta
+config/               78 tunable files in extended-1 format + _meta (count owned by docs/tunables.md)
 docs/                 Design notes, tunables, task records, checklists
 ops/                  Docker compose, staging `.env`, deploy and backup placeholders
 .github/workflows/    CI (verify) and staging static deploy
@@ -95,13 +92,9 @@ Every tunable lives in `config/<system>.json` in the **extended-1** format:
   the build if one appears.
 - `account_bound: true` forces `tradeable`, `mailable` and `listable` to false
   (RULE_23).
-- Stubs carry `values: {}` until their owning task fills them. Twenty-one files are
-  populated today: `ops`, `compliance`, `net_proto`, `onboarding`,
-  `plant_renderer`, `resources`, `world`, `network`, `accounts`,
-  `root_sight`, `weather`, `daynight`, `render`, `growth`, `items`, `dev`,
-  `controls`, `ui`, `chat`, `emotes`, `reports`; the other 56 are stubs. See
-  [`docs/tunables.md`](./docs/tunables.md) for the file-to-task map and current
-  values.
+- Stubs carry `values: {}` until their owning task fills them. **Twenty-three**
+  files carry values today and 55 are stubs; the authoritative list is owned by
+  [`docs/tunables.md`](./docs/tunables.md) rather than duplicated here.
 
 ## Environment
 
@@ -131,7 +124,7 @@ The staging compose stack reads `ops/.env` (gitignored) through Compose's normal
 - **Server + Postgres:** `docker compose -f ops/compose.yml up -d --build` on a
   machine running Docker. The current staging API is the local compose stack
   exposed through a **Cloudflare quick tunnel**; it is not a persistent VM yet.
-  See [`docs/hosting.md`](./docs/hosting.md).
+  See [`docs/deploy.md`](./docs/deploy.md).
 - **CI:** `.github/workflows/ci.yml` runs lint, typecheck, the config validator
   (schema + rarity ban), tests and the build on every push and PR.
 
@@ -142,23 +135,26 @@ together.
 
 ## Documentation
 
-| File | Contents |
+| Topic | Single home |
 |---|---|
-| [`DESIGN.md`](./DESIGN.md) | Master plan v5.3.1 (source of truth) |
-| [`CONTEXT.md`](./CONTEXT.md) | Stack, tree, interfaces, locked decisions |
-| [`docs/tunables.md`](./docs/tunables.md) | Every config file, owner, current values |
-| [`docs/protocol.md`](./docs/protocol.md) | WebSocket + JSON protocol (T03P) |
-| [`docs/controls.md`](./docs/controls.md) | Current bindings and the C01 contract |
-| [`docs/tasks/`](./docs/tasks/) | Task records and acceptance evidence |
-| [`docs/checklists/`](./docs/checklists/) | Manual test checklists |
-| [`docs/what-works-now.md`](./docs/what-works-now.md) | Honest status |
-| [`docs/compliance-policy.md`](./docs/compliance-policy.md) | Five-line policy |
-| [`docs/art-bible.md`](./docs/art-bible.md) | Visual language stub |
-| [`docs/hosting.md`](./docs/hosting.md) | Deploy and environment separation |
-| [`docs/deploy-walkthrough.md`](./docs/deploy-walkthrough.md) | First push → live staging URL, command by command |
-| [`docs/decisions.md`](./docs/decisions.md) | Decision log |
-| [`docs/v5.4-extension-plan.md`](./docs/v5.4-extension-plan.md) | Approved (not built) reactive fauna, material simulation, volumetric terrain, world objects, succession and orchestration |
-| [`ATTRIBUTION.md`](./ATTRIBUTION.md) | Asset licenses (empty for now) |
+| What the game is: philosophy, humour, the 27 rules, every task spec | [`DESIGN.md`](./DESIGN.md) — source of truth, not summarized elsewhere |
+| Every ruling, with its date and reasoning | [`docs/decisions.md`](./docs/decisions.md) |
+| How the built system actually works | [`CONTEXT.md`](./CONTEXT.md), [`docs/protocol.md`](./docs/protocol.md), [`docs/data-model.md`](./docs/data-model.md), [`docs/state-machines-and-invariants.md`](./docs/state-machines-and-invariants.md) |
+| Config files: owner, status, value count | [`docs/tunables.md`](./docs/tunables.md) — values live in `config/` |
+| What is built, what is not, known gaps | [`docs/what-works-now.md`](./docs/what-works-now.md) |
+| What happened, when | [`docs/history.md`](./docs/history.md) — append-only, not current state |
+| What comes next | [`docs/PlantLegacy-Abyssal-Integration-Plan.md`](./docs/PlantLegacy-Abyssal-Integration-Plan.md) |
+| How to ship it | [`docs/deploy.md`](./docs/deploy.md) |
+| Per-task evidence and checklists | [`docs/tasks/`](./docs/tasks/), [`docs/checklists/`](./docs/checklists/) |
+
+Supporting references: [`docs/controls.md`](./docs/controls.md) (bindings),
+[`docs/art-bible.md`](./docs/art-bible.md) (visual language),
+[`docs/partitioning-lod.md`](./docs/partitioning-lod.md) (interest, partitioning),
+[`docs/tick-budget.md`](./docs/tick-budget.md) (tick timing),
+[`docs/compliance-policy.md`](./docs/compliance-policy.md),
+[`docs/what-spores-are.md`](./docs/what-spores-are.md),
+[`docs/abyssal-mechanisms.md`](./docs/abyssal-mechanisms.md) (AG technique reference),
+[`ATTRIBUTION.md`](./ATTRIBUTION.md) (asset licences).
 
 ## Approved extensions (not built)
 
@@ -166,10 +162,16 @@ The v5.4 extension program is **approved 2026-11-09, not built**. It covers reac
 non-sapient fauna, material simulation (water/sand/lava/fire), sparse volumetric
 terrain, parametric terrain features, streamed world objects, ecological
 succession, and cloud-native World orchestration. The index is
-[`docs/v5.4-extension-plan.md`](./docs/v5.4-extension-plan.md); the task specs
-and rule amendments are in [`DESIGN.md`](./DESIGN.md) Parts 2, 11 and 16.
+[`docs/PlantLegacy-Abyssal-Integration-Plan.md`](./docs/PlantLegacy-Abyssal-Integration-Plan.md) §0.3; the task specs and rule amendments are in [`DESIGN.md`](./DESIGN.md) Parts 2, 11 and 16.
 
-Nothing in that program changes the current 77-file config count or the
+**Reviewed 2026-11-14:** [`docs/PlantLegacy-Abyssal-Integration-Plan.md`](./docs/PlantLegacy-Abyssal-Integration-Plan.md)
+is the programme for extending that work (work packages, waves, risks), and
+[`docs/abyssal-mechanisms.md`](./docs/abyssal-mechanisms.md) is the technique
+reference behind it. Its nine review decisions are ADR-041 to ADR-049 in
+[`docs/decisions.md`](./docs/decisions.md).
+
+Nothing in that program changes the current 78-file config count (owned by
+[`docs/tunables.md`](./docs/tunables.md)) or the
 single-process World until the individual task is started.
 
 ## Non-negotiables

@@ -496,86 +496,11 @@ features.
 
 ---
 
-# Part 4 — Remediation plan
+# Part 4 — Remediation plan (retired)
 
-Phases are ordered by risk × blast radius. Do not start a phase until the
-previous phase is green in `pnpm verify`.
-
-## Phase 0 — Stop the bleeding (single-file fixes)
-
-| Item | Change | Acceptance |
-|---|---|---|
-| P0.1 | Weather durations read from config; remove zero-duration shadowing; clear/rain last their configured range. | New unit test asserts a clear state survives `dt < min` and advances after `max`. |
-| P0.2 | Refresh token: store a deterministic SHA-256 lookup hash (or opaque id); keep bcrypt for passwords. | Login → logout revokes; refresh rotates and old token is rejected. |
-| P0.3 | Remove the aggregate upkeep subtraction (keep per-node subtraction) **or** make `totalUpkeep` a derived cache and use only one. | Upkeep per tick equals the sum of node upkeeps; test asserts the rate. |
-| P0.4 | Client HELLO sends `accessToken` and stored anonymous `plantId`; server reclaim paths use one key builder. | Reload with persistence enabled reclaims the same plant. |
-| P0.5 | Photosynthesis calls `addPhotosynthesisEnergy(plantId, rate * dt * leafFactor)`. | Energy rises in light, falls in darkness; config drives the rate. |
-| P0.6 | `RESOURCE_QUERY` schema: pick tile or world coords and convert in one place. | HUD reads the correct tile after one query. |
-| P0.7 | Germination returns/broadcasts inserted nodes and energy. | Client renders the root crown without a manual resync. |
-| P0.8 | `savePlant` writes `tier` and `lastTick`; `loadPlant` validates `rootNodeId`. | Reload a saved plant and compare totals/tier. |
-
-## Phase 1 — Formalize the machines
-
-1. Wire `reconnectStateMachine` and `growthIntentStateMachine` into `World`;
-   delete the duplicate closures.
-2. Introduce `killPlant(id, cause)` and route every death path through it.
-3. Introduce `ConnectionRegistry` (one message handler, one HELLO, one close
-   path, old-socket transfer on reclaim).
-4. Introduce `PlantMirror` on the client with `growthSeq` gap detection and
-   `PLANT_SYNC` recovery.
-5. Replace the weather visual booleans with an explicit transition state.
-
-## Phase 2 — Boundary validation and tests
-
-1. `validatePlantGraph(plant)` — root, reciprocity, node ids, plantIds, totals,
-   bounds; call after load and in dev every N ticks.
-2. Protocol schemas at `onmessage` (server and client); reject malformed
-   messages with `ERROR` instead of dropping them.
-3. Config validators for cross-field rules (weather durations, condition
-   mapping, resource maxima, tier rates).
-4. Property tests: random plant graphs round-trip save/load; totals conserved;
-   no node without a parent; tile values in range after N ticks.
-
-## Phase 3 — Consolidation and performance
-
-1. One tick clock; fixed-step accumulator; throttle broadcasts by config.
-2. Wire or delete `InterestManager` entity cells.
-3. Move every remaining hardcoded tunable to config (INV-CFG-01).
-4. Fix diffusion, double deposits, and texture of read-only accessors.
-
----
-
-# Progress log
-
-| Date | Item | Change |
-|---|---|---|
-| 2026-11-08 | — | Initial audit written. |
-| 2026-11-08 | DEF-01 / INV-RS-04 / INV-RS-05 | Weather durations, light multipliers, and moisture rates now read from `WeatherConfig`. Clear/rain no longer have zero duration. Forecast is the preselected `machine.nextState`. Tests added in `apps/server/src/ops/weather.test.ts`. |
-| 2026-11-08 | DEF-03 / INV-GR-06 | Upkeep recomputes the node-sum `totalUpkeep` and subtracts it once per tick (active and dormant). Test added in `apps/server/src/ops/plantWorld.test.ts`. |
-| 2026-11-08 | DEF-09 / DEF-12 / DEF-16 | Persistence writes the real tier/`lastTick`; session limit no longer revokes one too many; tile writes and initial tiles clamp to per-resource maxima. |
-| 2026-11-08 | DEF-10 / INV-RS-03 | Diffusion accumulates all four neighbours and lerps toward their mean. Test added in `apps/server/src/ops/resourceWorld.test.ts`. |
-| 2026-11-08 | DEF-02 / INV-AU-01 / INV-AU-11 | Refresh token uses deterministic SHA-256 lookup hash alongside bcrypt password hash. Login → logout revokes; refresh rotates and old token is rejected. |
-| 2026-11-08 | DEF-04 / DEF-07 / INV-ID-01 / INV-ID-07 / INV-NET-01 | Client HELLO sends `accessToken` and stored anonymous `plantId`; server uses single `makeReclaimKey` builder; reload with persistence enabled reclaims the same plant. |
-| 2026-11-09 | DEF-05 / INV-TM-07 | Photosynthesis applies both biomass and energy at their per-second config rates scaled by `dt`; `addPhotosynthesisEnergy` is now used. |
-| 2026-11-09 | DEF-06 / INV-NET-02 / INV-NET-03 | `RESOURCE_QUERY` accepts `worldX`/`worldZ` (tile coords still work); the per-tick `RESOURCE_UPDATE` reads the player's local tile directly instead of indexing the dirty-tile array as a grid. |
-| 2026-11-09 | DEF-08 / INV-NET-04 / INV-NET-05 | Germination returns/broadcasts all inserted nodes (`newNodes`), the replaced seed/root (`updatedParentNode`), `totalBiomass` and `totalEnergy`; the client applies every node and replaces the seed. |
-| 2026-11-09 | DEF-11 / INV-TM-10 | Corrected: only client registration and position updates are wired. Entity-cell population and per-client STATE/KEYFRAME/GROWTH_EVENT filtering are still not applied. |
-| 2026-11-08 | DEF-13 / INV-ID-11 / INV-ID-12 | HELLO timeout cleared on success; initial message handler removes itself; post-HELLO handler installed atomically. |
-| 2026-11-08 | DEF-14 / INV-GR-12 | `maxNodesPerPlant` checked against projected node count (germination +3, regular +1). |
-| 2026-11-08 | DEF-15 / INV-GR-10 | `canCrossLayer` no longer allows `seed→stem`; `getGrowthOptions` only offers `radicle` for seed nodes. |
-| 2026-11-09 | Phase 1.1 / SM-01 | Corrected: `reconnectStateMachine` is **not** wired into `World`; the inline `pendingRemovals` Map is still authoritative. `ConnectionRegistry` handles socket lifecycle. Deferred. |
-| 2026-11-09 | Phase 1.2 / SM-02 | Corrected: `growthIntentStateMachine` is **not** wired into `World`; `pendingGrowthIntents` is still processed inline. Deferred. |
-| 2026-11-09 | Phase 1.3 / SM-03 | `killPlant(id, cause)` queues a `PlantDeathRecord`; `World` drains the queue after `PlantWorld.step()` and handles mineral deposit, owner detach and a single `PLANT_REMOVED` broadcast. |
-| 2026-11-09 | ADR-025 / INV-GR-06 / INV-GR-17 | Root overlap damage is multiplied by `dt`; germination sets `plant.rootNodeId` to the transformed seed. Regression tests compare one 0.1 s step with two 0.05 s steps and assert exactly one death record. |
-| 2026-11-09 | SM-04 | Versioned snapshot envelope (`PLNT` magic, u16 version, u32 length, u32 CRC32), growable buffer, float64 age, persisted `event_log`, per-plant try/catch in save loop. 13 new tests. |
-| 2026-11-09 | Auth hardening | Refresh rotation inserts new session before revoking old; atomic rate-limit upsert with unique constraint (migration 004); JWT secret required in prod; lockout extends on failed attempts during lockout; pool errors logged. |
-| 2026-11-10 | Phase 1 fixes (P0/P1) | Fixed spawn collision (`findSpawnPosition` with 5-unit clearance + fallback), root overlap damage only from active-tier plants, `GROWTH_OPTIONS_RESULT` error response now schema-valid, `processPlantDeaths` wraps resource/broadcast in try-catch. Persistence now single-sourced from `world.json` (default false per ADR-029). Camera `minDistance=1` for ADR-027. Console spam reduced via `console.debug`. Invariant table statuses corrected (INV-ID-03/06/07/08, INV-GR-14/16, INV-RS-11). Dev watch paths narrowed to exclude tests/SQL. |
-| 2026-11-10 | Phase 1 formalization & wiring | Wired `reconnectStateMachine`, `growthIntentStateMachine`, `ConnectionRegistry`, and `TickClock` into `World`. Fixed `main.ts` constructor `worldConfig` scope bug and added `addPhotosynthesisEnergy` call on ticks. Fixed same-tick intent overwrites (`growthIntentStateMachine` FIFO queue, INV-NET-06). Added client parent-child linking on `GROWTH_EVENT` (INV-NET-09) and null-`plantId` sync matching (INV-NET-11). Added full unit test suites for `growthIntentStateMachine`, `reconnectStateMachine`, `tickClock`, and `connectionRegistry` (119 server tests passing). Verified `pnpm verify` clean. |
-| 2026-11-10 | Invariant hardening (INV-GR-13, INV-ID-01, INV-ID-02, INV-AU-06) | Introduced shared `computeGrowthCostQuote` helper function guaranteeing 1:1 match between `getGrowthOptions` quotes and `tryGrow`/`step` charges (INV-GR-13). Reused existing plants in `World.addPlayer` to enforce one active plant per owner (INV-ID-01). Added immediate ownership rejection in `handleGrowthIntent` (INV-ID-02). Unified display-name sanitization across signup and profile change (INV-AU-06). 181 tests passing. |
-| 2026-11-12 | Tick clock keeps wall time | Server was running ~8.7 of 20 configured ticks/s because the fixed-step clock threw away elapsed time beyond `max_frame_time_ms`; day/night cycle measured 7 877–8 264 s instead of 3 600. Clock now accumulates real elapsed time (backlog still capped to avoid a spiral), `ResourceWorld` runs moisture/minerals/diffusion on a 4 Hz accumulator with full elapsed dt, and `main.ts` counts dirty tiles before building the ~65k-entry broadcast array. Measured after: 20.0 ticks/s, cycle 3 597 s. Also moved the growth panel to the bottom-left column so it no longer covers or hides the chat box, and raised soil moisture (base 40→150, evaporation 0.1→0.025/s, rain 0.5→1.5/s) so ordinary dirt is damp instead of cracked-dry. |
-| 2026-11-12 | Documentation audit | Corrected `docs/protocol.md` (message types 7–30, both `RESOURCE_UPDATE` shapes, movement not server-validated), `docs/tunables.md` (counts recomputed from `config/`: 77 files, 21 populated, 56 stubs), Argon2id vs bcrypt in `CONTEXT.md`/`what-works-now.md`/`DEVELOPER_REFERENCE.md`/`ATTRIBUTION.md` (`docs/data-model.md` was already correct), T03P movement claim, and the 75→77 config count in living docs. Verified live: INV-TM-09 still unenforced, INV-TM-10/INV-NET-14 still unwired, INV-AU-12 still PARTIAL. |
-
----
+The phased plan and its progress log live in [`history.md`](./history.md) for the
+record. Current status lives in the tables above: change an item there when its
+enforcement changes.
 
 # Appendix — Audit shortcuts
 

@@ -52,22 +52,23 @@ Server rejects with `ERROR { code: "VERSION_MISMATCH", ... }` if mismatch.
 
 | Type | Name | Payload | Description |
 |------|------|---------|-------------|
-| 10 | `WELCOME` | `WelcomePayload` | Sent once on connect; assigns playerId, plantId, initial world state, full node set |
+| 10 | `WELCOME` | `WelcomePayload` | Sent once on connect; assigns playerId, plantId, initial world state, full node set. Optional `away` block (deltas over the offline span: `seconds`, `nodesBefore`, `nodesAfter`, `biomass`, `energy`, `water`, `minerals`) and `previousPlantDied` (`{ cause, secondsAgo }`) |
 | 11 | `STATE` | `StatePayload` | Per-tick delta state (plants changed this tick) |
 | 12 | `KEYFRAME` | `KeyframePayload` | Full state snapshot (every `keyframeIntervalTicks`) |
 | 13 | `REJECT` | `RejectPayload` | Input rejected; reason + original type |
 | 14 | `PONG` | `{}` | Response to `PING` |
-| 15 | `ERROR` | `ErrorPayload` | Fatal error (version mismatch, etc.); connection closes |
+| 15 | `ERROR` | `ErrorPayload` | Fatal error; the connection closes. Codes include `VERSION_MISMATCH`, `AUTH_FAILED` (bad or expired token; no guest fallback) and `SESSION_REPLACED` (same account opened in another tab) |
 | 16 | `GROWTH_EVENT` | `GrowthEventPayload` | Broadcast when a growth intent succeeds |
 | 17 | `RESOURCE_UPDATE` | `ResourceUpdatePayload` | Local resource tile update (player's tile only) |
 | 18 | `PLANT_SYNC` | `PlantSyncPayload` | Full plant state for reclaim/desync recovery |
 | 19 | `PLANT_CREATED` | `{ plantId: string, ownerId: string, rootNode: ... }` | New plant in world |
-| 20 | `PLANT_REMOVED` | `{ plantId: string }` | Plant removed (death or reconnect expiry) |
+| 20 | `PLANT_REMOVED` | `{ plantId: string, cause?: string }` | Plant removed (death, reconnect expiry or administrative removal). `cause` is optional so an older server's removal still validates; the client uses it to name the loss |
 | 21 | `WEATHER_UPDATE` | `WeatherUpdatePayload` | Weather/day-night state |
 | 22 | `GROWTH_OPTIONS_RESULT` | `GrowthOptionsResultPayload` | Legal options, costs and plain reasons for a node |
 | 23 | `CHAT_BROADCAST` | `ChatBroadcastPayload` | Chat or emote from another player |
 | 27 | `INVENTORY_SYNC` | `{ slots: Array<{ itemId: string \| null, count: number \| null }>, maxSlots: number }` | Full inventory |
 | 28 | `INVENTORY_SLOT_UPDATE` | `{ slotIndex: number, itemId: string \| null, count: number \| null }` | One slot changed |
+| 31 | `SEASON_UPDATE` | `{ season: number, remainingSeconds: number, lengthTicks: number, calamity: boolean }` | Current season, seconds left before the rollover, and whether the next rollover is the calamity. Sent on join, on every rollover and when the calamity runs; the client counts down locally |
 | 33 | `TERRAIN_REGION` | `{ originX, originZ, cellSizeM, cols, rows, revision, heightsBase64, materialBase64 }` | Height deltas (Float32) and moisture (Uint8) for the requested region (T25) |
 | 34 | `TERRAIN_EDITS` | `{ revision: number, edits: TerrainEdit[] }` | Root tunnels/voids since the client's revision; also broadcast near a new root (T25) |
 | 99 | `DEV_RESPONSE` | `{ ... }` | Dev-panel response (dev builds only) |

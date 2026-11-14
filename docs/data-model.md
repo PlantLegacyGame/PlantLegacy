@@ -1,10 +1,12 @@
 # Data model
 
-**Status:** reference. Tables are created by T03 (plants, events), T08C (accounts, sessions, rate_limits); the rest arrive with their owning tasks.
+**Status:** reference. `world_plants` and `world_events` (T03), `accounts`, `sessions` and `rate_limits` (T08C), `world_state` (T03 season calendar) and the three terrain tables (T25) exist; the rest arrive with their owning tasks.
 **Source of truth:** DESIGN.md Appendix H.
 
-Every gameplay table carries `world_id`. All item and Spore mutations use
-row-level locks (RULE_17); no in-memory inventories exist.
+Every gameplay table carries `world_id`. All item and Spore mutations must use
+row-level locks (RULE_17). The current inventory is the one exception and is a
+documented defect: it lives in memory only, so no economy code may build on it
+until T08A is completed ([`tasks/T08A.md`](./tasks/T08A.md)).
 
 ## Locked decisions
 
@@ -85,4 +87,44 @@ row-level locks (RULE_17); no in-memory inventories exist.
 
 Unique constraint on `(ip_address, endpoint)` for atomic upsert.
 
-Migration tooling lands with O02.
+### `world_state` (T03 season calendar)
+| Column | Type | Notes |
+|---|---|---|
+| `world_id` | `text` | PK. One row per world |
+| `season` | `integer` | Default 1. Survives restart and replanting |
+| `season_remaining_ticks` | `bigint` | **Remaining** ticks, not an absolute tick: the counter restarts at 0 each boot |
+| `last_calamity_at` | `timestamptz` | Wall time; display only |
+| `updated_at` | `timestamptz` | |
+
+### Terrain: `terrain_chunks`, `terrain_edits`, `terrain_voids` (T25)
+The base surface derives from the world seed, so only **edited** chunks, their
+voids and an append-only edit log are stored — never one row per voxel, and
+never the whole ground.
+
+| Table | Key | Stores |
+|---|---|---|
+| `terrain_chunks` | `(world_id, cx, cz)` | `revision`, plus `heights`, `moisture` and `compaction` as `bytea` |
+| `terrain_edits` | `(world_id, id)` | Append-only: `tick`, `actor_plant_id`, `kind`, position, `radius_m`, `volume_m3`. Indexed by `(world_id, tick)` |
+| `terrain_voids` | `(world_id, id)` | Position, `radius_m`, `volume_m3`, `stability`; a void collapses when dry and loose |
+
+### Migrations
+
+`apps/server/src/ops/persistence/`, applied in order:
+
+| File | Creates |
+|---|---|
+| `001_create_plants_table.sql` | `world_plants`, `world_events` |
+| `002_create_accounts_table.sql` | `accounts`, `sessions`, `rate_limits` |
+| `003_add_refresh_token_lookup_hash.sql` | Deterministic refresh-token lookup column |
+| `004_rate_limits_unique_constraint.sql` | `(ip_address, endpoint)` unique key for the atomic upsert |
+| `005_create_world_state_table.sql` | `world_state` |
+| `006_create_terrain_tables.sql` | `terrain_chunks`, `terrain_edits`, `terrain_voids` |
+
+### Not in the database yet
+
+- **Inventory.** The shipped inventory is in memory only — no table, no row
+  locks — which violates DESIGN T08A. See [`tasks/T08A.md`](./tasks/T08A.md).
+- **Reports.** Held in a bounded in-memory queue until T40 adds a table.
+- **Fauna, materials, water bodies, world objects.** Arrive with T54–T58.
+
+Migration tooling and the restore drill land with O02.

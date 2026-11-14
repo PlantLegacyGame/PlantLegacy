@@ -20,7 +20,8 @@
     "test": "pnpm -r --if-present test",
     "config:validate": "node tools/config-validator/src/cli.ts",
     "verify": "pnpm lint && pnpm typecheck && pnpm config:validate && pnpm test",
-    "start": "pnpm --filter @plant-legacy/server start"
+    "start": "pnpm --filter @plant-legacy/server start",
+    "docs:check": "node tools/docs-check/check.mjs"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.6.4",

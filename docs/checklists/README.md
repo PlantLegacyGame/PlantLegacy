@@ -6,7 +6,7 @@ real container, a real push.
 
 | Checklist | Covers |
 |---|---|
-| [T00-manual.md](./T00-manual.md) | Config loading, Part 6.2 file coverage (77 files today), rarity ban, compliance draft, stubs |
+| [T00-manual.md](./T00-manual.md) | Config loading, Part 6.2 file coverage (78 files today), rarity ban, compliance draft, stubs |
 | [O01-manual.md](./O01-manual.md) | Install/verify, health and readiness, one-command dev, Docker, CI, staging, secrets |
 
 Conventions:

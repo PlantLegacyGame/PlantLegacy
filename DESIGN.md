@@ -1,9 +1,8 @@
-# Plant Legacy — Master Build Plan v5.3.1
-## Merged, Standalone, Error-Corrected
+# Plant Legacy — Master Build Plan v5.3.2
 
-**Revision note (v5.3.1).** v5.3.1 is v5.3 with the thirteen reviewed corrections applied: the checkpoint table is rebuilt so no gap exceeds four weeks; Gate 3 gets an explicit playtest week and corrected arithmetic; the T25/T26 and T14/T43 cut-list conflicts are resolved; the Root Sight shader is owned by T02 and merely reused by C03; H01 is decoupled from the real-money switch; every stale `A…` cross-reference is replaced with a real section or task reference; T15 no longer contradicts T51; the vocabulary rows for heirloom seeds and gene items match the built systems; the dependency matrix is completed (`C03`, `C05`, `C02b`, `T14`, `T20`, `T43`, `H01`); the duplicated Part 8.2 heading and its merge artifact are removed; RULE_16's checkpoint weeks match the checkpoint table (W67, not W65); and heirloom-seed planting is separated from T53 offspring seeds. Nothing else changes; where v5.3.1 and v5.3 conflict, **v5.3.1 wins**.
+**Current version:** v5.3.2 (2026-11-14). Design rules, task scope and the 80-week plan are unchanged from v5.3.1; the revision history and v5.3.1 merge audit are in [`docs/history.md`](./docs/history.md). Every ruling is in [`docs/decisions.md`](./docs/decisions.md).
 
-**Core thesis unchanged.** Build systems, not outcomes. Build possibilities, not features. Build the sandbox; the players build the castles.
+**Core thesis.** Build systems, not outcomes. Build possibilities, not features. Build the sandbox; the players build the castles.
 
 ---
 
@@ -475,7 +474,8 @@ Fuses modular mathematical primitives (tapered capsule segments for roots/stems/
 **Architecture:**
 - **Compute pass** (cull.wgsl): Frustum culling, per-plant LOD tier assignment (L0 full prims, L1 reduced prims, L2 impostor sphere, L3 culled), hysteresis/dwell timer
 - **Raymarch pass** (mesh.wgsl): Bounding volume AABB test → SDF raymarch with `smin` blending → anatomical coloring + lighting + mutation visuals
-- **Impostor sphere pass** (impostor.wgsl): L2 distant plants as **single ellipsoid SDF per plant** with procedural surface (bark noise + canopy color + mutation hints). No billboards. One sphere trace per pixel, converges in 5-10 steps.
+- **Impostor sphere pass** (impostor.wgsl): L2 distant plants as **single ellipsoid SDF per plant** with procedural surface (bark noise + canopy color + mutation hints). No billboards at L2. One sphere trace per pixel, converges in 5-10 steps.
+- **L3 billboard pass** (billboard.wgsl): plants at 2–12 px use a colour-only atlas billboard. Below ~2 px they become a coloured point or minimap dot. The L3 atlas is the only atlas in the plant renderer; it carries no lighting data and is rebaked only when a plant's shape changes, under a per-frame rebake cap.
 - **Transparent WebGPU canvas** layered over Three.js environment (sky, terrain, weather from C03)
 - **WebGL2 fallback**: If WebGPU unavailable, use simplified mesh renderer (current PlantMeshBuilder) with improved joint blending — not SDF
 
@@ -485,13 +485,13 @@ Fuses modular mathematical primitives (tapered capsule segments for roots/stems/
 | L0 | < 50m | 192 prims (full) | Full `smin` raymarch |
 | L1 | 50–150m | 48 prims (trunk + major branches only) | Reduced `smin` raymarch, 24 steps |
 | L2 | 150–500m | 1 ellipsoid/plant | **Impostor sphere SDF** — procedural bark + canopy color, 10 steps |
-| L3 | > 500m | 0 | Culled (minimap dot only) |
+| L3 | > 500m | 0 | Colour-only atlas billboard on WebGPU (2–12 px); culled to a minimap dot on the WebGL2 fallback |
 
 **Impostor Sphere Details (L2):**
 - Ellipsoid axes derived from plant bounding box (width, height, depth)
 - Surface: `sdEllipsoid(p, radii)` + 3D noise for bark texture
 - Color: canopy hue from plant's mutation flags + health tint
-- No billboards, no atlas generation, no cross-fade artifacts
+- No billboards and no atlas generation at L2. The only atlas in the plant renderer is the L3 colour-only billboard (2–12 px); see Part 14.2.0 for the canonical tiers
 - 5-10 raymarch steps (ellipsoid SDF is analytic, no iteration needed for hit)
 - Mutation signatures: color shifts only (no geometry)
 
@@ -520,6 +520,16 @@ Fuses modular mathematical primitives (tapered capsule segments for roots/stems/
 **Config.** Part of `config/plant_renderer.json` (LOD thresholds, ellipsoid noise params, mutation signature params, WebGL2 fallback config).
 
 **AI prompt.** "No separate implementation — all features in C02 unified WebGPU SDF renderer. Ensure LOD transitions are smooth, impostor ellipsoids use procedural surface (no billboards, no atlas), WebGL2 fallback has smooth joint blending."
+
+### C02c · Client Physics and Collider Budgets — `config/physics.json`
+**Depends on:** T25.
+**Status:** config-only so far. `config/physics.json` carries `owner_task: C02c`,
+`status: active`, and real values (gravity, collider budgets, LOD distances), but
+there is **no task record**. The behaviour it sizes lives in
+`packages/shared/src/physics/plantColliderPlan.ts` and the client Rapier manager;
+AL-07 in `docs/PlantLegacy-Abyssal-Integration-Plan.md` formalises the record and
+extends the plan for hosts, water and fragments. Nothing new may be hardcoded
+here (RULE_3).
 
 ### C03 · Environment Rendering — `config/render.json`
 **Depends on:** C01, T07, T00A.
@@ -559,12 +569,7 @@ Fuses modular mathematical primitives (tapered capsule segments for roots/stems/
 **Must support.** SQL migration tooling; scheduled `pg_dump` to free storage; a restore drill script; health checks; tick-budget dashboard (Part 13.6).
 **Acceptance.** Restore to a clean database from yesterday's backup and the game starts. Migrations roll forward on staging without data loss.
 
-### T51 · Gene Extraction and Graft — `config/fragments.json`, `config/extraction.json`
-**Depends on:** T15, T13, T06, T16, T08A.
-**Must support.** Part 5, T51: fragments (sources, pickup, decay, flags), extraction from fragment or own plant, provenance ledger entries, graft with chance/cooldown/limits, duplication audit, events.
-**Acceptance.** One fragment yields exactly one gene. Concurrent extraction attempts on the same fragment cannot both succeed. Mint limits enforced. Graft applies T04 maintenance. Ledger shows provenance. No rarity field.
-**Config.** Fragment lifetime, pickup radius, drop chances, extraction cost, self-extract mode/limits, graft chance/cooldown/limit, mint limit.
-**AI prompt.** "Build T51 per Part 5, T51. Every transaction row-locked. One fragment, one gene. Provenance ledger entries. Duplication-audit test required."
+*(Full spec in Part 5, T51 — one copy only, so the two cannot drift.)*
 
 ### H01 · Hardening and Load
 **Depends on:** every Gate 3 task except the real-money Spore switch.
@@ -827,8 +832,8 @@ plant-legacy/
 │     climate_memory.json  profiles.json  reproduction.json
 ├─ docs/
 │  ├─ protocol.md  partitioning-lod.md  tick-budget.md  data-model.md
-│  ├─ compliance-policy.md  what-spores-are.md  what-works-now.md
-│  ├─ art-bible.md  controls.md  hosting.md  decisions.md
+│  ├─ compliance-policy.md  what-spores-are.md  what-works-now.md  history.md
+│  ├─ art-bible.md  controls.md  deploy.md  decisions.md  history.md
 │  ├─ tasks/                      # one markdown file per task (spec, README, checklist, status)
 │  └─ checklists/                 # manual tests, gate playtest forms
 ├─ packages/
@@ -882,6 +887,14 @@ plant-legacy/
    ├─ docker/  compose.yml  deploy/  backup-scripts/
 ```
 Not in the repo: `secrets.md` (see Part 9).
+
+**Config files added after this baseline (ADR-009).** The tree above is the
+original Part 6.2 baseline. Five existing files are not in it: `onboarding.json`
+(T00A), `plant_renderer.json` (C02), `dev.json` (D01), `physics.json` (C02c) and
+`items.json` (T08A, which the spec calls `inventory.json` + `item_flags.json` —
+see `docs/tasks/T08A.md`).
+The authoritative list of files, owners, statuses and value counts is
+`docs/tunables.md` (ADR-049) — do not extend the tree to track counts.
 
 ## B9. Definition of Done (every task)
 1. Implementation matches the spec; nothing extra.
@@ -1252,7 +1265,7 @@ Each spec is a block. Feed one to the AI at a time. Every AI session returns imp
 - Between seasons, rule-based deep-time transformation: continental drift, erosion, volcanism, sea level, biome distribution, climate.
 - Player-created scars fossilize and may reappear as landmarks, mineral deposits, faint mutation traces.
 - Season length tunable default 36 real days. Inter-season event scheduled, replayable god-view time-lapse with countdown. Players can pre-build/queue next seed during event.
-- **Season-end calamity:** every plant dies. T20 runs T06A death pipeline for every plant. Lineage survives only through queued heirloom seed. No plant survives directly. **[V5.3] `calamity_grant_seed=false` default (Part 5, T06A).**
+- **Season-end calamity:** every plant dies. T20 runs T06A death pipeline for every plant. Lineage survives only through queued heirloom seed. No plant survives directly. **[V5.3] `calamity_grant_seed=false` default (Part 5, T06A).** A calamity is a **burial, not a wipe** (RULE_8): the death pipeline converts structural biomass into the organic-matter soil field, player-made terrain edits and voids persist, and the next season runs on the same transformed planet. No code path regenerates the world or returns it to a blank state.
 - Season reward for standard+ boosters defined here: configured reward grants standard+ booster(s) or crafting currency per season participation. No money-to-standard loophole.
 - No relic drop in MVP; relic T18 post-MVP.
 - No pre-build decision left open; pre-build supported.
@@ -2539,6 +2552,25 @@ The **Root Sight cutaway shader is implemented by T02** and used by T02's camera
 >
 > **Implementation status (C02b slice, 2026-11-04):** the shipped WebGPU path is a v1 compute-driven LOD renderer: a transparent WebGPU canvas over the WebGL environment, one merged branch/leaf mesh for tiers 0/1, **impostor ellipsoid sphere SDF for tier 2**, per-plant frustum culling plus hysteresis/dwell in `cull.wgsl`, and a WebGL2 fallback. Impostor sphere SDF, VRAM slot pools, GPU skinning, texture arrays, cross-fade, and the L2/L3 mutation library are designed below but **not implemented yet**.
 
+## 14.2.0 Canonical LOD Tiers (v5.3.2)
+
+This table is the **single owner** of tier numbering. C02, C02b, this Part, `docs/partitioning-lod.md` and every task record defer to it. Earlier text used three incompatible schemes (C02's L0–L3 by distance, the 14.2.6 tiers 0–4 by projected size, and C02b's "tiers 2–4 billboards"); where they disagree, this table wins.
+
+| Tier | Projected size at 1080p | Representation | Physics / gameplay |
+|---|---|---|---|
+| **T0 / L0** | > 300 px | Full `smin` raymarch, 192 prims, real shadow caster, full IK | Full near-field; server full |
+| **T1 / L1** | 80–300 px | Reduced raymarch at 48 prims (WebGL2 fallback: merged mesh with smooth joint blending), analytic sway, blob shadow | Merged colliders; server reduced |
+| **T2 / L2** | 12–80 px | **Ellipsoid SDF impostor** — `sdEllipsoid` + noise, procedural bark and canopy colour, 5–10 steps | None |
+| **T3 / L3** | 2–12 px | **Colour-only atlas billboard**, no lighting data, rebaked on shape change under a frame cap | None |
+| **T4** | < 2 px | Coloured point / minimap dot | None |
+
+Rules:
+- **Projected size decides the tier; distance is a consequence.** C02's distance ranges remain useful as defaults for a 1080p camera but are not the definition.
+- **Render tiers are not simulation tiers.** `world_plants.tier` is `active | near | dormant` (Part 13.6, `docs/data-model.md`); T0–T4 above are *render representation* only. A plant is simultaneously, say, simulation-tier Active and render-tier T2.
+- **A tier never changes gameplay truth.** A T4 plant still grows, starves and dies by the same rules (RULE_27, and DESIGN Part 13.7).
+- Promotion at 1.15×, demotion at 0.85×, minimum dwell ~0.5 s. Cross-fades are dithered over ~0.3 s, capped per frame.
+- The player's own plant is pinned to the best tier the device can afford.
+
 ## 14.2.1 VRAM Budget and Pool Management
 
 **Assumptions:** 1080p, 2 GB-class GPU, ~800 MB budget for rendering.
@@ -2550,12 +2582,16 @@ The **Root Sight cutaway shader is implemented by T02** and used by T02's camera
 | Near meshes (Tier 0) | ~20 MB | 256 slots × ~80 KB |
 | Mid meshes (Tier 1) | ~26 MB | 1,280 slots × ~20 KB |
 | Leaf instances | ~4 MB | ~120k × 32 B |
-| Impostors | ~170 MB | 1k multi-view (8×64², ~131 KB) + 9k single-view (32², ~4 KB) |
+| Impostors — L2 (ellipsoid SDF) | ~0 MB | Analytic shader maths; per-plant shape/colour params live in the plant header buffer (~0.6 MB for 10k) |
+| Impostors — L3 (colour-only atlas) | ~37 MB | 9k single-view (32², 4 KB each); L3 only (2–12 px) |
+| *Superseded: full-fidelity atlas* | *~170 MB* | *Retained for reference only. One surface/view; the albedo+normal+emission spec in 14.2.6 costs ~504 MB and does not fit the 800 MB budget (ADR-042)* |
 | Texture arrays | ~40 MB | Leaf color/normal, bark color/normal |
 | Shadows (4 cascades 2048²) | ~67 MB | Depth only |
 | Render targets | 100–180 MB | More with MSAA |
 | Light volume | ~8 MB | |
-| **Total (1080p)** | **~520–600 MB** | **~1 GB at 4K** |
+| **Total (1080p)** | **~390–470 MB** | **~1 GB at 4K** |
+
+**Impostor budget note (v5.3.2).** The plant impostor is a **single analytic ellipsoid SDF at L2** (C02) and a **colour-only atlas billboard at L3** (2–12 px). L2 costs no VRAM beyond the header buffer it already needs for culling; the colour-only L3 atlas costs ~37 MB for 9k distant plants. The old ~170 MB row described a full-fidelity multi-view atlas, and would cost ~504 MB at three surfaces per view (albedo, normal, emission, as 14.2.6 requires) — more than the whole rendering budget. That path is not used. See ADR-042.
 
 **Pool Management:**
 - Each tier uses fixed-size slot pools inside large buffers, each pool ≤128 MB (WebGPU default binding limit). No fragmentation, no per-frame allocation.
@@ -3355,69 +3391,9 @@ Handlers must not block the tick. Subscribers register at startup. Event bus def
 
 ---
 
-# Appendix F — v5.3.1 Merge Audit / Change List
+# Appendix F — Intentionally open / not missing
 
-## F.1 What v5.3.1 changes relative to v5.3
-
-**Critical fixes (review #1–#6):**
-
-1. **B3.2 checkpoint table replaced** so the maximum gap between checkpoints is four weeks. New checkpoints added at W26, W47, W51, W54, W56, W61, W70, W78. RULE_28 now holds and the final sign-off claim is true.
-2. **Gate 3 arithmetic corrected.** W78 is an explicit Gate 3 playtest week; W79–80 are buffer and launch prep. Gate 3 arithmetic: 25 task-weeks + 1 playtest + 2 buffer = 28 weeks (W53–80). Gate 3 in B3.1 updated to match.
-3. **T25/T26 cut-list conflict resolved.** Gate 3 cut list keeps the T25 core stub (root tunneling/voids and canopy light-blocking persistence) required by T26. Only optional T25 capabilities are cut.
-4. **T14/T43 cut-list conflict resolved.** Gate 2 cut list keeps the T14 seller/listing data model and the `getSellerReputation` stub even if the T14 UI/auction/preview is cut. T43 cannot start without seller/listing identity; if T14 UI is deferred, T14 data model + stub must be scheduled at Gate 3 before T43.
-5. **Root Sight shader ownership fixed.** T02 implements the Root Sight cutaway shader; C03 reuses/refines it. C03 dependency row now includes T00A.
-6. **H01 dependency fixed.** H01 depends on all Gate 3 tasks *except* the real-money switch.
-
-**Moderate fixes (review #7–#13):**
-
-7. **Stale `A…` references replaced** with real Part/Task references throughout Parts 4–6, 11–18. The replacement map is in F.3.
-8. **T15 stale text corrected.** T15 no longer defers extraction to post-MVP. T51 owns extraction/graft; T14 owns gene listing; T22 owns bloodline. T15 owns the gene schema, shared ID space, and mint-on-acquisition.
-9. **Vocabulary rows corrected.** Heirloom seed row now states seed production (T06A) and death grant; gene item row now states T51 extraction and `mints_per_plant_mutation`.
-10. **Dependency matrix completed.** Added: `C03 → C01, T07, T00A`; `C05 → C01, C04, T08A, T16, T06A, T20, T08C, T12`; `C02b → C02, T03, T04`; `T14 → T08A, T15, T13A, T06A (stubs: getSellerReputation, giftToGuild)`; `T20 → T06A, T07, T16, T13A`; `T43 → T08B, T16, T14 (T14 may be deferred; T14 seller/listing stub required if T14 UI is cut)`; `H01 → all Gate 3 tasks except real-money switch`.
-11. **Duplicate Part 8.2 heading removed.** The "continued from cut-off" heading and the duplicated `No NPC vendors…` bullet are gone. Locked decisions form one continuous list.
-12. **RULE_16 checkpoint weeks corrected.** "Weeks 13, 36 and 65 become checkpoints" is now "Weeks 13, 36 and 67 become checkpoints," matching the corrected checkpoint table (CP21 is W67).
-13. **Heirloom-seed planting separated from T53.** T06A's planting bullet now names T22 (or a separate post-MVP seed-planting task). T53 covers offspring seeds from cross-pollination only.
-
-## F.2 What v5.3.1 does *not* change
-
-- The 80-week schedule, the 73 task-week total, the gate structure (24 / 52 / 80), and the task IDs.
-- The RULE_1–RULE_31 list (only RULE_16's checkpoint weeks changed).
-- The system specs' behavior; only references and dependency rows were corrected.
-- The secrets policy (Part 9).
-- All beta-bucket specs except T22 (planting bullet) and T53 (offspring-only clarification).
-
-## F.3 `A…` reference replacement map
-
-Applied globally to v5.3.1. After this patch, no standalone `A5.2`, `A8.1`, `A9.2`, `A11.4`, `A13-*`, etc. remain.
-
-| Find | Replace with |
-|---|---|
-| `Part 13, A5.2` / `A5.2` | `Part 13.6` |
-| `Part 13, A5.3` / `A5.3` | `Part 13.7` |
-| `Part 13, A5.4` / `A5.4` | `Part 13.8` |
-| `Part 13, A5.5` / `A5.5` | `Part 13.9` |
-| `Part 13, A4.4` / `A4.4` | `Part 13.4` |
-| `Part 14, A6.1–A6.3` / `A6.1–A6.3` | `Part 14.1.1–14.1.3` |
-| `Part 5, A8.1` / `A8.1` | `Part 5, T06A` |
-| `Part 5, A8.2–A8.3` / `A8.2–A8.3` | `Part 5, T51` |
-| `A8.2` / `A8.3` | `Part 5, T51` |
-| `A8.1-1` … `A8.1-6` | `Part 5, T06A` / `T06A planting bullet / T22` as appropriate |
-| `Part 5, A9.2` / `A9.2` | `Part 5, T05 (report/block) and T40 (admin triage)` |
-| `A11.4` | `Part 6.1 condition matrix` |
-| `A13-1` | `Part 16 item 1` |
-| `A13-2` | `Part 16 item 2` |
-| `A13-3` | `Part 16 item 3` |
-| `A13-4` | `Part 16 item 4` |
-| `A13-5` | `Part 16 item 5` |
-| `A13-6` | `Part 16 item 6` |
-| `A13-7` | `Part 16 item 7` |
-| `A13-8` | `Part 16 item 8` |
-
-## F.4 Retained v5.3 content
-
-Every v5.3 system spec is retained in v5.3.1, including: T00A consumption triggers; T01 root competition and canopy shading; T02 camera/substrate and now shader ownership; T03 event bus, A5.2 tiers (now Part 13.6), A5.3 interest (Part 13.7), A5.4 protocol (Part 13.8), A5.5 persistence (Part 13.9); T04 movement block; T05 dual chat + report/block; T06 damage pipeline, kill credit, dung, reroot crawl, fragment drops and remains; T07 day/night and weather phases; T08A inventory with flags, bundles, duplication audit, fragment and offspring seed categories; T08 session feedback; T08B account progress; T12 one archetype; T10 parasitism; T13 currency and P2W closure; T15 gene schema; T13A 3×3 boosters with thunderstorm column; T14 UI marketplace; T16 ledger; T17 naming; T06A heirloom; T20 deep time; T43 reputation; T44 guilds; T45 mail + Gift Bundles; T50 Starter Pack; T46 status/rank display only; T23–T26 frameworks; T40–T42 launch minimum; real-money switch.
-
-## F.5 Intentionally open / not missing
+Deliberate config decisions, not omissions.
 
 - Exact tuning numbers are defaults, not locks.
 - Consumed vs copied genes remains a config decision in T06A/T22.

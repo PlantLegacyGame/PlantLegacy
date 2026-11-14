@@ -1,13 +1,14 @@
 # Partitioning and LOD
 
 **Status:** implemented (C02b WebGPU, C02 SDF Raymarched). Owner: **T03** (weeks 10–11).
-**Source of truth:** DESIGN.md Parts 13.5, 13.6, 13.7.
+**Source of truth:** DESIGN.md Parts 13.5, 13.6, 13.7. Tier numbering is owned
+by DESIGN.md Part 14.2.0 (v5.3.2) and is not restated here (ADR-042, ADR-049).
 
 ## Overview
 
 The system uses a **dual rendering path**:
 1. **C02 (Three.js + SDF Raymarched)**: Primary renderer for plants, uses Raymarched Signed Distance Fields with polynomial smooth minimum (`smin`) organic fusion inside local bounding volumes. All primitives (tapered capsules, joint spheres, root crowns, parametric leaf blades) fuse into a single continuous anatomical membrane.
-2. **C02b (WebGPU Compute-Driven)**: GPU-driven plant rendering path with compute culling/LOD, merged mesh for tiers 0/1, billboards for tiers 2–4, WebGL2 fallback.
+2. **C02b (WebGPU Compute-Driven)**: GPU-driven plant rendering path with compute culling/LOD, merged mesh for tiers 0/1, ellipsoid SDF impostor at L2, colour-only atlas billboards at L3, coloured point at T4, WebGL2 fallback.
 
 ## Architecture
 
@@ -33,13 +34,17 @@ The system uses a **dual rendering path**:
 
 ### Client - C02b WebGPU Compute-Driven Renderer (`apps/client/src/renderers/webgpu/`)
 
-#### 4-Tier LOD System
+#### LOD tiers (canonical table: `DESIGN.md` Part 14.2.0)
 | Tier | Projected Size | Geometry | Render Path |
 |------|---------------|----------|-------------|
 | 0 (Near) | ≥ 300 px | Full merged mesh | `mesh.wgsl` |
 | 1 (Mid) | 80–300 px | Merged mesh (no leaves) | `mesh.wgsl` |
-| 2 (Far) | 12–80 px | Billboards | `billboard.wgsl` |
-| 3 (Distant) | 2–12 px | Billboards | `billboard.wgsl` |
+| 2 (Far) | 12–80 px | Ellipsoid SDF impostor | `impostor.wgsl` |
+| 3 (Distant) | 2–12 px | Colour-only atlas billboard | `billboard.wgsl` |
+
+As **shipped in the v1 slice**, billboards still cover tiers 2–3. ADR-042 makes L2
+an ellipsoid SDF (no atlas, relit live) and restricts the atlas billboard to L3
+(2–12 px, colour only), so `billboard.wgsl` becomes an L3 path only.
 
 #### Compute Pipeline (`cull.wgsl`)
 - Frustum culling per plant
@@ -53,7 +58,7 @@ The system uses a **dual rendering path**:
 - Wind animation in vertex shader
 - Root-specific: simpler geometry (4 sides vs 8 for canopy)
 
-#### Billboard Pipeline (`billboard.wgsl`) — Tier 2/3
+#### Billboard Pipeline (`billboard.wgsl`) — L3 only (tiers 2–3 as shipped)
 - Camera-facing quads, no vertex buffer
 - 6 vertices per plant, instanced
 - Procedural leaf breakup in fragment shader
@@ -100,7 +105,7 @@ The system uses a **dual rendering path**:
 1. **Compute culling** - GPU parallel per plant (C02b)
 2. **Instanced rendering** - Single draw call per tier (C02b)
 3. **Merged buffers** - No per-plant buffer binds (C02b)
-4. **Tier system** - 90%+ plants at billboard tiers (C02b)
+4. **Tier system** - 90%+ plants at L2/L3 (C02b)
 5. **Hysteresis** - Stable tier assignments (C02b)
 6. **Bounding volume** - Raymarching restricted to plant screen footprint (C02)
 7. **Interest management** - Server filters entities per client (T03)
