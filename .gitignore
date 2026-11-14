@@ -16,3 +16,9 @@ secrets.md
 *.log
 coverage/
 .tmp/
+
+# local capture artifacts: screenshots taken while checking a change, not assets
+/*.png
+/screens/
+/screenshots/
+/docs/verify/
