@@ -17,7 +17,7 @@ The plan has one central thesis:
 
 Abyssal Garden is a static, hand-authored, single-player diorama. Plant Legacy is a persistent, player-authored, server-authoritative ecology. That difference decides almost every adaptation in this document.
 
-The plan makes twelve decisions:
+The plan makes twelve decisions. Their IDs (`D1`–`D12`) are local to this plan—they are not DESIGN Part 12's dashed `D-nn` and not `ADR-nnn` in `[decisions.md](./decisions.md)`.
 
 | # | Decision | Why |
 |---|---|---|

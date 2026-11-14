@@ -1598,6 +1598,12 @@ Rule: `account_bound=true` forces other three false. Gift Bundle contents may no
 # Part 8 — Open Questions and Locked Decisions
 
 ## 8.1 Open Questions
+
+_These are the v5.3 questions as asked. Where a later decision answers one, the
+answer lives in [`docs/decisions.md`](./docs/decisions.md), in the v5.4 approvals
+(Part 16 items 9–14) or in Part 6; this list is not rewritten, so check those
+before treating an entry as open._
+
 - Multiplayer 10k scale: LOD, partitioning, or both. Test at Phase 1. Build for 50–100, design for 10k.
 - Session vs season: sessions are activity blocks; seasons are tunable intervals.
 - Poly symbionts configurable default 3, post-MVP.
@@ -2334,6 +2340,10 @@ The best moments will not be designed. They will be discovered. Build the possib
 
 Each row is a decision made (or that follows directly from answers). "Needs approval" rows are listed again in Part 16.
 
+This log is frozen with the plan (IDs `D-nn`). Decisions made **after** v5.3.1 —
+implementation choices and review outcomes — live in [`docs/decisions.md`](./docs/decisions.md)
+as `ADR-nnn`, which is the current ruling where the two differ.
+
 | ID | Decision | Source |
 |---|---|---|
 | D-01 | Launch order: browser first, then desktop app, then mobile app. Mobile browsers remain playable but are not optimized for. | User answer |
@@ -2757,6 +2767,9 @@ Free tiers change often. These were checked in November 2026 and must be re-chec
 ---
 
 # Part 16 — Open Decisions Needing Approval
+
+Items 1–8 are still open unless the item says otherwise. Items 9–14 were approved
+on 2026-11-09 and are kept here as the record of that approval.
 
 1. **Calamity seed rule.** Default: no automatic seed at season end; you must have produced and queued one. Alternative: grant one so nobody loses lineage. Which?
 2. **Graft balance.** Genes bought with Spores can be grafted onto living plants. Keep (default, with limits), or restrict grafting to genes the player has personally carried (`graft_requires_prior_carry=true`)?

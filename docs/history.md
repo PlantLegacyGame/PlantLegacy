@@ -44,6 +44,7 @@ commit that introduced this file.
 | 2026-11-14 | Abyssal review: nine decisions, ADR-041 to ADR-049 (unified renderer deferred, L2 ellipsoid/L3 atlas, terrain slice, calamity as burial, two water slices, full traits, fauna before volumetric terrain, measurement first, two-document discipline). | `decisions.md` |
 | 2026-11-14 | Documentation consolidated: one home per fact, `deploy.md`, `history.md`, tunables slimmed to an index, duplicate T51 spec removed, `pnpm docs:check` added. | commit `6e535c0` |
 | 2026-11-14 | `history.md` itself compressed to this log; the abyssal config appendix reduced to key names. | commit `497317a` |
+| 2026-11-14 | Separated the two decision logs (`D-nn` in Part 12, `ADR-nnn` in `docs/decisions.md`), marked which Part 16 approvals are still open, added a resolution pointer to §8.1, and retagged the dangling `O03` load-test reference to **H01**. | this commit |
 | 2026-11-14 | `DESIGN.md` gained the two specs it never had: **D01** (dev settings engine) and **C03b** (ground LOD), both shipped on 2026-11-13 without a spec in the plan, plus their dependency-matrix rows. The starter-tuning appendix was retired in favour of a config map, the checklist index completed, and the rule count corrected to 31. | commits `7f59339`, this one |
 
 ## Retired: state-machine remediation

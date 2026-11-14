@@ -1,9 +1,15 @@
 # Decision log
 
-Decisions made while building Phase 0 / Gate 0 (T00, O01, T03P, C01, T00A and
-the T01 renderer prototype). Each record is small on purpose: the plan in
-`DESIGN.md` is the source of truth, and these explain **how** this repository
-implements it. Add a record when a choice would otherwise be re-litigated.
+The only ruling log for this repository: every implementation choice and every
+review outcome, addressed as `ADR-nnn`. Each record is small on purpose — the
+plan in `DESIGN.md` is the source of truth, and these explain **how** this
+repository implements it, or **what was decided** when the plan left a choice
+open. Add a record when a choice would otherwise be re-litigated.
+
+**Not the same as DESIGN Part 12.** Part 12 is the plan's own v5.3 decision log
+(`D-nn`, e.g. `D-02`), frozen with the plan. Where the two overlap, the ADR here
+is the current ruling; Part 12 is kept for the history of how the plan was
+written.
 
 Format: **Context → Decision → Consequences.**
 

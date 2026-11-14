@@ -127,7 +127,7 @@ committed; CI installs with `--frozen-lockfile`.
 │   ├── dev.mjs                # one-command local stack
 │   ├── watch-server.mjs       # content-aware server restart (pnpm dev:server)
 │   ├── sim-bots/              # placeholder (T26)
-│   ├── load-test/             # placeholder (O03)
+│   ├── load-test/             # placeholder (H01)
 │   ├── seed-data/             # placeholder (T03)
 │   └── backup/                # placeholder (O02)
 ├── config/                    # 78 tunable files + _meta (count owned by docs/tunables.md)
