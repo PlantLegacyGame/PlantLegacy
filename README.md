@@ -137,7 +137,7 @@ together.
 
 | Topic | Single home |
 |---|---|
-| What the game is: philosophy, humour, the 27 rules, every task spec | [`DESIGN.md`](./DESIGN.md) — source of truth, not summarized elsewhere |
+| What the game is: philosophy, humour, the 31 rules, every task spec | [`DESIGN.md`](./DESIGN.md) — source of truth, not summarized elsewhere |
 | Every ruling, with its date and reasoning | [`docs/decisions.md`](./docs/decisions.md) |
 | How the built system actually works | [`CONTEXT.md`](./CONTEXT.md), [`docs/protocol.md`](./docs/protocol.md), [`docs/data-model.md`](./docs/data-model.md), [`docs/state-machines-and-invariants.md`](./docs/state-machines-and-invariants.md) |
 | Config files: owner, status, value count | [`docs/tunables.md`](./docs/tunables.md) — values live in `config/` |

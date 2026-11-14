@@ -41,7 +41,7 @@ These supersede the rows above wherever they conflict. Each is an ADR.
 | # | Decision | Effect on this plan |
 |---|---|---|
 | A1 | The unified renderer is **deferred until T56 makes local occlusion real**. C02's transparent canvas stands (ADR-041). | AL-02 leaves Wave 0 and becomes the gate for shipping caves/arches/sea. D3 becomes a proposal, not a precedent. |
-| A2 | **L2 = ellipsoid SDF, L3 = colour-only atlas** (ADR-042). | §7.2–7.4 and Appendix A: ~37 MB of L3 atlas, no L2 atlas, no `impostor_atlas_size`. |
+| A2 | **L2 = ellipsoid SDF, L3 = colour-only atlas** (ADR-042). | §7.2–7.4: ~37 MB of L3 atlas, no L2 atlas, no `impostor_atlas_size`. |
 | A3 | Volumetric terrain's **first slice is one authored region** around spawn (ADR-043). | AL-08 acceptance scoped to the region; planet-wide generation deferred. |
 | A4 | A calamity is a **burial**; biomass becomes an organic-matter soil field (ADR-044). | T20/T59 own the fix. `season_length_days` stays in `world.json`, not `deep_time.json`. |
 | A5 | Water ships in **two slices**: lakes/rivers/pools, then ocean (ADR-045). | AL-09 splits; salinity, pressure, depth biomes and underwater traits move to slice two. |

@@ -833,7 +833,7 @@ plant-legacy/
 ├─ docs/
 │  ├─ protocol.md  partitioning-lod.md  tick-budget.md  data-model.md
 │  ├─ compliance-policy.md  what-spores-are.md  what-works-now.md  history.md
-│  ├─ art-bible.md  controls.md  deploy.md  decisions.md  history.md
+│  ├─ art-bible.md  controls.md  deploy.md  decisions.md
 │  ├─ tasks/                      # one markdown file per task (spec, README, checklist, status)
 │  └─ checklists/                 # manual tests, gate playtest forms
 ├─ packages/
@@ -3178,56 +3178,26 @@ Because most plant geometry is procedural, the art actually needed is small: ter
 
 ---
 
-# Appendix A — Starter Tuning Values
+# Appendix A — Where tuning lives
 
-| System | Value | Default | Range |
-|---|---|---|---|
-| Resources | tile size | 1.0 | 0.5–10 |
-| Resources | light base | 50 | 0–100 |
-| Resources | moisture base | 50 | 0–100 |
-| Resources | minerals base | 50 | 0–100 |
-| Resources | photosynthesis rate | 0.1 | 0–1.0 |
-| Resources | absorption radius | 5 | 1–50 |
-| Resources | `tile_mineral_threshold` | 20 | 0–100 |
-| Growth | root/canopy speed | 1.0 | 0.1–10 |
-| Growth | node cost | 10 | 1–100 |
-| Growth | root overlap pressure | 5 HP/s | 0–20 |
-| Growth | light block per node | 10 | 1–25 |
-| World | tick rate | 20 Hz | 10–60 |
-| World | max players | 10,000 | 10–50,000 |
-| World | offline tick | 5 Hz | 1–60 |
-| World | reconnect window | 10 min | 1–60 |
-| Weather | cycle length | 30 min | 10–120 |
-| Weather | day fraction | 0.66 | 0.4–0.8 |
-| Weather | forecast window | 120 s | 30–600 |
-| Uproot | reroot window | 30 s | 3–120 |
-| Uproot | crawl speed | 1.0 | 0.1–2.0 |
-| Uproot | `kill_credit_window` | 60 s | 5–300 |
-| Session | duration | 30 min | 5–120 |
-| Session | stipend | 50 Spores | 0–1,000 |
-| Booster | MVP tiers | inferior/common/standard | fixed |
-| Booster | `min_effect` | 0.5 | 0–1 |
-| Booster | standard crafting Essence | config | earn-only |
-| Season | length | 36 days | tunable |
-| Heirloom | `max_seeds_per_life` | 3 | 1–10 |
-| Heirloom | `death_grant_seed` | true | bool |
-| Heirloom | `calamity_grant_seed` | false | bool (needs Part 16 item 1) |
-| Fragments | `fragment_lifetime` | 24 h | 1–168 h |
-| Fragments | drop chance per destroyed node | 0.1 | 0–1 |
-| Fragments | remains count | 3 | 0–20 |
-| Extraction | `self_extract_limit_per_life` | 2 | 0–10 |
-| Extraction | `mints_per_plant_mutation` | 1 | 1–5 |
-| Extraction | graft chance | 0.25 | 0–1 |
-| Extraction | `max_grafts_per_life` | 3 | 0–10 |
-| Client | desktop L0 plant triangle budget | 40 K | 20 K–80 K |
-| Client | phone L0 plant triangle budget | 12 K | 5 K–25 K |
-| Client | desktop detailed plant cap | 100 | 50–150 |
-| Client | phone detailed plant cap | 40 | 15–60 |
-| Client | HUD max screen fraction (landscape) | 0.2 | 0.1–0.4 |
-| Client | touch min target | 44 px | 40–64 |
-| Client | text scale | 1.0 | 0.8–1.5 |
+The v5.3 plan carried a table of starter defaults here. Every number in it is
+owned by `config/*.json` (RULE_3) and indexed by `docs/tunables.md`; keeping a
+copy in this document made a second owner, and the copy had already drifted from
+the shipped values. The table is retired — tune from the config files, not from
+the plan.
 
----
+| System family | Config |
+|---|---|
+| Resources, light, moisture, minerals | `config/resources.json`, `config/daynight.json`, `config/weather.json` |
+| Growth, node costs, competition | `config/growth.json`, `config/root_sight.json` |
+| World scale, tick, reconnect, seasons | `config/world.json`, `config/network.json`, `config/net_proto.json` |
+| Damage, uproot, tumbling | `config/damage.json`, `config/uproot.json`, `config/tumbling.json` |
+| Session and accounts | `config/session.json`, `config/accounts.json` |
+| Rendering and controls | `config/render.json`, `config/plant_renderer.json`, `config/controls.json`, `config/ui.json` |
+| Physics and terrain | `config/physics.json`, `config/terrain.json` |
+
+Statements that are *not* tunable — the player is the plant, no rarity, no world
+resets, the two worlds — live in Parts 1–3 and the rules, not here.
 
 # Appendix B — Schema Examples
 

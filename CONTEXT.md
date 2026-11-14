@@ -276,7 +276,7 @@ Entry types: `number`, `integer`, `boolean`, `string`, `enum`, `array`,
 `range: [min, max]`; `value` is the default. See
 `packages/shared/src/config/types.ts` and `config/_meta/schema.json`.
 
-Validator rules (authoritative code: `src/config/validate.ts`):
+Validator rules (authoritative code: `packages/shared/src/config/validate.ts`):
 
 1. `_meta.schema` must be `extended-1`; `_meta.system` must match the filename.
 2. Numeric `value` must be inside `range`; `range` must be `[min, max]` with
