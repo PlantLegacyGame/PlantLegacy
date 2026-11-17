@@ -16,8 +16,10 @@ function createPorts(overrides: Partial<WorldCommandPorts> = {}) {
       tileX: Math.floor(worldX / 8),
       tileZ: Math.floor(worldZ / 8),
     }),
-    setTileResources: (tileX, tileZ, resources) =>
-      calls.push(`tile:${tileX},${tileZ}:${JSON.stringify(resources)}`),
+    setTileResources: (tileX, tileZ, resources) => {
+      calls.push(`tile:${tileX},${tileZ}:${JSON.stringify(resources)}`);
+      return true;
+    },
     setTimeOfDay: (fraction) => calls.push(`time:${fraction}`),
     weatherBroadcast: () => ({ timeOfDay: 0.5, isDay: true, sunIntensity: 1.4 }),
     respond: (action, payload) => responses.push({ action, payload }),
@@ -68,9 +70,22 @@ describe('handleWorldCommand', () => {
   });
 
   it('does not write tile (0, 0) when the command names no position', () => {
-    const { ports, calls } = createPorts();
+    const { ports, calls, responses } = createPorts();
     handleWorldCommand(ports, { type: 'dev_set_tile', moisture: 0.5 });
     assert.deepEqual(calls, []);
+    assert.deepEqual(responses.at(-1)?.payload, { ok: false, reason: 'bad_tile' });
+  });
+
+  it('answers ok only when the tile was actually written', () => {
+    const { ports, responses } = createPorts();
+    handleWorldCommand(ports, { type: 'dev_set_tile', x: 2, z: 3, moisture: 0.5 });
+    assert.deepEqual(responses.at(-1)?.payload, { ok: true });
+  });
+
+  it('refuses an out-of-bounds tile instead of claiming success', () => {
+    const { ports, responses } = createPorts({ setTileResources: () => false });
+    handleWorldCommand(ports, { type: 'dev_set_tile', x: 999999, z: -999999, moisture: 0.5 });
+    assert.deepEqual(responses.at(-1)?.payload, { ok: false, reason: 'out_of_bounds' });
   });
 
   it('moves the world clock and answers with the state it settled on', () => {

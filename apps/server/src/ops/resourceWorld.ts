@@ -584,17 +584,22 @@ export class ResourceWorld {
     return tile ? { ...tile } : null;
   }
 
+  /**
+   * Write one tile's resources. Returns false when the coordinates are outside
+   * the grid or the cell has no tile, so a caller can tell a write from a no-op
+   * instead of reporting success either way.
+   */
   setTileResources(
     tileX: number,
     tileZ: number,
     resources: { light?: number; moisture?: number; minerals?: number; groundwater?: number },
-  ): void {
+  ): boolean {
     if (tileX < 0 || tileX >= this.width || tileZ < 0 || tileZ >= this.height) {
-      return;
+      return false;
     }
     const cell = this.tileCells[this.index(tileX, tileZ)];
     const tile = this.cells[cell];
-    if (!tile) return;
+    if (!tile) return false;
     if (resources.light !== undefined) tile.light = clamp(resources.light, 0, this.config.maxLight);
     if (resources.moisture !== undefined)
       tile.moisture = clamp(resources.moisture, 0, this.config.maxMoisture);
@@ -604,6 +609,7 @@ export class ResourceWorld {
       tile.groundwater = clamp(resources.groundwater, 0, this.config.groundwaterCapacity);
     this.sunIntensityCache = null;
     this.markCellDirty(cell);
+    return true;
   }
 
   /**

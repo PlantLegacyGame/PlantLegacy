@@ -490,3 +490,13 @@ describe('tile deltas before and after the first full grid', () => {
     assert.equal(world.getDirtyTileCount(), 0);
   });
 });
+
+describe('setTileResources outside the grid', () => {
+  it('reports whether the write landed', () => {
+    const world = makeWorld();
+    assert.equal(world.setTileResources(1, 1, { moisture: 0.5 }), true);
+    assert.equal(world.setTileResources(-1, 0, { moisture: 0.5 }), false);
+    assert.equal(world.setTileResources(0, world.getHeight(), { moisture: 0.5 }), false);
+    assert.equal(world.setTileResources(999999, -999999, { moisture: 0.5 }), false);
+  });
+});
