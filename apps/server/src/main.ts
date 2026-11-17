@@ -19,7 +19,7 @@ import {
   type ReportConfig,
 } from './ops/chat.ts';
 import { consumeChatBudget, resolveChatIntent } from './ops/chatService.ts';
-import { readConfigEntries, readFlatConfig } from './ops/configRoutes.ts';
+import { readConfigValues, readFlatConfig } from './ops/configRoutes.ts';
 import {
   type ConnectionRegistry,
   connectionRegistryClearHelloTimer,
@@ -3827,7 +3827,7 @@ async function main(): Promise<void> {
       // T00A: Serve onboarding config
       try {
         // Extract values from extended-1 format
-        const values = await readConfigEntries(runtime.configDir, 'onboarding');
+        const values = await readConfigValues(runtime.configDir, 'onboarding');
         if (!values) throw new Error('onboarding.json unreadable');
         const hintCardLines = values.hint_card_lines?.value || [
           'WASD / Arrows: Pan camera  |  Left-drag: Orbit  |  Middle-drag: Pan  |  Scroll: Zoom',
@@ -3870,7 +3870,7 @@ async function main(): Promise<void> {
       // T01: Serve plant renderer config
       try {
         // Extract values from extended-1 format
-        const values = await readConfigEntries(runtime.configDir, 'plant_renderer');
+        const values = await readConfigValues(runtime.configDir, 'plant_renderer');
         if (!values) throw new Error('plant_renderer.json unreadable');
         const plantRendererConfig = {
           max_nodes_per_plant: values.max_nodes_per_plant?.value ?? 1000,
@@ -3970,7 +3970,7 @@ async function main(): Promise<void> {
       // Growth step distances, so the aim arrow can preview exactly one real
       // segment instead of an invented length.
       try {
-        const parsed = { values: await readConfigEntries(runtime.configDir, 'growth') };
+        const parsed = { values: await readConfigValues(runtime.configDir, 'growth') };
         if (!parsed.values) throw new Error('growth.json unreadable');
         const values = (parsed.values ?? {}) as Record<
           string,
@@ -4033,7 +4033,7 @@ async function main(): Promise<void> {
     if (url.pathname === '/config/render') {
       // C01: Serve render config
       try {
-        const values = await readConfigEntries(runtime.configDir, 'render');
+        const values = await readConfigValues(runtime.configDir, 'render');
         if (!values) throw new Error('render.json unreadable');
         const renderConfig: Record<string, unknown> = {};
         for (const [key, entry] of Object.entries(values)) {
@@ -4100,7 +4100,7 @@ async function main(): Promise<void> {
     if (url.pathname === '/config/controls') {
       // C01: Serve controls config
       try {
-        const values = await readConfigEntries(runtime.configDir, 'controls');
+        const values = await readConfigValues(runtime.configDir, 'controls');
         if (!values) throw new Error('controls.json unreadable');
         const bindingsArray = (values.bindings_desktop?.value ?? []) as Array<{ action?: string }>;
         const bindingsObj: Record<string, unknown> = {};
@@ -4359,7 +4359,7 @@ async function main(): Promise<void> {
     if (url.pathname === '/config/ui') {
       // C01: Serve UI config
       try {
-        const values = await readConfigEntries(runtime.configDir, 'ui');
+        const values = await readConfigValues(runtime.configDir, 'ui');
         if (!values) throw new Error('ui.json unreadable');
         const uiConfig = {
           text_scale: values.text_scale?.value ?? 1.0,
