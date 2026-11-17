@@ -35,6 +35,7 @@ import {
   computeNodeRadii,
   type GrowthChargeScale,
   getGrowthSpeed,
+  growthDrawPerSecond,
   maxCotyledonsForPlant,
   nodeName,
   normalizeDirection,
@@ -2121,10 +2122,11 @@ export class PlantWorld {
       plant.totalBiomass += biomassThisTick;
       node.biomass = (node.biomass ?? 0) + biomassThisTick;
 
-      const waterCostPerSecond = this.config.growthWaterConsumptionRate * nodeDef.biomass_cost;
-      const mineralCostPerSecond = this.config.growthMineralConsumptionRate * nodeDef.biomass_cost;
-      const waterCost = Math.min(plant.storedWater, waterCostPerSecond * dt);
-      const mineralCost = Math.min(plant.storedMinerals, mineralCostPerSecond * dt);
+      // One draw helper, so the minerals a part takes include the nutrient
+      // share the menu quotes instead of only the structural share.
+      const drawPerSecond = growthDrawPerSecond(this.config, nodeDef.biomass_cost);
+      const waterCost = Math.min(plant.storedWater, drawPerSecond.water * dt);
+      const mineralCost = Math.min(plant.storedMinerals, drawPerSecond.minerals * dt);
       node.growthWaterConsumed = (node.growthWaterConsumed ?? 0) + waterCost;
       node.growthMineralsConsumed = (node.growthMineralsConsumed ?? 0) + mineralCost;
       plant.storedWater = Math.max(0, plant.storedWater - waterCost);

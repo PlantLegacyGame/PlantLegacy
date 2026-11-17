@@ -123,6 +123,27 @@ export function computeGrowthCostQuote(
 }
 
 /** Structural mass is quoted and accrued to hundredths, never raw floats. */
+/**
+ * What a part draws out of the plant per second while it builds.
+ *
+ * One place for the draw, because the quote and the charge disagreed: the menu
+ * showed a "nutrients" cost (`growth_nutrient_consumption_rate`) that the
+ * growth step never took, so the card promised a price the plant never paid.
+ * Minerals are the plant's only nutrient store - the resource panel says so in
+ * as many words - so the nutrient fraction is drawn from minerals alongside the
+ * structural share. `growthMinNutrients` gates that same store in `canGrow`.
+ */
+export function growthDrawPerSecond(
+  config: GrowthConfig,
+  biomassCost: number,
+): { water: number; minerals: number } {
+  const cost = Number.isFinite(biomassCost) ? Math.max(0, biomassCost) : 0;
+  return {
+    water: config.growthWaterConsumptionRate * cost,
+    minerals: (config.growthMineralConsumptionRate + config.growthNutrientConsumptionRate) * cost,
+  };
+}
+
 export function roundMass(value: number): number {
   if (!Number.isFinite(value)) return 0;
   return Math.round(Math.max(0, value) * 100) / 100;
@@ -265,8 +286,11 @@ export function canGrow(
   }
   const sharing = Math.min(0.9, Math.max(0, storedResourceSharing));
   const waterNeed = config.growthMinWater * (1 - sharing);
-  const mineralNeed = config.growthMinMinerals * (1 - sharing);
-  const nutrientNeed = config.growthMinNutrients * (1 - sharing);
+  // Nutrients have no store of their own: they are the mineral share a part
+  // draws (`growthDrawPerSecond`), so the gate is the sum of both thresholds.
+  // Checking them one after the other only ever compared minerals with the
+  // larger of the two, which let a plant pass owing more than it held.
+  const mineralNeed = (config.growthMinMinerals + config.growthMinNutrients) * (1 - sharing);
   // Check plant's internal resource storage for growth requirements
   if (plant.storedWater < waterNeed) {
     return {
@@ -274,13 +298,6 @@ export function canGrow(
       reason: `Insufficient stored water (${plant.storedWater.toFixed(1)} < ${waterNeed.toFixed(1)})`,
     };
   }
-  if (plant.storedMinerals < nutrientNeed) {
-    return {
-      ok: false,
-      reason: `Insufficient stored minerals (${plant.storedMinerals.toFixed(1)} < ${nutrientNeed.toFixed(1)})`,
-    };
-  }
-  // Minerals are used for both nutrients and structural minerals
   if (plant.storedMinerals < mineralNeed) {
     return {
       ok: false,
