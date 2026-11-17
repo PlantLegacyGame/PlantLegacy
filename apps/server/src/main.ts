@@ -108,10 +108,18 @@ import { TerrainService } from './ops/terrain.ts';
 import { createTickClock, type TickClock, tickClockStart, tickClockStop } from './ops/tickClock.ts';
 import { buildWelcomePayload } from './ops/welcomePayload.ts';
 import { loadWorldConfig } from './ops/world.ts';
-import { broadcastResourceDeltas } from './tick/resourceBroadcast.ts';
-import { broadcastRootReadouts, type RootResourceSnapshot } from './tick/rootReadout.ts';
+import { broadcastResourceDeltas, type ResourceBroadcastPorts } from './tick/resourceBroadcast.ts';
+import {
+  broadcastRootReadouts,
+  type RootReadoutPorts,
+  type RootResourceSnapshot,
+} from './tick/rootReadout.ts';
 import { handleSimulationCommand, type SimulationCommandPorts } from './tick/simulationCommands.ts';
-import { broadcastPlantStates, type PlantStateSnapshot } from './tick/stateBroadcast.ts';
+import {
+  broadcastPlantStates,
+  type PlantStateSnapshot,
+  type StateBroadcastPorts,
+} from './tick/stateBroadcast.ts';
 import { broadcastWeather } from './tick/weatherBroadcast.ts';
 
 const STARTED_AT = Date.now();
@@ -2108,30 +2116,21 @@ class World {
 
     // Per-player, by interest cell, on the configured wire cadence: every one of
     // those rules lives in tick/stateBroadcast.ts.
-    const stateBroadcast = broadcastPlantStates(
-      {
-        send: (playerId, message, messageType) => {
-          const player = this.players.get(playerId);
-          if (player) this.writeIfHealthy(player.ws, message, messageType);
-        },
-        isInRange: (playerId, x, z) => this.interestManager.isPositionInRange(playerId, x, z),
-      },
-      {
-        tick,
-        dt,
-        keyframeIntervalTicks: this.config.keyframeIntervalTicks,
-        clientSendRateHz: this.config.clientSendRateHz,
-        worldBounds: this.config.worldBounds,
-        tileSize: this.resourceWorld.getTileSize(),
-        accumulatorMs: this.stateCadenceAccumulatorMs,
-        players: Array.from(this.players.values(), (player) => ({
-          playerId: player.playerId,
-          plantId: player.plantId,
-        })),
-        states: plantStates,
-        positions: plantPositions,
-      },
-    );
+    const stateBroadcast = broadcastPlantStates(this.stateBroadcastPorts(), {
+      tick,
+      dt,
+      keyframeIntervalTicks: this.config.keyframeIntervalTicks,
+      clientSendRateHz: this.config.clientSendRateHz,
+      worldBounds: this.config.worldBounds,
+      tileSize: this.resourceWorld.getTileSize(),
+      accumulatorMs: this.stateCadenceAccumulatorMs,
+      players: Array.from(this.players.values(), (player) => ({
+        playerId: player.playerId,
+        plantId: player.plantId,
+      })),
+      states: plantStates,
+      positions: plantPositions,
+    });
     this.stateCadenceAccumulatorMs = stateBroadcast.nextAccumulatorMs;
     this.stateMessagesSent += stateBroadcast.sent;
     this.stateMessagesSkipped += stateBroadcast.skipped;
@@ -2145,23 +2144,7 @@ class World {
     // one per second; skipping one is harmless because the next event dirties
     // every tile again. Small deltas are never delayed.
     this.lastCompactGridBroadcastAt = broadcastResourceDeltas(
-      {
-        dirtyTileCount: () => this.resourceWorld.getDirtyTileCount(),
-        dirtyTiles: () => this.resourceWorld.getDirtyTiles(),
-        grid: () => ({
-          width: this.resourceWorld.getWidth(),
-          height: this.resourceWorld.getHeight(),
-          tileSize: this.resourceWorld.getTileSize(),
-        }),
-        encodeWholeGrid: (tiles) =>
-          encodeResourceGridBase64(
-            this.resourceWorld.getWidth(),
-            this.resourceWorld.getHeight(),
-            tiles as Parameters<typeof encodeResourceGridBase64>[2],
-          ),
-        broadcast: (payload) => this.broadcast(MESSAGE_TYPE.RESOURCE_UPDATE, payload),
-        now: () => Date.now(),
-      },
+      this.resourceBroadcastPorts(),
       {
         tick,
         wholeGridThreshold: COMPACT_GRID_TILE_THRESHOLD,
@@ -2170,73 +2153,14 @@ class World {
       { lastWholeGridAt: this.lastCompactGridBroadcastAt },
     ).lastWholeGridAt;
 
-    const rootReadout = broadcastRootReadouts(
-      {
-        plant: (playerId) => {
-          const player = this.players.get(playerId);
-          const plant = player?.plantId ? this.plantWorld.getPlant(player.plantId) : undefined;
-          if (!plant) return null;
-          const root = plant.rootNodeId ? plant.nodes.get(plant.rootNodeId) : undefined;
-          return {
-            id: plant.id,
-            totalEnergy: plant.totalEnergy,
-            totalBiomass: plant.totalBiomass,
-            storedWater: plant.storedWater,
-            storedMinerals: plant.storedMinerals,
-            rootPosition: root ? { x: root.x, z: root.z } : null,
-          };
-        },
-        coverage: (plantId) => {
-          const plant = this.plantWorld.getPlant(plantId);
-          const coverage = plant ? this.resourceWorld.getPlantTileCoverage(plant) : null;
-          return coverage
-            ? { ...coverage, sample: coverage.sample ?? null }
-            : {
-                count: 0,
-                avgLight: 0,
-                avgMoisture: 0,
-                avgMinerals: 0,
-                avgGroundwater: 0,
-                sample: null,
-              };
-        },
-        capacity: (plantId) => {
-          const plant = this.plantWorld.getPlant(plantId);
-          const capacity =
-            this.plantWorld.getPlantCapacity(plantId) ??
-            (plant
-              ? computePlantCapacity(plant, this.plantWorld.getConfig())
-              : { water: 0, minerals: 0 });
-          return { water: capacity.water, minerals: capacity.minerals };
-        },
-        groundwaterCapacity: () => this.resourceWorld.getGroundwaterCapacity(),
-        waterTable: (x, z) => this.buildWaterTableGrid(x, z),
-        waterTableRevisionSent: (playerId) => this.lastWaterTableRevision.get(playerId),
-        rememberWaterTableRevision: (playerId, revision) =>
-          this.lastWaterTableRevision.set(playerId, revision),
-        unchanged: (playerId, snapshot) => this.rootResourcesUnchanged(playerId, snapshot),
-        send: (playerId, message) => {
-          const player = this.players.get(playerId);
-          return player
-            ? this.writeIfHealthy(player.ws, message, MESSAGE_TYPE.RESOURCE_UPDATE)
-            : false;
-        },
-        remember: (playerId, snapshot) => this.lastRootResourceUpdate.set(playerId, snapshot),
-        grid: () => ({
-          width: this.resourceWorld.getWidth(),
-          height: this.resourceWorld.getHeight(),
-          tileSize: this.resourceWorld.getTileSize(),
-        }),
-      },
-      {
-        tick,
-        sendNow: sendStateNow,
-        players: Array.from(this.players.values(), (player) => ({
-          playerId: player.playerId,
-          plantId: player.plantId,
-        })),
-      },
-    );
+    const rootReadout = broadcastRootReadouts(this.rootReadoutPorts(), {
+      tick,
+      sendNow: sendStateNow,
+      players: Array.from(this.players.values(), (player) => ({
+        playerId: player.playerId,
+        plantId: player.plantId,
+      })),
+    });
     this.rootMessagesSkipped += rootReadout.skipped;
 
     const weatherStep = broadcastWeather(
@@ -2254,6 +2178,99 @@ class World {
     this.weatherMessagesSkipped += weatherStep.skipped;
 
     this.updateSeason(tick);
+  }
+
+  /** The state fanout's view: write through the health gate, and interest cells. */
+  private stateBroadcastPorts(): StateBroadcastPorts {
+    return {
+      send: (playerId, message, messageType) => {
+        const player = this.players.get(playerId);
+        if (player) this.writeIfHealthy(player.ws, message, messageType);
+      },
+      isInRange: (playerId, x, z) => this.interestManager.isPositionInRange(playerId, x, z),
+    };
+  }
+
+  /** The tile-delta fanout's view of the grid. */
+  private resourceBroadcastPorts(): ResourceBroadcastPorts {
+    return {
+      dirtyTileCount: () => this.resourceWorld.getDirtyTileCount(),
+      dirtyTiles: () => this.resourceWorld.getDirtyTiles(),
+      grid: () => ({
+        width: this.resourceWorld.getWidth(),
+        height: this.resourceWorld.getHeight(),
+        tileSize: this.resourceWorld.getTileSize(),
+      }),
+      encodeWholeGrid: (tiles) =>
+        encodeResourceGridBase64(
+          this.resourceWorld.getWidth(),
+          this.resourceWorld.getHeight(),
+          tiles as Parameters<typeof encodeResourceGridBase64>[2],
+        ),
+      broadcast: (payload) => this.broadcast(MESSAGE_TYPE.RESOURCE_UPDATE, payload),
+      now: () => Date.now(),
+    };
+  }
+
+  /** The root readout's view: one plant, its tiles, its caches, its wire. */
+  private rootReadoutPorts(): RootReadoutPorts {
+    return {
+      plant: (playerId) => {
+        const player = this.players.get(playerId);
+        const plant = player?.plantId ? this.plantWorld.getPlant(player.plantId) : undefined;
+        if (!plant) return null;
+        const root = plant.rootNodeId ? plant.nodes.get(plant.rootNodeId) : undefined;
+        return {
+          id: plant.id,
+          totalEnergy: plant.totalEnergy,
+          totalBiomass: plant.totalBiomass,
+          storedWater: plant.storedWater,
+          storedMinerals: plant.storedMinerals,
+          rootPosition: root ? { x: root.x, z: root.z } : null,
+        };
+      },
+      coverage: (plantId) => {
+        const plant = this.plantWorld.getPlant(plantId);
+        const coverage = plant ? this.resourceWorld.getPlantTileCoverage(plant) : null;
+        return coverage
+          ? { ...coverage, sample: coverage.sample ?? null }
+          : {
+              count: 0,
+              avgLight: 0,
+              avgMoisture: 0,
+              avgMinerals: 0,
+              avgGroundwater: 0,
+              sample: null,
+            };
+      },
+      capacity: (plantId) => {
+        const plant = this.plantWorld.getPlant(plantId);
+        const capacity =
+          this.plantWorld.getPlantCapacity(plantId) ??
+          (plant
+            ? computePlantCapacity(plant, this.plantWorld.getConfig())
+            : { water: 0, minerals: 0 });
+        return { water: capacity.water, minerals: capacity.minerals };
+      },
+      groundwaterCapacity: () => this.resourceWorld.getGroundwaterCapacity(),
+      waterTable: (x, z) => this.buildWaterTableGrid(x, z),
+      waterTableRevisionSent: (playerId) => this.lastWaterTableRevision.get(playerId),
+      rememberWaterTableRevision: (playerId, revision) =>
+        this.lastWaterTableRevision.set(playerId, revision),
+      unchanged: (playerId, snapshot) => this.rootResourcesUnchanged(playerId, snapshot),
+      send: (playerId, message) => {
+        const player = this.players.get(playerId);
+        return player
+          ? this.writeIfHealthy(player.ws, message, MESSAGE_TYPE.RESOURCE_UPDATE)
+          : false;
+      },
+      remember: (playerId, snapshot) => this.lastRootResourceUpdate.set(playerId, snapshot),
+      grid: () => ({
+        width: this.resourceWorld.getWidth(),
+        height: this.resourceWorld.getHeight(),
+        tileSize: this.resourceWorld.getTileSize(),
+      }),
+    };
   }
 
   /**

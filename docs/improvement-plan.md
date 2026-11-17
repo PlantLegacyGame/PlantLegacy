@@ -412,9 +412,11 @@ state machine and the socket - it moves when the context carries those.
    real frames rather than trusting the wiring: 54 STATE + 6 KEYFRAME + 62 root
    readouts in three seconds at a 20 Hz wire with a keyframe every ten ticks,
    weather at 2 Hz, and 13 tile deltas after a full-grid query plus one dev tile
-   edit. What is left in `onTick` is the pass order (uptake, step, growth events,
-   deaths, damage, resources, photosynthesis), the season check and the port
-   wiring for those four calls; `main.ts` is 3,938 lines.
+   edit. The port wiring for those four calls is in three accessors
+   (`stateBroadcastPorts`, `resourceBroadcastPorts`, `rootReadoutPorts`), so
+   `onTick` is 173 lines of pass order — uptake, step, growth events, deaths,
+   damage, resources, photosynthesis — plus four calls and the season check;
+   `main.ts` is 3,956 lines.
 
    Verifying that move found a dead feature, not a regression: the tile grid had
    never published a single delta. `markCellDirty` stays silent until the first
