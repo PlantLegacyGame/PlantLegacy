@@ -20,7 +20,6 @@ import { handleConfigRequest } from './http/configRoutes.ts';
 import { loadAccountsConfig } from './ops/accounts/config.ts';
 import { createAccountsHandlers, createAuthMiddleware } from './ops/accounts/http.ts';
 import { AccountsService } from './ops/accounts/service.ts';
-import { stepCadence } from './ops/broadcastCadence.ts';
 import {
   type ChatConfig,
   loadChatConfig,
@@ -110,8 +109,10 @@ import { createTickClock, type TickClock, tickClockStart, tickClockStop } from '
 import { buildWelcomePayload } from './ops/welcomePayload.ts';
 import { loadWorldConfig } from './ops/world.ts';
 import { broadcastResourceDeltas } from './tick/resourceBroadcast.ts';
+import { broadcastRootReadouts, type RootResourceSnapshot } from './tick/rootReadout.ts';
 import { handleSimulationCommand, type SimulationCommandPorts } from './tick/simulationCommands.ts';
 import { broadcastPlantStates, type PlantStateSnapshot } from './tick/stateBroadcast.ts';
+import { broadcastWeather } from './tick/weatherBroadcast.ts';
 
 const STARTED_AT = Date.now();
 
@@ -201,32 +202,6 @@ interface ConnectedPlayer {
   blocked: Set<string>;
   /** Timestamps of recent chat messages, for the per-minute rate limit. */
   chatTimestamps: number[];
-}
-
-/**
- * Everything the per-tick root-resource update tells a player.
- *
- * Constant size, however large the plant: the averages cover every tile any of
- * the plant's parts occupy, and one sample tile keeps the dev readout anchored
- * to a real tile.
- */
-interface RootResourceSnapshot {
-  totalEnergy: number;
-  totalBiomass: number;
-  storedWater: number;
-  storedMinerals: number;
-  waterCapacity: number;
-  mineralCapacity: number;
-  coveredTileCount: number;
-  tileAvgLight: number;
-  tileAvgMoisture: number;
-  tileAvgMinerals: number;
-  /** Share of the local soil cavity filled with water, 0..1. */
-  groundwaterFraction: number;
-  coverageTileX: number;
-  coverageTileZ: number;
-  /** Slow-moving water-table field revision; the grid is resent when it changes. */
-  waterTableRevision: number;
 }
 
 /**
@@ -2195,95 +2170,88 @@ class World {
       { lastWholeGridAt: this.lastCompactGridBroadcastAt },
     ).lastWholeGridAt;
 
-    for (const player of this.players.values()) {
-      if (!player.plantId) continue;
-      // The root readout rides the state cadence; it is the largest per-player
-      // payload on the hot path and the client cannot use it faster than the
-      // state it belongs to.
-      if (!sendStateNow) {
-        this.rootMessagesSkipped += 1;
-        continue;
-      }
-      const plant = this.plantWorld.getPlant(player.plantId);
-      if (!plant) continue;
-
-      // Every tile any part of the plant overlaps, summarised. A node touching a
-      // tile by even a sliver counts that tile in the average, whether it sits
-      // below the soil or over it.
-      const coverage = this.resourceWorld.getPlantTileCoverage(plant);
-      if (coverage.count === 0) continue;
-
-      const capacity =
-        this.plantWorld.getPlantCapacity(plant.id) ??
-        computePlantCapacity(plant, this.plantWorld.getConfig());
-      const snapshot: RootResourceSnapshot = {
-        totalEnergy: plant.totalEnergy,
-        totalBiomass: plant.totalBiomass,
-        storedWater: plant.storedWater,
-        storedMinerals: plant.storedMinerals,
-        waterCapacity: capacity.water,
-        mineralCapacity: capacity.minerals,
-        coveredTileCount: coverage.count,
-        tileAvgLight: coverage.avgLight,
-        tileAvgMoisture: coverage.avgMoisture,
-        tileAvgMinerals: coverage.avgMinerals,
-        groundwaterFraction:
-          coverage.avgGroundwater / Math.max(1e-6, this.resourceWorld.getGroundwaterCapacity()),
-        coverageTileX: coverage.sample?.tileX ?? 0,
-        coverageTileZ: coverage.sample?.tileZ ?? 0,
-        // The table moves on a slower clock than plant stores, so the grid is
-        // rebuilt twice a second and the revision is what makes the snapshot
-        // differ enough to be sent.
-        waterTableRevision: Math.floor(tick / 10),
-      };
-      const rootNode = plant.rootNodeId ? plant.nodes.get(plant.rootNodeId) : undefined;
-      const waterTable =
-        snapshot.waterTableRevision !== this.lastWaterTableRevision.get(player.playerId) && rootNode
-          ? this.buildWaterTableGrid(rootNode.x, rootNode.z)
-          : undefined;
-      if (waterTable) {
-        this.lastWaterTableRevision.set(player.playerId, snapshot.waterTableRevision);
-      }
-
-      // Skip a repeat only. The comparison is exact, so a payload is dropped only
-      // when the client already holds every one of these values; nothing is
-      // quantised or suppressed. The cache is updated only after the write
-      // succeeds, so a backpressure skip is retried on the next tick instead of
-      // being remembered as delivered.
-      if (this.rootResourcesUnchanged(player.playerId, snapshot)) continue;
-      const sent = this.writeIfHealthy(
-        player.ws,
-        JSON.stringify({
-          type: MESSAGE_TYPE.RESOURCE_UPDATE,
-          payload: {
-            tick,
-            ...snapshot,
-            waterTable,
-            width: this.resourceWorld.getWidth(),
-            height: this.resourceWorld.getHeight(),
-            tileSize: this.resourceWorld.getTileSize(),
-          },
+    const rootReadout = broadcastRootReadouts(
+      {
+        plant: (playerId) => {
+          const player = this.players.get(playerId);
+          const plant = player?.plantId ? this.plantWorld.getPlant(player.plantId) : undefined;
+          if (!plant) return null;
+          const root = plant.rootNodeId ? plant.nodes.get(plant.rootNodeId) : undefined;
+          return {
+            id: plant.id,
+            totalEnergy: plant.totalEnergy,
+            totalBiomass: plant.totalBiomass,
+            storedWater: plant.storedWater,
+            storedMinerals: plant.storedMinerals,
+            rootPosition: root ? { x: root.x, z: root.z } : null,
+          };
+        },
+        coverage: (plantId) => {
+          const plant = this.plantWorld.getPlant(plantId);
+          const coverage = plant ? this.resourceWorld.getPlantTileCoverage(plant) : null;
+          return coverage
+            ? { ...coverage, sample: coverage.sample ?? null }
+            : {
+                count: 0,
+                avgLight: 0,
+                avgMoisture: 0,
+                avgMinerals: 0,
+                avgGroundwater: 0,
+                sample: null,
+              };
+        },
+        capacity: (plantId) => {
+          const plant = this.plantWorld.getPlant(plantId);
+          const capacity =
+            this.plantWorld.getPlantCapacity(plantId) ??
+            (plant
+              ? computePlantCapacity(plant, this.plantWorld.getConfig())
+              : { water: 0, minerals: 0 });
+          return { water: capacity.water, minerals: capacity.minerals };
+        },
+        groundwaterCapacity: () => this.resourceWorld.getGroundwaterCapacity(),
+        waterTable: (x, z) => this.buildWaterTableGrid(x, z),
+        waterTableRevisionSent: (playerId) => this.lastWaterTableRevision.get(playerId),
+        rememberWaterTableRevision: (playerId, revision) =>
+          this.lastWaterTableRevision.set(playerId, revision),
+        unchanged: (playerId, snapshot) => this.rootResourcesUnchanged(playerId, snapshot),
+        send: (playerId, message) => {
+          const player = this.players.get(playerId);
+          return player
+            ? this.writeIfHealthy(player.ws, message, MESSAGE_TYPE.RESOURCE_UPDATE)
+            : false;
+        },
+        remember: (playerId, snapshot) => this.lastRootResourceUpdate.set(playerId, snapshot),
+        grid: () => ({
+          width: this.resourceWorld.getWidth(),
+          height: this.resourceWorld.getHeight(),
+          tileSize: this.resourceWorld.getTileSize(),
         }),
-        MESSAGE_TYPE.RESOURCE_UPDATE,
-      );
-      if (sent) this.lastRootResourceUpdate.set(player.playerId, snapshot);
-    }
+      },
+      {
+        tick,
+        sendNow: sendStateNow,
+        players: Array.from(this.players.values(), (player) => ({
+          playerId: player.playerId,
+          plantId: player.plantId,
+        })),
+      },
+    );
+    this.rootMessagesSkipped += rootReadout.skipped;
 
-    const weatherStep = stepCadence(
-      this.weatherCadenceAccumulatorMs,
-      dt * 1000,
-      this.config.weatherSendRateHz,
+    const weatherStep = broadcastWeather(
+      { broadcast: (payload) => this.broadcast(MESSAGE_TYPE.WEATHER_UPDATE, payload) },
+      {
+        tick,
+        dt,
+        sendRateHz: this.config.weatherSendRateHz,
+        accumulatorMs: this.weatherCadenceAccumulatorMs,
+        weather: weatherBroadcast,
+      },
     );
     this.weatherCadenceAccumulatorMs = weatherStep.nextAccumulatorMs;
-    if (weatherStep.due) {
-      this.weatherMessagesSent += 1;
-      this.broadcast(MESSAGE_TYPE.WEATHER_UPDATE, {
-        tick,
-        ...weatherBroadcast,
-      });
-    } else {
-      this.weatherMessagesSkipped += 1;
-    }
+    this.weatherMessagesSent += weatherStep.sent;
+    this.weatherMessagesSkipped += weatherStep.skipped;
 
     this.updateSeason(tick);
   }

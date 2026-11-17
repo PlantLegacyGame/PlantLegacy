@@ -402,9 +402,19 @@ state machine and the socket - it moves when the context carries those.
    own interval" rule; `tick/resourceBroadcast.ts` (`broadcastResourceDeltas`)
    holds the dirty-tile delta and the whole-grid throttle, counting before it
    builds so a re-tint does not allocate tens of thousands of objects at 20 Hz.
-   Both are functions of ports, and the live check counted real frames rather
-   than trusting the wiring: 53 STATE + 6 KEYFRAME in three seconds at a 20 Hz
-   wire with a keyframe every ten ticks, weather at 2 Hz.
+   The same pass finished the section: `tick/rootReadout.ts`
+   (`broadcastRootReadouts`) owns the per-player root payload — stores,
+   capacities, tile coverage, the groundwater fraction, and the water-table grid
+   that is rebuilt only when its slow revision changes — including the rule that
+   a payload is remembered only after a write succeeded, so a backpressure skip
+   is retried rather than lost. `tick/weatherBroadcast.ts` owns the weather /
+   day-night cadence. All four are functions of ports, and the live check counted
+   real frames rather than trusting the wiring: 54 STATE + 6 KEYFRAME + 62 root
+   readouts in three seconds at a 20 Hz wire with a keyframe every ten ticks,
+   weather at 2 Hz, and 13 tile deltas after a full-grid query plus one dev tile
+   edit. What is left in `onTick` is the pass order (uptake, step, growth events,
+   deaths, damage, resources, photosynthesis), the season check and the port
+   wiring for those four calls; `main.ts` is 3,938 lines.
 
    Verifying that move found a dead feature, not a regression: the tile grid had
    never published a single delta. `markCellDirty` stays silent until the first
