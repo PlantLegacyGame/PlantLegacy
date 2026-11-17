@@ -378,13 +378,6 @@ class World {
   }
 
   /**
-   * Send to every player whose interest cells contain (x, z), plus the plant's
-   * owner. Compliance with interest management matters most for the large
-   * per-plant payloads: a growth event carries every node of the plant, and
-   * broadcasting it to the whole world leaked every plant's geometry and cost
-   * bandwidth for players who could not see it.
-   */
-  /**
    * Send every plant that is inside this player's interest cells right now.
    *
    * `PLANT_CREATED` is only broadcast at creation, so a plant that appeared while
@@ -441,6 +434,13 @@ class World {
     };
   }
 
+  /**
+   * Send to every player whose interest cells contain (x, z), plus the plant's
+   * owner. Compliance with interest management matters most for the large
+   * per-plant payloads: a growth event carries every node of the plant, and
+   * broadcasting it to the whole world leaked every plant's geometry and cost
+   * bandwidth for players who could not see it.
+   */
   private broadcastNear(type: number, payload: unknown, x: number, z: number, ownerId?: string) {
     const message = JSON.stringify({ type, payload });
     for (const player of this.players.values()) {

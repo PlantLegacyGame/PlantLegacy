@@ -579,6 +579,26 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
               danger: true,
             },
           ]),
+          // Root Sight has nothing to excavate until the plant has pushed roots
+          // down, which takes minutes of play; mutation granting is per id
+          // because the gallery plants everything at once.
+          createButtonGroup('Roots & Mutations', [
+            {
+              label: 'Grow Roots',
+              action: () => send(8, { type: 'dev_grow_roots', count: 6 }),
+            },
+            {
+              label: 'Grant Mutation',
+              action: () => {
+                const mutationId = prompt('Mutation id');
+                if (mutationId) send(8, { type: 'dev_grant_mutation', mutationId });
+              },
+            },
+            {
+              label: 'Clear Mutations',
+              action: () => send(8, { type: 'dev_clear_mutations' }),
+            },
+          ]),
         ]);
         addSection(container, 'Uproot & Damage (T06)', [
           createButtonGroup('Damage', [
@@ -947,6 +967,14 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
               },
               danger: true,
             },
+          ]),
+          // The sun is server-authoritative: a client-side clock is overwritten by
+          // the next weather broadcast, so moving it here is the only way to get
+          // daylight on demand.
+          createButtonGroup('Sun', [
+            { label: 'Dawn', action: () => send(8, { type: 'dev_set_time', time_of_day: 0.25 }) },
+            { label: 'Noon', action: () => send(8, { type: 'dev_set_time', time_of_day: 0.5 }) },
+            { label: 'Dusk', action: () => send(8, { type: 'dev_set_time', time_of_day: 0.75 }) },
           ]),
         ]);
         addSection(container, 'Game Switches', [
