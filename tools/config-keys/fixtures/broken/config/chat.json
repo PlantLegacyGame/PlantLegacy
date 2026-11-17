@@ -33,6 +33,11 @@
       "type": "integer",
       "value": 6,
       "range": [0, 10]
+    },
+    "test_only_key": {
+      "type": "integer",
+      "value": 7,
+      "range": [0, 10]
     }
   }
 }

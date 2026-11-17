@@ -94,8 +94,8 @@ tests excluded: a key explained in prose but read nowhere is exactly how eleven
 of them survived, and a test that restates the fixture would hide the same rot.
 Exceptions must be listed in `tools/config-keys/allowlist.json` with a reason, and
 an exemption that matches no key is itself an error, so the list cannot go stale
-quietly. Today: 639 keys declared, 49 allowlisted, 590 read — 398 as quoted literals and
-192 only as identifiers (`data.<key>`, `values.<key>`, a declared field), which
+quietly. Today: 639 keys declared, 49 allowlisted, 590 read — 388 as quoted literals and
+202 only as identifiers (`data.<key>`, `values.<key>`, a declared field), which
 the report counts so the literal-only gap stays visible and `--identifiers` lists.
 Its rules are pinned by `tools/config-keys/check.test.mjs`, which `pnpm test` runs:
 two fixture trees (`fixtures/clean`, `fixtures/broken`) grade the same code the

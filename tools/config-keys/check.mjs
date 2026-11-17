@@ -205,7 +205,7 @@ const walk = (dir, filter, out = []) => {
 };
 
 const isTestFile = (file) =>
-  /\.test\.(mts?|tsx)$/.test(file) || file.includes(`${path.sep}test${path.sep}`);
+  /\.test\.m?tsx?$/.test(file) || file.includes(`${path.sep}test${path.sep}`);
 
 /**
  * Run the guardrail over one tree.

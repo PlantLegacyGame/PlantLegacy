@@ -51,10 +51,14 @@ describe('checkConfigKeys', () => {
     assert.match(result.errors.join('\n'), /chat\.ghost_key.*stale exemption/);
   });
 
+  it('ignores a key that only a test file mentions', () => {
+    assert.ok(deadKey(check('broken').errors, 'test_only_key'));
+  });
+
   it('does not report a key that is read', () => {
     const { errors } = check('broken');
     assert.ok(!deadKey(errors, 'identifier_key'));
-    assert.equal(errors.length, 5);
+    assert.equal(errors.length, 6);
   });
 });
 
@@ -69,7 +73,7 @@ describe('check.mjs CLI', () => {
     const run = runCli('broken');
     assert.equal(run.status, 1, run.stdout);
     assert.match(run.stdout, /`comment_key` is read by no source file/);
-    assert.match(run.stdout, /5 problem\(s\)/);
+    assert.match(run.stdout, /6 problem\(s\)/);
   });
 
   it('lists identifier-only reads when asked', () => {
