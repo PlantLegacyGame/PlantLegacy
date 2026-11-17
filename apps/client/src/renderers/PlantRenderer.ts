@@ -201,10 +201,18 @@ class PlantRenderer {
   private meshRenderer: MeshPlantRenderer | null = null;
   private lastLook: MutationLook = NEUTRAL_LOOK;
   private useMeshL0L1 = true;
+  /** Held until `initialize` builds the mesh pass. */
+  private pendingGroundQuery: ((x: number, z: number) => number) | null = null;
 
   constructor(config: PlantRendererConfig) {
     this.config = { ...DEFAULT_CONFIG, ...config };
     this.scene = new THREE.Scene();
+  }
+
+  /** Terrain height under a plan position, forwarded to the mesh pass. */
+  setGroundQuery(query: ((x: number, z: number) => number) | null): void {
+    this.meshRenderer?.setGroundQuery(query);
+    this.pendingGroundQuery = query;
   }
 
   /** Initialize the SDF renderer with scene and camera. */
@@ -225,6 +233,7 @@ class PlantRenderer {
       jointScale: this.config.meshJointScale,
       maxLeafSize: this.config.meshMaxLeafSize,
     });
+    if (this.pendingGroundQuery) this.meshRenderer.setGroundQuery(this.pendingGroundQuery);
   }
 
   /**

@@ -430,6 +430,19 @@ export class MeshPlantRenderer {
 
   private lastSignatureKey = '';
 
+  /** Terrain under a plan position, so a seed can sit on the soil it is drawn over. */
+  private groundQuery: ((x: number, z: number) => number) | null = null;
+
+  /**
+   * Give the mesh pass the terrain height function the ground is drawn from.
+   *
+   * Without it the seed had only its stored contact point, which is a server
+   * coordinate: a coat could hover over soil that the client painted lower.
+   */
+  setGroundQuery(query: ((x: number, z: number) => number) | null): void {
+    this.groundQuery = query;
+  }
+
   constructor(scene: THREE.Scene, quality: Partial<MeshQualityConfig> = {}) {
     this.quality = { ...DEFAULT_MESH_QUALITY, ...quality };
     this.scene = scene;
@@ -677,8 +690,24 @@ export class MeshPlantRenderer {
       const seedScale = this.appearanceFor(node).seedScale;
       mesh.scale.set(0.95 * seedScale, getSeedBodyHeightRatio() * seedScale, 0.85 * seedScale);
       // Sit the rounded base on the ground: the stored y is the contact point,
-      // not the centre.
-      mesh.position.set(node.position.x, seedBodyCentreY(node.position.y, radius), node.position.z);
+      // not the centre. The lift is the height actually drawn, so it takes the
+      // same seedScale the ovoid is scaled by - lifting by the unscaled half
+      // height left the base hovering whenever a plant's look shrank its seed.
+      //
+      // And the contact point is only trusted downwards: a seed that crawled
+      // keeps the height it was placed at, so on soil drawn a few centimetres
+      // lower it hung in the air. Seat it on the ground under it; never lift it
+      // off that ground, so a stored point lower than the drawing still wins.
+      const groundUnder = this.groundQuery?.(node.position.x, node.position.z);
+      const contactY =
+        groundUnder === undefined || !Number.isFinite(groundUnder)
+          ? node.position.y
+          : Math.min(node.position.y, groundUnder);
+      mesh.position.set(
+        node.position.x,
+        seedBodyCentreY(contactY, radius * seedScale),
+        node.position.z,
+      );
       // Remember where it was drawn so later moves can be applied as a delta.
       mesh.userData.sourcePosition = node.position.clone();
       mesh.castShadow = true;

@@ -1603,6 +1603,8 @@ interface CameraFocusTween {
   durationMs: number;
 }
 let cameraFocusTween: CameraFocusTween | null = null;
+/** Scratch for the tween's eye-to-target offset; the tween rewrites it per frame. */
+const cameraFocusOffset = new THREE.Vector3();
 
 function startCameraFocus(toTarget: THREE.Vector3, toPosition: THREE.Vector3): void {
   const travel = camera.position.distanceTo(toPosition) + controls.target.distanceTo(toTarget);
@@ -1626,8 +1628,18 @@ function updateCameraFocus(deltaTime: number): void {
   const t = Math.min(1, tween.elapsedMs / tween.durationMs);
   // Ease-in-out: the view accelerates away, then settles onto the node.
   const eased = t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2;
-  controls.target.lerpVectors(tween.fromTarget, tween.toTarget, eased);
-  camera.position.lerpVectors(tween.fromPosition, tween.toPosition, eased);
+  // Tween the framing, not the ground contact. The player's vertical physics owns
+  // `controls.target.y` and runs before this every frame, so a tween that lerped
+  // the target's height was overwritten a frame later and then re-lerped from the
+  // new start: pressing Space pumped the whole view up and down for the length of
+  // the tween. The target only moves in the plane, and the camera keeps the
+  // tweened offset from wherever that target actually is.
+  controls.target.x = THREE.MathUtils.lerp(tween.fromTarget.x, tween.toTarget.x, eased);
+  controls.target.z = THREE.MathUtils.lerp(tween.fromTarget.z, tween.toTarget.z, eased);
+  cameraFocusOffset.subVectors(tween.fromPosition, tween.fromTarget);
+  tempCameraOffset.subVectors(tween.toPosition, tween.toTarget);
+  cameraFocusOffset.lerp(tempCameraOffset, eased);
+  camera.position.copy(controls.target).add(cameraFocusOffset);
   if (t >= 1) cameraFocusTween = null;
 }
 
@@ -4385,6 +4397,11 @@ async function initPlantRenderer(): Promise<void> {
     });
 
     plantRenderer.initialize(scene, camera);
+    // The mesh pass seats a seed coat on the soil it is drawn over, so it needs
+    // the same terrain the ground mesh uses.
+    plantRenderer.setGroundQuery((x, z) =>
+      planetTerrainY(renderConfig?.planetRadiusM ?? 0, x, z, getTerrainParams()),
+    );
     plantRenderer.setViewportSize(renderer.domElement.width, renderer.domElement.height);
 
     // Initialize with existing plant nodes (root node from WELCOME, or empty)
