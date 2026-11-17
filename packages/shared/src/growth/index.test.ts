@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
+  applyMutationShapeBias,
   clampGrowthDirectionByGene,
   getSeedBodyHeightRatio,
   NODE_GROWTH_CONSTRAINTS,
@@ -102,5 +103,41 @@ describe('seed body placement', () => {
     assert.equal(seedBodyHalfHeight(0), 0);
     assert.equal(seedBodyHalfHeight(-1), 0);
     assert.equal(seedBodyCentreY(3, Number.NaN), 3);
+  });
+});
+
+describe('applyMutationShapeBias', () => {
+  it('a columnar habit lifts a lateral branch without breaking the gene cone', () => {
+    const lateral = clampGrowthDirectionByGene('branch', { x: 1, y: 0.2, z: 0 });
+    const upright = applyMutationShapeBias(
+      'branch',
+      lateral,
+      { vertical: 0.6, droop: 0 },
+      'canopy',
+    );
+    assert.ok(upright.y > lateral.y, `bias should raise Y (${lateral.y} -> ${upright.y})`);
+    const length = Math.hypot(upright.x, upright.y, upright.z);
+    assert.ok(Math.abs(length - 1) < 1e-4, 'still a unit direction');
+    const constraints = NODE_GROWTH_CONSTRAINTS.branch;
+    assert.ok(upright.y >= constraints.minY && upright.y <= constraints.maxY);
+  });
+
+  it('drooping fronds bend a leaf down to the lowest legal angle', () => {
+    const leaf = clampGrowthDirectionByGene('leaf', { x: 0.4, y: 0.7, z: 0 });
+    const drooped = applyMutationShapeBias('leaf', leaf, { vertical: 0, droop: 0.55 }, 'canopy');
+    assert.ok(drooped.y < leaf.y, `droop should lower Y (${leaf.y} -> ${drooped.y})`);
+    assert.ok(drooped.y >= NODE_GROWTH_CONSTRAINTS.leaf.minY);
+    const length = Math.hypot(drooped.x, drooped.y, drooped.z);
+    assert.ok(Math.abs(length - 1) < 1e-4, 'still a unit direction');
+  });
+
+  it('does nothing without a bias and never touches roots', () => {
+    const intent = { x: 0.6, y: 0.7, z: 0.2 };
+    assert.deepEqual(applyMutationShapeBias('stem', intent, undefined, 'canopy'), intent);
+    // Roots have no columnar habit: the bias is ignored, not applied downward.
+    assert.deepEqual(
+      applyMutationShapeBias('stem', intent, { vertical: 0.9, droop: 0 }, 'root'),
+      intent,
+    );
   });
 });

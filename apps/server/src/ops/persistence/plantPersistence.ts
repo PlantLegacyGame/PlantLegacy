@@ -1,4 +1,12 @@
-import type { Layer, NodeType, Plant, PlantNode } from '@plant-legacy/shared/growth';
+import type { UprootCause, UprootPhase } from '@plant-legacy/shared/damage';
+import type {
+  Layer,
+  NodeType,
+  Plant,
+  PlantMutation,
+  PlantNode,
+  PlantUprootState,
+} from '@plant-legacy/shared/growth';
 import type { Pool } from 'pg';
 import type { SeasonSnapshot } from '../seasonClock.ts';
 
@@ -18,10 +26,17 @@ export interface PlantSnapshot {
   tier: 'active' | 'near' | 'dormant';
   lastTick: number;
   growthSeq: number;
+  /** T04 fields. Absent on a v1 snapshot, which restores as "no mutations". */
+  mutations?: PlantMutation[];
+  mutationPressure?: Record<string, number>;
+  mutationShedCooldownUntil?: number;
+  mutationSignature?: number;
+  /** T06 uproot state. Absent means rooted (v3+ only). */
+  uproot?: PlantUprootState;
 }
 
 export interface PlantEvent {
-  type: 'growth' | 'damage' | 'upkeep' | 'tier_change' | 'removal';
+  type: 'growth' | 'damage' | 'uproot' | 'reroot' | 'upkeep' | 'tier_change' | 'removal';
   tick: number;
   data: Record<string, unknown>;
 }
@@ -38,6 +53,14 @@ const NODE_TYPE_TO_BYTE: Record<NodeType, number> = {
   flower: 8,
   spore_sac: 9,
   vine: 10,
+  trunk: 11,
+  rhizome: 12,
+  culm: 13,
+  floating_leaf: 14,
+  pneumatophore: 15,
+  thorn: 16,
+  stolon: 17,
+  tuber: 18,
 };
 
 const LAYER_TO_BYTE: Record<Layer, number> = {
@@ -57,11 +80,46 @@ const BYTE_TO_NODE_TYPE: NodeType[] = [
   'flower',
   'spore_sac',
   'vine',
+  'trunk',
+  'rhizome',
+  'culm',
+  'floating_leaf',
+  'pneumatophore',
+  'thorn',
+  'stolon',
+  'tuber',
 ];
 const BYTE_TO_LAYER: Layer[] = ['root', 'canopy'];
 
+const UPROOT_PHASE_TO_BYTE: Record<UprootPhase, number> = {
+  rooted: 0,
+  uprooted: 1,
+  tumbling: 2,
+  rerooting: 3,
+};
+const BYTE_TO_UPROOT_PHASE: UprootPhase[] = ['rooted', 'uprooted', 'tumbling', 'rerooting'];
+const UPROOT_CAUSE_TO_BYTE: Record<UprootCause, number> = {
+  saturation: 0,
+  gust: 1,
+  collapse: 2,
+  structural_damage: 3,
+};
+const BYTE_TO_UPROOT_CAUSE: UprootCause[] = ['saturation', 'gust', 'collapse', 'structural_damage'];
+
 const MAGIC = 0x504c4e54; // 'PLNT' in little-endian
-const VERSION = 1;
+/** v3 adds the T06 uproot block. v1/v2 snapshots still load. */
+const VERSION = 4;
+const MIN_SUPPORTED_VERSION = 1;
+const PRESSURE_CATEGORIES = [
+  'root',
+  'stem',
+  'leaf',
+  'flower',
+  'spore_sac',
+  'vine',
+  'defense',
+  'storage',
+] as const;
 
 class GrowableBuffer {
   private buffer: ArrayBuffer;
@@ -234,6 +292,39 @@ export function serializePlant(plant: Plant): Uint8Array {
     payload.writeUint8(node.isSeed ? 1 : 0);
   }
 
+  // T04 mutation block. Written after every pre-existing field so the v1 layout
+  // stays readable by the same reader. v4 appends each mutation's level and the
+  // cards chosen on the way up, inside the same loop.
+  const mutations = plant.mutations ?? [];
+  payload.writeUint8(Math.min(255, mutations.length));
+  for (const mutation of mutations.slice(0, 255)) {
+    payload.writeString(mutation.id);
+    payload.writeBigInt64(BigInt(mutation.acquiredTick));
+    payload.writeString(mutation.nodeId ?? '');
+    const level = Math.max(1, Math.min(255, Math.round(mutation.level ?? 1)));
+    payload.writeUint8(level);
+    const cards = (mutation.cards ?? []).slice(0, 255);
+    payload.writeUint8(cards.length);
+    for (const card of cards) payload.writeString(card);
+  }
+  for (const category of PRESSURE_CATEGORIES) {
+    payload.writeFloat64(plant.mutationPressure?.[category] ?? 0);
+  }
+  payload.writeBigInt64(BigInt(plant.mutationShedCooldownUntil ?? 0));
+  payload.writeUint8(Math.max(0, Math.min(255, plant.mutationSignature ?? 0)));
+
+  // T06 uproot block. A rooted plant writes one byte and nothing else, so the
+  // common case stays as small as the previous version.
+  const uproot = plant.uproot;
+  const uprooted = uproot !== undefined && uproot.phase !== 'rooted';
+  payload.writeUint8(uprooted ? 1 : 0);
+  if (uprooted) {
+    payload.writeUint8(UPROOT_PHASE_TO_BYTE[uproot.phase]);
+    payload.writeUint8(UPROOT_CAUSE_TO_BYTE[uproot.cause ?? 'structural_damage']);
+    payload.writeBigInt64(BigInt(uproot.sinceTick));
+    payload.writeFloat64(uproot.damageHp);
+  }
+
   const payloadBytes = payload.toUint8Array();
   const crc = crc32(payloadBytes);
 
@@ -264,7 +355,11 @@ function readString(view: DataView, offset: number): { str: string; offset: numb
   return { str, offset: offset + length };
 }
 
-function validateEnvelope(data: Uint8Array): { payloadOffset: number; payloadLength: number } {
+function validateEnvelope(data: Uint8Array): {
+  payloadOffset: number;
+  payloadLength: number;
+  version: number;
+} {
   if (data.length < 14) {
     throw new Error('Snapshot too short for envelope');
   }
@@ -276,7 +371,7 @@ function validateEnvelope(data: Uint8Array): { payloadOffset: number; payloadLen
     );
   }
   const version = view.getUint16(4, true);
-  if (version !== VERSION) {
+  if (version < MIN_SUPPORTED_VERSION || version > VERSION) {
     throw new Error(`Unsupported snapshot version: ${version} (current is ${VERSION})`);
   }
   const payloadLength = view.getUint32(6, true);
@@ -294,11 +389,11 @@ function validateEnvelope(data: Uint8Array): { payloadOffset: number; payloadLen
       `CRC32 mismatch: expected 0x${crc.toString(16)}, got 0x${actualCrc.toString(16)}`,
     );
   }
-  return { payloadOffset, payloadLength };
+  return { payloadOffset, payloadLength, version };
 }
 
 export function deserializePlant(data: Uint8Array): PlantSnapshot {
-  const { payloadOffset, payloadLength } = validateEnvelope(data);
+  const { payloadOffset, payloadLength, version } = validateEnvelope(data);
   const view = new DataView(data.buffer, data.byteOffset + payloadOffset, payloadLength);
   let offset = 0;
 
@@ -418,6 +513,105 @@ export function deserializePlant(data: Uint8Array): PlantSnapshot {
     nodes.set(nodeId, node);
   }
 
+  const mutations: PlantMutation[] = [];
+  let mutationPressure: Record<string, number> | undefined;
+  let mutationShedCooldownUntil: number | undefined;
+  let mutationSignature: number | undefined;
+
+  if (version >= 2) {
+    const mutationCount = view.getUint8(offset);
+    offset += 1;
+    for (let i = 0; i < mutationCount; i++) {
+      const { str: mutationId, offset: m1 } = readString(view, offset);
+      offset = m1;
+      const acquiredTick = Number(view.getBigInt64(offset, true));
+      offset += 8;
+      const { str: nodeId, offset: m2 } = readString(view, offset);
+      offset = m2;
+      // v4 stores the level and the cards that got it there; a v2/v3 save has
+      // neither, which loads as level 1 with no cards.
+      let level = 1;
+      const cards: string[] = [];
+      if (version >= 4) {
+        level = view.getUint8(offset);
+        offset += 1;
+        const cardCount = view.getUint8(offset);
+        offset += 1;
+        for (let c = 0; c < cardCount; c++) {
+          const { str: cardId, offset: m3 } = readString(view, offset);
+          offset = m3;
+          cards.push(cardId);
+        }
+      }
+      mutations.push({ id: mutationId, acquiredTick, nodeId: nodeId || null, level, cards });
+    }
+    const pressure: Record<string, number> = {};
+    for (const category of PRESSURE_CATEGORIES) {
+      pressure[category] = view.getFloat64(offset, true);
+      offset += 8;
+    }
+    mutationPressure = pressure;
+    mutationShedCooldownUntil = Number(view.getBigInt64(offset, true));
+    offset += 8;
+    mutationSignature = view.getUint8(offset);
+    offset += 1;
+  }
+
+  let uproot: PlantUprootState | undefined;
+  if (version >= 3) {
+    const present = view.getUint8(offset);
+    offset += 1;
+    if (present) {
+      const phase = BYTE_TO_UPROOT_PHASE[view.getUint8(offset)] ?? 'uprooted';
+      offset += 1;
+      const cause = BYTE_TO_UPROOT_CAUSE[view.getUint8(offset)] ?? 'structural_damage';
+      offset += 1;
+      const sinceTick = Number(view.getBigInt64(offset, true));
+      offset += 8;
+      const damageHp = view.getFloat64(offset, true);
+      offset += 8;
+      // A saved node set already carries the visible pose. Adopt it as the base
+      // pose and start a settled body, rather than replaying a tumble that had
+      // already finished when the world stopped.
+      const basePose = new Map<string, { x: number; y: number; z: number }>();
+      const baseAttach = new Map<string, { x: number; y: number; z: number }>();
+      for (const node of nodes.values()) {
+        basePose.set(node.id, { x: node.x, y: node.y, z: node.z });
+        if (node.parentAttachX !== undefined && node.parentAttachZ !== undefined) {
+          baseAttach.set(node.id, {
+            x: node.parentAttachX,
+            y: node.parentAttachY ?? node.y,
+            z: node.parentAttachZ,
+          });
+        }
+      }
+      uproot = {
+        phase: phase === 'rooted' ? 'uprooted' : phase === 'tumbling' ? 'uprooted' : phase,
+        cause,
+        sinceTick,
+        damageHp,
+        saturatedSeconds: 0,
+        settledSeconds: 0,
+        tiltRad: 0,
+        headingRad: 0,
+        rollRad: 0,
+        rollSpeedRad: 0,
+        offsetX: 0,
+        offsetY: 0,
+        offsetZ: 0,
+        velocityX: 0,
+        velocityY: 0,
+        velocityZ: 0,
+        crawlX: 0,
+        crawlZ: 0,
+        tumbleSeconds: 0,
+        tumbleSettled: true,
+        basePose,
+        baseAttach,
+      };
+    }
+  }
+
   return {
     id,
     worldId,
@@ -434,6 +628,11 @@ export function deserializePlant(data: Uint8Array): PlantSnapshot {
     tier,
     lastTick,
     growthSeq,
+    mutations,
+    mutationPressure,
+    mutationShedCooldownUntil,
+    mutationSignature,
+    uproot,
   };
 }
 
@@ -544,6 +743,52 @@ export class PlantPersistence {
       }
     }
     return snapshots;
+  }
+
+  /**
+   * Boot path: snapshots plus the event log each one was saved with.
+   *
+   * A row whose snapshot cannot be read is skipped whole; a row whose event log
+   * is malformed still yields its plant, with an empty history, because the log
+   * is audit data and must never cost the player their plant.
+   */
+  async loadAllPlantsWithEvents(): Promise<
+    Array<{ snapshot: PlantSnapshot; events: PlantEvent[] }>
+  > {
+    const result = await this.pool.query(
+      'SELECT snapshot, event_log FROM world_plants WHERE world_id = $1',
+      [this.worldId],
+    );
+    const loaded: Array<{ snapshot: PlantSnapshot; events: PlantEvent[] }> = [];
+    for (const row of result.rows) {
+      try {
+        const snapshot = deserializePlant(row.snapshot);
+        let events: PlantEvent[] = [];
+        try {
+          const raw: unknown = row.event_log;
+          const parsed: unknown = typeof raw === 'string' ? JSON.parse(raw || '[]') : raw;
+          if (Array.isArray(parsed)) events = parsed as PlantEvent[];
+        } catch (error) {
+          this.onLoadError?.(error);
+        }
+        loaded.push({ snapshot, events });
+      } catch (error) {
+        this.onLoadError?.(error);
+      }
+    }
+    return loaded;
+  }
+
+  /** Append one global event (deaths, calamities) to `world_events`. */
+  async saveWorldEvent(
+    type: string,
+    tick: number,
+    payload: Record<string, unknown>,
+  ): Promise<void> {
+    await this.pool.query(
+      'INSERT INTO world_events (world_id, type, payload, tick) VALUES ($1, $2, $3, $4)',
+      [this.worldId, type, JSON.stringify(payload), tick],
+    );
   }
 
   /**

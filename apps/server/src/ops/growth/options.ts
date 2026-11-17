@@ -3,15 +3,16 @@
  *
  * The menu is a pure function of the plant, the node and the tile under it, so
  * it lives beside the other growth rules instead of inside `PlantWorld`. Every
- * figure it quotes comes from `computeGrowthCostQuote`, which is the same
- * function `tryGrow` and the growth step charge, so a quote can never drift
- * from the charge.
+ * figure it quotes starts from `computeGrowthCostQuote` and then carries the
+ * same charge scale `tryGrow` applies (soil resistance, mutation cost/speed), so
+ * the price on a card is the price the server takes.
  */
 import type {
   GrowthConfig,
   GrowthOption,
   GrowthOptionsResult,
   NodeType,
+  NodeTypeDefinition,
   Plant,
   PlantNode,
 } from '@plant-legacy/shared/growth';
@@ -23,8 +24,11 @@ import {
 import {
   canGrow,
   computeGrowthCostQuote,
+  type GrowthChargeScale,
   germinationGateReason,
   maxCotyledonsForPlant,
+  NEUTRAL_GROWTH_SCALE,
+  scaleGrowthQuote,
 } from './rules.ts';
 
 export interface GrowableTile {
@@ -49,6 +53,22 @@ export function buildGrowthOptions(
   plant: Plant,
   node: PlantNode,
   tile: GrowableTile = FALLBACK_TILE,
+  /** Node types a mutation unlocked on top of the base rules (T04). */
+  unlockedTypes: NodeType[] = [],
+  /** Share of the stored-resource gate a clonal network covers (T04). */
+  storedResourceSharing = 0,
+  /**
+   * Tissue mass the grown part holds per unit of build cost (T04 size
+   * mutations: `scale³` for the parent node's layer). Quoted so the menu
+   * matches the mass the part actually ends up with.
+   */
+  massScale = 1,
+  /**
+   * What the charge adds on top of the bare quote for this target type. The
+   * menu must quote the price the server will actually charge, or a card can
+   * offer growth the server then refuses.
+   */
+  chargeScaleFor: (targetType: NodeType) => GrowthChargeScale = () => NEUTRAL_GROWTH_SCALE,
 ): GrowthOptionsResult {
   const safeMoisture = finiteOr(tile.moisture, 40);
   const safeLight = finiteOr(tile.light, 80);
@@ -77,6 +97,10 @@ export function buildGrowthOptions(
   };
 
   const options: GrowthOption[] = [];
+
+  /** One quote, already carrying the soil/mutation multipliers of the charge. */
+  const quoteFor = (def: NodeTypeDefinition, targetType: NodeType) =>
+    scaleGrowthQuote(computeGrowthCostQuote(config, def, massScale), chargeScaleFor(targetType));
 
   const addOption = (
     type: NodeType,
@@ -126,7 +150,7 @@ export function buildGrowthOptions(
    */
   const storageReason = (energyCost: number): { available: boolean; reason?: string } => {
     if (plant.totalEnergy < energyCost) return { available: false, reason: 'Insufficient energy' };
-    const storage = canGrow(plant, config);
+    const storage = canGrow(plant, config, storedResourceSharing);
     if (!storage.ok) return { available: false, reason: storage.reason };
     return { available: true };
   };
@@ -145,7 +169,7 @@ export function buildGrowthOptions(
 
     if (node.isSeed) {
       if (!hasRadicle) {
-        const costs = computeGrowthCostQuote(config, radicleDef);
+        const costs = quoteFor(radicleDef, 'radicle');
         addOption(
           'radicle',
           'Sprout Radicle',
@@ -167,7 +191,7 @@ export function buildGrowthOptions(
       }
 
       if (cotyledonCount < maxCotyledons) {
-        const costs = computeGrowthCostQuote(config, cotyledonDef);
+        const costs = quoteFor(cotyledonDef, 'cotyledon');
         addOption(
           'cotyledon',
           `Add Cotyledon ${cotyledonCount + 1}/${maxCotyledons}`,
@@ -188,7 +212,7 @@ export function buildGrowthOptions(
       // limit is still a cotyledon parent in `tryGrow`. Offering it here keeps the
       // menu from skipping straight to a stem the server would refuse with
       // `establish_seed_before_stem`.
-      const costs = computeGrowthCostQuote(config, cotyledonDef);
+      const costs = quoteFor(cotyledonDef, 'cotyledon');
       addOption(
         'cotyledon',
         `Add Cotyledon ${cotyledonCount + 1}/${maxCotyledons}`,
@@ -208,7 +232,7 @@ export function buildGrowthOptions(
     // Established crown (its cotyledon limit reached): offer stem. tryGrow
     // allows a stem from a seed crown once that limit is met.
     {
-      const costs = computeGrowthCostQuote(config, config.stemNode);
+      const costs = quoteFor(config.stemNode, 'stem');
       const { available, reason } = storageReason(costs.energyCost);
       addOption(
         'stem',
@@ -230,7 +254,14 @@ export function buildGrowthOptions(
   // Canopy parts only sprout from the crown. "Grow Stem" used to be offered on
   // any root node, so picking it sent a stem out of a buried root and it read
   // as another root growing sideways.
-  const availableTypes = getAvailableGrowthTypes(node.type, config).filter(
+  const baseTypes = getAvailableGrowthTypes(node.type, config);
+  // A mutation can open a menu entry the base rules refuse. Unlocked types are
+  // held to the same layer rule: a mutation never grows canopy from a buried root.
+  const extraTypes = unlockedTypes.filter(
+    (targetType) =>
+      !baseTypes.includes(targetType) && getLayerForNodeType(targetType) === node.layer,
+  );
+  const availableTypes = [...baseTypes, ...extraTypes].filter(
     (targetType) =>
       !(
         getLayerForNodeType(targetType) === 'canopy' &&
@@ -241,7 +272,7 @@ export function buildGrowthOptions(
 
   for (const targetType of availableTypes) {
     const nodeDef = getNodeTypeDefinition(config, targetType);
-    const costs = computeGrowthCostQuote(config, nodeDef);
+    const costs = quoteFor(nodeDef, targetType);
     const { available, reason } = storageReason(costs.energyCost);
 
     addOption(

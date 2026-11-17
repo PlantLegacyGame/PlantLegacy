@@ -25,6 +25,11 @@ export function addItem(
 ): number {
   const def = itemDefs.get(itemId);
   if (!def) return 0;
+  // Counts arrive from config and, later, from server-side grants. Reject a
+  // fractional, negative or non-finite count here so a bad caller cannot create
+  // a nano-stack or erase a slot by adding a negative amount.
+  if (!Number.isInteger(count) || count <= 0) return 0;
+  if (!Number.isInteger(def.stack_limit) || def.stack_limit < 1) return 0;
 
   const maxStack = def.stack_limit;
   let remaining = count;
@@ -53,6 +58,7 @@ export function addItem(
 }
 
 export function removeItem(inventory: Inventory, itemId: string, count: number): number {
+  if (!Number.isInteger(count) || count <= 0) return 0;
   let remaining = count;
 
   for (let i = 0; i < inventory.slots.length && remaining > 0; i++) {
@@ -89,8 +95,20 @@ export function getSlot(inventory: Inventory, index: number): InventoryItem | nu
   return inventory.slots[index];
 }
 
-export function setSlot(inventory: Inventory, index: number, item: InventoryItem | null): boolean {
+export function setSlot(
+  inventory: Inventory,
+  index: number,
+  item: InventoryItem | null,
+  itemDefs?: Map<string, ItemDefinition>,
+): boolean {
   if (index < 0 || index >= inventory.slots.length) return false;
+  if (item !== null) {
+    if (typeof item.itemId !== 'string' || item.itemId.length === 0) return false;
+    if (!Number.isInteger(item.count) || item.count <= 0) return false;
+    const def = itemDefs?.get(item.itemId);
+    if (itemDefs && !def) return false;
+    if (def && item.count > def.stack_limit) return false;
+  }
   inventory.slots[index] = item;
   return true;
 }
@@ -98,6 +116,7 @@ export function setSlot(inventory: Inventory, index: number, item: InventoryItem
 export function swapSlots(inventory: Inventory, fromIndex: number, toIndex: number): boolean {
   if (fromIndex < 0 || fromIndex >= inventory.slots.length) return false;
   if (toIndex < 0 || toIndex >= inventory.slots.length) return false;
+  if (fromIndex === toIndex) return true;
   const temp = inventory.slots[fromIndex];
   inventory.slots[fromIndex] = inventory.slots[toIndex];
   inventory.slots[toIndex] = temp;

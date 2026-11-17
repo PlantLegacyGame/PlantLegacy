@@ -7,17 +7,18 @@
  * `sdfShaders.ts` has exactly one producer, and a mismatch between the two is a
  * single place to look.
  */
+
+import { resolveDrawnRadius } from '@plant-legacy/shared/growth';
 import * as THREE from 'three';
-import type { PlantNodeData } from './plantNodeData.js';
+import type { PlantNodeData } from './plantNodeData.ts';
 import {
-  calculateMurrayTaper,
   getNodeColor,
   getNodeTypeString,
   getSDFPrimitive,
   nodeTypeToSdfCode,
+  SDFPrimitive,
   seedBodyLift,
-  visualRadius,
-} from './sdfNodeVisuals.js';
+} from './sdfNodeVisuals.ts';
 
 /** One tapered segment between a parent and a child, ready for upload. */
 export interface SDFSegment {
@@ -72,16 +73,31 @@ export function buildSdfGeometry(allNodes: PlantNodeData[]): SDFGeometry {
   const sdfNodes: SDFNode[] = [];
 
   const nodeMap = new Map<string, PlantNodeData>();
-  const childrenMap = new Map<string, string[]>();
-
   for (const node of allNodes) {
-    if (!node.isOwnPlant) continue;
-    nodeMap.set(node.id, node);
-    if (node.parentId) {
-      const children = childrenMap.get(node.parentId) ?? [];
-      children.push(node.id);
-      childrenMap.set(node.parentId, children);
+    if (node.isOwnPlant) nodeMap.set(node.id, node);
+  }
+
+  // Where each part is drawn this frame. Growth animates from the attach point
+  // to the final target, so children must start from the parent's current
+  // drawn end, not from the position the parent will reach in a few seconds.
+  const drawnPositions = new Map<string, THREE.Vector3>();
+  for (const node of nodeMap.values()) {
+    const drawPos = node.position.clone();
+    const nodeType = getNodeTypeString(node);
+    if (nodeType === 'seed' || node.isSeed) {
+      drawPos.y += seedBodyLift(nodeType, node.radius);
     }
+    const growth = Math.min(1, Math.max(0, node.growthProgress ?? 1));
+    if (growth < 1 && node.parentAttachX !== undefined) {
+      drawPos.set(
+        node.parentAttachX + (drawPos.x - node.parentAttachX) * growth,
+        (node.parentAttachY ?? drawPos.y) +
+          (drawPos.y - (node.parentAttachY ?? drawPos.y)) * growth,
+        (node.parentAttachZ ?? drawPos.z) +
+          (drawPos.z - (node.parentAttachZ ?? drawPos.z)) * growth,
+      );
+    }
+    drawnPositions.set(node.id, drawPos);
   }
 
   for (const node of allNodes) {
@@ -92,12 +108,7 @@ export function buildSdfGeometry(allNodes: PlantNodeData[]): SDFGeometry {
     const primitive = getSDFPrimitive(nodeType);
     const color = getNodeColor(nodeType, node.health);
 
-    // The seed's ovoid SDF extends below its center, so lift it until the
-    // rounded base sits on the ground (y = 0) instead of buried in the soil.
-    const nodePos = node.position.clone();
-    if (nodeType === 'seed' || node.isSeed) {
-      nodePos.y += seedBodyLift(nodeType, node.radius);
-    }
+    const nodePos = drawnPositions.get(node.id) ?? node.position.clone();
 
     sdfNodes.push({
       position: nodePos,
@@ -116,14 +127,6 @@ export function buildSdfGeometry(allNodes: PlantNodeData[]): SDFGeometry {
     const parent = nodeMap.get(node.parentId);
     if (!parent) continue;
 
-    const children = childrenMap.get(node.id) ?? [];
-    const childIndex = children.indexOf(node.id);
-    const taperedRadius = calculateMurrayTaper(
-      parent.radius,
-      childIndex,
-      Math.max(1, children.length),
-    );
-
     const hasTarget =
       node.targetX !== undefined && node.targetY !== undefined && node.targetZ !== undefined;
     const segmentEnd = hasTarget
@@ -133,24 +136,77 @@ export function buildSdfGeometry(allNodes: PlantNodeData[]): SDFGeometry {
     // Growth from a seed emerges realistically: the radicle/root exits the
     // heavy base into the soil (down), while the shoot/cotyledon exits the
     // pointed tip toward the sky (up).
-    const segmentStart = parent.position.clone();
     const parentType = getNodeTypeString(parent);
+    const parentDrawnEnd = drawnPositions.get(parent.id) ?? parent.position.clone();
+    const segmentStart = parentDrawnEnd.clone();
     if (parentType === 'seed') {
-      const toEnd = new THREE.Vector3().subVectors(segmentEnd, parent.position);
-      segmentStart.y =
-        toEnd.y <= 0
-          ? parent.position.y
-          : parent.position.y + visualRadius(parentType, parent.radius) * 2.0;
+      // Leave from the point the server stored as the attachment, which sits on
+      // the coat. Guessing it from the seed's contact point left the roots
+      // starting below the drawn body: underground the soil hid the gap, but an
+      // uprooted plant lifted its seed and the roots hung in the air, detached.
+      if (node.parentAttachX !== undefined && node.parentAttachZ !== undefined) {
+        segmentStart.set(
+          node.parentAttachX,
+          node.parentAttachY ?? parent.position.y,
+          node.parentAttachZ,
+        );
+      } else {
+        const toEnd = new THREE.Vector3().subVectors(segmentEnd, parent.position);
+        segmentStart.y =
+          toEnd.y <= 0
+            ? parent.position.y
+            : parent.position.y + resolveDrawnRadius(parentType, parent.radius) * 2.0;
+      }
+    } else if (
+      typeof node.attachFraction === 'number' &&
+      node.attachFraction < 1 &&
+      parent.parentAttachX !== undefined
+    ) {
+      // A lateral bud leaves part-way along the parent's current drawn
+      // segment, not at the tip it will reach when fully grown.
+      const parentStart = new THREE.Vector3(
+        parent.parentAttachX,
+        parent.parentAttachY ?? parent.position.y,
+        parent.parentAttachZ ?? parent.position.z,
+      );
+      segmentStart.copy(parentStart).lerp(parentDrawnEnd, node.attachFraction);
     }
 
+    // Start the child on the parent's surface instead of at its centre line.
+    // The capsule still overlaps the parent by more than half its radius, so
+    // the shared SDF blend reads as one organism rather than a pinned-on part.
+    const toEnd = segmentEnd.clone().sub(segmentStart);
+    const toEndLength = toEnd.length();
+    if (
+      parentType !== 'seed' &&
+      toEndLength > 1e-5 &&
+      (node.growthProgress ?? 1) >= 1 &&
+      (parent.growthProgress ?? 1) >= 1
+    ) {
+      const parentRadius = resolveDrawnRadius(parentType, parent.radius);
+      const socket = Math.min(parentRadius * 0.9, toEndLength * 0.4);
+      segmentStart.addScaledVector(toEnd.normalize(), socket);
+    }
+
+    const childRadius = resolveDrawnRadius(nodeType, node.radius);
+    const softPart =
+      nodeType === 'leaf' ||
+      nodeType === 'cotyledon' ||
+      nodeType === 'flower' ||
+      nodeType === 'spore_sac';
     segments.push({
       p0: segmentStart,
       p1: segmentEnd,
-      r0: visualRadius(parentType, parent.radius),
-      r1: visualRadius(nodeType, taperedRadius),
-      primitive,
+      r0: softPart
+        ? Math.min(resolveDrawnRadius(parentType, parent.radius), childRadius)
+        : resolveDrawnRadius(parentType, parent.radius),
+      r1: childRadius,
+      // The connector is always a stalk/capsule. A leaf's DISK primitive is the
+      // blade at the end of its petiole, not the petiole itself: drawing the
+      // whole segment as a disk left the blade hanging with no visible stem.
+      primitive: SDFPrimitive.CAPSULE,
       color,
-      growthProgress: Math.min(parent.growthProgress ?? 1.0, node.growthProgress ?? 1.0),
+      growthProgress: node.growthProgress ?? 1.0,
       spawnTime: Math.max(parent.spawnTime ?? 0, node.spawnTime ?? 0),
       nodeType,
       layer: node.layer === 'canopy' ? 1 : 0,
@@ -242,7 +298,7 @@ export function packNodes(nodes: readonly SDFNode[]): Float32Array {
     data[base + 0] = n.position.x;
     data[base + 1] = n.position.y;
     data[base + 2] = n.position.z;
-    data[base + 3] = visualRadius(n.nodeType, n.radius);
+    data[base + 3] = resolveDrawnRadius(n.nodeType, n.radius);
 
     data[base + 4] = n.color.x;
     data[base + 5] = n.color.y;

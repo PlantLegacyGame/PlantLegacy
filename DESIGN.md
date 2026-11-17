@@ -332,7 +332,7 @@ Task IDs: **T** = game system from v5.2, **C** = client task, **O** = operations
 |---|---|---|---|---|
 | 3 | **C01** Client foundation | W3–4 | T00, T03P | Renderer, camera rig, input layer, UI shell, asset pipeline, quality tiers. |
 | 4 | **T00A** Resource model | W5 | T00 | Includes onboarding hint card and tooltips. **Checkpoint 2 (W5):** browser scene, orbit camera, resource readout. |
-| 5 | **T01** Growth | W6–7 | T00A | Root competition, canopy shading, root attack. |
+| 5 | **T01** Growth | W6–7 | T00A | Resource competition, canopy shading (root attack removed 2026-11-13, ADR-051). |
 | 6 | **C02** Procedural plant renderer v1 | W8–9 | C01, T01 | **Checkpoint 3 (W9):** a plant grows and renders, light changes under canopy. |
 | 7 | **T03** The multiplayer world | W10–11 | T03P, T01 | Persistence, offline tiers (Part 13.6), interest management, event bus. |
 | 8 | **T08C** Accounts and sessions | W12 | T03 | Username + password. |
@@ -340,8 +340,8 @@ Task IDs: **T** = game system from v5.2, **C** = client task, **O** = operations
 | 10 | **T07** Weather and day/night | W14 | T00A, T03 | Thunderstorm active phase is the first cut if late. |
 | 11 | **C03** Environment rendering | W15 | C01, T07, T00A | Sky, light grading, rain, storm, soil tint, cutaway shader. |
 | 12 | **T05** Chat, emotes, report/block | W16 | T03, T08C | Proximity + world chat both included (D-12). **Checkpoint 5 (W16).** |
-| 13 | **T04** Mutation | W17 | T00A, T01, T03 | Schema + at least 3 simple mutations. |
-| 14 | **T06** Uproot, damage, tumbling | W18–19 | T01, T02, T03, T07 | Reroot crawl, root attack, kill credit, fragments and remains drops. **Checkpoint 6 (W19).** |
+| 13 | **T04** Mutation | W17 | T00A, T01, T03 | Schema + at least 3 simple mutations. **Partially implemented 2026-11-14** with 36 mutations and 12 signatures; the reroot-speed block is consumed by T06, translocation (post-MVP) is unowned (`docs/tasks/T04.md`). |
+| 14 | **T06** Uproot, damage, tumbling | W18–19 | T01, T02, T03, T07 | Reroot crawl, physical damage sources, kill credit, fragments and remains drops. **Checkpoint 6 (W19). Built 2026-11-15** except the in-browser checklist (`docs/tasks/T06.md`). |
 | 15 | **T08A** Inventory | W20 | T03, T08C | Item flags, bundles, `spore_balance`, duplication audit. |
 | 16 | **C04** HUD and controls v1 | W21–22 | C01, T00A, T07, T08A, T05, T06 | Desktop-first. **Checkpoint 7 (W22):** the full loop is playable. |
 | — | **Gate 1 playtest** (50 players) | W23 | all above | Real people, real notes. |
@@ -410,7 +410,7 @@ Task IDs: **T** = game system from v5.2, **C** = client task, **O** = operations
 | 3 | W9 | A plant grows server-side and renders procedurally; canopy shades the ground |
 | 4 | W13 | Log in, two browsers see each other's plants, Root Sight works *(the original "week 13" milestone)* |
 | 5 | W16 | Day/night, rain, chat, reporting |
-| 6 | W19 | Mutations, uproot, tumble, reroot crawl, root attack damage |
+| 6 | W19 | Mutations, uproot, tumble, reroot crawl, physical damage |
 | 7 | W22 | Complete playable HUD and controls |
 | 8 | W26 | Session feedback and account progress (prestige/achievements) |
 | 9 | W30 | Ledger, naming, gene items |
@@ -626,7 +626,7 @@ non-local server rejects dev endpoints; a normal player cannot reach the panel.
 | Task | Produces (Outputs) | Consumes (Inputs) | Consumed By (Downstream) |
 |------|-------------------|-------------------|--------------------------|
 | **T00A** | Tile grid (light/moisture/minerals), photosynthesis formula, consumption triggers, resource readout API, onboarding hint card | T00 (config), **T07** (`time_of_day`) | **T01** (growth costs), **T04** (mutation triggers), **T07** (rain→moisture), **C01/C03** (resource readout), **C04** (HUD tooltips) |
-| **T01** | Node graph (root/canopy), growth intents → server validation, root competition, canopy shading, root attack damage | T00A (resource tiles, costs), **T03** (broadcast) | **T03** (persistence), **T02** (root sight data), **T04** (adaptive pressure), **T06** (damage pipeline), **C02** (renderer input), **C04** (growth UI) |
+| **T01** | Node graph (root/canopy), growth intents → server validation, resource competition, canopy shading (no root attack; ADR-051) | T00A (resource tiles, costs), **T03** (broadcast) | **T03** (persistence), **T02** (root sight data), **T04** (adaptive pressure), **T06** (damage pipeline), **C02** (renderer input), **C04** (growth UI) |
 | **T03** | Persistent world state, Active/Near/Dormant tiers, interest management, event bus, binary protocol, snapshot+event log, reconnect window | T03P (protocol), T01 (plant state), T00A (resource sync) | **T08C** (sessions), **T05** (chat channels), **T04** (mutation events), **T06** (death events), **T08A** (inventory), **T16** (ledger), **C02** (plant data), **C03** (environment sync) |
 | **T08C** | Argon2id auth, JWT tokens, session management, rate limits, `account_id`, `world_id` on all gameplay rows | T03 (world, WS) | **T05** (chat auth), **T08A** (inventory owner), **T14** (marketplace auth), **T45** (mail auth), **C07** (app wrappers) |
 
@@ -646,7 +646,7 @@ non-local server rejects dev endpoints; a normal player cannot reach the panel.
 |------|-------------------|-------------------|--------------------------|
 | **T04** | Data-driven mutations (triggers, effects, maintenance, visual signatures), **adaptive pressure** (8 growth categories → gene tag weights), `mutation_acquired`/`shed` events | T00A (env triggers), T01 (growth events), T03 (event bus) | **T08B** (achievements), **T15** (gene items), **T12** (archetype biases), **T24** (expansion), **C02** (12 visual signatures), **T06A** (death record genes) |
 | **T05** | Proximity chat, world chat, emote wheel, **Roblox-style report/block** (context snapshots, rate limits), illegal-content-only policy enforcement | T03 (channels), T08C (auth) | **T40** (admin triage), **C04** (chat panel), **T14** (trade chat) |
-| **T06** | State machine (rooted→uprooted→tumbling→reroot→rooted), **damage pipeline** (4 sources: weather/roots/tools/herbivores), kill credit, dung drops, fragments/remains, reroot crawl | T01 (root attack), T02 (substrate multiplier), T07 (weather damage), T03 (broadcast) | **T04** (mutation triggers), **T08B** (kill events), **T16** (ledger), **T51** (fragments from damage), **T06A** (death pipeline), **C04** (damage UI) |
+| **T06** | State machine (rooted→uprooted→tumbling→reroot→rooted), **damage pipeline** (4 sources: weather/roots/tools/herbivores), kill credit, dung drops, fragments/remains, reroot crawl | T01 (resource competition), T02 (substrate multiplier), T07 (weather damage), T03 (broadcast) | **T04** (mutation triggers), **T08B** (kill events), **T16** (ledger), **T51** (fragments from damage), **T06A** (death pipeline), **C04** (damage UI) |
 | **T08A** | Row-locked inventory (Postgres), `spore_balance`, item flags (tradeable/mailable/listable/account_bound), bundle create/open, fragments, offspring seeds, duplication audit | T03 (transactions), T08C (owner) | **T08** (session stipend), **T08B** (prestige), **T13** (currency), **T14** (marketplace), **T15** (gene items), **T51** (extraction), **T06A** (heirloom), **T13A** (boosters), **T45** (mail attachments), **C04** (inventory UI), **C05** (inventory screen) |
 | **C04** | Context dock (valid actions only), rebinding screen, text-size slider, resource tooltips, hint card, chat panel (proximity/world), report dialog, notifications | C01 (UI shell), T00A (resources), T07 (weather), T08A (inventory), T05 (chat), T06 (damage) | **C05** (menus build on HUD), **T02** (Root Sight toggle), **T08** (session end screen) |
 
@@ -1093,7 +1093,7 @@ Each spec is a block. Feed one to the AI at a time. Every AI session returns imp
 ### T06 · Uprooted, Damage, Tumbling — `config/uproot.json`, `config/damage.json`, `config/tumbling.json`, `config/fragments.json`
 **Depends on:** T01, T02, T03, **T07** (no weather stub needed; build T07 first).
 
-**Must support.** State machine rooted → uprooted → tumbling → re-rooting → rooted with biomass/growth cost per transition. Uprooting by structural damage, weather, prolonged starvation. Uprooted roots visible, biomass drains fast, plant tumbles per local physics, nearby players notified. MVP reroot crawl: uprooted player steers slow crawl toward valid soil within reroot window. Success grants short desperation buff; failure death. Speed = `reroot_crawl_speed × substrate_multiplier × movement.rerootSpeed` default 1.0. One damage pipeline, four sources: weather, roots (root attack and overlap from T01), tools (accepted, unused MVP), herbivores (scripted ambient events: swarm passes region on timer, applies damage, does not pathfind). Kill credit: every damage record keeps source plant IDs; on death, credit goes to player source with most damage within `kill_credit_window`. Weather/herbivore deaths credit no one. Emits `plant_died`, `plant_uprooted`, `kill_credited`. Dung drops from herbivore events and plant death. No editorializing UI. **[V5.3] Fragment drops and remains per Part 5, T51: a node destroyed by the damage pipeline drops a fragment with a configured chance; a dead plant leaves remains (a configured number of fragments in the world).**
+**Must support.** State machine rooted → uprooted → tumbling → re-rooting → rooted with biomass/growth cost per transition. Uprooting by structural damage, weather, prolonged starvation. **[ADR-051/052]** Root contact deals no damage: competition is resource theft, and uproot is caused by saturation, storm gust or collapse, never a random roll. No desperation buff; a failed reroot dies of starvation. Uprooted roots visible, biomass drains fast, plant tumbles per local physics, nearby players notified. MVP reroot crawl: uprooted player steers slow crawl toward valid soil within reroot window. Success grants short desperation buff; failure death. Speed = `reroot_crawl_speed × substrate_multiplier × movement.rerootSpeed` default 1.0. One damage pipeline, four sources: weather, tools (accepted, unused MVP), herbivores (scripted ambient events: swarm passes region on timer, applies damage, does not pathfind), and terrain collapse/debris. Roots are **not** a damage source (ADR-051). Kill credit: every damage record keeps source plant IDs; on death, credit goes to player source with most damage within `kill_credit_window`. Weather/herbivore deaths credit no one. Emits `plant_died`, `plant_uprooted`, `kill_credited`. Dung drops from herbivore events and plant death. No editorializing UI. **[V5.3] Fragment drops and remains per Part 5, T51: a node destroyed by the damage pipeline drops a fragment with a configured chance; a dead plant leaves remains (a configured number of fragments in the world).**
 
 **Acceptance.** Uprooting visible/broadcast. Reroot stressful but possible via crawl. Failure death. All damage uses pipeline; root attack live; tool source accepted. Herbivores scripted events, not agents. Fragment drops and remains work; fragments expire per config.
 
@@ -3167,7 +3167,7 @@ All screens use the same tokens, scale with text size, and are keyboard operable
 | Vine | Thin, twisting, flexible sway |
 | Spore sac | Soft, slightly glossy bulb with gentle pulse |
 
-**Mutation visual signatures.** Each mutation sets at most three shader parameters (for example hue shift, pattern, emissive amount) and optionally an instance variant (leaf shape). Rules: (1) signatures must be readable at distance; (2) **no "rarity glow"**; no signature may imply tier or power (RULE_20); (3) signatures describe *what the mutation does*, not *how strong it is*; (4) all signatures use the shared plant shader (no unique meshes).
+**Mutation visual signatures.** A mutation declares a *style* — an organ family to paint (`foliage`, `woody`, `seed`, `bloom`, `whole`), a procedural pattern, a tint, a variegation, a glow, bark thickness/darkening and thorn density — in `config/mutation_visuals.json` (ADR-059). Formerly "at most three shader parameters"; the composed record replaces that count because the look is now data, every held mutation contributes, and the renderer only paints. Rules: (1) signatures must be readable at distance; (2) **no "rarity glow"**; no signature may imply tier or power (RULE_20); (3) signatures describe *what the mutation does*, not *how strong it is*; (4) all signatures use the shared plant shader (no unique meshes); (5) a style that would look identical to another is rejected by the config test, and every visual amount has a ceiling in `values.caps`.
 
 **Health and damage.** Wilt blends toward thinner, desaturated forms; pressure damage appears as local darkening at contact points.
 

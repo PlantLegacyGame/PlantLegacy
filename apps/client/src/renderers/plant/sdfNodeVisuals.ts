@@ -128,16 +128,6 @@ export function calculateMurrayTaper(
 }
 
 /**
- * Drawn radius of a part. The server stores drawn metres now, so its radius is
- * authoritative; `resolveDrawnRadius` handles legacy vessel radii and previews.
- * This used to be a third, independent multiplier table, which is why the same
- * plant looked different on WebGL2 and WebGPU.
- */
-export function visualRadius(nodeType: string, serverRadius: number): number {
-  return resolveDrawnRadius(nodeType, serverRadius);
-}
-
-/**
  * Vertical lift that puts the seed's drawn body on top of the soil: its ovoid
  * extends below the stored base position, so drawing it at y = 0 buried it.
  *
@@ -148,5 +138,5 @@ export function visualRadius(nodeType: string, serverRadius: number): number {
  * the mesh paths had it resting on the surface.
  */
 export function seedBodyLift(nodeType: string, serverRadius: number): number {
-  return seedBodyHalfHeight(visualRadius(nodeType, serverRadius));
+  return seedBodyHalfHeight(resolveDrawnRadius(nodeType, serverRadius));
 }

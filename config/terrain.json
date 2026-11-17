@@ -16,13 +16,13 @@
     },
     "surface_amplitude_m": {
       "type": "number",
-      "value": 6.0,
+      "value": 26.0,
       "range": [0, 40],
       "notes": "Peak relief above the base planet surface, in metres."
     },
     "surface_base_frequency": {
       "type": "number",
-      "value": 0.045,
+      "value": 0.02,
       "range": [0.001, 0.5],
       "notes": "Base noise frequency in cycles per metre."
     },
@@ -46,7 +46,7 @@
     },
     "ridge_strength": {
       "type": "number",
-      "value": 0.35,
+      "value": 0.6,
       "range": [0, 1],
       "notes": "0 = rolling hills, 1 = sharp crests."
     },
@@ -163,6 +163,65 @@
       "value": 0.05,
       "range": [0, 1],
       "notes": "Surface moisture gained per second during rain."
+    },
+    "river_enabled": {
+      "type": "boolean",
+      "value": true,
+      "notes": "Carve the shared terrain field into a river channel. The channel is part of the ground field, so server and client derive the same bed."
+    },
+    "river_center_z_m": {
+      "type": "number",
+      "value": 24,
+      "range": [-500, 500],
+      "notes": "Middle of the corridor surveyed for drainage, in metres across the play area. The route inside the corridor comes from the terrain, not from this line."
+    },
+    "river_width_m": {
+      "type": "number",
+      "value": 12,
+      "range": [1, 60],
+      "notes": "Full width of the carved channel at its banks, in metres."
+    },
+    "river_depth_m": {
+      "type": "number",
+      "value": 2.8,
+      "range": [0.05, 8],
+      "notes": "How far the channel bed is cut below the surrounding ground at its deepest."
+    },
+    "river_path_cell_m": {
+      "type": "number",
+      "value": 2,
+      "range": [0.5, 20],
+      "notes": "Grid step of the flow-accumulation survey that routes the river. Smaller finds finer valleys and costs more to build."
+    },
+    "river_bank_slope": {
+      "type": "number",
+      "value": 0.9,
+      "range": [0, 4],
+      "notes": "How steeply the shoulders rise away from the water, as metres of rise per metre out. This is what turns the carve into a valley."
+    },
+    "river_bank_apron_m": {
+      "type": "number",
+      "value": 12,
+      "range": [0, 60],
+      "notes": "How far the shoulder cut reaches either side of the channel before the untouched hillside takes over."
+    },
+    "river_water_depth_m": {
+      "type": "number",
+      "value": 0.9,
+      "range": [0.02, 3],
+      "notes": "Depth of the stream flowing in the channel, measured from the bed up."
+    },
+    "river_length_m": {
+      "type": "number",
+      "value": 320,
+      "range": [40, 1200],
+      "notes": "Length of the corridor surveyed for the river, in metres. The trunk of the drainage inside that corridor becomes the channel."
+    },
+    "river_flow_speed_mps": {
+      "type": "number",
+      "value": 2.4,
+      "range": [0, 10],
+      "notes": "Downstream speed of the stream's ripples. Zero leaves the surface standing still."
     }
   }
 }

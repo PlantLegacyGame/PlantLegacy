@@ -10,10 +10,12 @@ task, rule and tunable comes from there. This repository implements **T00, O01,
 T03P, C01, T00A** (resource model + onboarding), **T01** (growth simulation),
 **T03** (persistence, offline tiers, interest management, event bus),
 **T08C** (accounts + sessions), **T07** (weather & day/night), **C02** (SDF
-plant renderer), **T02** (Root Sight), **T05** (chat, emotes, block, report),
+plant renderer), **T02** (Root Sight), **T04** (mutations), **T05** (chat,
+emotes, block, report),
 **C03** (environment rendering) and **C03b** (ground LOD), the
 **C02b slice** (WebGPU compute-driven plant LOD with WebGL2 fallback), **D01**
-(dev settings), and
+(dev settings), **T06** (damage, uproot, tumbling, reroot crawl, kill credit and
+drops; in-browser checklist pending), and
 **T25** (shared terrain field, LOD ground colliders, plant colliders, sparse
 persistent soil edits; client height-texture application still pending).
 
@@ -48,12 +50,14 @@ pnpm verify
 | `pnpm dev` | One-command local stack (install if needed, server + Vite dev server) |
 | `pnpm dev:server` | Server only, watch mode |
 | `pnpm dev:client` | Vite dev server only (proxies `/health`, `/ready`, `/config`, `/ws`) |
-| `pnpm verify` | Lint + typecheck + config validator + unit tests |
+| `pnpm verify` | The CI chain: lint + typecheck + config validator + docs check + unit tests |
+| `pnpm verify:ci` | `verify` plus the production build |
 | `pnpm lint` / `pnpm lint:fix` | Biome check / autofix |
 | `pnpm typecheck` | `tsc` across every workspace package |
 | `pnpm config:validate` | Validate all `config/*.json`; **rejects `rarity`** |
 | `pnpm docs:check` | Links, config counts, protocol table and duplicate prose across `docs/` |
 | `pnpm test` | `node --test` in every package |
+| `pnpm bot` | Headless player bots against a running server (`-- --bots 2 --minutes 5`); see [`tools/sim-bots`](./tools/sim-bots/README.md) |
 | `pnpm build` | Vite production build → `apps/client/dist` |
 | `pnpm start` | Start the server (no watch) |
 
@@ -94,8 +98,8 @@ Every tunable lives in `config/<system>.json` in the **extended-1** format:
   the build if one appears.
 - `account_bound: true` forces `tradeable`, `mailable` and `listable` to false
   (RULE_23).
-- Stubs carry `values: {}` until their owning task fills them. **Twenty-three**
-  files carry values today and 55 are stubs; the authoritative list is owned by
+- Stubs carry `values: {}` until their owning task fills them. **Twenty-four**
+  files carry values today and 54 are stubs; the authoritative list is owned by
   [`docs/tunables.md`](./docs/tunables.md) rather than duplicated here.
 
 ## Environment
@@ -146,6 +150,9 @@ together.
 | What is built, what is not, known gaps | [`docs/what-works-now.md`](./docs/what-works-now.md) |
 | What happened, when | [`docs/history.md`](./docs/history.md) — append-only, not current state |
 | What comes next | [`docs/PlantLegacy-Abyssal-Integration-Plan.md`](./docs/PlantLegacy-Abyssal-Integration-Plan.md) |
+| What to fix in the built system, in order | [`docs/improvement-plan.md`](./docs/improvement-plan.md) |
+| The 2026-11-16 verified defect pass, fix by fix | [`docs/bugfix-plan.md`](./docs/bugfix-plan.md) |
+| What is broken right now, with evidence and status | [`docs/bug-inventory.md`](./docs/bug-inventory.md) |
 | How to ship it | [`docs/deploy.md`](./docs/deploy.md) |
 | Per-task evidence and checklists | [`docs/tasks/`](./docs/tasks/), [`docs/checklists/`](./docs/checklists/) |
 

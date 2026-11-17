@@ -23,6 +23,7 @@ import {
   weatherStateMachineGetMoistureGainPerS,
   weatherStateMachineGetTimeOfDay,
   weatherStateMachineGetWeatherState,
+  weatherStateMachineSetTimeOfDay,
   weatherStateMachineUpdate,
 } from './weatherStateMachine.ts';
 
@@ -58,6 +59,16 @@ export class WeatherSystem {
    */
   forceState(state: WeatherStateName, durationS?: number): void {
     weatherStateMachineForceState(this.machine, state, durationS);
+  }
+
+  /**
+   * Dev control: jump the clock to a fraction of the day so screenshots can be
+   * taken in daylight. The sun is server-authoritative, so this is the only way
+   * to brighten the world on demand - a client-side set is overwritten by the
+   * next broadcast.
+   */
+  setTimeOfDay(timeOfDay: number): void {
+    weatherStateMachineSetTimeOfDay(this.machine, timeOfDay);
   }
 
   getBroadcast() {

@@ -9,7 +9,7 @@ import {
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { applyGrowthGeometry } from './config/growthGeometryConfig.js';
-import type { PlantNodeData } from './renderers/PlantRenderer.js';
+import type { PlantNodeData } from './renderers/plant/plantNodeData.js';
 import {
   measureDrawnPlant,
   resolveSegmentFrame,

@@ -6,7 +6,9 @@
 Every gameplay table carries `world_id`. All item and Spore mutations must use
 row-level locks (RULE_17). The current inventory is the one exception and is a
 documented defect: it lives in memory only, so no economy code may build on it
-until T08A is completed ([`tasks/T08A.md`](./tasks/T08A.md)).
+until T08A is completed ([`tasks/T08A.md`](./tasks/T08A.md)). Its local model
+now validates counts, stack limits and slot bounds, but there is no inventory
+table, row locking or restart survival yet.
 
 ## Locked decisions
 
@@ -29,7 +31,7 @@ until T08A is completed ([`tasks/T08A.md`](./tasks/T08A.md)).
 | `world_id` | `uuid` | FK → `worlds` |
 | `owner_id` | `uuid` | FK → `accounts` (or `anon_<plantId>`) |
 | `snapshot` | `bytea` | Versioned binary envelope (PLNT magic, u16 ver, u32 len, u32 CRC32) |
-| `event_log` | `jsonb` | `PlantEvent[]` array, max 1000 entries |
+| `event_log` | `jsonb` | `PlantEvent[]`, bounded by `world.event_log_compaction_threshold` (default 10000) |
 | `root_node_id` | `text` | |
 | `total_biomass` | `numeric` | |
 | `total_upkeep` | `numeric` | |
@@ -46,9 +48,10 @@ until T08A is completed ([`tasks/T08A.md`](./tasks/T08A.md)).
 | Column | Type | Notes |
 |---|---|---|
 | `id` | `bigserial` | PK |
-| `world_id` | `uuid` | |
-| `event_type` | `text` | `GAME_EVENTS` value |
-| `payload` | `jsonb` | |
+| `world_id` | `text` | |
+| `type` | `text` | `plant_death` today; the `GAME_EVENTS` feed can add more |
+| `payload` | `jsonb` | plant id, owner, cause, final biomass, node count |
+| `tick` | `bigint` | simulation tick |
 | `created_at` | `timestamptz` | |
 
 ### `accounts` (T08C)

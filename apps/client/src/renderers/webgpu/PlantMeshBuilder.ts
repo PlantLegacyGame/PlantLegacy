@@ -8,8 +8,13 @@ import {
 } from '@plant-legacy/shared/growth';
 import { hash01 } from '@plant-legacy/shared/math';
 import * as THREE from 'three';
-import type { PlantNodeData } from '../PlantRenderer';
-import { MUTATION_BIT, nodeMutationMask } from '../plant/mutations.ts';
+import {
+  type MutationLookStack,
+  NEUTRAL_STACK,
+  nodeMutationMask,
+  organLook,
+} from '../plant/mutations.ts';
+import type { PlantNodeData } from '../plant/plantNodeData.js';
 
 /** C02b: GPU skinning configuration */
 export const MAX_JOINTS_PER_VERTEX = 4;
@@ -34,6 +39,8 @@ interface ChainPoint {
   weight: number;
   spawnTime: number;
   growthProgress: number;
+  /** `spined_epidermis` density for this point's node (0 = no thorns). */
+  spines: number;
 }
 
 /** Everything the chain pass needs to know about one node's segment. */
@@ -48,6 +55,8 @@ interface DrawnSegment {
   sides: number;
   spawnTime: number;
   growthEase: number;
+  /** `spined_epidermis` density, 0 when the plant bristles nowhere. */
+  spines: number;
 }
 
 export interface PlantMeshBuildOptions {
@@ -57,8 +66,13 @@ export interface PlantMeshBuildOptions {
   rootSides: number;
   now: number;
   sunDirection: THREE.Vector3;
-  /** Radius multiplier applied to nodes with the thickened-bark mutation. */
-  mutationBarkThicknessScale?: number;
+  /** Per-plant look parameters (petals, leaf and seed scale). */
+  appearanceForPlant?: (
+    plantId: string,
+    isOwn: boolean,
+  ) => { petalCount: number; leafScale: number; seedScale: number } | undefined;
+  /** Composed mutation looks per plant (bark thickness, pigment, thorns). */
+  lookForPlant?: (plantId: string, isOwn: boolean) => MutationLookStack | undefined;
 }
 
 export interface PlantRenderPlant {
@@ -75,6 +89,8 @@ export interface BuiltPlantMesh {
   vertices: Float32Array;
   indices: Uint32Array;
   plantData: PlantRenderPlant[];
+  /** Composed looks, aligned with `plantData` by plant index. */
+  plantLooks: MutationLookStack[];
 }
 
 const OWN_PLANT_COLOR: [number, number, number] = [0.3, 0.62, 0.24];
@@ -93,9 +109,44 @@ function packNode(
     ((nodeType & 0xff) << 16) |
     ((isOwn ? 1 : 0) << 24) |
     ((variationIndex & 0xf) << 25) |
-    // C02b mutation signatures travel in the three spare high bits.
-    ((mutationMask & 0x7) << 29)
+    // T04 mutation signature index (0..12) in the four spare high bits.
+    ((mutationMask & 0xf) << 28)
   );
+}
+
+/**
+ * Thorn geometry for `spined_epidermis`.
+ *
+ * The mutation's name promises spines, and unlocking a thorn organ is not the
+ * same thing: a plant that has the mutation has to bristle. Spikes are emitted
+ * as short tapered tubes on the chain's surface so they inherit its shading and
+ * its skinning.
+ */
+function addChainSpines(mesh: MeshAccumulator, points: readonly ChainPoint[]): void {
+  for (let i = 0; i < points.length; i += 2) {
+    const point = points[i];
+    if (!(point.spines > 0.01)) continue;
+    const count = Math.max(1, Math.round(point.spines * 3));
+    const spikeLength = Math.max(0.012, point.radius * 1.5);
+    for (let spike = 0; spike < count; spike += 1) {
+      const angle = spike * 2.399963 + i * 0.7;
+      const outward = new THREE.Vector3(Math.cos(angle), 0.55, Math.sin(angle)).normalize();
+      const base = point.position.clone().addScaledVector(outward, point.radius * 0.85);
+      const tip = base.clone().addScaledVector(outward, spikeLength);
+      mesh.addTube(
+        base,
+        tip,
+        Math.max(0.004, point.radius * 0.4),
+        0.0015,
+        4,
+        point.packed,
+        false,
+        point.spawnTime,
+        point.growthProgress,
+        point.jointA,
+      );
+    }
+  }
 }
 
 function getVisualNodeType(node: PlantNodeData): number {
@@ -114,6 +165,14 @@ function getVisualNodeType(node: PlantNodeData): number {
   if (nt === 'leaf') return 3; // Regular leaf - vibrant green
   if (nt === 'stem') return 1; // Stem - woody trunk
   if (nt === 'branch') return 1; // Branch - woody trunk
+  if (nt === 'trunk') return 1; // Woody trunk
+  if (nt === 'culm') return 2; // Hollow segmented shoot - green stem
+  if (nt === 'rhizome') return 0; // Underground stem - root colour
+  if (nt === 'floating_leaf') return 3; // Buoyant pad - leaf colour
+  if (nt === 'pneumatophore') return 0; // Aerial breathing root - root colour
+  if (nt === 'thorn') return 1; // Hardened defensive shoot - woody
+  if (nt === 'stolon') return 2; // Runner - green stem
+  if (nt === 'tuber') return 0; // Storage tuber - root colour
   if (nt === 'radicle') return 0; // Radicle - delicate root
   if (nt === 'root') return 0; // Root - woody root
   if (nt === 'lateral_root') return 0; // Lateral root - thinner root
@@ -126,20 +185,6 @@ function getVariationIndex(node: PlantNodeData, visualType: number): number {
   // Use node ID hash to get deterministic variation
   const hash = hash01(node.id, `variation_${visualType}`);
   return Math.floor(hash * 16);
-}
-
-/**
- * Drawn radius of a part. The server now stores drawn metres, so its radius is
- * authoritative; `resolveDrawnRadius` falls back to the shared per-type table
- * for legacy payloads and aim previews of a node that has not been sent yet.
- * This is the only radius rule the WebGPU and SDF renderers may use.
- */
-export function visualRadiusForNode(
-  nodeType: string | undefined,
-  serverRadius: number,
-  biomass?: number,
-): number {
-  return resolveDrawnRadius(nodeType, serverRadius, biomass);
 }
 
 function isRootNodeType(nodeType: string | undefined): boolean {
@@ -214,7 +259,7 @@ export function resolveDrawnNodePosition(
   const fan = new THREE.Vector3(Math.cos(fanAngle), fanElevation, Math.sin(fanAngle)).normalize();
   const stubLength = Math.max(
     0.15,
-    visualRadiusForNode(parent.nodeType, parent.radius, parent.biomass) * 1.6,
+    resolveDrawnRadius(parent.nodeType, parent.radius, parent.biomass) * 1.6,
   );
   return parent.position.clone().addScaledVector(fan, stubLength);
 }
@@ -913,20 +958,37 @@ export function resolveSegmentFrame(
   // leaves a visible step at every joint.
   let start = parentDrawnEnd ? parentDrawnEnd.clone() : parent.position.clone();
 
-  // Children leave the seed coat, at the same point the server used to place
-  // them, so their target needs no translation: model and drawing agree.
+  // The server placed this child from a point on its parent and shipped that
+  // point; the drawn tube has to start there too. A seed's children leave the
+  // coat, which is why this used to be a seed-only rule - but a stem's own
+  // drawn start is its shipped attach as well, and its children attach along
+  // that same segment. Recomputing the seed point here while the server shipped
+  // a different one put a stem's drawn start at the coat surface and its
+  // branches at fractions of a segment that began 30 cm lower: the branch then
+  // hung in the air below every drawn joint.
+  const shippedAttach =
+    node.parentAttachX !== undefined &&
+    node.parentAttachY !== undefined &&
+    node.parentAttachZ !== undefined
+      ? new THREE.Vector3(node.parentAttachX, node.parentAttachY, node.parentAttachZ)
+      : null;
   if ((parent.nodeType ?? '').toLowerCase() === 'seed') {
-    const attach = nodeAttachmentPoint(
-      {
-        x: parent.position.x,
-        y: parent.position.y,
-        z: parent.position.z,
-        nodeType: parent.nodeType,
-        radius: parent.radius,
-        biomass: parent.biomass,
-      },
-      target.clone().sub(parent.position),
-    );
+    const attach =
+      shippedAttach ??
+      (() => {
+        const point = nodeAttachmentPoint(
+          {
+            x: parent.position.x,
+            y: parent.position.y,
+            z: parent.position.z,
+            nodeType: parent.nodeType,
+            radius: parent.radius,
+            biomass: parent.biomass,
+          },
+          target.clone().sub(parent.position),
+        );
+        return new THREE.Vector3(point.x, point.y, point.z);
+      })();
     start.set(attach.x, attach.y, attach.z);
   }
 
@@ -953,15 +1015,38 @@ export function resolveSegmentFrame(
     target = resolveDrawnNodePosition(node, parent, allById);
   }
 
+  // Leave the parent on its surface rather than its centre line. The child
+  // still overlaps the parent body, so the joint reads as grown tissue instead
+  // of a pin pushed through the middle.
+  const parentType = (parent.nodeType ?? '').toLowerCase();
+  if (parentType !== 'seed') {
+    const outward = target.clone().sub(start);
+    const span = outward.length();
+    if (span > 1e-5) {
+      const parentRadiusForSocket = resolveDrawnRadius(
+        parent.nodeType,
+        parent.radius,
+        parent.biomass,
+      );
+      start.addScaledVector(outward.normalize(), Math.min(parentRadiusForSocket * 0.9, span * 0.4));
+    }
+  }
+
   const animated = start.clone().lerp(target, growthEase);
   const branch = new THREE.Vector3().subVectors(animated, start);
 
-  const parentRadius = visualRadiusForNode(parent.nodeType, parent.radius, parent.biomass);
-  const nodeRadius = visualRadiusForNode(node.nodeType, node.radius, node.biomass);
+  const parentRadius = resolveDrawnRadius(parent.nodeType, parent.radius, parent.biomass);
+  const nodeRadius = resolveDrawnRadius(node.nodeType, node.radius, node.biomass);
 
   // Anything emerging from a seed starts thin so the seed never turns into a
   // cone with a giant base.
   let startRadius = parentRadius;
+  const softPart =
+    (node.nodeType ?? '').toLowerCase() === 'leaf' ||
+    (node.nodeType ?? '').toLowerCase() === 'cotyledon' ||
+    (node.nodeType ?? '').toLowerCase() === 'flower' ||
+    (node.nodeType ?? '').toLowerCase() === 'spore_sac';
+  if (softPart) startRadius = Math.min(parentRadius, nodeRadius);
   if (parent.nodeType === 'seed') {
     startRadius = Math.min(parentRadius, nodeRadius, isRootNodeType(node.nodeType) ? 0.03 : 0.028);
   }
@@ -1053,7 +1138,7 @@ export function measureDrawnPlant(nodes: PlantNodeData[]): PlantGeometryMetrics 
         frame.target.distanceTo(node.position),
       );
 
-      const drawn = visualRadiusForNode(node.nodeType, node.radius, node.biomass);
+      const drawn = resolveDrawnRadius(node.nodeType, node.radius, node.biomass);
       const reference = nodeRenderRadius(node.nodeType, node.biomass);
       if (reference > 0) {
         metrics.maxRadiusRatio = Math.max(metrics.maxRadiusRatio, drawn / reference);
@@ -1104,6 +1189,7 @@ export function buildPlantMesh(
   const rootSides = Math.max(8, Math.min(12, Math.round(options.rootSides)));
   const mesh = new MeshAccumulator();
   const plantData: PlantRenderPlant[] = [];
+  const plantLooks: MutationLookStack[] = [];
 
   const now = options.now;
 
@@ -1113,10 +1199,19 @@ export function buildPlantMesh(
     if (!root) continue;
 
     const isOwn = group.some((node) => node.isOwnPlant === true);
+    const look = options.appearanceForPlant?.(group[0]?.plantId ?? '', isOwn) ?? {
+      petalCount: 6,
+      leafScale: 1,
+      seedScale: 1,
+    };
+    // T04 appearance: one composed look per plant, shared by every part it
+    // grows. Composition happens once, not per vertex.
+    const stack = options.lookForPlant?.(group[0]?.plantId ?? '', isOwn) ?? NEUTRAL_STACK;
+    plantLooks.push(stack);
     const color = isOwn ? OWN_PLANT_COLOR : RIVAL_PLANT_COLOR;
     const box = new THREE.Box3();
     let leafCount = 0;
-    let plantMutationMask = 0;
+    let plantSignature = 0;
 
     // Build children map and compute Murray's law radii
     const childrenMap = new Map<string, PlantNodeData[]>();
@@ -1144,7 +1239,7 @@ export function buildPlantMesh(
     if (isSeedPlant) {
       // Position seed base contact point on the ground so the rounded base sits
       // on top of the soil with the pointed tip toward the sky.
-      const seedRadius = visualRadiusForNode('seed', root.radius, root.biomass);
+      const seedRadius = resolveDrawnRadius('seed', root.radius, root.biomass) * look.seedScale;
       const seedCenter = new THREE.Vector3(
         root.position.x,
         seedBodyCentreY(root.position.y, seedRadius),
@@ -1164,11 +1259,9 @@ export function buildPlantMesh(
     } else {
       // Normal plant with root - render seed coat base (crown at surface)
       // Render as seed coat (egg-shaped) via addSeed, NOT as tan sphere via addJoint
-      const seedRadius = visualRadiusForNode(
-        'seed',
-        computedRadii.get(root.id) ?? root.radius,
-        root.biomass,
-      );
+      const seedRadius =
+        resolveDrawnRadius('seed', computedRadii.get(root.id) ?? root.radius, root.biomass) *
+        look.seedScale;
       const seedCenter = new THREE.Vector3(
         root.position.x,
         seedBodyCentreY(root.position.y, seedRadius),
@@ -1224,12 +1317,12 @@ export function buildPlantMesh(
       const animatedPosition = frame.animated;
       const branch = frame.branch;
       const mutationMask = nodeMutationMask(node);
-      plantMutationMask |= mutationMask;
-      // Thickened bark is a body change, so it is applied to the drawn radii.
-      const barkScale =
-        (mutationMask & MUTATION_BIT.thick_bark) !== 0
-          ? Math.max(1, options.mutationBarkThicknessScale ?? 1)
-          : 1;
+      plantSignature = Math.max(plantSignature, mutationMask);
+      // Bark thickness is a body change, not paint: a thickened-bark plant is
+      // physically fatter, and the same style thickens roots and stems too.
+      const organLookNow = organLook(stack, node.nodeType ?? 'stem');
+      const spineDensity = organLookNow.spines;
+      const barkScale = organLookNow.barkScale;
       const rA = frame.startRadius * barkScale;
       const rB = frame.endRadius * barkScale;
 
@@ -1303,6 +1396,7 @@ export function buildPlantMesh(
           sides: tubeSides,
           spawnTime,
           growthEase,
+          spines: spineDensity,
         });
       }
 
@@ -1361,7 +1455,15 @@ export function buildPlantMesh(
           animatedPosition,
           direction,
           normal,
-          Math.min(bladeCap, options.leafSize * 0.9 * growthEase * leafSizeMult),
+          Math.min(
+            bladeCap,
+            options.leafSize *
+              0.9 *
+              growthEase *
+              leafSizeMult *
+              look.leafScale *
+              (isFlower ? Math.min(2, look.petalCount / 6) : 1),
+          ),
           packNode(plantIndex, leafVisualType, isOwn, leafVariationIdx, mutationMask),
           spawnTime,
           growthEase,
@@ -1389,7 +1491,10 @@ export function buildPlantMesh(
             animatedPosition,
             leafDir,
             normal,
-            Math.min(bladeCap, options.leafSize * 0.75 * growthEase * leafSizeMult),
+            Math.min(
+              bladeCap,
+              options.leafSize * 0.75 * growthEase * leafSizeMult * look.leafScale,
+            ),
             packNode(plantIndex, leafVisualType, isOwn, leafVariationIdx, mutationMask),
             spawnTime,
             growthEase,
@@ -1463,6 +1568,7 @@ export function buildPlantMesh(
             weight: t,
             spawnTime: info.spawnTime,
             growthProgress: info.growthEase,
+            spines: info.spines,
           });
         }
         first = false;
@@ -1479,6 +1585,7 @@ export function buildPlantMesh(
       if (points.length >= 2) {
         const sidesForChain = drawnSegments.get(startId)?.sides ?? sides;
         mesh.addChainTube(points, sidesForChain);
+        addChainSpines(mesh, points);
       }
 
       if (chainEnd !== null) {
@@ -1503,7 +1610,7 @@ export function buildPlantMesh(
       color,
       isOwn,
       nodeCount: group.length,
-      mutationMask: plantMutationMask,
+      mutationMask: plantSignature,
     });
 
     // Selection is communicated by the growth panel. There is deliberately no
@@ -1516,5 +1623,6 @@ export function buildPlantMesh(
     vertices: mesh.toVertexArray(),
     indices: new Uint32Array(mesh.indices),
     plantData,
+    plantLooks,
   };
 }

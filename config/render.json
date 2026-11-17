@@ -22,13 +22,13 @@
     },
     "resolution_floor": {
       "type": "number",
-      "value": 1.0,
+      "value": 0.5,
       "range": [0.1, 1.0],
       "notes": "Minimum renderer pixel ratio relative to devicePixelRatio."
     },
     "max_pixel_ratio": {
       "type": "number",
-      "value": 1,
+      "value": 2.0,
       "range": [1.0, 4.0],
       "notes": "Maximum renderer pixel ratio."
     },
@@ -52,8 +52,8 @@
     },
     "camera_max_distance": {
       "type": "number",
-      "value": 500.0,
-      "range": [50.0, 5000.0],
+      "value": 2000.0,
+      "range": [50.0, 20000.0],
       "notes": "Maximum orbit distance."
     },
     "camera_max_polar_angle": {
@@ -275,6 +275,12 @@
       "range": [0.01, 0.8],
       "notes": "Ambient light intensity during night."
     },
+    "ambient_fade_tau_s": {
+      "type": "number",
+      "value": 0.35,
+      "range": [0.01, 5.0],
+      "notes": "Time constant in seconds for the ambient day/night fade. The frame step is exp(-dt/tau), so dusk takes the same wall-clock time at 30, 60 or 144 fps; the old fixed 0.3-per-frame step ran three times faster at 144 fps."
+    },
     "fog_near_clear": {
       "type": "number",
       "value": 70.0,
@@ -489,8 +495,8 @@
     },
     "webgpu_max_plants": {
       "type": "integer",
-      "value": 10000,
-      "range": [1000, 20000],
+      "value": 20000,
+      "range": [1000, 65536],
       "notes": "Maximum plants supported by WebGPU compute-driven renderer."
     },
     "webgpu_tier0_threshold": {
@@ -621,6 +627,112 @@
       "value": 0,
       "range": [0, 0.5],
       "notes": "Secondary wave of the aim arrow, as a fraction of its length. 0 keeps the preview straight like the real segment."
+    },
+    "soil_crack_strength": {
+      "type": "number",
+      "value": 0.18,
+      "range": [0.0, 1.0],
+      "notes": "AL-04 dirt: how strongly dried fissures darken the soil. Ridged world-space noise, so the ground breaks into plates instead of reading as a painted sheet."
+    },
+    "soil_pebble_strength": {
+      "type": "number",
+      "value": 0.18,
+      "range": [0.0, 1.0],
+      "notes": "AL-04 dirt: small rounded stones mixed into the topsoil, in colour and in the bump normal, so the ground catches light like loose dirt."
+    },
+
+    "atmosphere_extinction_r": {
+      "type": "number",
+      "value": 0.00075,
+      "range": [0.0, 0.02],
+      "notes": "AL-04: red extinction per metre at sea level. Art-directed for a hazy day, not Earth air."
+    },
+    "atmosphere_extinction_g": {
+      "type": "number",
+      "value": 0.0009,
+      "range": [0.0, 0.02],
+      "notes": "AL-04: green extinction per metre at sea level."
+    },
+    "atmosphere_extinction_b": {
+      "type": "number",
+      "value": 0.0013,
+      "range": [0.0, 0.02],
+      "notes": "AL-04: blue extinction per metre at sea level. Higher than red so distance cools."
+    },
+    "atmosphere_scale_height_m": {
+      "type": "number",
+      "value": 700,
+      "range": [100, 20000],
+      "notes": "AL-04: height over which air density falls by 1/e, in metres."
+    },
+    "atmosphere_sun_phase_g": {
+      "type": "number",
+      "value": 0.72,
+      "range": [0.0, 0.95],
+      "notes": "AL-04: Henyey-Greenstein anisotropy. Forward scattering picks out the sun and backlights silhouettes."
+    },
+    "atmosphere_in_scatter": {
+      "type": "number",
+      "value": 0.6,
+      "range": [0.0, 4.0],
+      "notes": "AL-04: strength of sun in-scatter mixed into fogged surfaces and the sky."
+    },
+    "atmosphere_horizon_boost": {
+      "type": "number",
+      "value": 0.4,
+      "range": [0.0, 2.0],
+      "notes": "AL-04: extra density at grazing view angles, so the horizon reads heavier than the zenith."
+    },
+    "gpu_band_min_ms": {
+      "type": "number",
+      "value": 10.0,
+      "range": [1, 33],
+      "notes": "AL-03: frame cost below this restores detail. 10 ms at 60 Hz leaves rendering headroom."
+    },
+    "gpu_band_max_ms": {
+      "type": "number",
+      "value": 13.6,
+      "range": [4, 50],
+      "notes": "AL-03: frame cost above this spends detail, resolution first, then draw distance, then tier."
+    },
+    "quality_hold_ms": {
+      "type": "integer",
+      "value": 600,
+      "range": [100, 5000],
+      "notes": "AL-03: minimum time between quality decisions, so the controller cannot oscillate."
+    },
+    "quality_warmup_ms": {
+      "type": "integer",
+      "value": 4000,
+      "range": [0, 30000],
+      "notes": "AL-03: cost is ignored for this long after the first sample, so shader compiles and uploads during load do not spend detail."
+    },
+    "quality_smoothing": {
+      "type": "number",
+      "value": 0.12,
+      "range": [0.01, 1.0],
+      "notes": "AL-03: EMA weight for a new frame-cost sample. Lower is steadier, so one hitch cannot move a lever."
+    },
+    "draw_distance_floor": {
+      "type": "number",
+      "value": 0.5,
+      "range": [0.1, 1],
+      "notes": "AL-03: lowest draw-distance scale. Detail is only removed down to this before the tier is lowered."
+    },
+    "size_classes": {
+      "type": "schema_array",
+      "schema": {
+        "id": "string",
+        "camera_max_distance_multiplier": "number",
+        "detailed_plant_budget_multiplier": "number",
+        "lod_size_bias": "number"
+      },
+      "value": [
+        { "id": "normal", "camera_max_distance_multiplier": 1, "detailed_plant_budget_multiplier": 1, "lod_size_bias": 1.0 },
+        { "id": "large", "camera_max_distance_multiplier": 2, "detailed_plant_budget_multiplier": 2, "lod_size_bias": 1.5 },
+        { "id": "giant", "camera_max_distance_multiplier": 4, "detailed_plant_budget_multiplier": 2.5, "lod_size_bias": 2.0 }
+      ],
+      "notes": "ADR-027: organism size class is presentation. A giant is framed from further away and may hold more detailed plants, because LOD assigns tiers by projected pixel size."
     }
   }
 }

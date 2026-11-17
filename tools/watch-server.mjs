@@ -19,6 +19,7 @@
  */
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, readdirSync, statSync } from 'node:fs';
+import net from 'node:net';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -35,6 +36,45 @@ const pollMs = 400;
 const debounceMs = 250;
 const fastFailureMs = 5000;
 const maxConsecutiveFailures = 5;
+// PORT=0 means "pick one", which the fixed client URL cannot use; treat it as 8080.
+const serverPort = process.env.PORT && process.env.PORT !== '0' ? Number(process.env.PORT) : 8080;
+
+/** True when something is already listening on `port`. */
+function isPortInUse(port) {
+  return new Promise((resolvePort) => {
+    const probe = net.createServer();
+    probe.once('error', (error) => {
+      probe.removeAllListeners();
+      resolvePort(error.code === 'EADDRINUSE');
+    });
+    probe.once('listening', () => {
+      probe.removeAllListeners();
+      probe.close(() => resolvePort(false));
+    });
+    probe.listen({ port, host: '0.0.0.0', exclusive: true });
+  });
+}
+
+function delay(ms) {
+  return new Promise((resolveDelay) => setTimeout(resolveDelay, ms));
+}
+
+/**
+ * Wait (bounded) for a port to be released.
+ *
+ * Our own child's socket can outlive its exit by a moment on Windows, so a
+ * restart that checked once and found the port busy used to report "another
+ * stack owns it" and pause, when the port was only waiting for its own corpse to
+ * be reaped. Returns true when the port is free within the timeout.
+ */
+async function waitForPortFree(port, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    if (!(await isPortInUse(port))) return true;
+    if (Date.now() >= deadline) return false;
+    await delay(150);
+  }
+}
 
 // Fail fast and clearly: a typo/moved directory must not silently watch nothing.
 const missingRoots = watchedRoots.filter((root) => !existsSync(root));
@@ -100,9 +140,31 @@ let startedAt = 0;
 function startServer() {
   startedAt = Date.now();
   child = spawn(process.execPath, ['src/main.ts'], { cwd: serverDir, stdio: 'inherit' });
-  child.on('exit', (code, signal) => {
+  child.on('exit', async (code, signal) => {
     if (stopping) return;
     child = null;
+    // A clean exit is a decision, not a crash: the server exits 0 when it was
+    // told to stop, and restarting that would fight the operator.
+    if (code === 0 && !signal) {
+      paused = true;
+      console.log(
+        '[watch] server stopped cleanly; not restarting. Save a watched file to start it again.',
+      );
+      return;
+    }
+    // A busy port is not a crash: retrying into it would restart forever while
+    // another stack owns 8080. Say what is wrong and stop trying.
+    if (!(await waitForPortFree(serverPort, 2000))) {
+      paused = true;
+      console.error(
+        `[watch] server exited (code ${code ?? 'null'}, signal ${signal ?? 'none'}) and port ${serverPort} is already in use.`,
+      );
+      console.error(
+        '[watch] another dev stack or a hand-started server owns that port; not restarting into it.',
+      );
+      console.error('[watch] stop that process, then save a watched file or restart pnpm dev.');
+      return;
+    }
     if (Date.now() - startedAt < fastFailureMs) consecutiveFailures += 1;
     else consecutiveFailures = 0;
 
@@ -155,9 +217,19 @@ function restart(reason) {
     console.log('[watch] change detected after a crash loop; trying again');
   }
   console.log(`[watch] restarting server: ${reason}`);
-  killChild(() => {
+  killChild(async () => {
+    const free = await waitForPortFree(serverPort, 2000);
     restartInFlight = false;
-    if (!stopping && !paused) startServer();
+    if (stopping || paused) return;
+    if (!free) {
+      paused = true;
+      console.error(
+        `[watch] port ${serverPort} is still held after stopping the server; not restarting into it.`,
+      );
+      console.error('[watch] stop that process, then save a watched file or restart pnpm dev.');
+      return;
+    }
+    startServer();
   });
 }
 

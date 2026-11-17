@@ -11,84 +11,225 @@
     "root_growth_speed": {
       "type": "number",
       "value": 0.85,
-      "range": [0.1, 10.0],
-      "notes": "Root layer growth speed in units per second"
+      "range": [
+        0.1,
+        10
+      ],
+      "notes": "Root layer growth speed in units per second. Bounded by the 0.1-10 range below; the old cross-field rule compared this against net_proto.max_velocity_units_per_tick, which was a per-tick movement cap for an avatar the server does not have, so that key and the rule were removed rather than kept as a check that always passed."
     },
     "canopy_growth_speed": {
       "type": "number",
       "value": 0.95,
-      "range": [0.1, 10.0],
-      "notes": "Canopy layer growth speed in units per second"
+      "range": [
+        0.1,
+        10
+      ],
+      "notes": "Canopy layer growth speed in units per second. Bounded by the 0.1-10 range below (see root_growth_speed for why there is no cross-field ceiling any more)."
     },
     "node_cost_base": {
       "type": "integer",
       "value": 20,
-      "range": [1, 100],
+      "range": [
+        1,
+        100
+      ],
       "notes": "Base biomass cost per node"
     },
     "max_cotyledons": {
       "type": "integer",
       "value": 2,
-      "range": [1, 6],
+      "range": [
+        1,
+        6
+      ],
       "notes": "Cotyledons a seed crown may produce before it offers a stem (T01 growth menu)."
     },
     "cotyledon_shed_leaf_count": {
       "type": "integer",
       "value": 4,
-      "range": [1, 12],
+      "range": [
+        1,
+        12
+      ],
       "notes": "True leaves a plant needs before its cotyledons are shed"
     },
     "default_growth_time_s": {
       "type": "number",
-      "value": 5.0,
-      "range": [0.5, 120.0],
+      "value": 5,
+      "range": [
+        0.5,
+        120
+      ],
       "notes": "Growth time used when a node definition does not set growth_time_seconds."
     },
     "max_nodes_per_plant": {
       "type": "integer",
       "value": 2000,
-      "range": [200, 200000],
+      "range": [
+        200,
+        200000
+      ],
       "notes": "Server-safety ceiling for max nodes per plant"
     },
     "growth_cooldown": {
       "type": "number",
       "value": 0.5,
-      "range": [0.0, 1.0],
+      "range": [
+        0,
+        1
+      ],
       "notes": "Cooldown between growth attempts in seconds"
     },
     "light_blocking_per_node": {
       "type": "integer",
       "value": 5,
-      "range": [1, 25],
+      "range": [
+        1,
+        25
+      ],
       "notes": "Light reduction per canopy node on tiles below"
     },
     "seed_body_height_ratio": {
       "type": "number",
       "value": 1.35,
-      "range": [1.0, 3.0],
+      "range": [
+        1,
+        3
+      ],
       "notes": "Aspect of the drawn seed body: its centre sits this many radii above its stored base. Shared by the server's attachment rule, the mesh pass, the SDF shader, the aim gizmo and Plant Lab, so a seed's children always leave its coat at the point it is drawn."
     },
     "branch_attach_fraction": {
       "type": "number",
       "value": 0.6,
-      "range": [0.05, 1.0],
+      "range": [
+        0.05,
+        1
+      ],
       "notes": "Where lateral roots, branches and vines leave their parent: a fraction along the parent's own segment measured from its attachment point. 1.0 makes them continue from the parent's end instead."
     },
     "node_radius_profiles": {
       "type": "object",
       "value": {
-        "seed": { "nominalBiomass": 1, "radius": 0.075, "min": 0.06, "max": 0.1 },
-        "radicle": { "nominalBiomass": 8, "radius": 0.03, "min": 0.01, "max": 0.04 },
-        "root": { "nominalBiomass": 5, "radius": 0.02, "min": 0.008, "max": 0.032 },
-        "lateral_root": { "nominalBiomass": 4, "radius": 0.013, "min": 0.005, "max": 0.024 },
-        "stem": { "nominalBiomass": 5, "radius": 0.026, "min": 0.01, "max": 0.04 },
-        "branch": { "nominalBiomass": 4, "radius": 0.017, "min": 0.007, "max": 0.028 },
-        "vine": { "nominalBiomass": 3, "radius": 0.014, "min": 0.006, "max": 0.024 },
-        "leaf": { "nominalBiomass": 2, "radius": 0.008, "min": 0.004, "max": 0.014 },
-        "cotyledon": { "nominalBiomass": 6, "radius": 0.011, "min": 0.005, "max": 0.018 },
-        "flower": { "nominalBiomass": 2, "radius": 0.01, "min": 0.004, "max": 0.02 },
-        "spore_sac": { "nominalBiomass": 2, "radius": 0.01, "min": 0.004, "max": 0.02 },
-        "default": { "nominalBiomass": 3, "radius": 0.012, "min": 0.005, "max": 0.03 }
+        "seed": {
+          "nominalBiomass": 1,
+          "radius": 0.075,
+          "min": 0.06,
+          "max": 0.1
+        },
+        "radicle": {
+          "nominalBiomass": 8,
+          "radius": 0.03,
+          "min": 0.01,
+          "max": 0.04
+        },
+        "root": {
+          "nominalBiomass": 5,
+          "radius": 0.02,
+          "min": 0.008,
+          "max": 0.032
+        },
+        "lateral_root": {
+          "nominalBiomass": 4,
+          "radius": 0.013,
+          "min": 0.005,
+          "max": 0.024
+        },
+        "stem": {
+          "nominalBiomass": 5,
+          "radius": 0.026,
+          "min": 0.01,
+          "max": 0.04
+        },
+        "branch": {
+          "nominalBiomass": 4,
+          "radius": 0.017,
+          "min": 0.007,
+          "max": 0.028
+        },
+        "vine": {
+          "nominalBiomass": 3,
+          "radius": 0.014,
+          "min": 0.006,
+          "max": 0.024
+        },
+        "leaf": {
+          "nominalBiomass": 2,
+          "radius": 0.008,
+          "min": 0.004,
+          "max": 0.014
+        },
+        "cotyledon": {
+          "nominalBiomass": 6,
+          "radius": 0.011,
+          "min": 0.005,
+          "max": 0.018
+        },
+        "flower": {
+          "nominalBiomass": 2,
+          "radius": 0.01,
+          "min": 0.004,
+          "max": 0.02
+        },
+        "spore_sac": {
+          "nominalBiomass": 2,
+          "radius": 0.01,
+          "min": 0.004,
+          "max": 0.02
+        },
+        "default": {
+          "nominalBiomass": 3,
+          "radius": 0.012,
+          "min": 0.005,
+          "max": 0.03
+        },
+        "trunk": {
+          "nominalBiomass": 10,
+          "radius": 0.045,
+          "min": 0.02,
+          "max": 0.07
+        },
+        "rhizome": {
+          "nominalBiomass": 6,
+          "radius": 0.022,
+          "min": 0.01,
+          "max": 0.035
+        },
+        "culm": {
+          "nominalBiomass": 5,
+          "radius": 0.03,
+          "min": 0.015,
+          "max": 0.045
+        },
+        "floating_leaf": {
+          "nominalBiomass": 2,
+          "radius": 0.05,
+          "min": 0.03,
+          "max": 0.08
+        },
+        "pneumatophore": {
+          "nominalBiomass": 4,
+          "radius": 0.016,
+          "min": 0.007,
+          "max": 0.03
+        },
+        "thorn": {
+          "nominalBiomass": 2,
+          "radius": 0.012,
+          "min": 0.005,
+          "max": 0.02
+        },
+        "stolon": {
+          "nominalBiomass": 6,
+          "radius": 0.016,
+          "min": 0.007,
+          "max": 0.026
+        },
+        "tuber": {
+          "nominalBiomass": 14,
+          "radius": 0.055,
+          "min": 0.03,
+          "max": 0.085
+        }
       },
       "notes": "Drawn radius in metres per node type. nominalBiomass is the biomass drawn at radius; the cube root keeps the growth response. Shared by server, WebGPU mesh pass and Plant Lab."
     },
@@ -97,9 +238,9 @@
       "value": {
         "biomass_cost": 1,
         "resource_draw_water": 0.35,
-        "resource_draw_nutrients": 0.0,
+        "resource_draw_nutrients": 0,
         "resource_draw_minerals": 0.2,
-        "upkeep_biomass_per_second": 0.0,
+        "upkeep_biomass_per_second": 0,
         "stat_modifiers": {},
         "growth_direction_bias": "downward",
         "growth_time_seconds": 0,
@@ -160,7 +301,9 @@
         "resource_draw_nutrients": 0.2,
         "resource_draw_minerals": 0.6,
         "upkeep_biomass_per_second": 0.02,
-        "stat_modifiers": { "structural_integrity": 1.0 },
+        "stat_modifiers": {
+          "structural_integrity": 1
+        },
         "growth_direction_bias": "upward",
         "growth_time_seconds": 10,
         "segment_length": 0.35
@@ -175,7 +318,9 @@
         "resource_draw_nutrients": 0.2,
         "resource_draw_minerals": 0.5,
         "upkeep_biomass_per_second": 0.015,
-        "stat_modifiers": { "structural_integrity": 0.8 },
+        "stat_modifiers": {
+          "structural_integrity": 0.8
+        },
         "growth_direction_bias": "outward",
         "growth_time_seconds": 10,
         "segment_length": 0.3
@@ -190,7 +335,10 @@
         "resource_draw_nutrients": 0.1,
         "resource_draw_minerals": 0.05,
         "upkeep_biomass_per_second": 0.003,
-        "stat_modifiers": { "photosynthesis": 1.5, "light_blocking": 1.0 },
+        "stat_modifiers": {
+          "photosynthesis": 1.5,
+          "light_blocking": 1
+        },
         "growth_direction_bias": "outward",
         "growth_time_seconds": 9,
         "segment_length": 0.08
@@ -205,7 +353,10 @@
         "resource_draw_nutrients": 0.1,
         "resource_draw_minerals": 0.05,
         "upkeep_biomass_per_second": 0.003,
-        "stat_modifiers": { "photosynthesis": 1.2, "light_blocking": 0.8 },
+        "stat_modifiers": {
+          "photosynthesis": 1.2,
+          "light_blocking": 0.8
+        },
         "growth_direction_bias": "outward",
         "growth_time_seconds": 6,
         "segment_length": 0.1
@@ -220,7 +371,10 @@
         "resource_draw_nutrients": 0.4,
         "resource_draw_minerals": 0.3,
         "upkeep_biomass_per_second": 0.05,
-        "stat_modifiers": { "reproduction": 1.0, "pollinator_attraction": 1.0 },
+        "stat_modifiers": {
+          "reproduction": 1,
+          "pollinator_attraction": 1
+        },
         "growth_direction_bias": "upward",
         "growth_time_seconds": 10,
         "segment_length": 0.1
@@ -235,7 +389,9 @@
         "resource_draw_nutrients": 0.3,
         "resource_draw_minerals": 0.2,
         "upkeep_biomass_per_second": 0.04,
-        "stat_modifiers": { "spore_production": 1.0 },
+        "stat_modifiers": {
+          "spore_production": 1
+        },
         "growth_direction_bias": "outward",
         "growth_time_seconds": 10,
         "segment_length": 0.1
@@ -250,7 +406,10 @@
         "resource_draw_nutrients": 0.1,
         "resource_draw_minerals": 0.15,
         "upkeep_biomass_per_second": 0.02,
-        "stat_modifiers": { "climbing": 1.0, "horizontal_spread": 1.5 },
+        "stat_modifiers": {
+          "climbing": 1,
+          "horizontal_spread": 1.5
+        },
         "growth_direction_bias": "horizontal",
         "growth_time_seconds": 5,
         "segment_length": 0.3
@@ -260,145 +419,412 @@
     "growth_intent_cooldown": {
       "type": "number",
       "value": 0.2,
-      "range": [0.05, 1.0],
+      "range": [
+        0.05,
+        1
+      ],
       "notes": "Client growth intent rate limit in seconds"
     },
     "germination_min_moisture": {
       "type": "number",
       "value": 30,
-      "range": [0, 100],
+      "range": [
+        0,
+        100
+      ],
       "notes": "Hard success threshold: local tile moisture (0-100) must be at least this value for the seed to sprout. A player may still attempt below it; the seed dies instead (ADR-026)."
     },
     "germination_min_light": {
       "type": "number",
       "value": 10,
-      "range": [0, 100],
+      "range": [
+        0,
+        100
+      ],
       "notes": "Hard success threshold: local light (0-100) must be at least this value for the seed to sprout. A player may still attempt below it; the seed dies instead (ADR-026)."
     },
     "germination_failure_kills_seed": {
       "type": "boolean",
-      "value": true,
+      "value": false,
       "notes": "When true, a germination attempt below the moisture/light thresholds destroys the seed/plant. Lets a player deliberately kill a seed (ADR-026)."
     },
     "photosynthesis_energy_per_second": {
       "type": "number",
-      "value": 10.0,
-      "range": [0.1, 100.0],
+      "value": 10,
+      "range": [
+        0.1,
+        100
+      ],
       "notes": "Base energy production per leaf per second at max light/moisture/minerals"
     },
     "energy_upkeep_per_biomass": {
       "type": "number",
       "value": 0.04,
-      "range": [0.001, 0.1],
+      "range": [
+        0.001,
+        0.1
+      ],
       "notes": "Energy upkeep cost per unit biomass per second"
     },
     "growth_biomass_yield": {
       "type": "number",
       "value": 0.6,
-      "range": [0.2, 1.0],
+      "range": [
+        0.2,
+        1
+      ],
       "notes": "Share of a part's carbon budget that becomes structural biomass; the rest is respired as construction cost. A part now stores 0.6 of the mass its energy and minerals paid for, so biomass no longer grows 1:1 with energy spent and small parts stop claiming large masses."
     },
     "upkeep_water_per_biomass_per_s": {
       "type": "number",
       "value": 0.004,
-      "range": [0, 0.05],
+      "range": [
+        0,
+        0.05
+      ],
       "notes": "Stored water respired per unit of standing biomass per second (transpiration maintenance). A 6-biomass seedling spends 0.024 water/s, so a 40-water store lasts about 28 minutes with no uptake."
     },
     "upkeep_mineral_per_biomass_per_s": {
       "type": "number",
       "value": 0.0015,
-      "range": [0, 0.05],
+      "range": [
+        0,
+        0.05
+      ],
       "notes": "Stored minerals respired per unit of standing biomass per second as cell walls and enzyme cofactors are maintained and replaced."
     },
     "water_deficit_biomass_loss": {
       "type": "number",
       "value": 0.6,
-      "range": [0, 2],
+      "range": [
+        0,
+        2
+      ],
       "notes": "Biomass lost per unit of water upkeep the plant cannot pay. This is wilting: a dry plant loses structure instead of ignoring the shortfall."
     },
     "mineral_deficit_biomass_loss": {
       "type": "number",
       "value": 0.4,
-      "range": [0, 2],
+      "range": [
+        0,
+        2
+      ],
       "notes": "Biomass lost per unit of mineral upkeep the plant cannot pay; slower than drought because structural minerals are recycled internally first."
     },
     "growth_water_consumption_rate": {
       "type": "number",
       "value": 0.15,
-      "range": [0.1, 50.0],
+      "range": [
+        0.1,
+        50
+      ],
       "notes": "Water consumed per second of growth time per unit biomass cost"
     },
     "growth_nutrient_consumption_rate": {
       "type": "number",
       "value": 0.1,
-      "range": [0.1, 50.0],
+      "range": [
+        0.1,
+        50
+      ],
       "notes": "Nutrients (N/P/K) consumed per second of growth time per unit biomass cost"
     },
     "growth_mineral_consumption_rate": {
       "type": "number",
       "value": 0.1,
-      "range": [0.1, 50.0],
+      "range": [
+        0.1,
+        50
+      ],
       "notes": "Minerals consumed per second of growth time per unit biomass cost. Minerals = structural building blocks (calcium for cell walls, magnesium for chlorophyll, silica for rigidity, trace elements for enzymes)."
     },
     "growth_min_water": {
       "type": "number",
       "value": 12,
-      "range": [0, 100],
+      "range": [
+        0,
+        100
+      ],
       "notes": "Minimum tile water level (0-100) for growth to proceed. Below this, growth pauses."
     },
     "growth_min_nutrients": {
       "type": "number",
       "value": 8,
-      "range": [0, 100],
+      "range": [
+        0,
+        100
+      ],
       "notes": "Minimum tile nutrient level (0-100) for growth to proceed. Below this, growth pauses."
     },
     "growth_min_minerals": {
       "type": "number",
       "value": 6,
-      "range": [0, 100],
+      "range": [
+        0,
+        100
+      ],
       "notes": "Minimum tile mineral level (0-100) for growth to proceed. Below this, growth pauses."
+    },
+    "growth_min_health": {
+      "type": "number",
+      "value": 0.35,
+      "range": [
+        0,
+        1
+      ],
+      "notes": "Lowest plant health (0-1) at which growth may proceed. Health is the mass-weighted state of every part; a wilting plant must rebuild tissue before it extends."
+    },
+    "health_photosynthesis_floor": {
+      "type": "number",
+      "value": 0.5,
+      "range": [
+        0,
+        1
+      ],
+      "notes": "Share of photosynthesis a plant keeps at zero health. Damaged tissue fixes less carbon, never none."
+    },
+    "tissue_repair_per_second": {
+      "type": "number",
+      "value": 0.08,
+      "range": [
+        0,
+        10
+      ],
+      "notes": "Biomass a part regrows per second while the plant is unstressed. Damage comes from drought and mineral shortage; repair is what lets tissue health recover."
+    },
+    "tissue_repair_energy_per_biomass": {
+      "type": "number",
+      "value": 8,
+      "range": [
+        1,
+        100
+      ],
+      "notes": "Energy spent per unit of biomass regrown by tissue repair."
+    },
+    "stem_damage_wither_delay_s": {
+      "type": "number",
+      "value": 30,
+      "range": [0, 600],
+      "notes": "Seconds a stem may sit under its tissue quota before the damage starts thinning it. A stem damaged but repaired inside this window does not wither."
+    },
+    "stem_damage_wither_per_s": {
+      "type": "number",
+      "value": 0.01,
+      "range": [0, 0.2],
+      "notes": "Fraction of a stem's tissue quota lost per second once unhealed damage has outlasted the delay. Repair outpaces it while the plant is fed."
+    },
+    "floating_leaf_min_groundwater": {
+      "type": "number",
+      "value": 20,
+      "range": [
+        0,
+        100
+      ],
+      "notes": "Groundwater (0-100) a floating pad needs under the point it would occupy. A pad cannot grow in dry air."
     },
     "energy_capacity_per_biomass": {
       "type": "number",
       "value": 20,
-      "range": [1, 5000],
+      "range": [
+        1,
+        5000
+      ],
       "notes": "Energy the plant can store per unit of its own total biomass. Storage is a property of the plant, not a global cap."
     },
     "energy_capacity_floor": {
       "type": "number",
       "value": 120,
-      "range": [10, 10000],
+      "range": [
+        10,
+        10000
+      ],
       "notes": "Minimum energy capacity, so a seed can still sprout."
     },
     "water_capacity_per_root_biomass": {
       "type": "number",
       "value": 8,
-      "range": [1, 5000],
+      "range": [
+        1,
+        5000
+      ],
       "notes": "Water the roots can store per unit of root biomass."
     },
     "water_capacity_floor": {
       "type": "number",
       "value": 40,
-      "range": [5, 5000],
+      "range": [
+        5,
+        5000
+      ],
       "notes": "Minimum water capacity of a plant."
     },
     "mineral_capacity_per_root_biomass": {
       "type": "number",
       "value": 8,
-      "range": [1, 5000],
+      "range": [
+        1,
+        5000
+      ],
       "notes": "Minerals the roots can store per unit of root biomass."
     },
     "mineral_capacity_floor": {
       "type": "number",
       "value": 40,
-      "range": [5, 5000],
+      "range": [
+        5,
+        5000
+      ],
       "notes": "Minimum mineral capacity of a plant."
     },
     "initial_energy_fraction": {
       "type": "number",
       "value": 0.5,
-      "range": [0.05, 1],
+      "range": [
+        0.05,
+        1
+      ],
       "notes": "Fraction of energy capacity a new seed starts with."
+    },
+    "trunk_node": {
+      "type": "object",
+      "value": {
+        "biomass_cost": 20,
+        "resource_draw_water": 0.25,
+        "resource_draw_nutrients": 0.25,
+        "resource_draw_minerals": 0.8,
+        "upkeep_biomass_per_second": 0.03,
+        "stat_modifiers": {
+          "structural_integrity": 1.4
+        },
+        "growth_direction_bias": "upward",
+        "growth_time_seconds": 14,
+        "segment_length": 0.4
+      },
+      "description": "Secondary woody stem. The only tissue bark mutations thicken."
+    },
+    "rhizome_node": {
+      "type": "object",
+      "value": {
+        "biomass_cost": 10,
+        "resource_draw_water": 0.3,
+        "resource_draw_nutrients": 0.2,
+        "resource_draw_minerals": 0.3,
+        "upkeep_biomass_per_second": 0.01,
+        "stat_modifiers": {
+          "clonal_spread": 1
+        },
+        "growth_direction_bias": "horizontal",
+        "growth_time_seconds": 9,
+        "segment_length": 0.5
+      },
+      "description": "Underground horizontal stem; can raise a new shoot away from the seed crown."
+    },
+    "culm_node": {
+      "type": "object",
+      "value": {
+        "biomass_cost": 8,
+        "resource_draw_water": 0.35,
+        "resource_draw_nutrients": 0.15,
+        "resource_draw_minerals": 0.25,
+        "upkeep_biomass_per_second": 0.012,
+        "stat_modifiers": {
+          "water_storage": 0.6
+        },
+        "growth_direction_bias": "upward",
+        "growth_time_seconds": 5,
+        "segment_length": 0.55
+      },
+      "description": "Hollow segmented shoot: cheap, fast, holds water, no secondary thickening."
+    },
+    "floating_leaf_node": {
+      "type": "object",
+      "value": {
+        "biomass_cost": 7,
+        "resource_draw_water": 0.05,
+        "resource_draw_nutrients": 0.1,
+        "resource_draw_minerals": 0.05,
+        "upkeep_biomass_per_second": 0.004,
+        "stat_modifiers": {
+          "photosynthesis": 1.8,
+          "buoyancy": 1
+        },
+        "growth_direction_bias": "horizontal",
+        "growth_time_seconds": 7,
+        "segment_length": 0.12
+      },
+      "description": "Buoyant pad that floats on the water surface."
+    },
+    "pneumatophore_node": {
+      "type": "object",
+      "value": {
+        "biomass_cost": 9,
+        "resource_draw_water": 0.1,
+        "resource_draw_nutrients": 0.15,
+        "resource_draw_minerals": 0.3,
+        "upkeep_biomass_per_second": 0.008,
+        "stat_modifiers": {
+          "aeration": 1.5,
+          "structural_integrity": 0.6
+        },
+        "growth_direction_bias": "upward",
+        "growth_time_seconds": 8,
+        "segment_length": 0.28
+      },
+      "description": "Aerial breathing root lifted out of waterlogged soil (mangrove-like). Moves air down to the flooded roots; unlocks with aerenchyma."
+    },
+    "thorn_node": {
+      "type": "object",
+      "value": {
+        "biomass_cost": 4,
+        "resource_draw_water": 0.05,
+        "resource_draw_nutrients": 0.1,
+        "resource_draw_minerals": 0.45,
+        "upkeep_biomass_per_second": 0.003,
+        "stat_modifiers": {
+          "defense": 1.8,
+          "structural_integrity": 2
+        },
+        "growth_direction_bias": "outward",
+        "growth_time_seconds": 6,
+        "segment_length": 0.14
+      },
+      "description": "Hardened defensive shoot: short, rigid, mineral-dense. Unlocks with spined_epidermis."
+    },
+    "stolon_node": {
+      "type": "object",
+      "value": {
+        "biomass_cost": 6,
+        "resource_draw_water": 0.15,
+        "resource_draw_nutrients": 0.15,
+        "resource_draw_minerals": 0.15,
+        "upkeep_biomass_per_second": 0.006,
+        "stat_modifiers": {
+          "horizontal_spread": 1.2,
+          "photosynthesis": 0.4
+        },
+        "growth_direction_bias": "horizontal",
+        "growth_time_seconds": 6,
+        "segment_length": 0.8
+      },
+      "description": "Above-ground runner with long internodes (strawberry-style). Roots adventitiously at a node and can raise a new shoot there, so a stolon is the one canopy organ that may place a root. Unlocks with clonal_network."
+    },
+    "tuber_node": {
+      "type": "object",
+      "value": {
+        "biomass_cost": 14,
+        "resource_draw_water": 0.1,
+        "resource_draw_nutrients": 0.1,
+        "resource_draw_minerals": 0.2,
+        "upkeep_biomass_per_second": 0.004,
+        "stat_modifiers": {
+          "water_storage": 2,
+          "starch_storage": 2
+        },
+        "growth_direction_bias": "downward",
+        "growth_time_seconds": 12,
+        "segment_length": 0.18
+      },
+      "description": "Swollen storage stem at the tip of a rhizome (potato-style): thick, short, starch- and water-holding, and its eyes are buds that can raise a shoot. Unlocks with clonal_rhizome."
     }
   }
 }

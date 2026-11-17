@@ -1,11 +1,284 @@
 {
   "_meta": {
     "system": "water",
-    "version": "0.1.0",
+    "version": "0.3.0",
     "schema": "extended-1",
     "owner_task": "T31",
-    "status": "stub",
-    "notes": "Declared by T00. Populated by T31 per DESIGN.md Part 5."
+    "status": "active",
+    "notes": "Surface rain sheet only. The water table is simulated by the server per tile (resources.groundwater_*) and streamed to the client, so its depth is not tuned here."
   },
-  "values": {}
+  "values": {
+    "surface_cells": {
+      "type": "integer",
+      "value": 72,
+      "range": [
+        8,
+        192
+      ],
+      "notes": "Vertices per side of the surface sheet. Higher is finer and costs one vertex update per cell per frame."
+    },
+    "surface_extent_m": {
+      "type": "number",
+      "value": 64,
+      "range": [
+        8,
+        400
+      ],
+      "notes": "Half-extent of the surface sheet around the play area."
+    },
+    "surface_flow_rate_per_s": {
+      "type": "number",
+      "value": 0.55,
+      "range": [
+        0,
+        4
+      ],
+      "notes": "Share of the head difference between cells that equalises per second. The shallow-water flow speed."
+    },
+    "surface_infiltration_per_s": {
+      "type": "number",
+      "value": 0.02,
+      "range": [
+        0,
+        0.5
+      ],
+      "notes": "Metres of standing water that soak into the soil per second."
+    },
+    "surface_evaporation_per_s": {
+      "type": "number",
+      "value": 0.01,
+      "range": [
+        0,
+        0.1
+      ],
+      "notes": "Metres of standing water lost to the air per second."
+    },
+    "surface_max_depth_m": {
+      "type": "number",
+      "value": 0.08,
+      "range": [
+        0.02,
+        3
+      ],
+      "notes": "Deepest a puddle may get before the rest runs off."
+    },
+    "water_min_visible_depth_m": {
+      "type": "number",
+      "value": 0.02,
+      "range": [
+        0,
+        0.5
+      ],
+      "notes": "Shallowest standing water the surface sheet draws. Rain leaves a one-to-two centimetre film across the whole grid; at a millimetre threshold that film covered the map in a grey sheet, which is what read as water rising out of the ground and as a dark disc in the Root Sight cavity."
+    },
+    "rain_depth_per_s": {
+      "type": "number",
+      "value": 0.0015,
+      "range": [
+        0,
+        0.5
+      ],
+      "notes": "Metres of rain depth added to the surface sheet per second while it is raining."
+    },
+    "water_absorption_per_m": {
+      "type": "number",
+      "value": 1,
+      "range": [
+        0.05,
+        20
+      ],
+      "notes": "Metres of water that halve the light reaching the bottom of a body. At 1.6 m the river channel (0.9 m of water) was already two-thirds absorbed and the whole stream read as a black plate under a clear noon; 1.0 m still darkens a deep pit but keeps a stream readable as water."
+    },
+    "water_deep_color": {
+      "type": "color",
+      "value": "#163a45",
+      "notes": "Body colour of deep water: the medium seen underwater, the tint the fog takes when the eye is submerged, and the deep end of every sheet. One value for all three so a pond cannot be blue from above and green from inside. Not #0d2a33: that is darker than any daylight water and made a channel read as a hole in the ground."
+    },
+    "water_shallow_color": {
+      "type": "color",
+      "value": "#4f93a3",
+      "notes": "Colour of water a few centimetres deep, before absorption has taken the redness out of it."
+    },
+    "water_sky_color": {
+      "type": "color",
+      "value": "#9ecfe4",
+      "notes": "Colour the sheet reflects at a grazing angle, and the bright inside of the Snell window seen from under the surface."
+    },
+    "wet_ground_opacity": {
+      "type": "number",
+      "value": 0.35,
+      "range": [
+        0,
+        1
+      ],
+      "notes": "How dark the damp ground stain is where water stands, 0 (invisible) .. 1 (black). Wet dirt is darker than dry dirt, and this is what makes a puddle sit in darkened soil instead of on top of unchanged ground."
+    },
+    "wet_ground_halo_cells": {
+      "type": "integer",
+      "value": 1,
+      "range": [
+        0,
+        8
+      ],
+      "notes": "Surface-sheet cells the damp stain spreads beyond the water's edge, so the wet margin fades instead of ending on an outline. One cell is about 1.3 m at the default sheet size."
+    },
+    "wet_ground_dry_per_s": {
+      "type": "number",
+      "value": 0.05,
+      "range": [
+        0.005,
+        2
+      ],
+      "notes": "How fast damp ground fades once the water is gone, per second. This is the stain that stays after a puddle dries."
+    },
+    "wet_band_above_table_m": {
+      "type": "number",
+      "value": 0.6,
+      "range": [
+        0,
+        5
+      ],
+      "notes": "Metres of soil above the water table that still read as damp (capillary rise). The soil shader darkens everything below the table fully and this band above it partially, so a pit that holds water has soaked walls instead of a hard waterline."
+    },
+    "surface_lift_m": {
+      "type": "number",
+      "value": 0.05,
+      "range": [
+        0.005,
+        0.5
+      ],
+      "notes": "How far the rain sheet floats above the ground it is sampled from. The sheet grid is coarser than the drawn terrain, so without a lift the two surfaces intersect and z-fight. Raising it to 11 cm did not fix the sampled-height disagreement and floated the film above the soil across the whole map, so it stays at the geometric minimum."
+    },
+    "water_near_discard_m": {
+      "type": "number",
+      "value": 0.35,
+      "range": [
+        0.02,
+        3
+      ],
+      "notes": "Water this close to the camera is not drawn. Without it the large water surfaces clip through the near plane and smear across the view when the camera sits on the waterline."
+    },
+    "water_dry_sink_m": {
+      "type": "number",
+      "value": 0.6,
+      "range": [
+        0.02,
+        3
+      ],
+      "notes": "How far dry cells of the puddle sheet are pushed under the terrain. A triangle between a wet vertex and a dry one is sloped, so a shallow sink let the slope poke through the soil as blue shards at a distance."
+    },
+    "puddle_fade_start_m": {
+      "type": "number",
+      "value": 420,
+      "range": [
+        0,
+        900
+      ],
+      "notes": "Camera distance at which the rain film begins to fade out. Purely a distance fade now: whether water may be drawn at all is decided by the ground test below, which compares the sheet with the coarse ground that is actually drawn out there. It used to start at 60 m, which meant a lake vanished as soon as the camera pulled back to look at it."
+    },
+    "puddle_fade_end_m": {
+      "type": "number",
+      "value": 700,
+      "range": [
+        1,
+        1000
+      ],
+      "notes": "Camera distance at which the rain film is fully gone. Far film has no readable surface, so it is faded for looks, not to hide a defect."
+    },
+    "table_fade_start_m": {
+      "type": "number",
+      "value": 320,
+      "range": [
+        0,
+        1000
+      ],
+      "notes": "Distance at which the water-table sheet begins to fade out. Distant lakes stay visible: the sheet is discarded wherever it stands above the drawn ground, so it no longer needs a short leash."
+    },
+    "table_fade_end_m": {
+      "type": "number",
+      "value": 520,
+      "range": [
+        1,
+        1400
+      ],
+      "notes": "Distance at which the water-table sheet is gone, for readability at range rather than to hide it over hills."
+    },
+    "ocean_enabled": {
+      "type": "boolean",
+      "value": true,
+      "notes": "Draw the planet-wide sea. It is one sphere at sea_level_m around the planet body, so the water is the same surface everywhere: no sheet edge, no LOD seam, and coasts wherever the ground rises through it."
+    },
+    "sea_level_m": {
+      "type": "number",
+      "value": 6,
+      "range": [
+        -400,
+        40
+      ],
+      "notes": "Height of the sea above the play area's tangent plane, in metres. The play area's ground sits at 5.6-20.8 m, so 6 m floods the low basins and leaves the plateau dry; past the local terrain patches the bare planet sphere is at 0 m, so the far world is open ocean instead of a featureless brown shell."
+    },
+    "sea_wave_strength": {
+      "type": "number",
+      "value": 1.2,
+      "range": [
+        0,
+        2
+      ],
+      "notes": "How much slope the sea's wave field puts into its normal. Zero is a mirror-flat plane; the default carries a swell, a wind chop and a ripple, which is what lets the sun write a glitter path on open water instead of a flat grey band."
+    },
+    "sea_wave_scale_m": {
+      "type": "number",
+      "value": 5.5,
+      "range": [
+        0.5,
+        40
+      ],
+      "notes": "Wavelength of the sea's main swell, in metres. The chop and ripple octaves scale from it."
+    },
+    "sea_foam_width_m": {
+      "type": "number",
+      "value": 0.9,
+      "range": [
+        0,
+        4
+      ],
+      "notes": "Depth of water over the bed at which the sea's foam band is fully broken white. It is what ties the sea's edge to the ground - foam sits wherever the bed nearly reaches the surface - rather than to the dome's own outline."
+    },
+    "ground_test_radius_m": {
+      "type": "number",
+      "value": 560,
+      "range": [
+        64,
+        1200
+      ],
+      "notes": "Half-extent of the coarse ground grid the water is tested against, in metres. It matches the distance at which the water table finishes fading, so every water surface the sheet can still draw has a ground to compare with."
+    },
+    "ground_test_cell_m": {
+      "type": "number",
+      "value": 8,
+      "range": [
+        1,
+        40
+      ],
+      "notes": "Spacing of the coarse ground samples the water shader tests its own height against, in metres. The far terrain ring is a mesh of ~8 m cells, so an interpolated triangle sits below the field on a rise and water that is really underground would otherwise stand on top of it. The client passes the ring's own cell size; this value is the fallback and the documented spacing."
+    },
+    "sheet_edge_fade": {
+      "type": "number",
+      "value": 0.82,
+      "range": [
+        0.2,
+        0.98
+      ],
+      "notes": "Where the water sheet's radial edge fade starts, as a fraction of its half-size. The sheet is a square grid, and from a high camera its straight edge read as the edge of the world; fading the alpha out radially inside the grid means water never ends in a visible straight line at any zoom."
+    },
+    "river_clip_margin_m": {
+      "type": "number",
+      "value": 0.5,
+      "range": [
+        0,
+        4
+      ],
+      "notes": "Extra metres either side of the river channel that puddles and the water table are clipped out of. Translucent surfaces drawn in the same place stack their opacity, so only the stream may exist inside its channel."
+    }
+  }
 }

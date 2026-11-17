@@ -9,6 +9,8 @@
  * DESIGN.md C01 acceptance: "Debug overlay shows live metrics."
  */
 
+import type { UIShell } from './UIShell.js';
+
 export interface DebugMetrics {
   fps: number;
   frameMs: number;
@@ -42,7 +44,7 @@ export class DebugOverlay {
   private bytesOut = 0;
   private lastByteSample = performance.now();
 
-  constructor(layer: HTMLElement, _toggleKey: string) {
+  constructor(shell: UIShell, _toggleKey: string) {
     this.el = document.createElement('div');
     this.el.style.cssText = `
       position: absolute;
@@ -60,7 +62,10 @@ export class DebugOverlay {
       pointer-events: none;
       display: none;
     `;
-    layer.appendChild(this.el);
+    // One path into a UI layer: attachTo owns stacking, pointer-events and the
+    // fallback when a layer is missing. Appending to a layer directly put this
+    // widget outside that contract.
+    shell.attachTo('debug', this.el);
   }
 
   setVisible(on: boolean): void {
@@ -128,6 +133,6 @@ export class DebugOverlay {
   }
 }
 
-export function createDebugOverlay(layer: HTMLElement, toggleKey: string): DebugOverlay {
-  return new DebugOverlay(layer, toggleKey);
+export function createDebugOverlay(shell: UIShell, toggleKey: string): DebugOverlay {
+  return new DebugOverlay(shell, toggleKey);
 }

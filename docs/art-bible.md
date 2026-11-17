@@ -40,5 +40,36 @@ Avoid NonCommercial licenses: real-money Spores make the project commercial.
 ## Mutation signature rules
 
 A signature describes what a mutation does, never how strong it is. No rarity
-glow, no tier colors, no unique meshes. At most three shader parameters per
-mutation, all on the shared plant material (RULE_20).
+glow, no tier colors, no unique meshes. All of it paints the shared plant
+material (RULE_20).
+
+The style itself is data, not code (RULE_3, ADR-059): `config/mutation_visuals.json`
+holds one record per mutation — organ family, pattern, tint and strength,
+variegation, glow, bark thickness and darkening, thorn density — and every held
+mutation composes into it. The "three shader parameters" limit this file used to
+quote is superseded by that record; what still holds is that the amounts are
+capped (`values.caps`), stacked values are clamped rather than multiplied
+open, and the renderer knows no mutation by name.
+
+## Water and what it does to light
+
+Water is a medium, not a decal (ADR-062). Two looks have to agree:
+
+1. **Above it** — the sheet is a lid you see: Fresnel sky at grazing angles, the
+   water's own body colour where you look down into it, absorption darkening with
+   depth (Beer–Lambert), rain rings and downstream streaks, foam-free shoreline
+   (the damp-soil stain is the shore).
+2. **Under it** — the same surface is a ceiling: a bright, rippling *Snell's
+   window* within ~48.6° of vertical, total internal reflection (dim, greenish,
+   mirror-like) everywhere outside it. The view between is the water's colour, not
+   the sky's: fog collapses to a few metres, direct sun is eaten with depth, and
+   there is no horizon.
+
+Rule: the colours are `water_deep_color`, `water_shallow_color` and
+`water_sky_color` in `config/water.json`, and one set paints the medium, the fog
+and every sheet, so a pond cannot be blue from above and green from inside.
+
+Rule: **water has no straight edge.** The sheets are square grids, so their alpha
+falls off radially as well as with distance (`sheet_edge_fade`); a lid of water
+that stops on a line is a texture, and from a high camera it read as a square of
+water in the middle of the world.

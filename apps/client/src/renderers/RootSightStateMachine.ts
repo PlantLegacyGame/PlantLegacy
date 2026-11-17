@@ -37,20 +37,31 @@ export function createRootSightStateMachine(config: RootSightConfig): RootSightS
   };
 }
 
+/**
+ * The state a machine should report for its current target and progress.
+ *
+ * A transition that is still moving has a direction, and the state has to say
+ * which one: the old code only relabelled at the two endpoints, so re-opening
+ * during a close kept reporting `transitioning_to_surface` all the way up. Every
+ * reader of `rootSightStateMachineIsEnabled` (underground view, root picking,
+ * the camera floor) then treated an opening cavity as closed.
+ */
+function transitionStateFor(machine: RootSightStateMachine): RootSightState {
+  if (machine.target === 'underground') {
+    return machine.progress >= 1 ? 'underground' : 'transitioning_to_underground';
+  }
+  return machine.progress <= 0 ? 'surface' : 'transitioning_to_surface';
+}
+
 export function rootSightStateMachineToggle(machine: RootSightStateMachine): void {
   const { state } = machine;
 
   if (state === 'surface' || state === 'transitioning_to_surface') {
     machine.target = 'underground';
-    if (state === 'surface') {
-      machine.state = 'transitioning_to_underground';
-    }
   } else if (state === 'underground' || state === 'transitioning_to_underground') {
     machine.target = 'surface';
-    if (state === 'underground') {
-      machine.state = 'transitioning_to_surface';
-    }
   }
+  machine.state = transitionStateFor(machine);
 }
 
 export function rootSightStateMachineUpdate(
@@ -72,12 +83,10 @@ export function rootSightStateMachineUpdate(
     }
   }
 
-  // Update state based on progress
-  if (machine.progress >= 1) {
-    machine.state = 'underground';
-  } else if (machine.progress <= 0) {
-    machine.state = 'surface';
-  }
+  // Update state from where the transition now is, in whichever direction it is
+  // moving. Deriving the label instead of only stamping the endpoints is what
+  // makes a reversed transition report its new direction immediately.
+  machine.state = transitionStateFor(machine);
 
   // Ease-out for visual blend
   const eased = 1 - (1 - machine.progress) ** 3;
@@ -110,7 +119,11 @@ export function rootSightStateMachineGetProgress(machine: RootSightStateMachine)
 }
 
 export function rootSightStateMachineIsEnabled(machine: RootSightStateMachine): boolean {
-  return machine.state === 'underground' || machine.state === 'transitioning_to_underground';
+  // Any visible cavity counts, including one that is still closing. Gating this
+  // on "underground or opening" used to turn the underground plant view and
+  // root picking off on the first frame of a close, while the soil was still
+  // open, and made a reversed close look like it had not re-opened.
+  return machine.state !== 'surface' || machine.progress > 0;
 }
 
 export function rootSightStateMachineReset(machine: RootSightStateMachine): void {
@@ -124,13 +137,5 @@ export function rootSightStateMachineSetTarget(
   target: 'surface' | 'underground',
 ): void {
   machine.target = target;
-  if (target === 'underground') {
-    if (machine.state === 'surface') {
-      machine.state = 'transitioning_to_underground';
-    }
-  } else {
-    if (machine.state === 'underground') {
-      machine.state = 'transitioning_to_surface';
-    }
-  }
+  machine.state = transitionStateFor(machine);
 }

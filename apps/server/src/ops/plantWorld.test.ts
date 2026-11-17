@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import type { ConfigFile } from '@plant-legacy/shared/config';
-import { type GrowthIntent, nodeAttachmentPoint } from '@plant-legacy/shared/growth';
+import { type GrowthIntent, nodeAttachmentPoint, plantHealth } from '@plant-legacy/shared/growth';
+import { canGrow } from './growth/rules.ts';
 import { loadGrowthConfig } from './growth.ts';
+import type { MutationDefinition, MutationsConfig } from './mutations/types.ts';
 import { PlantWorld } from './plantWorld.ts';
 import { loadResourcesConfig } from './resourceWorld.ts';
 
@@ -324,6 +326,28 @@ describe('PlantWorld', () => {
     assert.equal(seedNode?.upkeepBiomassPerSecond, 0);
     assert.equal(plant.totalUpkeep, 0);
     assert.equal(plant.rootNodeId, seedId, 'seed crown is the structural root');
+  });
+
+  it('shrinks a part radius when damage takes its biomass', () => {
+    const world = makeTestPlantWorld({
+      node_radius_profiles: {
+        type: 'object',
+        value: { seed: { nominalBiomass: 25, radius: 0.15, min: 0.005, max: 0.2 } },
+      },
+    });
+    const plant = world.createPlant('player_1', 'world_0', 0, 0);
+    const seedId = plant.rootNodeId ?? Array.from(plant.nodes.keys())[0];
+    assert(seedId);
+    const seed = plant.nodes.get(seedId);
+    assert(seed);
+    const before = seed.radius ?? 0;
+    world.applyNodeDamage(plant.id, seedId, seed.biomass / 2);
+    const after = plant.nodes.get(seedId)?.radius ?? 0;
+    assert.ok(before > 0, 'the seed starts with a drawn radius');
+    assert.ok(
+      after < before,
+      `losing half its mass must thin the part, ${before.toFixed(4)} -> ${after.toFixed(4)}`,
+    );
   });
 
   it('gets plants by owner', () => {
@@ -896,6 +920,48 @@ describe('PlantWorld', () => {
     assert.equal(cotyledonOption.biomassGain, 6);
   });
 
+  it('quotes the soil and mutation charge, so a card never offers growth that is refused', () => {
+    const world = makeTestPlantWorld();
+    world.setResourceProvider(() => ({ light: 50, moisture: 50, minerals: 50 }));
+    // Deep, compacted soil charges more than the bare node cost. The menu used
+    // to quote the bare figure and the charge applied the multiplier, so a card
+    // said "6 energy", the server wanted 11 and refused growth for energy the
+    // card had promised was enough.
+    world.setGrowthResistanceProvider(() => 2.4);
+    const plant = world.createPlant('p1', 'w1', 0, 0);
+    const seedId = plant.rootNodeId ?? '';
+    const options = world.getGrowthOptions(plant.id, seedId);
+    assert.ok(options);
+    const radicle = options.options.find((o) => o.type === 'radicle');
+    assert.ok(radicle);
+    assert.ok(
+      radicle.energyCost > 6,
+      `root quote must carry soil resistance, quoted ${radicle.energyCost}`,
+    );
+
+    // Pay exactly what the card asked for: growth must go through.
+    plant.totalEnergy = radicle.energyCost;
+    const grown = world.tryGrow(
+      {
+        plantId: plant.id,
+        nodeId: seedId,
+        direction: { x: 0, y: -1, z: 0 },
+        nodeType: 'radicle',
+        tick: 1,
+      },
+      1,
+    );
+    assert.equal(grown.success, true, grown.reason);
+
+    // Canopy growth is in air: no soil multiplier, so the cotyledon quote is the
+    // bare definition cost.
+    const canopy = world.getGrowthOptions(plant.id, seedId);
+    assert.ok(canopy);
+    const cotyledon = canopy.options.find((o) => o.type === 'cotyledon');
+    assert.ok(cotyledon);
+    assert.equal(cotyledon.energyCost, 6);
+  });
+
   it('never moves a stored position while stepping', () => {
     const world = makeTestPlantWorld();
     const plant = world.createPlant('player_1', 'world_0', 0, 0);
@@ -998,6 +1064,16 @@ describe('PlantWorld', () => {
     assert.equal(restored.parentAttachY, attach.y);
     assert.equal(restored.targetY, restored.y);
     assert.equal(restored.growthStartY, attach.y);
+  });
+
+  it('refuses a corrupt snapshot instead of inserting it', () => {
+    const source = makeTestPlantWorld();
+    const plant = source.createPlant('player_1', 'world_0', 0, 0);
+    plant.rootNodeId = 'missing-root';
+
+    const target = makeTestPlantWorld();
+    assert.throws(() => target.loadPlant(plant), /Refusing to load corrupt plant/);
+    assert.equal(target.getAllPlants().length, 0);
   });
 
   it('buds a lateral root part-way along the radicle and keeps it there', () => {
@@ -1342,5 +1418,823 @@ describe('PlantWorld', () => {
       wilted.totalBiomass < starved,
       `wilting should cost structure, ${starved.toFixed(2)} -> ${wilted.totalBiomass.toFixed(2)}`,
     );
+  });
+});
+
+/** T04: a mutation definition with only what the growth path reads. */
+function mutationDefinition(
+  id: string,
+  effects: MutationDefinition['effects'],
+): MutationDefinition {
+  return {
+    id,
+    name: id,
+    kind: 'stat',
+    geneTags: [],
+    visualSignature: 1,
+    visualParams: [0, 0, 0],
+    visualTarget: 'whole',
+    visualStyle: {
+      id,
+      ordinal: 1,
+      target: 'whole',
+      pattern: 'none',
+      patternScale: 1,
+      tint: [1, 1, 1],
+      tintStrength: 0,
+      variegation: 0,
+      variegationColor: [1, 1, 1],
+      glow: 0,
+      glowColor: [0.2, 0.75, 0.45],
+      barkThickness: 1,
+      barkDarken: 0,
+      spines: 0,
+    },
+    triggers: { growthChanceWeight: 1 },
+    maintenance: { energyPerSecond: 0, biomassPerSecond: 0 },
+    effects,
+    movement: { rerootSpeed: 1, translocate: false, parts: [], drift: 0 },
+    shed: { cooldownS: 10, biomassPenaltyFraction: 0 },
+  };
+}
+
+describe('T04 mutation effects on growth', () => {
+  /** Germinate a radicle, two cotyledons and a stem; returns the stem node. */
+  function growToStem(world: ReturnType<typeof makeTestPlantWorld>) {
+    const plant = world.createPlant('player_1', 'world_0', 0, 0);
+    world.setResourceProvider(() => ({ light: 50, moisture: 50, minerals: 50 }));
+    const seedId = plant.rootNodeId ?? Array.from(plant.nodes.keys())[0];
+
+    let result = world.tryGrow(
+      {
+        plantId: plant.id,
+        nodeId: seedId,
+        direction: { x: 0, y: -1, z: 0 },
+        nodeType: 'radicle',
+        tick: 1,
+      },
+      1,
+    );
+    assert(result.success, result.reason ?? 'radicle');
+    for (let i = 0; i < 120; i++) world.step(0.1, new Set([plant.id]), 2 + i);
+
+    for (let c = 0; c < 2; c++) {
+      for (let i = 0; i < 20; i++) world.step(0.1, new Set([plant.id]), 200 + c * 40 + i);
+      result = world.tryGrow(
+        {
+          plantId: plant.id,
+          nodeId: seedId,
+          direction: { x: c === 0 ? 0.3 : -0.3, y: 1, z: 0 },
+          nodeType: 'cotyledon',
+          tick: 250 + c,
+        },
+        250 + c * 20,
+      );
+      assert(result.success, result.reason ?? `cotyledon ${c + 1}`);
+      for (let i = 0; i < 80; i++) world.step(0.1, new Set([plant.id]), 260 + c * 100 + i);
+    }
+
+    const grown = world.getPlant(plant.id);
+    assert(grown);
+    grown.storedWater = 5000;
+    grown.storedMinerals = 5000;
+    grown.totalEnergy = 5000;
+    for (let i = 0; i < 30; i++) world.step(0.1, new Set([plant.id]), 500 + i);
+
+    result = world.tryGrow(
+      {
+        plantId: plant.id,
+        nodeId: seedId,
+        direction: { x: 0, y: 1, z: 0 },
+        nodeType: 'stem',
+        tick: 2,
+      },
+      560,
+    );
+    assert(result.success, result.reason ?? 'stem');
+    assert(result.newNode);
+    return { plantId: plant.id, stemId: result.newNode.id, stem: result.newNode };
+  }
+
+  it('divides growth time, scales the segment and unlocks a refused node type', () => {
+    const world = makeTestPlantWorld();
+    world.setMutations({
+      chancePerGrowth: 0,
+      adaptivePressureEnabled: false,
+      decayHalfLifeTicks: 1000,
+      maxPressureMultiplier: 1,
+      defaultShedCooldownS: 10,
+      maintenanceScale: 1,
+      upkeepNodeScale: 0,
+      upkeepBiomassScale: 0,
+      upkeepMaxMultiplier: 10,
+      upkeepBiomassFloor: 8,
+      oversizeWiltPerS: 0.02,
+      oversizeLeakPerS: 0.05,
+      levelUp: {
+        maxLevel: 3,
+        cardsPerOffer: 3,
+        baseEnergyCost: 10,
+        energyCostPerLevel: 10,
+        energyCostPerBiomass: 1,
+        energyCostPerBiomassPerLevel: 1,
+        baseBiomassFraction: 0.05,
+        biomassFractionPerLevel: 0.05,
+        minBiomassCost: 1,
+        upkeepPerLevel: 0.15,
+        cardSteps: { sizeMultiplier: 1.15, energyUpkeepMultiplier: 0.92 },
+        cardLabels: { sizeMultiplier: 'Larger form', energyUpkeepMultiplier: 'Leaner upkeep' },
+      },
+      definitions: [
+        mutationDefinition('quick', { growthSpeedMultiplier: 2 }),
+        mutationDefinition('bulky', { sizeMultiplier: 2 }),
+        mutationDefinition('bloom', { unlockNodeTypes: ['flower'] }),
+      ],
+      categoryForNodeType: {},
+      categoryToTags: {},
+    } satisfies MutationsConfig);
+
+    const { plantId, stemId, stem } = growToStem(world);
+    for (const id of ['quick', 'bulky', 'bloom']) {
+      const granted = world.grantMutation(plantId, id, 561);
+      assert(granted.ok, `grant ${id}: ${granted.reason ?? ''}`);
+    }
+
+    const plant = world.getPlant(plantId);
+    assert(plant);
+    plant.totalEnergy = 5000;
+    plant.storedWater = 5000;
+    plant.storedMinerals = 5000;
+    for (let i = 0; i < 300; i++) world.step(0.1, new Set([plantId]), 600 + i);
+
+    const leaf = world.tryGrow(
+      {
+        plantId,
+        nodeId: stemId,
+        direction: { x: 0.4, y: 0.6, z: 0 },
+        nodeType: 'leaf',
+        tick: 3,
+      },
+      700,
+    );
+    assert(leaf.success, `leaf: ${leaf.reason}`);
+    assert(leaf.newNode);
+
+    const mutatedStep = Math.hypot(
+      leaf.newNode.x - stem.x,
+      leaf.newNode.y - stem.y,
+      leaf.newNode.z - stem.z,
+    );
+
+    // A flower is refused on a leaf by the base rules; the unlock admits it.
+    for (let i = 0; i < 300; i++) world.step(0.1, new Set([plantId]), 700 + i);
+    const flower = world.tryGrow(
+      {
+        plantId,
+        nodeId: leaf.newNode.id,
+        direction: { x: 0, y: 0.4, z: 0.6 },
+        nodeType: 'flower',
+        tick: 4,
+      },
+      1400,
+    );
+    assert(flower.success, `flower: ${flower.reason}`);
+
+    // Drop the mutations and grow the same leaf again: the unmutated growth is
+    // the baseline for both the time and the segment length.
+    world.clearMutations(plantId, 702);
+    const refreshed = world.getPlant(plantId);
+    assert(refreshed);
+    refreshed.totalEnergy = 5000;
+    refreshed.storedWater = 5000;
+    refreshed.storedMinerals = 5000;
+    for (let i = 0; i < 300; i++) world.step(0.1, new Set([plantId]), 900 + i);
+    const plain = world.tryGrow(
+      {
+        plantId,
+        nodeId: stemId,
+        direction: { x: -0.4, y: 0.6, z: 0 },
+        nodeType: 'leaf',
+        tick: 5,
+      },
+      1600,
+    );
+    assert(plain.success, `plain: ${plain.reason}`);
+    assert(plain.newNode);
+    assert.ok(
+      Math.abs((plain.newNode.growthTimeSeconds ?? 0) - (leaf.newNode.growthTimeSeconds ?? 0) * 2) <
+        1e-6,
+      'growth speed 2 halves the quoted growth time',
+    );
+    const plainStep = Math.hypot(
+      plain.newNode.x - stem.x,
+      plain.newNode.y - stem.y,
+      plain.newNode.z - stem.z,
+    );
+    assert.ok(
+      Math.abs(plainStep * 2 - mutatedStep) < 1e-6,
+      `size multiplier 2 doubles the segment (${mutatedStep} vs ${plainStep})`,
+    );
+  });
+
+  it('holds an unpaid mutation bill at the floor instead of shedding or killing', () => {
+    const world = makeTestPlantWorld();
+    world.setMutations({
+      chancePerGrowth: 0,
+      adaptivePressureEnabled: false,
+      decayHalfLifeTicks: 1000,
+      maxPressureMultiplier: 1,
+      defaultShedCooldownS: 10,
+      maintenanceScale: 1,
+      upkeepNodeScale: 0,
+      upkeepBiomassScale: 0,
+      upkeepMaxMultiplier: 10,
+      upkeepBiomassFloor: 8,
+      oversizeWiltPerS: 0.02,
+      oversizeLeakPerS: 0.05,
+      levelUp: {
+        maxLevel: 3,
+        cardsPerOffer: 3,
+        baseEnergyCost: 10,
+        energyCostPerLevel: 10,
+        energyCostPerBiomass: 1,
+        energyCostPerBiomassPerLevel: 1,
+        baseBiomassFraction: 0.05,
+        biomassFractionPerLevel: 0.05,
+        minBiomassCost: 1,
+        upkeepPerLevel: 0.15,
+        cardSteps: { sizeMultiplier: 1.15, energyUpkeepMultiplier: 0.92 },
+        cardLabels: { sizeMultiplier: 'Larger form', energyUpkeepMultiplier: 'Leaner upkeep' },
+      },
+      definitions: [
+        {
+          ...mutationDefinition('gluttonous', {}),
+          maintenance: { energyPerSecond: 0.05, biomassPerSecond: 5 },
+        },
+      ],
+      categoryForNodeType: {},
+      categoryToTags: {},
+    });
+
+    const { plantId } = growToStem(world);
+    const granted = world.grantMutation(plantId, 'gluttonous', 900);
+    assert(granted.ok, `grant: ${granted.reason ?? ''}`);
+
+    const plant = world.getPlant(plantId);
+    assert(plant);
+    plant.totalEnergy = 5000;
+    plant.storedWater = 5000;
+    plant.storedMinerals = 5000;
+    plant.totalBiomass = 12;
+    for (let i = 0; i < 200; i++) world.step(0.1, new Set([plantId]), 1000 + i);
+
+    const after = world.getPlant(plantId);
+    assert(after, 'a bill larger than the plant must not kill it');
+    assert.deepEqual(
+      after.mutations?.map((mutation) => mutation.id),
+      ['gluttonous'],
+      'unpaid upkeep must never shed a mutation on its own',
+    );
+    assert.ok(
+      Math.abs(after.totalBiomass - 8) < 1e-9,
+      `biomass stops at the floor (${after.totalBiomass})`,
+    );
+  });
+
+  it("keeps a shed size mutation's tissue and wilts it back gradually", () => {
+    const world = makeTestPlantWorld();
+    world.setMutations({
+      chancePerGrowth: 0,
+      adaptivePressureEnabled: false,
+      decayHalfLifeTicks: 1000,
+      maxPressureMultiplier: 1,
+      defaultShedCooldownS: 0,
+      maintenanceScale: 1,
+      upkeepNodeScale: 0,
+      upkeepBiomassScale: 0,
+      upkeepMaxMultiplier: 10,
+      upkeepBiomassFloor: 8,
+      oversizeWiltPerS: 0.02,
+      oversizeLeakPerS: 0.05,
+      levelUp: {
+        maxLevel: 3,
+        cardsPerOffer: 3,
+        baseEnergyCost: 10,
+        energyCostPerLevel: 10,
+        energyCostPerBiomass: 1,
+        energyCostPerBiomassPerLevel: 1,
+        baseBiomassFraction: 0.05,
+        biomassFractionPerLevel: 0.05,
+        minBiomassCost: 1,
+        upkeepPerLevel: 0.15,
+        cardSteps: { sizeMultiplier: 1.15, energyUpkeepMultiplier: 0.92 },
+        cardLabels: { sizeMultiplier: 'Larger form', energyUpkeepMultiplier: 'Leaner upkeep' },
+      },
+      definitions: [mutationDefinition('bulky', { sizeMultiplier: 1.25 })],
+      categoryForNodeType: {},
+      categoryToTags: {},
+    });
+
+    const { plantId, stemId } = growToStem(world);
+    const plant = world.getPlant(plantId);
+    assert(plant);
+    // Let the last part finish filling in: only completed tissue has a quota.
+    for (let i = 0; i < 100; i++) world.step(0.1, new Set([plantId]), 700 + i);
+    const stem = plant.nodes.get(stemId);
+    assert(stem);
+    // Quota for a stem is `biomass_cost × growth_biomass_yield`; a 1.25× form
+    // holds 1.25³ of it. The test config's yield is read rather than assumed.
+    const baseMass = stem.biomass;
+    assert.ok(baseMass > 1, `unmutated stem mass (${baseMass})`);
+
+    const granted = world.grantMutation(plantId, 'bulky', 900);
+    assert(granted.ok, `grant: ${granted.reason ?? ''}`);
+    const grown = plant.nodes.get(stemId);
+    assert(grown);
+    const bigMass = grown.biomass;
+    const bigRadius = grown.radius ?? 0;
+    assert.ok(
+      Math.abs(bigMass - baseMass * 1.25 ** 3) < 1e-6,
+      `a size mutation is real tissue (${bigMass})`,
+    );
+    assert.ok(bigRadius > 0, 'the part is drawn');
+
+    // Shedding must not shrink the body on the spot.
+    const shedTick = 1000;
+    const shed = world.shedMutation(plantId, 'bulky', shedTick);
+    assert(shed.ok, `shed: ${shed.reason ?? ''}`);
+    const justShed = plant.nodes.get(stemId);
+    assert(justShed);
+    assert.ok(
+      Math.abs(justShed.biomass - bigMass) < 1e-6,
+      `mass is kept at the shed (${justShed.biomass} vs ${bigMass})`,
+    );
+    assert.equal(justShed.radius, bigRadius, 'the drawn size is kept at the shed');
+
+    // Feed it so only the oversize drain moves the mass, then let it wilt.
+    plant.totalEnergy = 5000;
+    plant.storedWater = 5000;
+    plant.storedMinerals = 5000;
+    for (let i = 0; i < 100; i++) world.step(0.1, new Set([plantId]), shedTick + 1 + i);
+    const midway = plant.nodes.get(stemId);
+    assert(midway);
+    assert.ok(midway.biomass < bigMass, 'the excess tissue starts draining');
+    assert.ok(midway.biomass > baseMass, 'it is still bigger than its regular size');
+    assert.ok((midway.radius ?? 0) < bigRadius, 'the part visibly thins as it drains');
+
+    // Long enough for the exponential drain to finish: back to regular size.
+    for (let i = 0; i < 4000; i++) world.step(0.1, new Set([plantId]), shedTick + 101 + i);
+    const settled = plant.nodes.get(stemId);
+    assert(settled);
+    assert.ok(
+      Math.abs(settled.biomass - baseMass) < baseMass * 0.01,
+      `tissue returns to the regular size (${settled.biomass} vs ${baseMass})`,
+    );
+  });
+  it('levels a size mutation on the card the player picks, and grows the body', () => {
+    const world = makeTestPlantWorld();
+    world.setMutations({
+      chancePerGrowth: 0,
+      adaptivePressureEnabled: false,
+      decayHalfLifeTicks: 1000,
+      maxPressureMultiplier: 1,
+      defaultShedCooldownS: 0,
+      maintenanceScale: 1,
+      upkeepNodeScale: 0,
+      upkeepBiomassScale: 0,
+      upkeepMaxMultiplier: 10,
+      upkeepBiomassFloor: 8,
+      oversizeWiltPerS: 0.02,
+      oversizeLeakPerS: 0.05,
+      levelUp: {
+        maxLevel: 2,
+        cardsPerOffer: 3,
+        baseEnergyCost: 10,
+        energyCostPerLevel: 10,
+        energyCostPerBiomass: 1,
+        energyCostPerBiomassPerLevel: 1,
+        baseBiomassFraction: 0.05,
+        biomassFractionPerLevel: 0.05,
+        minBiomassCost: 1,
+        upkeepPerLevel: 0.15,
+        cardSteps: { sizeMultiplier: 1.15, energyUpkeepMultiplier: 0.92 },
+        cardLabels: { sizeMultiplier: 'Larger form', energyUpkeepMultiplier: 'Leaner upkeep' },
+      },
+      definitions: [mutationDefinition('bulky', { sizeMultiplier: 1.25 })],
+      categoryForNodeType: {},
+      categoryToTags: {},
+    });
+
+    const { plantId, stemId } = growToStem(world);
+    const plant = world.getPlant(plantId);
+    assert(plant);
+    for (let i = 0; i < 100; i++) world.step(0.1, new Set([plantId]), 700 + i);
+    const granted = world.grantMutation(plantId, 'bulky', 800);
+    assert(granted.ok, `grant: ${granted.reason ?? ''}`);
+
+    const stem = plant.nodes.get(stemId);
+    assert(stem);
+    const firstLevelMass = stem.biomass;
+    plant.totalEnergy = 500;
+
+    const deal = world.offerMutationLevel(plantId, 'bulky');
+    assert(deal.ok, `deal: ${deal.reason ?? ''}`);
+    assert.equal(deal.level, 1);
+    const cards = deal.cards ?? [];
+    const sizeCard = cards.find((card) => card.id === 'sizeMultiplier');
+    assert.ok(sizeCard, 'the size mutation deals a size card');
+    const state = world.getMutationState(plantId, 900);
+    assert.equal(state?.levelOffer?.mutationId, 'bulky', 'the deal is visible to the owner');
+
+    // An unoffered card is refused, and nothing is spent.
+    const refused = world.chooseMutationLevel(plantId, 'bulky', 'growthSpeedMultiplier', 901);
+    assert.equal(refused.ok, false);
+    assert.equal(plant.totalEnergy, 500);
+
+    const energyBefore = plant.totalEnergy;
+    const levelled = world.chooseMutationLevel(plantId, 'bulky', 'sizeMultiplier', 902);
+    assert(levelled.ok, `level: ${levelled.reason ?? ''}`);
+    assert.equal(levelled.level, 2);
+    assert.equal(plant.totalEnergy, energyBefore - (levelled.cost?.energy ?? 0));
+    assert.ok(
+      Math.abs((stem.biomass ?? 0) - firstLevelMass * 1.15 ** 3) < 1e-6,
+      `the larger form is real tissue (${stem.biomass} vs ${firstLevelMass * 1.15 ** 3})`,
+    );
+
+    const after = world.getMutationState(plantId, 903);
+    const held = after?.mutations.find((mutation) => mutation.id === 'bulky');
+    assert.equal(held?.level, 2);
+    assert.equal(held?.maxLevel, 2);
+    assert.equal(held?.levelBlocked, 'max_level');
+    assert.equal(after?.levelOffer, null, 'the deal closes once it is taken');
+  });
+});
+
+function plantHealthOf(world: ReturnType<typeof makeTestPlantWorld>, plantId: string): number {
+  const plant = world.getPlant(plantId);
+  assert(plant);
+  return plantHealth(plant, world.getConfig());
+}
+
+describe('health baseline and the stored-resource gate', () => {
+  /** Germinate a radicle and two cotyledons; leaves the crown as the seed node. */
+  function germinateWithCotyledons(world: ReturnType<typeof makeTestPlantWorld>) {
+    const plant = world.createPlant('player_1', 'world_0', 0, 0);
+    world.setResourceProvider(() => ({ light: 50, moisture: 50, minerals: 50 }));
+    const seedId = Array.from(plant.nodes.keys())[0];
+    const radicle = world.tryGrow(
+      {
+        plantId: plant.id,
+        nodeId: seedId,
+        direction: { x: 0, y: -1, z: 0 },
+        nodeType: 'radicle',
+        tick: 1,
+      },
+      1,
+    );
+    assert(radicle.success, radicle.reason ?? 'radicle');
+    for (let i = 0; i < 120; i++) world.step(0.1, new Set([plant.id]), 2 + i);
+    for (let c = 0; c < 2; c++) {
+      for (let i = 0; i < 20; i++) world.step(0.1, new Set([plant.id]), 200 + c * 40 + i);
+      const cotyledon = world.tryGrow(
+        {
+          plantId: plant.id,
+          nodeId: seedId,
+          direction: { x: c === 0 ? 0.3 : -0.3, y: 1, z: 0 },
+          nodeType: 'cotyledon',
+          tick: 300 + c * 100,
+        },
+        400 + c * 100,
+      );
+      assert(cotyledon.success, cotyledon.reason ?? 'cotyledon');
+    }
+    return { plant, seedId };
+  }
+
+  it('grows a stem immediately after the second cotyledon', () => {
+    const world = makeTestPlantWorld();
+    const { plant, seedId } = germinateWithCotyledons(world);
+    const current = world.getPlant(plant.id);
+    assert(current);
+    current.storedWater = 1000;
+    current.storedMinerals = 1000;
+    current.totalEnergy = 5000;
+
+    // The browser run on 2026-11-14 refused this exact intent; a fresh part
+    // with no mass yet used to read zero health, and before that the fix the
+    // refusal looked like a storage problem.
+    const stem = world.tryGrow(
+      {
+        plantId: plant.id,
+        nodeId: seedId,
+        direction: { x: 0, y: 1, z: 0 },
+        nodeType: 'stem',
+        tick: 2,
+      },
+      900,
+    );
+    assert.equal(stem.success, true, stem.reason ?? 'stem should grow');
+  });
+
+  it('drains the stores when biomass is inflated past what the plant holds', () => {
+    const world = makeTestPlantWorld({
+      upkeep_water_per_biomass_per_s: { type: 'number', value: 0.005, range: [0, 1] },
+      water_deficit_biomass_loss: { type: 'number', value: 0.5, range: [0, 1] },
+    });
+    const plant = world.createPlant('player_1', 'world_0', 0, 0);
+    world.setResourceProvider(() => ({ light: 50, moisture: 50, minerals: 50 }));
+    const seedId = Array.from(plant.nodes.keys())[0];
+    // A lone seed is exempt from upkeep; germinating gives it tissue to respire.
+    assert(
+      world.tryGrow(
+        {
+          plantId: plant.id,
+          nodeId: seedId,
+          direction: { x: 0, y: -1, z: 0 },
+          nodeType: 'radicle',
+          tick: 1,
+        },
+        1,
+      ).success,
+    );
+    // `dev_fill_biomass` sets this figure; per-biomass upkeep then scales with it.
+    plant.totalBiomass = 200_000;
+    plant.storedWater = 46;
+    plant.totalEnergy = 5_000_000;
+
+    world.step(0.1, new Set([plant.id]), 2);
+    assert.ok(
+      plant.storedWater < 12,
+      `a 200k-biomass plant drains its stores in one tick (left ${plant.storedWater})`,
+    );
+
+    // That is why the browser stem intent came back insufficient_stored_resources:
+    // the gate it failed was the water it had just been given.
+    const gate = canGrow(plant, world.getConfig());
+    assert.equal(gate.ok, false);
+    assert.match(gate.reason ?? '', /stored water/);
+  });
+
+  it('lowers health when drought sheds tissue and repairs it once fed', () => {
+    const world = makeTestPlantWorld({
+      upkeep_water_per_biomass_per_s: { type: 'number', value: 0.02, range: [0, 1] },
+      water_deficit_biomass_loss: { type: 'number', value: 1, range: [0, 1] },
+      tissue_repair_per_second: { type: 'number', value: 1, range: [0, 10] },
+      tissue_repair_energy_per_biomass: { type: 'number', value: 1, range: [1, 100] },
+    });
+    const { plant } = germinateWithCotyledons(world);
+    const current = world.getPlant(plant.id);
+    assert(current);
+    current.storedWater = 0;
+    current.storedMinerals = 0;
+    for (let i = 0; i < 200; i++) world.step(0.1, new Set([plant.id]), 600 + i);
+    const damaged = plantHealthOf(world, plant.id);
+    assert.ok(damaged < 1, `a drought should damage tissue (health ${damaged})`);
+
+    current.storedWater = 5000;
+    current.storedMinerals = 5000;
+    current.totalEnergy = 5000;
+    for (let i = 0; i < 200; i++) world.step(0.1, new Set([plant.id]), 900 + i);
+    const repaired = plantHealthOf(world, plant.id);
+    assert.ok(repaired > damaged, `repair should raise health (${damaged} -> ${repaired})`);
+  });
+});
+
+describe('root runner growth', () => {
+  it('lets a rhizome throw a stolon, but keeps other canopy off buried roots', () => {
+    const world = makeTestPlantWorld();
+    const plant = world.createPlant('runner', 'world_0', 0, 0);
+    const seedId = plant.rootNodeId ?? Array.from(plant.nodes.keys())[0];
+    plant.totalEnergy = 1e6;
+    plant.storedWater = 1e6;
+    plant.storedMinerals = 1e6;
+    plant.growthCooldownUntil = 0;
+    // A rhizome, placed directly: the gallery and the clonal unlock are the only
+    // things that produce one, and this test is about what may grow from it.
+    const rhizome = {
+      id: `${seedId}.rhizome0`,
+      plantId: plant.id,
+      type: 'rhizome' as const,
+      layer: 'root' as const,
+      x: 1,
+      y: -0.2,
+      z: 0,
+      biomass: 4,
+      age: 1,
+      parentId: seedId,
+      children: [],
+      statModifiers: {},
+      resourceDrawWater: 0,
+      resourceDrawNutrients: 0,
+      resourceDrawMinerals: 0,
+      upkeepBiomassPerSecond: 0,
+      growthProgress: 1,
+      isSeed: false,
+      lastGrowthTick: 0,
+    };
+    plant.nodes.set(rhizome.id, rhizome as never);
+    plant.nodes.get(seedId)?.children.push(rhizome.id);
+    world.fillPlantTissue(plant.id);
+
+    plant.growthCooldownUntil = 0;
+    const stolon = world.tryGrow(
+      {
+        plantId: plant.id,
+        nodeId: rhizome.id,
+        direction: { x: 1, y: -0.1, z: 0 },
+        nodeType: 'stolon',
+        tick: 10,
+      },
+      10,
+    );
+    assert.equal(stolon.success, true, `a runner must be growable: ${stolon.reason ?? ''}`);
+
+    // A leaf or a stem still cannot sprout from a buried root.
+    plant.growthCooldownUntil = 0;
+    const leaf = world.tryGrow(
+      {
+        plantId: plant.id,
+        nodeId: rhizome.id,
+        direction: { x: 0.8, y: 0.5, z: 0 },
+        nodeType: 'leaf',
+        tick: 20,
+      },
+      20,
+    );
+    assert.equal(leaf.success, false);
+    assert.equal(leaf.reason, 'canopy_from_crown_only');
+  });
+});
+
+describe('mutation gallery', () => {
+  it('builds one spaced plant per mutation, each expressing its own mutation', () => {
+    const world = makeTestPlantWorld();
+    world.setMutations({
+      chancePerGrowth: 0,
+      adaptivePressureEnabled: false,
+      decayHalfLifeTicks: 1000,
+      maxPressureMultiplier: 1,
+      defaultShedCooldownS: 10,
+      maintenanceScale: 1,
+      upkeepNodeScale: 0,
+      upkeepBiomassScale: 0,
+      upkeepMaxMultiplier: 10,
+      upkeepBiomassFloor: 8,
+      oversizeWiltPerS: 0.02,
+      oversizeLeakPerS: 0.05,
+      levelUp: {
+        maxLevel: 3,
+        cardsPerOffer: 3,
+        baseEnergyCost: 10,
+        energyCostPerLevel: 10,
+        energyCostPerBiomass: 1,
+        energyCostPerBiomassPerLevel: 1,
+        baseBiomassFraction: 0.05,
+        biomassFractionPerLevel: 0.05,
+        minBiomassCost: 1,
+        upkeepPerLevel: 0.15,
+        cardSteps: { sizeMultiplier: 1.15, energyUpkeepMultiplier: 0.92 },
+        cardLabels: { sizeMultiplier: 'Larger form', energyUpkeepMultiplier: 'Leaner upkeep' },
+      },
+      definitions: [
+        mutationDefinition('pale', { sizeMultiplier: 1.1 }),
+        mutationDefinition('thorny', { unlockNodeTypes: ['thorn'] }),
+        mutationDefinition('glow', { energyUpkeepMultiplier: 0.9 }),
+      ],
+      categoryForNodeType: {},
+      categoryToTags: {},
+    });
+
+    const result = world.buildMutationGallery('world_0', 3, 8);
+    assert.equal(result.plants, 3);
+    assert.equal(result.rows, 1);
+
+    const gallery = world
+      .getAllPlants()
+      .filter((plant) => plant.ownerId.startsWith('gallery:'))
+      .sort((a, b) => a.ownerId.localeCompare(b.ownerId));
+    assert.equal(gallery.length, 3);
+
+    const xs: number[] = [];
+    for (const plant of gallery) {
+      const mutationId = plant.ownerId.replace('gallery:', '');
+      assert.equal(plant.mutations?.length, 1, 'exactly one mutation per plant');
+      assert.equal(plant.mutations?.[0].id, mutationId);
+      // The body is mature: a seedling showed a tint and nothing else, so a
+      // bark or spine mutation had no length of stem to be seen on.
+      assert.ok(
+        plant.nodes.size >= 15,
+        `body has ${plant.nodes.size} nodes: ${result.rejected.join(', ')}`,
+      );
+      const types = new Set(Array.from(plant.nodes.values()).map((node) => node.type));
+      for (const organ of ['radicle', 'lateral_root', 'stem', 'leaf', 'branch'] as const) {
+        assert.ok(types.has(organ), `a showcase body has a ${organ}`);
+      }
+      for (const node of plant.nodes.values()) {
+        assert.ok((node.mutationFlags ?? 0) > 0, 'every node carries the mutation look');
+        // Full growth: a node caught mid-emergence would render half-sized.
+        assert.equal(node.growthProgress, 1, `${node.type} is fully grown`);
+        assert.ok(node.biomass > 0, `${node.type} carries tissue`);
+      }
+      const seed = plant.rootNodeId ? plant.nodes.get(plant.rootNodeId) : undefined;
+      if (seed) xs.push(seed.x);
+    }
+    xs.sort((a, b) => a - b);
+    for (let i = 1; i < xs.length; i += 1) {
+      assert.ok(xs[i] - xs[i - 1] >= 7.9, `plants are spaced (${xs[i - 1]} -> ${xs[i]})`);
+    }
+
+    // The mutation was granted before the body grew, so its size is already in
+    // the tissue standing in the row. Each plant now has its own body plan (that
+    // is the point of the per-mutation variation), so the comparison is tissue
+    // per node: the 1.1x size mutation must carry more mass per part than the
+    // plant whose mutation only changes its upkeep.
+    const byId = new Map(gallery.map((plant) => [plant.ownerId.replace('gallery:', ''), plant]));
+    const big = byId.get('pale');
+    const plain = byId.get('glow');
+    assert.ok(big && plain);
+    const perNode = (plant: { totalBiomass: number; nodes: Map<string, unknown> }): number =>
+      plant.totalBiomass / Math.max(1, plant.nodes.size);
+    assert.ok(
+      perNode(big) > perNode(plain),
+      `the size mutation grew the tissue (${perNode(big)} vs ${perNode(plain)} per node)`,
+    );
+
+    // Rebuilding replaces the row instead of stacking a second garden on it.
+    world.buildMutationGallery('world_0', 3, 8);
+    const after = world.getAllPlants().filter((plant) => plant.ownerId.startsWith('gallery:'));
+    assert.equal(after.length, 3);
+  });
+});
+
+describe('PlantWorld tier rates', () => {
+  it('runs the active tier at the one simulation rate', () => {
+    const world = makeTestPlantWorld();
+    assert.equal(world.getTickRateHz(), 20);
+    world.setTierRates({ activeTickRateHz: 45 });
+    assert.equal(world.getTickRateHz(), 45);
+  });
+});
+
+describe('tissue loss is reported, growth never is', () => {
+  it('a growing, fed plant never queues shed damage', () => {
+    const world = makeTestPlantWorld();
+    const plant = world.createPlant('p1', 'w1', 0, 0);
+    const seedId = plant.rootNodeId ?? Array.from(plant.nodes.keys())[0];
+    assert.ok(seedId);
+    world.setResourceProvider(() => ({ light: 50, moisture: 50, minerals: 50 }));
+    plant.totalEnergy = 5000;
+    plant.storedWater = 5000;
+    plant.storedMinerals = 5000;
+    assert.ok(
+      world.tryGrow(
+        {
+          plantId: plant.id,
+          nodeId: seedId,
+          direction: { x: 0, y: -1, z: 0 },
+          nodeType: 'radicle',
+          tick: 1,
+        },
+        1,
+      ),
+    );
+    for (let i = 0; i < 40; i += 1) world.step(0.1, new Set([plant.id]), 10 + i);
+    // Growth spends energy and opens a new part; none of that is damage. Roots
+    // are not a damage source (ADR-051), so the shed queue must stay empty.
+    assert.deepEqual(world.drainShedDamage(), []);
+  });
+
+  it('batches a tick of drought loss into one entry and clears it', () => {
+    const world = makeTestPlantWorld({
+      upkeep_water_per_biomass_per_s: { type: 'number', value: 0.05, range: [0, 0.05] },
+      water_deficit_biomass_loss: { type: 'number', value: 1, range: [0, 2] },
+    });
+    const plant = world.createPlant('p1', 'w1', 0, 0);
+    const seedId = plant.rootNodeId ?? Array.from(plant.nodes.keys())[0];
+    assert.ok(seedId);
+    world.setResourceProvider(() => ({ light: 50, moisture: 50, minerals: 50 }));
+    plant.totalEnergy = 5000;
+    plant.storedWater = 5000;
+    plant.storedMinerals = 5000;
+    assert(
+      world.tryGrow(
+        {
+          plantId: plant.id,
+          nodeId: seedId,
+          direction: { x: 0, y: -1, z: 0 },
+          nodeType: 'radicle',
+          tick: 1,
+        },
+        1,
+      ).success,
+    );
+    // Dry the plant out: every part that pays the water bill is now in deficit.
+    plant.storedWater = 0;
+    for (let i = 0; i < 20; i++) world.step(0.05, new Set([plant.id]), 10 + i);
+    const drained = world.drainShedDamage();
+    assert.equal(drained.length, 1, 'one entry per plant per tick, not one per part');
+    assert.equal(drained[0]?.plantId, plant.id);
+    assert.ok((drained[0]?.amount ?? 0) > 0, 'the loss is reported, not swallowed');
+    assert.deepEqual(world.drainShedDamage(), [], 'draining clears the batch');
   });
 });

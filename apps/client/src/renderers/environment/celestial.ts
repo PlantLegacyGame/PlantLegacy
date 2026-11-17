@@ -53,10 +53,64 @@ export interface CelestialLightingTargets {
   skyMaterial: THREE.ShaderMaterial;
   bodies: CelestialBodies;
   elevation: CelestialElevation;
-  /** Server-provided sun intensity multiplier for the time of day. */
-  sunIntensity: number;
   /** Orbit radius that puts the directional light on the visual sun. */
   sunOrbitalDistance: number;
+  /**
+   * Ambient intensity for this frame: the smoothed baseline plus the lightning
+   * flash. Composed by `stepAmbientLighting`, never accumulated into the value
+   * the next frame smooths from.
+   */
+  ambientIntensity: number;
+}
+
+/** The ambient fields `stepAmbientLighting` needs from `render.json`. */
+export type AmbientLightingConfig = Pick<
+  RenderConfig,
+  'ambientIntensityDay' | 'ambientIntensityNight' | 'lightningIntensityBoost' | 'ambientFadeTauS'
+>;
+
+export interface AmbientLightingStep {
+  /** Smoothed ambient level without any lightning. */
+  baseline: number;
+  /** Extra intensity for this frame's strike, already boosted by config. */
+  flash: number;
+  /** Value to assign to the AmbientLight this frame. */
+  intensity: number;
+}
+
+/**
+ * One frame of ambient lighting: smooth the day/night baseline, then add the
+ * storm's flash on top.
+ *
+ * The flash used to be added straight into the light's intensity, which is also
+ * the value `applyCelestialLighting` lerps toward the day/night target. A strike
+ * therefore re-entered the smoother every frame: the lerp only removes 30% of
+ * it per frame, so a 120 ms flash was drawn several times brighter than the
+ * weather machine asked for and lingered after it ended. Keeping the baseline
+ * in its own number makes the flash a pure per-frame contribution.
+ */
+export function stepAmbientLighting(params: {
+  currentBaseline: number;
+  config: AmbientLightingConfig;
+  elevation: CelestialElevation;
+  sunIntensity: number;
+  lightningIntensity: number;
+  /** How much of the distance to the day/night target to close this frame. */
+  alpha: number;
+}): AmbientLightingStep {
+  const target =
+    params.elevation.dayFactor > 0.1
+      ? params.config.ambientIntensityDay * params.sunIntensity
+      : params.config.ambientIntensityNight;
+  const alpha = Math.min(1, Math.max(0, params.alpha));
+  const baseline = THREE.MathUtils.lerp(params.currentBaseline, Math.max(0.1, target), alpha);
+  // `lightning_intensity_boost` is a peak multiplier on the ambient level, so
+  // only the part above 1 is the flash. `lightning_max_intensity` normalises the
+  // machine's strike to 0..1 as it fades.
+  const boost = Math.max(1, params.config.lightningIntensityBoost);
+  const lightning = Math.max(0, params.lightningIntensity);
+  const flash = baseline * (boost - 1) * lightning;
+  return { baseline, flash, intensity: baseline + flash };
 }
 
 /**
@@ -64,7 +118,7 @@ export interface CelestialLightingTargets {
  * sky's celestial uniforms.
  */
 export function applyCelestialLighting(targets: CelestialLightingTargets): void {
-  const { config: cfg, sunLight, skyMaterial, bodies, elevation, sunIntensity } = targets;
+  const { config: cfg, sunLight, skyMaterial, bodies, elevation } = targets;
   const orbit = targets.sunOrbitalDistance;
   const { sunDir, moonDir } = bodies;
   const { sunElev } = elevation;
@@ -91,11 +145,5 @@ export function applyCelestialLighting(targets: CelestialLightingTargets): void 
     skyMaterial.uniforms.uSunIntensity.value = sunLight.intensity;
   }
 
-  const ambientTarget =
-    elevation.dayFactor > 0.1 ? cfg.ambientIntensityDay * sunIntensity : cfg.ambientIntensityNight;
-  targets.ambientLight.intensity = THREE.MathUtils.lerp(
-    targets.ambientLight.intensity,
-    Math.max(0.1, ambientTarget),
-    0.3,
-  );
+  targets.ambientLight.intensity = targets.ambientIntensity;
 }

@@ -19,9 +19,11 @@
     "format": "biome format --write .",
     "test": "pnpm -r --if-present test",
     "config:validate": "node tools/config-validator/src/cli.ts",
-    "verify": "pnpm lint && pnpm typecheck && pnpm config:validate && pnpm test",
+    "verify": "pnpm lint && pnpm typecheck && pnpm config:validate && pnpm docs:check && pnpm test",
+    "verify:ci": "pnpm verify && pnpm build",
     "start": "pnpm --filter @plant-legacy/server start",
-    "docs:check": "node tools/docs-check/check.mjs"
+    "docs:check": "node tools/docs-check/check.mjs",
+    "bot": "node tools/sim-bots/src/run.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.6.4",

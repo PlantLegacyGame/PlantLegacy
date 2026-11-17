@@ -28,6 +28,14 @@ export const NODE_RADIUS_PROFILES: Readonly<Record<string, NodeRadiusProfile>> =
   cotyledon: { nominalBiomass: 6, radius: 0.011, min: 0.005, max: 0.018 },
   flower: { nominalBiomass: 2, radius: 0.01, min: 0.004, max: 0.02 },
   spore_sac: { nominalBiomass: 2, radius: 0.01, min: 0.004, max: 0.02 },
+  trunk: { nominalBiomass: 10, radius: 0.045, min: 0.02, max: 0.07 },
+  rhizome: { nominalBiomass: 6, radius: 0.022, min: 0.01, max: 0.035 },
+  culm: { nominalBiomass: 5, radius: 0.03, min: 0.015, max: 0.045 },
+  floating_leaf: { nominalBiomass: 2, radius: 0.05, min: 0.03, max: 0.08 },
+  pneumatophore: { nominalBiomass: 4, radius: 0.016, min: 0.007, max: 0.03 },
+  thorn: { nominalBiomass: 2, radius: 0.012, min: 0.005, max: 0.02 },
+  stolon: { nominalBiomass: 6, radius: 0.016, min: 0.007, max: 0.026 },
+  tuber: { nominalBiomass: 14, radius: 0.055, min: 0.03, max: 0.085 },
   default: { nominalBiomass: 3, radius: 0.012, min: 0.005, max: 0.03 },
 };
 
@@ -49,7 +57,14 @@ export const DEFAULT_BRANCH_ATTACH_FRACTION = 0.6;
  * an internode. Everything else (roots, stems, leaves, flowers) continues or
  * terminates a segment, so it leaves at the parent's end.
  */
-export const MID_SEGMENT_BRANCH_TYPES: readonly NodeType[] = ['lateral_root', 'branch', 'vine'];
+export const MID_SEGMENT_BRANCH_TYPES: readonly NodeType[] = [
+  'lateral_root',
+  'branch',
+  'vine',
+  'rhizome',
+  'thorn',
+  'stolon',
+];
 
 let activeSeedBodyHeightRatio = SEED_BODY_HEIGHT_RATIO;
 let activeNodeRadiusProfiles: Readonly<Record<string, NodeRadiusProfile>> = NODE_RADIUS_PROFILES;
@@ -134,12 +149,22 @@ export function getBranchAttachFraction(): number {
   return activeBranchAttachFraction;
 }
 
-export function nodeRenderRadius(nodeType: string | undefined, biomass: number): number {
+export function nodeRenderRadius(
+  nodeType: string | undefined,
+  biomass: number,
+  /**
+   * How much wider the part is allowed to be drawn than its base profile. A
+   * size mutation holds `scale³` mass, and this lets the drawn radius follow it
+   * instead of saturating at the profile's base maximum.
+   */
+  maxScale = 1,
+): number {
   const profiles = getNodeRadiusProfiles();
   const profile = profiles[(nodeType ?? '').toLowerCase()] ?? profiles.default;
-  const mass = Number.isFinite(biomass) && biomass > 0 ? biomass : profile.nominalBiomass;
+  const mass = Number.isFinite(biomass) && biomass >= 0 ? biomass : profile.nominalBiomass;
   const scale = Math.cbrt(mass / profile.nominalBiomass);
-  return Math.min(profile.max, Math.max(profile.min, profile.radius * scale));
+  const widened = Number.isFinite(maxScale) && maxScale > 1 ? maxScale : 1;
+  return Math.min(profile.max * widened, Math.max(profile.min, profile.radius * scale));
 }
 
 /**

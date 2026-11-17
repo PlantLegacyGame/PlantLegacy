@@ -80,6 +80,36 @@ outcomes: it makes the world readable without telling players what to do.
 
 ---
 
+## Source verified 2026-11-15
+
+The MIT source was read directly (`source/src/*.js`, 2 490 lines including the
+build script and template). What the catalogue above says is accurate, with four
+corrections that matter for T56:
+
+| Claim | What the source actually does |
+|---|---|
+| "Designed SDF terrain" is `W_DENS` | The density field is a **WGSL compute pass**, not JS. `main.js` dispatches it over a 512×80×512 grid at 0.75 m, reads the buffer back with `mapAsync`, then `world.js buildTerrain(D)` meshes it on the CPU. Only the mesher and the density *math* are portable; the shader itself is not (PL's environment pass is GLSL). |
+| `surfaceNets` is ~70 lines | Confirmed: a naive one-vertex-per-cell mesher over a `>0 inside` scalar grid, `Float32Array` positions in grid space, `Uint32Array` indices, grow-by-doubling buffers. No seams, no LOD, no border sampling — because AG meshes the whole world once. All three are T56 additions. |
+| Brick cache | 4³ bricks quantised to 1/127 m in an `Int8Array`, indexed with a fixed +52 voxel offset so no index is negative, plus `CI` brick headers that mark all-air/all-rock bricks (so their 64 samples are not stored). `cv()` samples trilinearly; `collide()` steps the camera in sub-radius chunks and pushes out along the field gradient with velocity projection. |
+| `floorsAt` | Confirmed and better than expected: it walks one column and returns **every** floor/ceiling pair with the clear height between, which is why AG can scatter on cave floors and under overhangs. This is exactly the `surfacesAt(x, z)` T56 needs. |
+
+Two details worth copying that the catalogue did not name:
+
+1. **The primitive set is a flat number array, not a scene graph.** `MESAS`,
+   `ARCHES`, `HOLES` and `CLEARS` are packed into one `Float32Array` of 8-float
+   rows and iterated in the shader. That is cheap to stream, cheap to diff and
+   cheap to persist as an edit log — a good shape for T57's feature list.
+2. **The mesh is bucketed before it is drawn.** `buildTerrain` splits the
+   triangles into a 16×16 XZ grid with a min/max Y per cell, so the draw loop
+   does one bind per cell instead of per triangle. T56's chunks make this
+   unnecessary at the chunk level but the same rule applies inside a chunk.
+
+What the zip does **not** contain, despite the plan's framing: no server, no
+persistence, no player state, no networking, no config system, and no tests.
+Every value is a module-level constant. Nothing can be lifted wholesale; the
+mesher, the density expressions and the collision march are the parts worth
+adapting, and each becomes a config entry under RULE_3.
+
 ## Attribution
 
 If any AG code or close adaptation is used, add to

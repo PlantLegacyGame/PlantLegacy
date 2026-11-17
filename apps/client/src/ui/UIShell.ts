@@ -43,6 +43,7 @@ export class UIShell {
   private readonly toasts: HTMLElement[] = [];
   private readonly panelListeners = new Set<PanelListener>();
   private textScale = 1.0;
+  private toastsEnabled = true;
 
   constructor(
     private readonly config: UIConfig,
@@ -111,6 +112,7 @@ export class UIShell {
   // ---- Toasts --------------------------------------------------------
 
   toast(options: ToastOptions): void {
+    if (!this.toastsEnabled) return;
     const el = document.createElement('div');
     el.className = `ui-toast ui-toast-${options.kind ?? 'info'}`;
     el.textContent = options.message;
@@ -157,6 +159,18 @@ export class UIShell {
         }, 200);
       }, duration);
     }
+  }
+
+  /** Hide the toast stack, e.g. when the death screen takes over. */
+  clearToasts(): void {
+    for (const toast of this.toasts) toast.remove();
+    this.toasts.length = 0;
+  }
+
+  /** Suppress new toasts while a modal owns the screen. */
+  setToastsEnabled(enabled: boolean): void {
+    this.toastsEnabled = enabled;
+    if (!enabled) this.clearToasts();
   }
 
   // ---- Panels --------------------------------------------------------

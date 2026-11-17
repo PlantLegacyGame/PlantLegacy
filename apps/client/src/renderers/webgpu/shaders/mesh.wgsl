@@ -22,12 +22,39 @@
    @location(4) isOwn: f32,
       @location(5) @interpolate(flat) variationIndex: u32,
    @location(6) @interpolate(flat) blendFactor: f32,
-   // C02b: mutation signature bits for this node.
+   // C02b: mutation signature bits for this node (billboard tiers only now).
    @location(7) @interpolate(flat) mutationMask: u32,
+   // T04: which plant's composed look applies to this fragment.
+   @location(8) @interpolate(flat) plantIndex: u32,
 }
 
  @group(0) @binding(0) var<uniform> frame: FrameUniforms;
  @group(0) @binding(1) var<storage, read> renderData: array<PlantRenderData>;
+ // T04 appearance: one composed look per plant, one record per organ family.
+ @group(0) @binding(9) var<storage, read> plantLooks: array<PlantLook>;
+
+/** The composed look for one organ of one plant. */
+fn lookForOrgan(plantIndex: u32, nodeType: f32) -> LookOrgan {
+  if (plantIndex >= arrayLength(&plantLooks)) {
+    return neutralLookOrgan();
+  }
+  let look = plantLooks[plantIndex];
+  // Organ families follow the visual node types the mesh packs: 0 root,
+  // 1 stem, 2 vine, 3 leaf, 4 seed, 5 flower, 6 spore sac, 7 cotyledon.
+  if (nodeType < 2.5) {
+    return look.woody;
+  }
+  if (nodeType > 2.5 && nodeType < 3.5) {
+    return look.foliage;
+  }
+  if (nodeType > 3.5 && nodeType < 4.5) {
+    return look.seed;
+  }
+  if (nodeType > 4.5 && nodeType < 6.5) {
+    return look.bloom;
+  }
+  return look.foliage;
+}
 
  // C02b: Texture arrays for plant variation (bindings 3-8).
  @group(0) @binding(3) var barkTextureArray: texture_2d_array<f32>;
@@ -48,6 +75,7 @@
      0u,
      0.0,
      0u,
+     0u,
    );
 }
 
@@ -66,8 +94,8 @@
     let nodeType = f32((input.packed >> 16u) & 0xffu);
     let isOwn = f32((input.packed >> 24u) & 0x1u);
      let variationIndex = (input.packed >> 25u) & 0xfu;
-    // Bits 0/1/2: bioluminescent, thickened bark, variegated foliage.
-    let mutationMask = (input.packed >> 29u) & 0x7u;
+    // T04: four-bit mutation signature index (0 = none, 1..12 = a signature).
+    let mutationMask = (input.packed >> 28u) & 0xFu;
 
     // C02b: GPU skinning - emergence value for animation. Eased so a node that
     // arrives with a chunk of server progress still unfolds smoothly instead of
@@ -147,6 +175,7 @@
       variationIndex,
       renderInfo.blendFactor,
       mutationMask,
+      plantIndex,
     );
   }
 
@@ -237,15 +266,13 @@
    // C02b: mutation signatures, per node. Thickened bark darkens the woody
    // tissue (its thickness is baked into the tube radii) and variegated foliage
    // mottles leaf colour; bioluminescence is added after lighting below.
-   if ((input.mutationMask & 2u) != 0u && input.nodeType < 2.5) {
-     baseColor *= 1.0 - clamp((frame.mutation1Param - 1.0) * 0.6, 0.0, 0.35);
-   }
-   let isFoliage = (input.nodeType > 2.5 && input.nodeType < 3.5) ||
-     (input.nodeType > 6.5 && input.nodeType < 7.5);
-   if ((input.mutationMask & 4u) != 0u && isFoliage) {
-     let mottle = 0.5 + 0.5 * sin(input.worldPosition.x * 9.0 + input.worldPosition.y * 5.0)
-       * sin(input.worldPosition.z * 7.0 + input.worldPosition.y * 3.0);
-     baseColor = mix(baseColor, baseColor * vec3f(0.82, 1.08, 0.62), mottle * frame.mutation2Param);
+   // T04 appearance (ADR-059): every held mutation contributes, each on the
+   // organs its style names. The JS side composed and clamped the result; the
+   // shader only applies it, so a plant can show a bark mutation and a lamina
+   // mutation at once instead of one signature or the other.
+   let look = lookForOrgan(input.plantIndex, input.nodeType);
+   if (!isOutline) {
+     baseColor = applyPlantLook(baseColor, look, input.worldPosition, frame);
    }
 
    let healthFactor = 1.0 - frame.healthTintStrength * 0.3;
@@ -262,11 +289,10 @@
     let rim = pow(1.0 - max(dot(normal, viewDirection), 0.0), 3.0) * 0.18;
     lit = vec4f(lit.rgb + vec3f(0.18, 0.30, 0.18) * rim, lit.a);
 
-    if ((input.mutationMask & 1u) != 0u && frame.mutation0Param > 0.01) {
-      let emissive = frame.mutation0Param * 0.25;
-      let glowColor = vec3f(0.20, 0.75, 0.45);
-      let pulse = 0.6 + 0.4 * sin(frame.time * 2.0 + input.worldPosition.y * 0.5);
-      lit = vec4f(lit.rgb + glowColor * (emissive * pulse), lit.a);
+    // T04: emissive mutations glow from the tissue, after lighting. The
+    // selection outline is not tissue, so it keeps its flat gold.
+    if (!isOutline) {
+      lit = vec4f(lit.rgb + lookEmissive(look, input.worldPosition, frame), lit.a);
     }
 
     lit = applyRootSight(lit.rgb, input.worldPosition, input.nodeType, input.isOwn, frame);

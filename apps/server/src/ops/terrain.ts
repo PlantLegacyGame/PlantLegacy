@@ -63,6 +63,16 @@ export interface TerrainVoid {
   radiusM: number;
   volumeM3: number;
   stability: number;
+  /**
+   * The plant whose root dug this cavity, so its own roof coming down cannot be
+   * billed to it as damage. Roots are not a damage source (ADR-051): before this
+   * field existed, a radicle's own tunnel collapsed two seconds later and
+   * destroyed the radicle that dug it.
+   *
+   * Not persisted: a cavity restored from an older save has no owner and
+   * collapses on whoever is under it, exactly as before.
+   */
+  actorPlantId?: string | null;
 }
 
 export interface TerrainRegion {
@@ -204,6 +214,7 @@ export class TerrainService {
       radiusM: Math.max(0.12, radius * 1.8),
       volumeM3: volume,
       stability,
+      actorPlantId,
     });
 
     const edit = this.pushEdit({
@@ -252,7 +263,7 @@ export class TerrainService {
         }
         this.pushEdit({
           tick,
-          actorPlantId: null,
+          actorPlantId: cavity.actorPlantId ?? null,
           kind: 'collapse',
           x: cavity.x,
           y: cavity.y,

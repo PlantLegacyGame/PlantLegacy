@@ -1,3 +1,32 @@
+/* Native scrollbars are styled on both engines so panels inside the HUD read as
+   part of the soil, not as a browser page. Keep this rule first: it is the only
+   universal selector in the sheet and must not follow higher-specificity rules. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(142, 176, 84, 0.6) rgba(14, 18, 10, 0.72);
+}
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-track {
+  background: rgba(14, 18, 10, 0.72);
+  border-radius: 8px;
+}
+*::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 8px;
+  background: linear-gradient(180deg, rgba(142, 176, 84, 0.72), rgba(90, 112, 52, 0.78));
+  background-clip: padding-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, rgba(168, 204, 102, 0.86), rgba(112, 138, 64, 0.9));
+  background-clip: padding-box;
+}
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
 /* ===== PLANT LEGACY — GAME UI =====
    Earthy, solid, warm, plant, soft, close together.
    No website chrome — just game HUD that feels like part of the soil. */
@@ -122,11 +151,16 @@ body {
 }
 
 #app {
-  width: 100vw;
-  height: 100vh;
+  /* 100vw counts the scrollbar gutter, which `position: fixed` already excludes:
+     that mismatch drew the canvas wider than the area it is seen in, so the
+     renderer's buffer and the browser's layout disagreed by the scrollbar. */
+  width: 100%;
+  height: 100%;
   position: fixed;
   top: 0;
   left: 0;
+  right: 0;
+  bottom: 0;
   overflow: hidden;
   touch-action: none;
 }
@@ -1455,4 +1489,21 @@ body {
   height: 34px;
   max-height: 34px;
   resize: none;
+}
+
+/* ===== C04 UI polish: green/brown surfaces and in-world scrollbars =====
+   Native scrollbars were the last default web chrome left in the game. They are
+   styled on both engines so panels inside the HUD read as part of the soil, not
+   as a browser page. */
+:root {
+  --hud-bg: rgba(19, 26, 14, 0.95);
+  --hud-bg-hover: rgba(29, 38, 21, 0.97);
+  --hud-border: rgba(126, 154, 74, 0.4);
+  --hud-border-muted: rgba(96, 108, 64, 0.4);
+  --hud-shadow: 0 16px 48px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(200, 232, 108, 0.1);
+}
+
+::selection {
+  background: rgba(142, 176, 84, 0.34);
+  color: var(--bone-50, #fdfbf6);
 }

@@ -62,10 +62,10 @@ owning task fills it.
 | `companions` | T11 | stub | 0 |
 | `compliance` | T00 | draft | 3 |
 | `controls` | C01 | active | 7 |
-| `damage` | T06 | stub | 0 |
+| `damage` | T06 | active | 23 |
 | `daynight` | T07 | active | 4 |
 | `deep_time` | T20 | stub | 0 |
-| `dev` | D01 | active | 15 |
+| `dev` | D01 | active | 18 |
 | `emotes` | T05 | active | 2 |
 | `epoch_map` | T37 | stub | 0 |
 | `extraction` | T51 | stub | 0 |
@@ -74,7 +74,7 @@ owning task fills it.
 | `gift_bundles` | T45 | stub | 0 |
 | `gift_packs` | T50 | stub | 0 |
 | `gifts` | T29 | stub | 0 |
-| `growth` | T01 | active | 47 |
+| `growth` | T01 | active | 62 |
 | `growth_scale` | T23 | stub | 0 |
 | `guilds` | T44 | stub | 0 |
 | `heirlooms` | T06A | stub | 0 |
@@ -88,10 +88,11 @@ owning task fills it.
 | `marketplace` | T14 | stub | 0 |
 | `messaging` | T27 | stub | 0 |
 | `minimap` | T48 | stub | 0 |
-| `mutations` | T04 | stub | 0 |
+| `mutations` | T04 | active | 59 |
+| `mutation_visuals` | T04 | active | 3 |
 | `naming` | T17 | stub | 0 |
-| `net_proto` | T03P | draft | 15 |
-| `network` | T03 | active | 12 |
+| `net_proto` | T03P | draft | 16 |
+| `network` | T03 | active | 2 |
 | `observation` | T28 | stub | 0 |
 | `onboarding` | T00A | active | 3 |
 | `ops` | O01 | active | 13 |
@@ -99,16 +100,16 @@ owning task fills it.
 | `parasitism` | T10 | stub | 0 |
 | `persistence` | T26 | stub | 0 |
 | `physics` | C02c | active | 14 |
-| `plant_renderer` | C02 | active | 39 |
+| `plant_renderer` | C02 | active | 37 |
 | `prestige` | T08B | stub | 0 |
 | `profiles` | T47 | stub | 0 |
 | `relics` | T18 | stub | 0 |
-| `render` | C01 | active | 103 |
+| `render` | C01 | active | 119 |
 | `reports` | T05 | active | 5 |
 | `reproduction` | T53 | stub | 0 |
 | `reputation` | T43 | stub | 0 |
-| `resources` | T00A | draft | 50 |
-| `root_sight` | T02 | active | 16 |
+| `resources` | T00A | draft | 51 |
+| `root_sight` | T02 | active | 20 |
 | `session` | T08 | stub | 0 |
 | `spectating` | T30 | stub | 0 |
 | `spectating_ui` | T36 | stub | 0 |
@@ -116,28 +117,28 @@ owning task fills it.
 | `spores` | T13 | stub | 0 |
 | `status` | T46 | stub | 0 |
 | `symbiosis` | T09 | stub | 0 |
-| `terrain` | T25 | active | 26 |
+| `terrain` | T25 | active | 36 |
 | `territory` | T49 | stub | 0 |
-| `tumbling` | T06 | stub | 0 |
+| `tumbling` | T06 | active | 10 |
 | `tutorial` | T33 | stub | 0 |
-| `ui` | C01 | active | 11 |
-| `uproot` | T06 | stub | 0 |
-| `water` | T31 | stub | 0 |
+| `ui` | C01 | active | 16 |
+| `uproot` | T06 | active | 19 |
+| `water` | T31 | active | 25 |
 | `weather` | T07 | active | 19 |
-| `world` | T03 | active | 19 |
+| `world` | T03 | active | 17 |
 
 
-Total: **78 files**; 23 populated and 55 stubs.
+Total: **79 files**; 29 populated and 50 stubs (3 of them `draft`).
 
 **This line owns the count.** Other documents link here rather than quoting a
 number (ADR-049).
-Populated: `accounts`, `chat`, `compliance`, `controls`, `daynight`, `dev`, `emotes`, `growth`, `items`, `net_proto`, `network`, `onboarding`, `ops`, `physics`, `plant_renderer`, `render`, `reports`, `resources`, `root_sight`, `terrain`, `ui`, `weather`, `world`.
+Populated: `accounts`, `chat`, `compliance`, `controls`, `daynight`, `dev`, `emotes`, `growth`, `items`, `net_proto`, `network`, `onboarding`, `ops`, `physics`, `plant_renderer`, `render`, `reports`, `resources`, `root_sight`, `terrain`, `ui`, `water`, `weather`, `world`.
 
 ## Approved V5.4 config files (not created yet)
 
 These are specified in `DESIGN.md` Part 11 and indexed in
 [`PlantLegacy-Abyssal-Integration-Plan.md`](./PlantLegacy-Abyssal-Integration-Plan.md) §11.1. They are **not** in
-`config/` yet, so the validator count stays at 78.
+`config/` yet, so the validator count stays at 79.
 
 | File | Owner | Purpose |
 |---|---|---|

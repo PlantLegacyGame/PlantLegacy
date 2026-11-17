@@ -16,6 +16,7 @@ import { SERVICE_VERSION } from './core/version.ts';
 import { loadAccountsConfig } from './ops/accounts/config.ts';
 import { createAccountsHandlers, createAuthMiddleware } from './ops/accounts/http.ts';
 import { AccountsService } from './ops/accounts/service.ts';
+import { stepCadence } from './ops/broadcastCadence.ts';
 import {
   type ChatConfig,
   loadChatConfig,
@@ -34,6 +35,8 @@ import {
   connectionRegistryTransferPlant,
   createConnectionRegistry,
 } from './ops/connectionRegistry.ts';
+import { loadDamageConfig, loadTumblingConfig, loadUprootConfig } from './ops/damage/config.ts';
+import { DamagePipeline } from './ops/damage/damagePipeline.ts';
 import { DatabaseProbe } from './ops/db.ts';
 import { devToolsAllowed, handleGetDevConfig, handlePostDevConfig } from './ops/dev.ts';
 import { loadGrowthConfig } from './ops/growth.ts';
@@ -49,11 +52,13 @@ import { InterestManager } from './ops/interestManager.ts';
 import { addItem, createInventory, type Inventory } from './ops/inventory.ts';
 import { loadItemsConfig } from './ops/items.ts';
 import { createLogger } from './ops/log.ts';
+import { loadMutationsConfig } from './ops/mutations/config.ts';
 import {
   type ErrorPayload,
   type HelloPayload,
   loadNetProtoConfig,
   MESSAGE_TYPE,
+  nodeWireFields,
   type PlantSyncPayload,
   type PlayerInput,
   type RejectPayload,
@@ -61,9 +66,10 @@ import {
   type SeasonUpdatePayload,
   type WelcomePayload,
 } from './ops/net.ts';
-import { PlantPersistence } from './ops/persistence/plantPersistence.ts';
+import { type PlantEvent, PlantPersistence } from './ops/persistence/plantPersistence.ts';
 import { TerrainPersistence } from './ops/persistence/terrainPersistence.ts';
 import { clampPlantStorage, computePlantCapacity } from './ops/plantCapacity.ts';
+import { PlantEventLog } from './ops/plantEventLog.ts';
 import { canAdoptGuestPlant, isAnonymousOwner } from './ops/plantOwnership.ts';
 import { selectVisiblePlants } from './ops/plantVisibility.ts';
 import { PlantWorld } from './ops/plantWorld.ts';
@@ -203,6 +209,8 @@ interface RootResourceSnapshot {
   groundwaterFraction: number;
   coverageTileX: number;
   coverageTileZ: number;
+  /** Slow-moving water-table field revision; the grid is resent when it changes. */
+  waterTableRevision: number;
 }
 
 /**
@@ -217,12 +225,13 @@ async function saveAllPlants(
   plantPersistence: PlantPersistence,
   log: ReturnType<typeof createLogger>,
   context: string,
+  eventLog?: PlantEventLog,
 ): Promise<{ saved: number; total: number }> {
   const plants = plantWorld.getAllPlants();
   let saved = 0;
   for (const plant of plants) {
     try {
-      await plantPersistence.savePlant(plant);
+      await plantPersistence.savePlant(plant, eventLog?.get(plant.id) ?? []);
       saved += 1;
     } catch (error) {
       log.error('plant save failed', {
@@ -243,6 +252,14 @@ class World {
   // whole-grid event because it dirties every tile again.
   private lastCompactGridBroadcastAt = 0;
   private static readonly COMPACT_GRID_MIN_INTERVAL_MS = 1000;
+  /** Wire cadence accumulators (INV-TM-09). */
+  private stateCadenceAccumulatorMs = 0;
+  private weatherCadenceAccumulatorMs = 0;
+  private stateMessagesSent = 0;
+  private stateMessagesSkipped = 0;
+  private weatherMessagesSent = 0;
+  private weatherMessagesSkipped = 0;
+  private rootMessagesSkipped = 0;
   /** Messages dropped because their socket was over the backlog limit. */
   private skippedSends = 0;
   /**
@@ -259,7 +276,7 @@ class World {
   /** Last death per owner, so a returning player learns what happened. */
   private readonly lostPlantReports = new Map<
     string,
-    { cause: string; plantId: string; at: number }
+    { cause: string; source?: string; plantId: string; at: number }
   >();
   /**
    * The same deaths keyed by plant id. An anonymous owner id is the id of a
@@ -267,7 +284,10 @@ class World {
    * plant's token has nothing stable to look the loss up by. The plant id is
    * that stable key.
    */
-  private readonly lostPlantReportsByPlant = new Map<string, { cause: string; at: number }>();
+  private readonly lostPlantReportsByPlant = new Map<
+    string,
+    { cause: string; source?: string; at: number }
+  >();
   private readonly awaySnapshots = new Map<
     string,
     {
@@ -280,6 +300,8 @@ class World {
     }
   >();
   private readonly lastRootResourceUpdate = new Map<string, RootResourceSnapshot>();
+  /** Per player: the water-table grid revision last sent to them. */
+  private readonly lastWaterTableRevision = new Map<string, number>();
   private config: ReturnType<typeof loadNetProtoConfig>;
   private log: ReturnType<typeof createLogger>;
   private plantWorld: PlantWorld;
@@ -298,6 +320,9 @@ class World {
   private seasonLengthDays: number;
   private lastCalamityAt: number | null = null;
   private onSeasonEnded: ((state: SeasonSnapshot) => void) | null = null;
+  private damagePipeline: DamagePipeline | null = null;
+  /** Bounded per-plant audit history, written with every save (INV-PR-07). */
+  private readonly plantEventLog: PlantEventLog;
   private itemsConfig: ReturnType<typeof loadItemsConfig>;
   private chatConfig: ChatConfig;
   private reportConfig: ReportConfig;
@@ -320,6 +345,14 @@ class World {
 
   getPlantWorld(): PlantWorld {
     return this.plantWorld;
+  }
+
+  getPlantEventLog(): PlantEventLog {
+    return this.plantEventLog;
+  }
+
+  setDamagePipeline(pipeline: DamagePipeline): void {
+    this.damagePipeline = pipeline;
   }
 
   getResourceWorld(): ResourceWorld {
@@ -373,6 +406,21 @@ class World {
     }
   }
 
+  /**
+   * T04: the mutation set, upkeep and adaptive pressure for one plant.
+   * Public so the HELLO path can send it right after WELCOME.
+   */
+  getMutationStateFor(plantId: string) {
+    return this.plantWorld.getMutationState(plantId, this.getTick());
+  }
+
+  /** Push MUTATION_STATE to the owner of a plant. */
+  private sendMutationState(player: ConnectedPlayer): void {
+    if (!player.plantId) return;
+    const state = this.plantWorld.getMutationState(player.plantId, this.getTick());
+    if (state) this.send(player.ws, MESSAGE_TYPE.MUTATION_STATE, state);
+  }
+
   /** Full plant snapshot for PLANT_CREATED, mirroring the WELCOME node shape. */
   private plantCreatedPayload(plant: import('@plant-legacy/shared/growth').Plant) {
     return {
@@ -383,29 +431,9 @@ class World {
         totalBiomass: plant.totalBiomass,
         totalEnergy: plant.totalEnergy,
         totalUpkeep: plant.totalUpkeep,
-        nodes: Array.from(plant.nodes.values()).map((n) => ({
-          id: n.id,
-          plantId: n.plantId,
-          type: n.type,
-          layer: n.layer,
-          x: n.x,
-          y: n.y,
-          z: n.z,
-          biomass: n.biomass,
-          age: n.age,
-          parentId: n.parentId,
-          children: n.children,
-          statModifiers: n.statModifiers,
-          resourceDrawWater: n.resourceDrawWater,
-          resourceDrawNutrients: n.resourceDrawNutrients,
-          upkeepBiomassPerSecond: n.upkeepBiomassPerSecond,
-          growthDirectionBias: n.growthDirectionBias,
-          lastGrowthTick: n.lastGrowthTick,
-          isSeed: n.isSeed ?? false,
-          radius: n.radius,
-          growthProgress: n.growthProgress ?? 1.0,
-          growthTimeSeconds: n.growthTimeSeconds,
-        })),
+        nodes: Array.from(plant.nodes.values()).map((n) =>
+          nodeWireFields(n, this.plantWorld.getNodeHealth(plant.id, n.id)),
+        ),
       },
     };
   }
@@ -476,6 +504,18 @@ class World {
         growthSeq: plant?.growthSeq ?? 0,
       };
       const nodes = result.newNodes ?? (result.newNode ? [result.newNode] : []);
+      for (const node of nodes) {
+        this.plantEventLog.append(plantId, {
+          type: 'growth',
+          tick: this.getTick(),
+          data: {
+            nodeId: node.id,
+            nodeType: node.type,
+            parentId: node.parentId,
+            totalBiomass: plant?.totalBiomass ?? 0,
+          },
+        });
+      }
       const anchor = nodes[0];
       if (anchor) {
         this.broadcastNear(MESSAGE_TYPE.GROWTH_EVENT, growthPayload, anchor.x, anchor.z);
@@ -497,10 +537,15 @@ class World {
       if (death.cause !== 'removed') {
         this.lostPlantReports.set(death.ownerId, {
           cause: death.cause,
+          source: death.killedBy,
           plantId: death.id,
           at: Date.now(),
         });
-        this.lostPlantReportsByPlant.set(death.id, { cause: death.cause, at: Date.now() });
+        this.lostPlantReportsByPlant.set(death.id, {
+          cause: death.cause,
+          source: death.killedBy,
+          at: Date.now(),
+        });
         // Bounded: owners who never come back must not leak an entry each.
         if (this.lostPlantReports.size > 1000) {
           const oldest = this.lostPlantReports.keys().next().value;
@@ -532,9 +577,19 @@ class World {
         }
       }
       try {
-        this.broadcast(MESSAGE_TYPE.PLANT_REMOVED, { plantId: death.id, cause: death.cause });
+        this.broadcast(MESSAGE_TYPE.PLANT_REMOVED, {
+          plantId: death.id,
+          cause: death.cause,
+          source: death.killedBy,
+        });
       } catch (e) {
         this.log.error('PLANT_REMOVED broadcast failed', { plantId: death.id, error: String(e) });
+      }
+      // T06: resolve kill credit and leave remains/dung where the plant fell.
+      // `removed` is administrative (persistence off, dev removal) and is not a
+      // death in the world, so it leaves nothing behind.
+      if (death.cause !== 'removed') {
+        this.damagePipeline?.onPlantDeath(death, this.getTick());
       }
       // Remove plant entities from InterestManager
       if (death.rootNodeId) {
@@ -552,6 +607,26 @@ class World {
       // A dead plant must not come back from its snapshot on the next restart.
       // `removed` is administrative (persistence off, dev removal), not death.
       if (this.plantPersistence && death.cause !== 'removed') {
+        const tick = this.getTick();
+        // The per-plant row is about to be deleted, so the death itself goes to
+        // the append-only world log. This is what makes the audit trail complete
+        // across the plant's whole life.
+        void this.plantPersistence
+          .saveWorldEvent('plant_death', tick, {
+            plantId: death.id,
+            ownerId: death.ownerId,
+            cause: death.cause,
+            source: death.killedBy,
+            totalBiomass: death.totalBiomass,
+            nodeCount: death.nodes.size,
+          })
+          .catch((error: unknown) => {
+            this.log.error('recording plant death event failed', {
+              plantId: death.id,
+              error: String(error),
+            });
+          });
+        this.plantEventLog.delete(death.id);
         void this.plantPersistence.deletePlant(death.id).catch((error: unknown) => {
           this.log.error('deleting dead plant from persistence failed', {
             plantId: death.id,
@@ -563,6 +638,151 @@ class World {
         plantId: death.id,
         ownerId: death.ownerId,
         cause: death.cause,
+      });
+    }
+  }
+
+  /** T06: node positions for the uproot redraw. */
+  private plantNodeTransforms(plantId: string): Array<{
+    id: string;
+    x: number;
+    y: number;
+    z: number;
+    parentAttachX?: number;
+    parentAttachY?: number;
+    parentAttachZ?: number;
+  }> {
+    const plant = this.plantWorld.getPlant(plantId);
+    if (!plant) return [];
+    // The joints travel with the body. A node's position alone is not its whole
+    // pose: each child also stores where it leaves its parent, and the crawl
+    // rewrites both. Sending only the positions left the client drawing every
+    // lateral root from the parent's pre-crawl spot, so an uprooted plant came
+    // apart at the joints.
+    return Array.from(plant.nodes.values()).map((node) => ({
+      id: node.id,
+      x: node.x,
+      y: node.y,
+      z: node.z,
+      parentAttachX: node.parentAttachX,
+      parentAttachY: node.parentAttachY,
+      parentAttachZ: node.parentAttachZ,
+    }));
+  }
+
+  /** T06: broadcast what the damage pipeline did this tick. */
+  private processDamageEvents(): void {
+    const events = this.damagePipeline?.drainEvents() ?? [];
+    const tick = this.getTick();
+    for (const event of events) {
+      try {
+        switch (event.kind) {
+          case 'damage':
+            this.plantEventLog.append(event.plantId, {
+              type: 'damage',
+              tick,
+              data: {
+                source: event.source,
+                amount: event.amount,
+                nodeId: event.nodeId,
+                destroyedNodeIds: event.destroyedNodeIds,
+                totalBiomass: event.totalBiomass,
+              },
+            });
+            this.broadcast(MESSAGE_TYPE.PLANT_DAMAGE, {
+              plantId: event.plantId,
+              nodeId: event.nodeId,
+              destroyedNodeIds: event.destroyedNodeIds,
+              source: event.source,
+              amount: event.amount,
+              totalBiomass: event.totalBiomass,
+              damageHp: event.damageHp,
+              structuralThreshold: event.structuralThreshold,
+            });
+            break;
+          case 'uproot':
+            this.plantEventLog.append(event.plantId, {
+              type: 'uproot',
+              tick,
+              data: {
+                cause: event.cause,
+                phase: event.phase,
+                tiltRad: event.tiltRad,
+                headingRad: event.headingRad,
+              },
+            });
+            this.broadcast(MESSAGE_TYPE.PLANT_UPROOT, {
+              plantId: event.plantId,
+              phase: event.phase,
+              cause: event.cause,
+              x: event.x,
+              y: event.y,
+              z: event.z,
+              tiltRad: event.tiltRad,
+              headingRad: event.headingRad,
+              windowRemainingS: event.windowRemainingS,
+              nodes: this.plantNodeTransforms(event.plantId),
+            });
+            break;
+          case 'reroot':
+            this.plantEventLog.append(event.plantId, {
+              type: 'reroot',
+              tick,
+              data: { x: event.x, y: event.y, z: event.z },
+            });
+            this.broadcast(MESSAGE_TYPE.PLANT_UPROOT, {
+              plantId: event.plantId,
+              phase: 'rooted',
+              x: event.x,
+              y: event.y,
+              z: event.z,
+              tiltRad: 0,
+              headingRad: 0,
+              windowRemainingS: 0,
+              nodes: this.plantNodeTransforms(event.plantId),
+            });
+            break;
+          case 'fauna':
+            this.broadcast(MESSAGE_TYPE.FAUNA_EVENT, {
+              phase: event.phase,
+              x: event.x,
+              z: event.z,
+              radiusM: event.radiusM,
+            });
+            break;
+          case 'drop':
+            this.broadcast(MESSAGE_TYPE.DROP_SPAWN, event.drop);
+            break;
+          case 'drop_expired':
+            this.broadcast(MESSAGE_TYPE.DROP_EXPIRED, { id: event.id });
+            break;
+          case 'kill_credit':
+            this.broadcast(MESSAGE_TYPE.KILL_CREDIT, {
+              plantId: event.plantId,
+              credit: event.credit,
+            });
+            break;
+        }
+      } catch (error) {
+        this.log.error('damage event broadcast failed', {
+          kind: event.kind,
+          error: String(error),
+        });
+      }
+    }
+
+    // Upkeep, thirst and hunger losses are damage too. They used to reach the
+    // wire not at all: only the damage pipeline broadcast PLANT_DAMAGE, so a
+    // wilting plant shrank in silence. One message per plant per tick, because
+    // the losses themselves are already batched in PlantWorld.
+    for (const shed of this.plantWorld.drainShedDamage()) {
+      this.broadcast(MESSAGE_TYPE.PLANT_DAMAGE, {
+        plantId: shed.plantId,
+        nodeId: null,
+        destroyedNodeIds: [],
+        source: 'starvation',
+        amount: Number(shed.amount.toFixed(3)),
+        totalBiomass: Number(shed.totalBiomass.toFixed(3)),
       });
     }
   }
@@ -583,6 +803,8 @@ class World {
     reportConfig: ReportConfig,
     seasonLengthDays = 36,
     terrain: TerrainService | null = null,
+    eventLogCompactionThreshold = 10000,
+    initialEvents: Map<string, PlantEvent[]> = new Map(),
   ) {
     this.config = config;
     this.log = log;
@@ -594,6 +816,10 @@ class World {
     this.terrain = terrain;
     this.maxFrameTimeMs = maxFrameTimeMs;
     this.persistenceEnabled = persistenceEnabled;
+    this.plantEventLog = new PlantEventLog(eventLogCompactionThreshold);
+    for (const [plantId, events] of initialEvents) {
+      this.plantEventLog.seed(plantId, events);
+    }
     this.itemsConfig = itemsConfig;
     this.chatConfig = chatConfig;
     this.reportConfig = reportConfig;
@@ -695,7 +921,7 @@ class World {
   }
 
   /** Consume the death notice for a plant id, if it died in the world. */
-  takeLostPlantReport(plantId: string): { cause: string; at: number } | null {
+  takeLostPlantReport(plantId: string): { cause: string; source?: string; at: number } | null {
     const report = this.lostPlantReportsByPlant.get(plantId);
     if (!report) return null;
     this.lostPlantReportsByPlant.delete(plantId);
@@ -778,35 +1004,9 @@ class World {
         : { id: rootNodeId ?? '', x: 0, y: 0, z: 0, type: 'root', biomass: 0 },
       totalBiomass: plant.totalBiomass,
       totalEnergy: plant.totalEnergy,
-      nodes: Array.from(plant.nodes.values()).map((n) => ({
-        id: n.id,
-        plantId: n.plantId,
-        type: n.type,
-        layer: n.layer,
-        x: n.x,
-        y: n.y,
-        z: n.z,
-        biomass: n.biomass,
-        age: n.age,
-        parentId: n.parentId,
-        children: n.children,
-        statModifiers: n.statModifiers,
-        resourceDrawWater: n.resourceDrawWater,
-        resourceDrawNutrients: n.resourceDrawNutrients,
-        upkeepBiomassPerSecond: n.upkeepBiomassPerSecond,
-        growthDirectionBias: n.growthDirectionBias,
-        lastGrowthTick: n.lastGrowthTick,
-        growthProgress: n.growthProgress ?? 1.0,
-        isSeed: n.isSeed ?? false,
-        targetX: n.targetX,
-        targetY: n.targetY,
-        targetZ: n.targetZ,
-        parentAttachX: n.parentAttachX,
-        parentAttachY: n.parentAttachY,
-        parentAttachZ: n.parentAttachZ,
-        growthTimeSeconds: n.growthTimeSeconds,
-        growthStartTick: n.growthStartTick,
-      })),
+      nodes: Array.from(plant.nodes.values()).map((n) =>
+        nodeWireFields(n, this.plantWorld.getNodeHealth(plant.id, n.id)),
+      ),
     };
   }
 
@@ -871,6 +1071,7 @@ class World {
         this.lostPlantReports.delete(accountId);
         welcome.previousPlantDied = {
           cause: loss.cause,
+          source: loss.source,
           secondsAgo: Math.max(0, Math.round((Date.now() - loss.at) / 1000)),
         };
       }
@@ -952,12 +1153,14 @@ class World {
     if (disconnectedPlantId && this.plantPersistence) {
       const disconnectedPlant = this.plantWorld.getPlant(disconnectedPlantId);
       if (disconnectedPlant) {
-        this.plantPersistence.savePlant(disconnectedPlant).catch((error: unknown) => {
-          this.log.error('plant save on disconnect failed', {
-            plantId: disconnectedPlantId,
-            error: String(error),
+        this.plantPersistence
+          .savePlant(disconnectedPlant, this.plantEventLog.get(disconnectedPlantId))
+          .catch((error: unknown) => {
+            this.log.error('plant save on disconnect failed', {
+              plantId: disconnectedPlantId,
+              error: String(error),
+            });
           });
-        });
       }
     }
 
@@ -1062,35 +1265,9 @@ class World {
         : { id: rootNodeId ?? '', x: 0, y: 0, z: 0, type: 'root', biomass: 0 },
       totalBiomass: plant.totalBiomass,
       totalEnergy: plant.totalEnergy,
-      nodes: Array.from(plant.nodes.values()).map((n) => ({
-        id: n.id,
-        plantId: n.plantId,
-        type: n.type,
-        layer: n.layer,
-        x: n.x,
-        y: n.y,
-        z: n.z,
-        biomass: n.biomass,
-        age: n.age,
-        parentId: n.parentId,
-        children: n.children,
-        statModifiers: n.statModifiers,
-        resourceDrawWater: n.resourceDrawWater,
-        resourceDrawNutrients: n.resourceDrawNutrients,
-        upkeepBiomassPerSecond: n.upkeepBiomassPerSecond,
-        growthDirectionBias: n.growthDirectionBias,
-        lastGrowthTick: n.lastGrowthTick,
-        growthProgress: n.growthProgress ?? 1.0,
-        isSeed: n.isSeed ?? false,
-        targetX: n.targetX,
-        targetY: n.targetY,
-        targetZ: n.targetZ,
-        parentAttachX: n.parentAttachX,
-        parentAttachY: n.parentAttachY,
-        parentAttachZ: n.parentAttachZ,
-        growthTimeSeconds: n.growthTimeSeconds,
-        growthStartTick: n.growthStartTick,
-      })),
+      nodes: Array.from(plant.nodes.values()).map((n) =>
+        nodeWireFields(n, this.plantWorld.getNodeHealth(plant.id, n.id)),
+      ),
     };
 
     this.attachAwaySummary(welcome, plant);
@@ -1262,35 +1439,9 @@ class World {
         : { id: rootNodeId ?? '', x: 0, y: 0, z: 0, type: 'root', biomass: 0 },
       totalBiomass: plant.totalBiomass,
       totalEnergy: plant.totalEnergy,
-      nodes: Array.from(plant.nodes.values()).map((n) => ({
-        id: n.id,
-        plantId: n.plantId,
-        type: n.type,
-        layer: n.layer,
-        x: n.x,
-        y: n.y,
-        z: n.z,
-        biomass: n.biomass,
-        age: n.age,
-        parentId: n.parentId,
-        children: n.children,
-        statModifiers: n.statModifiers,
-        resourceDrawWater: n.resourceDrawWater,
-        resourceDrawNutrients: n.resourceDrawNutrients,
-        upkeepBiomassPerSecond: n.upkeepBiomassPerSecond,
-        growthDirectionBias: n.growthDirectionBias,
-        lastGrowthTick: n.lastGrowthTick,
-        growthProgress: n.growthProgress ?? 1.0,
-        isSeed: n.isSeed ?? false,
-        targetX: n.targetX,
-        targetY: n.targetY,
-        targetZ: n.targetZ,
-        parentAttachX: n.parentAttachX,
-        parentAttachY: n.parentAttachY,
-        parentAttachZ: n.parentAttachZ,
-        growthTimeSeconds: n.growthTimeSeconds,
-        growthStartTick: n.growthStartTick,
-      })),
+      nodes: Array.from(plant.nodes.values()).map((n) =>
+        nodeWireFields(n, this.plantWorld.getNodeHealth(plant.id, n.id)),
+      ),
     };
 
     this.attachAwaySummary(welcome, plant);
@@ -1365,6 +1516,18 @@ class World {
     this.send(player.ws, MESSAGE_TYPE.INVENTORY_SYNC, {
       slots,
       maxSlots: player.inventory.maxSlots,
+      // The definitions travel with the slots. The client used to have only an
+      // item id, so it drew "Starter Dung" from a table it invented and had no
+      // description to show at all. Sending the server's own definition means
+      // the panel can never describe an effect the server would not perform.
+      definitions: Array.from(this.itemsConfig.itemDefinitions.values()).map((def) => ({
+        id: def.id,
+        name: def.name,
+        description: def.description,
+        category: def.category,
+        stackLimit: def.stack_limit,
+        use: def.use,
+      })),
     });
   }
 
@@ -1390,55 +1553,48 @@ class World {
     const itemDef = this.itemsConfig.itemDefinitions.get(slot.itemId);
     if (!itemDef) return;
 
-    // Handle different item types
-    if (itemDef.category === 'fertilizer' || itemDef.category === 'dung') {
-      // Consumable that affects the plant's resources
-      if (!player.plantId) return;
-      const plant = this.plantWorld.getPlant(player.plantId);
-      if (!plant) return;
-
-      if (itemDef.category === 'fertilizer') {
-        plant.storedMinerals += this.itemsConfig.effects.fertilizerMineralsGain;
-      } else if (itemDef.category === 'dung') {
-        plant.storedWater += this.itemsConfig.effects.dungWaterGain;
-        plant.storedMinerals += this.itemsConfig.effects.dungMineralsGain;
-      }
-      clampPlantStorage(plant, this.plantWorld.getConfig());
-
-      // Enrich the soil under the root too: `dung_deposit` and
-      // `fertilizer_deposit` were configured but never applied, because nothing
-      // ever called these two methods.
-      const rootNode = plant.rootNodeId != null ? plant.nodes.get(plant.rootNodeId) : undefined;
-      if (rootNode) {
-        if (itemDef.category === 'fertilizer') {
-          this.resourceWorld.onFertilizerApplied(rootNode.x, rootNode.z);
-        } else {
-          this.resourceWorld.onDungApplied(rootNode.x, rootNode.z);
-        }
-      }
-
-      // Remove one from inventory
-      this.removeItemFromInventory(player, slotIndex, 1);
-      this.sendInventorySlotUpdate(player, slotIndex);
-
-      this.log.info('Item used', {
-        playerId: player.playerId,
-        itemId: slot.itemId,
-        category: itemDef.category,
+    // One handler for every item. The definition owns what Use does; an item
+    // that cannot be used yet says so out loud instead of the old silent no-op
+    // (gene boosters and both seed types were clicked into a void).
+    if (itemDef.use.kind !== 'resources') {
+      this.send(player.ws, MESSAGE_TYPE.REJECT, {
+        reason: 'item_not_usable',
+        originalType: MESSAGE_TYPE.INVENTORY_SLOT_USE,
       });
-    } else if (itemDef.category === 'essence') {
-      // Consumable that restores energy
-      if (!player.plantId) return;
-      const plant = this.plantWorld.getPlant(player.plantId);
-      if (!plant) return;
-
-      plant.totalEnergy += this.itemsConfig.effects.essenceEnergyGain;
-      clampPlantStorage(plant, this.plantWorld.getConfig());
-
-      this.removeItemFromInventory(player, slotIndex, 1);
-      this.sendInventorySlotUpdate(player, slotIndex);
+      return;
     }
-    // Other item types can be added here
+
+    if (!player.plantId) return;
+    const plant = this.plantWorld.getPlant(player.plantId);
+    if (!plant) return;
+
+    const use = itemDef.use;
+    if (use.water > 0) plant.storedWater += use.water;
+    if (use.minerals > 0) plant.storedMinerals += use.minerals;
+    if (use.energy > 0) plant.totalEnergy += use.energy;
+    clampPlantStorage(plant, this.plantWorld.getConfig());
+
+    // Enrich the soil under the root too: `dung_deposit` and
+    // `fertilizer_deposit` were configured but never applied, because nothing
+    // ever called these two methods.
+    const rootNode = plant.rootNodeId != null ? plant.nodes.get(plant.rootNodeId) : undefined;
+    if (rootNode) {
+      if (itemDef.category === 'fertilizer') {
+        this.resourceWorld.onFertilizerApplied(rootNode.x, rootNode.z);
+      } else if (itemDef.category === 'dung') {
+        this.resourceWorld.onDungApplied(rootNode.x, rootNode.z);
+      }
+    }
+
+    // Remove one from inventory
+    this.removeItemFromInventory(player, slotIndex, 1);
+    this.sendInventorySlotUpdate(player, slotIndex);
+
+    this.log.info('Item used', {
+      playerId: player.playerId,
+      itemId: slot.itemId,
+      category: itemDef.category,
+    });
   }
 
   private removeItemFromInventory(player: ConnectedPlayer, slotIndex: number, count: number): void {
@@ -1501,6 +1657,80 @@ class World {
           }
           break;
         }
+        case MESSAGE_TYPE.REROOT_INTENT: {
+          const player = this.players.get(playerId);
+          const intent = payload as { dirX?: number; dirZ?: number };
+          if (!player?.plantId) break;
+          if (typeof intent?.dirX !== 'number' || typeof intent?.dirZ !== 'number') break;
+          this.damagePipeline?.requestReroot(player.plantId, intent.dirX, intent.dirZ);
+          break;
+        }
+        case MESSAGE_TYPE.MUTATION_SHED: {
+          const shed = payload as { plantId?: string; mutationId?: string };
+          const player = this.players.get(playerId);
+          if (
+            player?.plantId &&
+            typeof shed?.mutationId === 'string' &&
+            shed.plantId === player.plantId
+          ) {
+            const result = this.plantWorld.shedMutation(
+              player.plantId,
+              shed.mutationId,
+              this.getTick(),
+            );
+            if (result.ok) {
+              this.sendMutationState(player);
+            } else {
+              this.send(player.ws, MESSAGE_TYPE.ERROR, {
+                code: result.reason ?? 'shed_refused',
+                message: 'Mutation was not shed',
+              });
+            }
+          }
+          break;
+        }
+        case MESSAGE_TYPE.MUTATION_LEVEL: {
+          const level = payload as { plantId?: string; mutationId?: string; cardId?: string };
+          const player = this.players.get(playerId);
+          if (
+            !player?.plantId ||
+            typeof level?.mutationId !== 'string' ||
+            level.plantId !== player.plantId
+          ) {
+            break;
+          }
+          // No card: deal the cards and let the panel show the choice. A card:
+          // take it, but only from the deal the server itself laid out.
+          if (typeof level.cardId === 'string') {
+            const result = this.plantWorld.chooseMutationLevel(
+              player.plantId,
+              level.mutationId,
+              level.cardId,
+              this.getTick(),
+            );
+            if (result.ok) {
+              this.sendMutationState(player);
+            } else {
+              this.send(player.ws, MESSAGE_TYPE.ERROR, {
+                code: result.reason ?? 'level_refused',
+                message: 'Mutation was not levelled',
+              });
+              // A refused choice still needs the panel back in sync: the deal may
+              // have gone stale (level reached, cost no longer affordable).
+              this.sendMutationState(player);
+            }
+          } else {
+            const deal = this.plantWorld.offerMutationLevel(player.plantId, level.mutationId);
+            if (!deal.ok) {
+              this.send(player.ws, MESSAGE_TYPE.ERROR, {
+                code: deal.reason ?? 'level_refused',
+                message: 'No cards were dealt for that mutation',
+              });
+            }
+            this.sendMutationState(player);
+          }
+          break;
+        }
         case MESSAGE_TYPE.PING: {
           const player = this.players.get(playerId);
           if (player) this.handlePing(player.ws);
@@ -1534,9 +1764,12 @@ class World {
                   totalBiomass: plant.totalBiomass,
                   storedWater: plant.storedWater,
                   storedMinerals: plant.storedMinerals,
-                  waterCapacity: computePlantCapacity(plant, this.plantWorld.getConfig()).water,
-                  mineralCapacity: computePlantCapacity(plant, this.plantWorld.getConfig())
-                    .minerals,
+                  waterCapacity:
+                    this.plantWorld.getPlantCapacity(plant.id)?.water ??
+                    computePlantCapacity(plant, this.plantWorld.getConfig()).water,
+                  mineralCapacity:
+                    this.plantWorld.getPlantCapacity(plant.id)?.minerals ??
+                    computePlantCapacity(plant, this.plantWorld.getConfig()).minerals,
                   coveredTileCount: this.resourceWorld.getCoveredTileCount(plant),
                   fullGrid: true,
                 });
@@ -1571,9 +1804,12 @@ class World {
                   totalBiomass: plant.totalBiomass,
                   storedWater: plant.storedWater,
                   storedMinerals: plant.storedMinerals,
-                  waterCapacity: computePlantCapacity(plant, this.plantWorld.getConfig()).water,
-                  mineralCapacity: computePlantCapacity(plant, this.plantWorld.getConfig())
-                    .minerals,
+                  waterCapacity:
+                    this.plantWorld.getPlantCapacity(plant.id)?.water ??
+                    computePlantCapacity(plant, this.plantWorld.getConfig()).water,
+                  mineralCapacity:
+                    this.plantWorld.getPlantCapacity(plant.id)?.minerals ??
+                    computePlantCapacity(plant, this.plantWorld.getConfig()).minerals,
                   coveredTileCount: this.resourceWorld.getCoveredTileCount(plant),
                 });
               }
@@ -1602,6 +1838,13 @@ class World {
               totalBiomass: p.totalBiomass,
               totalEnergy: p.totalEnergy,
               totalUpkeep: p.totalUpkeep,
+              appearance: this.plantWorld.getPlantAppearance(p.id) ?? undefined,
+              pigment: this.plantWorld.getPlantPigment(p.id) ?? undefined,
+              // Display names, so a rival (or a gallery plant) can carry a tag
+              // with the mutation it expresses.
+              mutations: (
+                this.plantWorld.getMutationState(p.id, this.getTick())?.mutations ?? []
+              ).map((mutation) => mutation.name),
               nodes: Array.from(p.nodes.values()).map((n) => ({
                 id: n.id,
                 plantId: n.plantId,
@@ -1611,6 +1854,7 @@ class World {
                 y: n.y,
                 z: n.z,
                 biomass: n.biomass,
+                health: this.plantWorld.getNodeHealth(p.id, n.id),
                 age: n.age,
                 parentId: n.parentId,
                 children: n.children,
@@ -1622,6 +1866,7 @@ class World {
                 lastGrowthTick: n.lastGrowthTick,
                 growthProgress: n.growthProgress ?? 1.0,
                 isSeed: n.isSeed ?? false,
+                mutationFlags: n.mutationFlags ?? 0,
                 targetX: n.targetX,
                 targetY: n.targetY,
                 targetZ: n.targetZ,
@@ -1944,6 +2189,13 @@ class World {
     );
 
     this.plantWorld.step(dt, onlinePlantIds, tick);
+    for (const transition of this.plantWorld.drainTierTransitions()) {
+      this.plantEventLog.append(transition.plantId, {
+        type: 'tier_change',
+        tick,
+        data: { from: transition.oldTier, to: transition.newTier },
+      });
+    }
 
     this.processPlantGrowthEvents();
     this.processPlantDeaths();
@@ -1959,6 +2211,18 @@ class World {
     }
     this.weatherSystem.update(dt);
     const weatherBroadcast = this.weatherSystem.getBroadcast();
+
+    // T06 runs after the weather has advanced so a gust and a lightning strike
+    // use this tick's state, and before the resource pass so a plant that died
+    // is no longer drawing water.
+    this.damagePipeline?.tick(dt, tick);
+    this.processDamageEvents();
+    this.processPlantDeaths();
+    this.processDamageEvents();
+    // A plant killed by damage must not keep drawing water this tick.
+    for (const plantId of plantsForResource.keys()) {
+      if (!this.plantWorld.getPlant(plantId)) plantsForResource.delete(plantId);
+    }
 
     this.resourceWorld.step(
       dt,
@@ -1981,6 +2245,7 @@ class World {
       totalBiomass: number;
       totalEnergy: number;
       totalUpkeep: number;
+      structure?: { damageHp: number; threshold: number };
     }> = [];
     for (const player of this.players.values()) {
       if (!player.plantId) continue;
@@ -1991,6 +2256,7 @@ class World {
           totalBiomass: plant.totalBiomass,
           totalEnergy: plant.totalEnergy,
           totalUpkeep: plant.totalUpkeep,
+          structure: this.damagePipeline?.getStructure(plant.id, plant.totalBiomass),
         });
       }
     }
@@ -2006,6 +2272,16 @@ class World {
       if (root) plantPositions.set(state.id, { x: root.x, z: root.z });
     }
     const stateType = isKeyframe ? MESSAGE_TYPE.KEYFRAME : MESSAGE_TYPE.STATE;
+    // Honour the configured wire rate. A keyframe is always sent on its own
+    // interval even when the state cadence is slower, so a late joiner and a
+    // reconnecting client still get a full snapshot.
+    const stateStep = stepCadence(
+      this.stateCadenceAccumulatorMs,
+      dt * 1000,
+      this.config.clientSendRateHz,
+    );
+    this.stateCadenceAccumulatorMs = stateStep.nextAccumulatorMs;
+    const sendStateNow = isKeyframe || stateStep.due;
     const payloadFor = (playerId: string, ownPlantId: string | null) => ({
       tick,
       plants: plantStates.filter((state) => {
@@ -2019,6 +2295,11 @@ class World {
       tileSize: this.resourceWorld.getTileSize(),
     });
     for (const player of this.players.values()) {
+      if (!sendStateNow) {
+        this.stateMessagesSkipped += 1;
+        continue;
+      }
+      this.stateMessagesSent += 1;
       this.writeIfHealthy(
         player.ws,
         JSON.stringify({ type: stateType, payload: payloadFor(player.playerId, player.plantId) }),
@@ -2065,6 +2346,13 @@ class World {
 
     for (const player of this.players.values()) {
       if (!player.plantId) continue;
+      // The root readout rides the state cadence; it is the largest per-player
+      // payload on the hot path and the client cannot use it faster than the
+      // state it belongs to.
+      if (!sendStateNow) {
+        this.rootMessagesSkipped += 1;
+        continue;
+      }
       const plant = this.plantWorld.getPlant(player.plantId);
       if (!plant) continue;
 
@@ -2074,7 +2362,9 @@ class World {
       const coverage = this.resourceWorld.getPlantTileCoverage(plant);
       if (coverage.count === 0) continue;
 
-      const capacity = computePlantCapacity(plant, this.plantWorld.getConfig());
+      const capacity =
+        this.plantWorld.getPlantCapacity(plant.id) ??
+        computePlantCapacity(plant, this.plantWorld.getConfig());
       const snapshot: RootResourceSnapshot = {
         totalEnergy: plant.totalEnergy,
         totalBiomass: plant.totalBiomass,
@@ -2090,7 +2380,19 @@ class World {
           coverage.avgGroundwater / Math.max(1e-6, this.resourceWorld.getGroundwaterCapacity()),
         coverageTileX: coverage.sample?.tileX ?? 0,
         coverageTileZ: coverage.sample?.tileZ ?? 0,
+        // The table moves on a slower clock than plant stores, so the grid is
+        // rebuilt twice a second and the revision is what makes the snapshot
+        // differ enough to be sent.
+        waterTableRevision: Math.floor(tick / 10),
       };
+      const rootNode = plant.rootNodeId ? plant.nodes.get(plant.rootNodeId) : undefined;
+      const waterTable =
+        snapshot.waterTableRevision !== this.lastWaterTableRevision.get(player.playerId) && rootNode
+          ? this.buildWaterTableGrid(rootNode.x, rootNode.z)
+          : undefined;
+      if (waterTable) {
+        this.lastWaterTableRevision.set(player.playerId, snapshot.waterTableRevision);
+      }
 
       // Skip a repeat only. The comparison is exact, so a payload is dropped only
       // when the client already holds every one of these values; nothing is
@@ -2105,6 +2407,7 @@ class World {
           payload: {
             tick,
             ...snapshot,
+            waterTable,
             width: this.resourceWorld.getWidth(),
             height: this.resourceWorld.getHeight(),
             tileSize: this.resourceWorld.getTileSize(),
@@ -2115,10 +2418,21 @@ class World {
       if (sent) this.lastRootResourceUpdate.set(player.playerId, snapshot);
     }
 
-    this.broadcast(MESSAGE_TYPE.WEATHER_UPDATE, {
-      tick,
-      ...weatherBroadcast,
-    });
+    const weatherStep = stepCadence(
+      this.weatherCadenceAccumulatorMs,
+      dt * 1000,
+      this.config.weatherSendRateHz,
+    );
+    this.weatherCadenceAccumulatorMs = weatherStep.nextAccumulatorMs;
+    if (weatherStep.due) {
+      this.weatherMessagesSent += 1;
+      this.broadcast(MESSAGE_TYPE.WEATHER_UPDATE, {
+        tick,
+        ...weatherBroadcast,
+      });
+    } else {
+      this.weatherMessagesSkipped += 1;
+    }
 
     this.updateSeason(tick);
   }
@@ -2147,8 +2461,41 @@ class World {
       prev.tileAvgMinerals === next.tileAvgMinerals &&
       prev.groundwaterFraction === next.groundwaterFraction &&
       prev.coverageTileX === next.coverageTileX &&
-      prev.coverageTileZ === next.coverageTileZ
+      prev.coverageTileZ === next.coverageTileZ &&
+      prev.waterTableRevision === next.waterTableRevision
     );
+  }
+
+  /**
+   * A coarse water-table height field around a point, for the client's water
+   * surface. Forty-eight cells of two metres cover the play area at a cost of
+   * one float per cell, updated twice a second — the same information the
+   * simulation already holds, not a rendering guess.
+   */
+  private buildWaterTableGrid(
+    centreX: number,
+    centreZ: number,
+  ): { originX: number; originZ: number; cellSizeM: number; cells: number; heightsBase64: string } {
+    const cells = 48;
+    const cellSizeM = 2;
+    const originX = centreX - (cells / 2) * cellSizeM;
+    const originZ = centreZ - (cells / 2) * cellSizeM;
+    const heights = new Float32Array(cells * cells);
+    for (let j = 0; j < cells; j += 1) {
+      for (let i = 0; i < cells; i += 1) {
+        heights[j * cells + i] = this.resourceWorld.getWaterTableHeightAt(
+          originX + (i + 0.5) * cellSizeM,
+          originZ + (j + 0.5) * cellSizeM,
+        );
+      }
+    }
+    return {
+      originX,
+      originZ,
+      cellSizeM,
+      cells,
+      heightsBase64: Buffer.from(new Uint8Array(heights.buffer)).toString('base64'),
+    };
   }
 
   /** Root position used for proximity chat range checks. */
@@ -2250,6 +2597,18 @@ class World {
             totalEnergy: plant?.totalEnergy ?? 0,
             growthSeq: plant?.growthSeq ?? 0,
           };
+          for (const node of result.newNodes ?? (result.newNode ? [result.newNode] : [])) {
+            this.plantEventLog.append(intent.plantId, {
+              type: 'growth',
+              tick: currentTick,
+              data: {
+                nodeId: node.id,
+                nodeType: node.type,
+                parentId: node.parentId,
+                totalBiomass: plant?.totalBiomass ?? 0,
+              },
+            });
+          }
           // A growth that only updates the parent (germination finishing, for
           // instance) has no new node, and the old anchor check then broadcast
           // nothing, so the client never saw the update. Fall back to the parent.
@@ -2257,6 +2616,9 @@ class World {
           if (anchor) {
             this.broadcastNear(MESSAGE_TYPE.GROWTH_EVENT, growthPayload, anchor.x, anchor.z);
           }
+          // A growth is also a mutation roll (T04); the owner needs the new set
+          // even when the roll failed, because upkeep and pressure changed.
+          this.sendMutationState(player);
 
           // Register new nodes as entities in InterestManager
           if (result.newNode) {
@@ -2446,8 +2808,20 @@ class World {
           break;
         }
         case 'dev_set_tile': {
-          const x = action.x as number;
-          const z = action.z as number;
+          // Tile indices are what the store wants, but a caller that only knows
+          // where it is standing (a script, the pad's world point) should not
+          // have to invent the grid maths: world coordinates are converted here.
+          let x = action.x as number;
+          let z = action.z as number;
+          if (
+            (x === undefined || z === undefined) &&
+            typeof action.worldX === 'number' &&
+            typeof action.worldZ === 'number'
+          ) {
+            const tile = this.resourceWorld.getTileCoordinates(action.worldX, action.worldZ);
+            x = tile.tileX;
+            z = tile.tileZ;
+          }
           if (x !== undefined && z !== undefined) {
             const resources: Record<string, number> = {};
             if (action.light !== undefined) resources.light = action.light as number;
@@ -2485,6 +2859,46 @@ class World {
           this.sendDevResponse(ws, action.type, { ok: true });
           break;
         }
+        case 'dev_mutation_gallery': {
+          if (!plant) {
+            noPlant();
+            break;
+          }
+          // Put the row in front of the player who asked for it, far enough
+          // back that a mature body does not stand on their own plant.
+          const crown = plant.rootNodeId ? plant.nodes.get(plant.rootNodeId) : undefined;
+          const gallery = this.plantWorld.buildMutationGallery(plant.worldId, 8, 10, {
+            x: crown?.x ?? 0,
+            z: (crown?.z ?? 0) - 16,
+          });
+          this.sendDevResponse(ws, action.type, { ok: true, ...gallery });
+          break;
+        }
+        case 'dev_grant_mutation': {
+          if (!plant || !player?.plantId) {
+            noPlant();
+            break;
+          }
+          const mutationId = typeof action.mutationId === 'string' ? action.mutationId : '';
+          const granted = this.plantWorld.grantMutation(player.plantId, mutationId, this.getTick());
+          if (granted.ok) this.sendMutationState(player);
+          this.sendDevResponse(ws, action.type, {
+            ok: granted.ok,
+            reason: granted.reason,
+            mutationId,
+          });
+          break;
+        }
+        case 'dev_clear_mutations': {
+          if (!plant || !player?.plantId) {
+            noPlant();
+            break;
+          }
+          const cleared = this.plantWorld.clearMutations(player.plantId, this.getTick());
+          this.sendMutationState(player);
+          this.sendDevResponse(ws, action.type, { ok: true, cleared });
+          break;
+        }
         case 'dev_fill_energy': {
           if (!plant) {
             noPlant();
@@ -2499,11 +2913,136 @@ class World {
             noPlant();
             break;
           }
-          plant.totalBiomass =
-            this.plantWorld.getConfig().maxNodesPerPlant *
-            this.plantWorld.getConfig().nodeCostBase *
-            10;
-          this.sendDevResponse(ws, action.type, { ok: true });
+          const filled = this.plantWorld.fillPlantTissue(plant.id);
+          this.sendDevResponse(ws, action.type, { ok: true, totalBiomass: filled });
+          break;
+        }
+        case 'dev_set_time': {
+          // The sun is server-authoritative: a client-side setTimeOfDay is
+          // overwritten by the very next weather broadcast, which is why the
+          // world sat at 04:00 while the renderer was told it was afternoon.
+          // Moving the world clock here is the only way to get daylight on
+          // demand for a screenshot.
+          const fraction = Number(action.time_of_day);
+          if (!Number.isFinite(fraction)) {
+            this.sendDevResponse(ws, action.type, { ok: false, reason: 'bad_time' });
+            break;
+          }
+          this.weatherSystem.setTimeOfDay(fraction);
+          const moved = this.weatherSystem.getBroadcast();
+          this.sendDevResponse(ws, action.type, {
+            ok: true,
+            timeOfDay: moved.timeOfDay,
+            isDay: moved.isDay,
+            sunIntensity: moved.sunIntensity,
+          });
+          break;
+        }
+        case 'dev_grow_roots': {
+          // Root Sight only has something to excavate once the plant has pushed
+          // roots down, and growing them by hand takes minutes of play. This
+          // grows a chain of real root nodes through the same `tryGrow` the
+          // player's growth menu uses, so the skeleton, tunnels and cavity the
+          // screenshots show are the real thing.
+          if (!plant || !player?.plantId) {
+            noPlant();
+            break;
+          }
+          const steps = Math.max(1, Math.min(24, Number(action.count) || 6));
+          const grown: string[] = [];
+          const rejected: string[] = [];
+          for (let step = 0; step < steps; step += 1) {
+            const live = this.plantWorld.getPlant(player.plantId);
+            if (!live) {
+              rejected.push('plant_gone');
+              break;
+            }
+            live.growthCooldownUntil = this.getTick();
+            live.totalEnergy = Math.max(live.totalEnergy, 400);
+            live.storedWater = Math.max(live.storedWater, 40);
+            live.storedMinerals = Math.max(live.storedMinerals, 40);
+            const roots = Array.from(live.nodes.values()).filter(
+              (node) => node.type === 'root' || node.type === 'radicle',
+            );
+            const crown = live.rootNodeId ? live.nodes.get(live.rootNodeId) : undefined;
+            const parent = roots.length > 0 ? roots.sort((a, b) => a.y - b.y)[0] : crown;
+            if (!parent) {
+              rejected.push('no_parent');
+              break;
+            }
+            const angle = step * 2.399;
+            const result = this.plantWorld.tryGrow(
+              {
+                plantId: live.id,
+                nodeId: parent.id,
+                direction: { x: Math.cos(angle) * 0.5, y: -0.8, z: Math.sin(angle) * 0.5 },
+                // A radicle is the only thing a seed may grow downwards, and
+                // after it the root layer offers lateral roots (not `root`).
+                nodeType: roots.length > 0 ? 'lateral_root' : 'radicle',
+                tick: this.getTick(),
+                attachFraction: 1,
+              },
+              this.getTick(),
+            );
+            if (!result.success) {
+              rejected.push(result.reason ?? 'growth_failed');
+              break;
+            }
+            if (result.newNode) grown.push(result.newNode.id);
+            const after = this.plantWorld.getPlant(live.id);
+            this.broadcastNear(
+              MESSAGE_TYPE.GROWTH_EVENT,
+              {
+                plantId: live.id,
+                newNode: result.newNode,
+                newNodes: result.newNodes,
+                updatedParentNode: result.updatedParentNode,
+                totalBiomass: after?.totalBiomass ?? 0,
+                totalEnergy: after?.totalEnergy ?? 0,
+                growthSeq: after?.growthSeq ?? 0,
+              },
+              result.newNode?.x ?? live.nodes.get(live.rootNodeId ?? '')?.x ?? 0,
+              result.newNode?.z ?? live.nodes.get(live.rootNodeId ?? '')?.z ?? 0,
+            );
+          }
+          this.sendDevResponse(ws, action.type, { ok: true, grown, rejected });
+          break;
+        }
+        case 'dev_fill_resources': {
+          // Energy and biomass alone cannot buy growth: `canGrow` also gates on
+          // the plant's own captured water and minerals, which only accumulate
+          // by absorption over time. Without this action a dev-driven growth
+          // chain stalls at the first post-establishment node and looks broken.
+          if (!plant) {
+            noPlant();
+            break;
+          }
+          const capacity = computePlantCapacity(plant, this.plantWorld.getConfig());
+          plant.storedWater = capacity.water;
+          plant.storedMinerals = capacity.minerals;
+          this.sendDevResponse(ws, action.type, {
+            ok: true,
+            water: capacity.water,
+            minerals: capacity.minerals,
+          });
+          break;
+        }
+        case 'dev_grant_item': {
+          // Every item in config/items.json should be readable in the panel, but
+          // only three are in a starting pouch and there is no other grant path.
+          // Without this action half the definitions could not be seen at all.
+          if (!player) {
+            noPlant();
+            break;
+          }
+          const itemId = typeof action.itemId === 'string' ? action.itemId : '';
+          const count =
+            typeof action.count === 'number' && Number.isFinite(action.count)
+              ? Math.floor(action.count)
+              : 1;
+          const added = addItem(player.inventory, itemId, count, this.itemsConfig.itemDefinitions);
+          this.sendInventorySync(player);
+          this.sendDevResponse(ws, action.type, { ok: added > 0, itemId, added });
           break;
         }
         case 'dev_kill_plant': {
@@ -2515,6 +3054,77 @@ class World {
           // Settle the death now: the broadcast normally waits for the next tick,
           // so with the simulation paused the client never heard about it.
           this.processPlantDeaths();
+          this.processDamageEvents();
+          this.sendDevResponse(ws, action.type, { ok: true });
+          break;
+        }
+        case 'dev_damage_plant': {
+          if (!plant || !player?.plantId || !this.damagePipeline) {
+            noPlant();
+            break;
+          }
+          const amount =
+            typeof action.amount === 'number'
+              ? action.amount
+              : this.damagePipeline.getConfig().damage.toolDamagePerHit;
+          this.damagePipeline.applyDamage(player.plantId, amount, 'tool', this.getTick(), {
+            playerId: player.playerId,
+          });
+          this.processDamageEvents();
+          this.processPlantDeaths();
+          this.processDamageEvents();
+          this.sendDevResponse(ws, action.type, { ok: true, amount });
+          break;
+        }
+        case 'dev_uproot_plant': {
+          if (!plant || !player?.plantId || !this.damagePipeline) {
+            noPlant();
+            break;
+          }
+          const cause =
+            action.cause === 'saturation' ||
+            action.cause === 'gust' ||
+            action.cause === 'collapse' ||
+            action.cause === 'structural_damage'
+              ? action.cause
+              : 'gust';
+          const uprooted = this.damagePipeline.forceUproot(player.plantId, cause, this.getTick());
+          this.processDamageEvents();
+          this.sendDevResponse(ws, action.type, { ok: uprooted, cause });
+          break;
+        }
+        case 'dev_reroot': {
+          if (!plant || !player?.plantId || !this.damagePipeline) {
+            noPlant();
+            break;
+          }
+          const dirX = typeof action.dirX === 'number' ? action.dirX : 1;
+          const dirZ = typeof action.dirZ === 'number' ? action.dirZ : 0;
+          const steered = this.damagePipeline.requestReroot(player.plantId, dirX, dirZ);
+          this.sendDevResponse(ws, action.type, { ok: steered, dirX, dirZ });
+          break;
+        }
+        case 'dev_herbivore_swarm': {
+          if (!plant || !this.damagePipeline) {
+            noPlant();
+            break;
+          }
+          const root = plant.rootNodeId ? plant.nodes.get(plant.rootNodeId) : undefined;
+          this.damagePipeline.forceSwarm(root?.x ?? 0, root?.z ?? 0, this.getTick());
+          this.processDamageEvents();
+          this.sendDevResponse(ws, action.type, { ok: true });
+          break;
+        }
+        case 'dev_terrain_collapse': {
+          if (!plant || !this.damagePipeline) {
+            noPlant();
+            break;
+          }
+          const root = plant.rootNodeId ? plant.nodes.get(plant.rootNodeId) : undefined;
+          this.damagePipeline.forceCollapse(root?.x ?? 0, root?.z ?? 0, this.getTick());
+          this.processDamageEvents();
+          this.processPlantDeaths();
+          this.processDamageEvents();
           this.sendDevResponse(ws, action.type, { ok: true });
           break;
         }
@@ -2579,13 +3189,13 @@ class World {
           if (action.interest_ring_radius !== undefined)
             this.interestManager.setRingRadius(action.interest_ring_radius as number);
           // These three used to call InterestManager no-ops, so the controls did
-          // nothing. The active rate drives the tick clock and the plant tier
-          // rates; near/dormant only exist inside PlantWorld.
+          // nothing. The active rate changes the single simulation/wire clock,
+          // which also updates the plant tier rates; near/dormant only exist
+          // inside PlantWorld.
           if (action.active_tick_rate_hz !== undefined) {
             const hz = Number(action.active_tick_rate_hz);
             if (Number.isFinite(hz) && hz > 0) {
               this.setTickRate(hz);
-              this.plantWorld.setTierRates({ activeTickRateHz: hz });
             }
           }
           if (action.near_tick_rate_hz !== undefined) {
@@ -2602,7 +3212,13 @@ class World {
         case 'dev_force_save': {
           // This used to call a placeholder that saved nothing, and it ignored the
           // returned promise. Save for real, and report what actually landed.
-          saveAllPlants(this.plantWorld, this.getPlantPersistence(), this.log, 'dev_force_save')
+          saveAllPlants(
+            this.plantWorld,
+            this.getPlantPersistence(),
+            this.log,
+            'dev_force_save',
+            this.plantEventLog,
+          )
             .then((result) => this.sendDevResponse(ws, action.type, { ok: true, ...result }))
             .catch((error: unknown) =>
               this.sendDevResponse(ws, action.type, { ok: false, error: String(error) }),
@@ -2636,8 +3252,20 @@ class World {
           this.log.info('Dev: Network stats', {
             players: this.players.size,
             connections: connectionRegistryGetConnectionCount(this.connectionRegistry),
+            stateSent: this.stateMessagesSent,
+            stateSkipped: this.stateMessagesSkipped,
+            weatherSent: this.weatherMessagesSent,
+            weatherSkipped: this.weatherMessagesSkipped,
+            rootReadoutsSkipped: this.rootMessagesSkipped,
           });
-          this.sendDevResponse(ws, action.type, { ok: true });
+          this.sendDevResponse(ws, action.type, {
+            ok: true,
+            stateSent: this.stateMessagesSent,
+            stateSkipped: this.stateMessagesSkipped,
+            weatherSent: this.weatherMessagesSent,
+            weatherSkipped: this.weatherMessagesSkipped,
+            rootReadoutsSkipped: this.rootMessagesSkipped,
+          });
           break;
         }
         case 'dev_toggle_webgpu':
@@ -2788,7 +3416,23 @@ class World {
    */
   photosynthesizePlant(plant: import('@plant-legacy/shared/growth').Plant, seconds: number): void {
     if (!(seconds > 0)) return;
-    this.applyPhotosynthesis(this.plantResourceView(plant), plant, seconds);
+    // T04: diet/metabolism mutations change how much energy a second of light
+    // produces. Applied here, the one place photosynthesis is credited.
+    const gain = this.plantWorld.getMutationEffects(plant).photosynthesisMultiplier;
+    // T04 health: tissue that lost mass to drought or mineral shortage fixes
+    // less carbon. Derived from the parts, so wilting needs no second stat.
+    const health = this.plantWorld.getPhotosynthesisHealthMultiplier(plant);
+    // T06 detached survival: a plant torn out of the soil still catches light,
+    // but without root pressure it cannot fix carbon at the rooted rate. This is
+    // the quality-of-life cost of living unrooted, not a second death timer.
+    const detached = plant.uproot
+      ? (this.damagePipeline?.getConfig().uproot.detachedPhotosynthesisMultiplier ?? 1)
+      : 1;
+    this.applyPhotosynthesis(
+      this.plantResourceView(plant),
+      plant,
+      seconds * gain * health * detached,
+    );
   }
 
   getTick(): number {
@@ -2818,6 +3462,10 @@ class World {
     // leaves a second loop ticking the same world.
     tickClockStop(this.tickClock);
     this.config.tickRateHz = hz;
+    // The active plant tier runs on the same clock as the wire. Keeping a
+    // second rate here was how a dev tick-rate change left growth and damage
+    // integrating at the old rate.
+    this.plantWorld.setTierRates({ activeTickRateHz: hz });
     this.tickClock = createTickClock({
       tickRateHz: hz,
       maxFrameTimeMs: this.maxFrameTimeMs,
@@ -2900,6 +3548,17 @@ async function main(): Promise<void> {
         rimFadeFraction: value('rim_fade_fraction', 0.28),
         maxDepthM: value('max_depth_m', 12),
         soilDepthM: readNumber(configs, 'render', 'soil_depth_m'),
+        // The river is cut into the shared field, so the server's ground and the
+        // client's drawn ground are the same surface, channel included.
+        riverEnabled: terrainFlat.river_enabled !== false,
+        riverCenterZM: value('river_center_z_m', 0),
+        riverWidthM: value('river_width_m', 7),
+        riverDepthM: value('river_depth_m', 1.2),
+        riverPathCellM: value('river_path_cell_m', 2),
+        riverBankSlope: value('river_bank_slope', 0.9),
+        riverBankApronM: value('river_bank_apron_m', 12),
+        riverWaterDepthM: value('river_water_depth_m', 0.35),
+        riverLengthM: value('river_length_m', 320),
       },
       {
         cellSizeM: value('cell_size_m', 0.5),
@@ -2932,7 +3591,7 @@ async function main(): Promise<void> {
       maxY: 100,
     },
     {
-      activeTickRateHz: worldConfig.activeTickRateHz,
+      activeTickRateHz: netProtoConfig.tickRateHz,
       nearTickRateHz: worldConfig.nearTickRateHz,
       dormantStepIntervalSec: worldConfig.dormantStepIntervalSec,
       tickBudgetActiveShare: worldConfig.tickBudgetActiveShare,
@@ -2972,6 +3631,7 @@ async function main(): Promise<void> {
   // Groundwater drains along the terrain the world is drawn from, so a storm
   // fills hollows and pools there instead of raising every tile equally.
   resourceWorld.setSurfaceHeightProvider((x, z) => terrainService?.heightAt(x, z) ?? 0);
+  resourceWorld.setBaseHeightProvider((x, z) => terrainService?.baseHeightAt(x, z) ?? 0);
 
   // PlantWorld checks ambient tiles for germination/growth and debits them on
   // uptake, so tile supply and plant-owned stores stay one connected system.
@@ -2984,6 +3644,8 @@ async function main(): Promise<void> {
   // Persistence layer (T03)
   const worldId = 'world_0';
   let plantPersistence: PlantPersistence | null = null;
+  /** Loaded audit history, handed to the World once it exists. */
+  const loadedPlantEvents = new Map<string, PlantEvent[]>();
   if (database.pool && terrainService) {
     terrainPersistence = new TerrainPersistence(database.pool, worldId);
     try {
@@ -3008,10 +3670,11 @@ async function main(): Promise<void> {
         error: error instanceof Error ? error.message : String(error),
       });
     });
-    // Load existing plants
-    const loadedPlants = await plantPersistence.loadAllPlants();
+    // Load existing plants and their audit history (INV-PR-07).
+    const loadedPlants = await plantPersistence.loadAllPlantsWithEvents();
     let skippedPlants = 0;
-    for (const loaded of loadedPlants) {
+    for (const loadedEntry of loadedPlants) {
+      const loaded = loadedEntry.snapshot;
       // Reconstruct Plant from snapshot
       const plant = {
         id: loaded.id,
@@ -3029,12 +3692,18 @@ async function main(): Promise<void> {
         tier: loaded.tier,
         lastTick: loaded.lastTick,
         growthSeq: loaded.growthSeq ?? 0,
+        mutations: loaded.mutations,
+        mutationPressure: loaded.mutationPressure,
+        mutationShedCooldownUntil: loaded.mutationShedCooldownUntil,
+        mutationSignature: loaded.mutationSignature,
+        uproot: loaded.uproot,
       };
       // One unreadable snapshot must not stop the world from booting. A single
       // corrupt row used to throw out of module init, which is why the server
       // sometimes refused to start with no useful message.
       try {
         plantWorld.loadPlant(plant);
+        loadedPlantEvents.set(plant.id, loadedEntry.events);
       } catch (error) {
         skippedPlants += 1;
         log.error('skipping unreadable plant snapshot', {
@@ -3095,6 +3764,42 @@ async function main(): Promise<void> {
   const dayNightConfig = loadDayNightConfig(configs);
   const weatherSystem = new WeatherSystem(weatherConfig, dayNightConfig);
 
+  // T04 mutation rules. Acquisition lives in PlantWorld; the world supplies the
+  // environment each growth happened in (tiles, weather, day/night).
+  const mutationsConfig = loadMutationsConfig(configs);
+  plantWorld.setMutations(mutationsConfig);
+  plantWorld.setMutationEnvironmentProvider((x, z) => {
+    const tile = resourceWorld.getTileResources(x, z);
+    const broadcast = weatherSystem.getBroadcast();
+    return {
+      light: tile.light,
+      moisture: tile.moisture,
+      minerals: tile.minerals,
+      weather: broadcast.weatherState,
+      timeOfDay: broadcast.isDay ? 'day' : 'night',
+    };
+  });
+
+  // T06 damage pipeline: one owner for weather, tool, scripted fauna and
+  // terrain-collapse damage, uproot, tumbling, drops and kill credit.
+  const uprootConfig = loadUprootConfig(configs);
+  // T06 detached survival: whether a torn-free plant may keep growing. Read once
+  // so the growth menu and the charge can never disagree (INV-GR-13).
+  plantWorld.setDetachedGrowthEnabled(uprootConfig.detachedGrowthEnabled);
+  const damagePipeline = new DamagePipeline({
+    plantWorld,
+    resourceWorld,
+    terrain: terrainService,
+    damage: loadDamageConfig(configs),
+    uproot: uprootConfig,
+    tumbling: loadTumblingConfig(configs),
+    tickRateHz: netProtoConfig.tickRateHz,
+    getWeatherState: () => weatherSystem.getWeatherState(),
+    lightningFrequencyPerMinute: weatherConfig.lightningFrequencyPerMinute,
+    lightningRadiusM: weatherConfig.lightningDamageRadius,
+    log,
+  });
+
   const world = new World(
     netProtoConfig,
     log,
@@ -3111,10 +3816,13 @@ async function main(): Promise<void> {
     reportConfig,
     worldConfig.seasonLengthDays,
     terrainService,
+    worldConfig.eventLogCompactionThreshold,
+    loadedPlantEvents,
   );
   if (terrainService) {
     plantWorld.setGrowthResistanceProvider((x, y, z) => terrainService.growthResistanceAt(x, y, z));
   }
+  world.setDamagePipeline(damagePipeline);
 
   // Near and dormant plants are stepped inside PlantWorld, not in the online
   // loop, so they need the same photosynthesis the online loop applies. Without
@@ -3168,7 +3876,13 @@ async function main(): Promise<void> {
       }
       saveInFlight = true;
       try {
-        const result = await saveAllPlants(plantWorld, plantPersistence, log, 'periodic');
+        const result = await saveAllPlants(
+          plantWorld,
+          plantPersistence,
+          log,
+          'periodic',
+          world.getPlantEventLog(),
+        );
         // The calendar is cheap and must survive a crash between rollovers, so
         // it rides the same cadence as the plants. A failure here must not take
         // the plant-save loop down with it.
@@ -3393,7 +4107,18 @@ async function main(): Promise<void> {
           bounding_box_padding: values.bounding_box_padding?.value ?? 1.2,
         };
 
-        sendJson(response, 200, plantRendererConfig);
+        // Every entry in the file rides along. This route used to send only the
+        // names it listed, and those names are mostly not the file's: the client
+        // asks this payload for `l0_raymarch_steps`, `mesh_tube_radial_segments`
+        // and the rest of the SDF/mesh tessellation, none of which were here, so
+        // a whole tier of drawn detail ignored the config. The listed values stay
+        // on top because some of them (the plan-wide spacing/limit names) have no
+        // entry in this file yet.
+        const flat: Record<string, unknown> = {};
+        for (const [key, entry] of Object.entries(values)) {
+          flat[key] = (entry as { value?: unknown }).value;
+        }
+        sendJson(response, 200, { ...flat, ...plantRendererConfig });
         return;
       } catch {
         // Fallback to defaults
@@ -3823,7 +4548,19 @@ async function main(): Promise<void> {
       url.pathname === '/config/reports' ||
       url.pathname === '/config/network' ||
       url.pathname === '/config/terrain' ||
-      url.pathname === '/config/physics'
+      url.pathname === '/config/physics' ||
+      url.pathname === '/config/water' ||
+      // T02: every root-sight tunable reaches the client. A hand-written
+      // whitelist served seven of seventeen, so the cutaway radius, bubble
+      // budget, burrow depth and rebuild rate silently ran on compiled-in
+      // defaults while the file said otherwise.
+      url.pathname === '/config/root_sight' ||
+      // T04: the client paints mutations from the style table the config
+      // validator owns, so appearance stays data (RULE_3).
+      url.pathname === '/config/mutation_visuals' ||
+      // AL-01/ADR-027: the client reads the dev-only size class and the six
+      // benchmark poses from the same file the dev panel edits.
+      url.pathname === '/config/dev'
     ) {
       // T05: Serve chat/report tunables so client-side limits mirror server
       // enforcement; the network file also carries the client ping thresholds.
@@ -3845,44 +4582,6 @@ async function main(): Promise<void> {
         return;
       } catch {
         sendJson(response, 200, {});
-        return;
-      }
-    }
-
-    if (url.pathname === '/config/root_sight') {
-      // T02: Serve Root Sight config
-      const fs = await import('node:fs/promises');
-      const path = await import('node:path');
-
-      try {
-        const configDir = runtime.configDir;
-        const rootSightPath = path.resolve(configDir, 'root_sight.json');
-        const raw = await fs.readFile(rootSightPath, 'utf8');
-        const config = JSON.parse(raw);
-
-        const values = config.values || {};
-        const rootSightConfig = {
-          cutaway_radius: values.cutaway_radius?.value ?? 50,
-          transition_ms: values.transition_ms?.value ?? 500,
-          soil_opacity: values.soil_opacity?.value ?? 0.3,
-          own_root_highlight_color: values.own_root_highlight_color?.value ?? '#4CAF50',
-          rival_root_highlight_color: values.rival_root_highlight_color?.value ?? '#FF5722',
-          substrate_multiplier: values.substrate_multiplier?.value ?? 0.5,
-          camera_target: values.camera_target?.value ?? 'own_plant',
-        };
-
-        sendJson(response, 200, rootSightConfig);
-        return;
-      } catch {
-        sendJson(response, 200, {
-          cutaway_radius: 50,
-          transition_ms: 500,
-          soil_opacity: 0.3,
-          own_root_highlight_color: '#4CAF50',
-          rival_root_highlight_color: '#FF5722',
-          substrate_multiplier: 0.5,
-          camera_target: 'own_plant',
-        });
         return;
       }
     }
@@ -3922,7 +4621,16 @@ async function main(): Promise<void> {
           safe_area_padding_px: values.safe_area_padding_px?.value ?? 8,
         };
 
-        sendJson(response, 200, uiConfig);
+        // The route used to whitelist eleven of sixteen entries, so
+        // `hud_update_interval_ms`, `damage_vignette_ms` and the three health
+        // thresholds in the file never reached the client and it ran on
+        // compiled-in defaults. Every entry rides along; the explicit fields
+        // above still win because `layers` and `theme` are derived here.
+        const flat: Record<string, unknown> = {};
+        for (const [key, entry] of Object.entries(values)) {
+          flat[key] = (entry as { value?: unknown }).value;
+        }
+        sendJson(response, 200, { ...flat, ...uiConfig });
         return;
       } catch {
         sendJson(response, 200, {
@@ -3976,6 +4684,23 @@ async function main(): Promise<void> {
       if (!response.headersSent) sendJson(response, 500, { error: 'internal_error' });
       else response.end();
     });
+  });
+
+  // A busy port is a startup condition, not a crash. Without this handler an
+  // EADDRINUSE arrives as an uncaught exception, the supervisor reads it as a
+  // crash and restarts into the same occupied port, forever. Exit with a code
+  // the supervisors can tell apart from a crash (2 = port owned by someone else).
+  server.on('error', (error: NodeJS.ErrnoException) => {
+    if (error.code === 'EADDRINUSE') {
+      log.error('port already in use', { host: runtime.host, port: runtime.port });
+      console.error(
+        `server: port ${runtime.port} is already in use — another dev stack or a hand-started server owns it.`,
+      );
+      console.error('server: stop that process, then start again.');
+      process.exit(2);
+    }
+    log.error('server error', { error: error.message, code: error.code ?? '' });
+    process.exit(1);
   });
 
   // WebSocket server
@@ -4181,6 +4906,7 @@ async function main(): Promise<void> {
         if (loss) {
           welcome.previousPlantDied = {
             cause: loss.cause,
+            source: loss.source,
             secondsAgo: Math.max(0, Math.round((Date.now() - loss.at) / 1000)),
           };
         }
@@ -4192,6 +4918,10 @@ async function main(): Promise<void> {
         payload: { ...welcome, plantId: welcome.plantId },
       });
       ws.send(welcomeMsg);
+      const mutationState = world.getMutationStateFor(welcome.plantId);
+      if (mutationState) {
+        ws.send(JSON.stringify({ type: MESSAGE_TYPE.MUTATION_STATE, payload: mutationState }));
+      }
       ws.send(
         JSON.stringify({ type: MESSAGE_TYPE.SEASON_UPDATE, payload: world.getSeasonUpdate() }),
       );
@@ -4236,7 +4966,7 @@ async function main(): Promise<void> {
       const plants = plantWorld.getAllPlants();
       for (const plant of plants) {
         try {
-          await plantPersistence.savePlant(plant);
+          await plantPersistence.savePlant(plant, world.getPlantEventLog().get(plant.id));
         } catch (error) {
           log.error('shutdown plant save failed', {
             plantId: plant.id,

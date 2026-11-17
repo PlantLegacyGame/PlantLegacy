@@ -31,7 +31,7 @@
         },
         "germination_failure_kills_seed": {
             "type": "boolean",
-            "value": true,
+            "value": false,
             "notes": "When true, failing germination destroys the seed/plant. When false, it just pauses growth."
         },
         "seed_size_class": {
@@ -98,6 +98,37 @@
             "value": 2,
             "range": [1, 8],
             "notes": "Projected pixel size for tier 3 (billboard); below uses tier 4"
+        },
+        "benchmark_warmup_ms": {
+            "type": "integer",
+            "value": 1500,
+            "range": [0, 20000],
+            "notes": "AL-01: frames discarded after each pose is applied, before measurement."
+        },
+        "benchmark_pose_ms": {
+            "type": "integer",
+            "value": 6000,
+            "range": [1000, 60000],
+            "notes": "AL-01: measured window per fixed pose."
+        },
+        "benchmark_poses": {
+            "type": "schema_array",
+            "schema": {
+                "id": "string",
+                "distance_m": "number",
+                "azimuth_deg": "number",
+                "elevation_deg": "number",
+                "target_lift_m": "number"
+            },
+            "value": [
+                { "id": "seedling", "distance_m": 6, "azimuth_deg": 35, "elevation_deg": 18, "target_lift_m": 0 },
+                { "id": "canopy-from-below", "distance_m": 9, "azimuth_deg": 200, "elevation_deg": -22, "target_lift_m": 2 },
+                { "id": "silhouette", "distance_m": 14, "azimuth_deg": 120, "elevation_deg": 6, "target_lift_m": 1.5 },
+                { "id": "golden-hour-wide", "distance_m": 28, "azimuth_deg": 300, "elevation_deg": 12, "target_lift_m": 0.5 },
+                { "id": "root-layer", "distance_m": 5, "azimuth_deg": 80, "elevation_deg": -35, "target_lift_m": -1.5 },
+                { "id": "terrain-panorama", "distance_m": 90, "azimuth_deg": 15, "elevation_deg": 30, "target_lift_m": 0 }
+            ],
+            "notes": "AL-01: the six fixed comparison poses. Camera-relative offsets from the player plant, so they are reproducible on any world seed."
         }
     }
 }

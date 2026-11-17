@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import * as THREE from 'three';
-import type { PlantNodeData } from '../PlantRenderer.ts';
+import type { PlantNodeData } from '../plant/plantNodeData.ts';
 import { jointMatrixFor } from './jointMatrix.ts';
 
 function node(overrides: Partial<PlantNodeData> = {}): PlantNodeData {

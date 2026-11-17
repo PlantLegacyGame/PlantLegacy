@@ -19,11 +19,35 @@ import {
 } from '@plant-legacy/shared/growth';
 import { hash01 } from '@plant-legacy/shared/math';
 import * as THREE from 'three';
-import type { PlantNodeData } from './PlantRenderer.js';
+import { type AtmosphereParams, DEFAULT_ATMOSPHERE } from './environment/atmosphere.js';
+import { applyAtmosphereToStandardMaterial } from './environment/standardAtmosphere.js';
+import {
+  geometryKey,
+  lookAppliesTo,
+  type MutationLook,
+  type MutationLookStack,
+  NEUTRAL_STACK,
+  organFamily,
+  organLook,
+} from './plant/mutations.ts';
+import type { PlantNodeData } from './plant/plantNodeData.js';
 import { segmentStartFor } from './plant/segmentStart.js';
+import { buildSpineGeometry } from './plant/spineGeometry.ts';
+
+interface MeshAppearance {
+  petalCount: number;
+  leafScale: number;
+  seedScale: number;
+}
+
+const DEFAULT_APPEARANCE: MeshAppearance = { petalCount: 6, leafScale: 1, seedScale: 1 };
 
 interface MeshNode {
   id: string;
+  /** Owning plant, so the node draws that plant's look, not the renderer's. */
+  plantId?: string;
+  /** T04 signature index for this node (0 = none). */
+  mutationFlags: number;
   position: THREE.Vector3;
   radius: number;
   nodeType: string;
@@ -41,6 +65,8 @@ interface MeshNode {
   // Animated target position for connected growth
   targetPosition?: THREE.Vector3;
   parentAttachPosition?: THREE.Vector3;
+  /** Where along the parent segment this node leaves it (1 = its end). */
+  attachFraction?: number;
 }
 
 interface MeshSegmentData {
@@ -54,9 +80,25 @@ interface MeshSegmentData {
   mesh: THREE.Mesh;
   jointMesh: THREE.Mesh | null;
   leafMeshes: THREE.Mesh[];
+  /** Thorn cones for a spined epidermis; empty for every other plant. */
+  spineMeshes: THREE.Mesh[];
+  /** Geometry revision this segment was built for (bark/spine changes rebuild). */
+  lookRevision: number;
   ornament: THREE.Group | null;
   parentPosition: THREE.Vector3;
   targetPosition: THREE.Vector3;
+  /** Node position this segment was last drawn for, to detect rigid moves. */
+  sourcePosition: THREE.Vector3;
+  /**
+   * Joint point this segment was built from, in world space.
+   *
+   * A segment is normally kept and moved by its node's delta, but the joint is
+   * not tied to the node: an uproot lifts and tilts the body and a reroot puts
+   * it back, so an attachment can move without the part's own position telling
+   * the same story. Comparing against this rebuilds the tube when the joint has
+   * actually moved, which is what keeps a root welded to its seed.
+   */
+  sourceAttach?: THREE.Vector3;
   originalRadius0: number;
   originalRadius1: number;
   originalLength: number;
@@ -92,6 +134,15 @@ export const DEFAULT_MESH_QUALITY: MeshQualityConfig = {
   jointScale: 0.55,
   maxLeafSize: 0.45,
 };
+
+// Scratch colour for mutation tinting, so the per-organ base colour is kept.
+const TMP_TINT = new THREE.Color();
+
+// AL-04: the mesh plants use the shared atmosphere, like the ground and the SDF
+// plants, instead of the scene's fog. Params are held here so organs created
+// later (new mutations, a new plant) are patched with the current values.
+let atmosphereParams: AtmosphereParams = DEFAULT_ATMOSPHERE;
+const atmosphereSunDir = new THREE.Vector3(0, 1, 0);
 
 // Material cache shared across instances
 const barkMaterial: THREE.MeshStandardMaterial = new THREE.MeshStandardMaterial({
@@ -157,11 +208,27 @@ const seedMaterial: THREE.MeshStandardMaterial = new THREE.MeshStandardMaterial(
   flatShading: false,
 });
 
-function getMaterial(nodeType: string): THREE.MeshStandardMaterial {
+/** Every uncloned organ material, so a single call can patch all of them. */
+const BASE_MATERIALS: THREE.MeshStandardMaterial[] = [
+  barkMaterial,
+  rootMaterial,
+  stemMaterial,
+  leafMaterial,
+  cotyledonMaterial,
+  flowerMaterial,
+  flowerCentreMaterial,
+  sporeMaterial,
+  seedMaterial,
+];
+
+function baseMaterialFor(nodeType: string): THREE.MeshStandardMaterial {
   switch (nodeType) {
     case 'root':
     case 'radicle':
     case 'lateral_root':
+    case 'rhizome':
+    case 'pneumatophore':
+    case 'tuber':
       return rootMaterial;
     case 'leaf':
       return leafMaterial;
@@ -169,10 +236,18 @@ function getMaterial(nodeType: string): THREE.MeshStandardMaterial {
       return cotyledonMaterial;
     case 'stem':
     case 'branch':
+    case 'trunk':
+    case 'culm':
     case 'vine':
+    case 'thorn':
+    case 'stolon':
       return stemMaterial;
+    case 'floating_leaf':
+      return leafMaterial;
     case 'flower':
       return flowerMaterial;
+    case 'flower_centre':
+      return flowerCentreMaterial;
     case 'spore_sac':
       return sporeMaterial;
     case 'seed':
@@ -180,19 +255,6 @@ function getMaterial(nodeType: string): THREE.MeshStandardMaterial {
     default:
       return barkMaterial;
   }
-}
-
-/**
- * Drawn radius of a part, in metres.
- *
- * The server already stores the drawn radius (`resolveDrawnRadius` in
- * packages/shared/growth), and the SDF and WebGPU paths both read it from there.
- * This path used to apply a fourth, independent multiplier-and-clamp table, so
- * the mesh plant was a different thickness from the same plant on either other
- * renderer. One table, one plant.
- */
-function visualRadius(nodeType: string, serverRadius: number, biomass?: number): number {
-  return resolveDrawnRadius(nodeType, serverRadius, biomass);
 }
 
 function isRootNodeType(nodeType: string): boolean {
@@ -249,6 +311,14 @@ function buildTubeGeometry(
   }
   return geo;
 }
+
+/**
+ * Thorn cones along one woody segment, for `spined_epidermis`.
+ *
+ * The mutation's name promises spines, and an unlockable thorn organ is not the
+ * same thing: the plant has to actually bristle. Spines are part of the
+ * segment's geometry so they share its transform and its life cycle.
+ */
 
 /**
  * A leaf blade with its base at the origin and tip along +X.
@@ -319,22 +389,147 @@ function segmentBend(node: MeshNode, length: number): number {
 }
 
 export class MeshPlantRenderer {
+  /**
+   * AL-04: use the shared atmosphere instead of the scene's fog, so a mesh plant
+   * fades into the same air as the ground and the SDF plants.
+   */
+  setAtmosphere(params: AtmosphereParams, sunDir: THREE.Vector3): void {
+    atmosphereParams = params;
+    atmosphereSunDir.copy(sunDir);
+    for (const material of BASE_MATERIALS) {
+      applyAtmosphereToStandardMaterial(material, params, atmosphereSunDir);
+    }
+    for (const material of this.materialVariants.values()) {
+      applyAtmosphereToStandardMaterial(material, params, atmosphereSunDir);
+    }
+  }
+
   private scene: THREE.Scene;
   private meshGroup = new THREE.Group();
   private nodeMap = new Map<string, MeshNode>();
   private childrenMap = new Map<string, string[]>();
   private segments = new Map<string, MeshSegmentData>();
+  /** Bumped when a look change alters geometry (bark thickness, spines). */
+  private geometryRevision = 0;
+  private lookGeometryKey = '';
   private seedMeshes = new Map<string, THREE.Mesh>();
   private nodeFirstSeen = new Map<string, number>();
   private hasPlantData = false;
   private structureDirty = true;
   private readonly quality: MeshQualityConfig;
+  // One tinted material per (organ type, signature). Materials live on the
+  // instance and are never mutated after creation, so two plants with different
+  // signatures cannot repaint each other (the old shared-material leak).
+  private readonly materialVariants = new Map<string, THREE.MeshStandardMaterial>();
+  // Look parameters belong to a plant, not to the renderer: the own plant's
+  // petals must never leak onto a rival.
+  private readonly appearanceByPlant = new Map<string, MeshAppearance>();
+  // Pigment is per mutation, not per signature: two mutations sharing a
+  // signature still carry their own visual_params and organ target.
+  private readonly lookByPlant = new Map<string, MutationLookStack>();
+
+  private lastSignatureKey = '';
 
   constructor(scene: THREE.Scene, quality: Partial<MeshQualityConfig> = {}) {
     this.quality = { ...DEFAULT_MESH_QUALITY, ...quality };
     this.scene = scene;
     this.scene.add(this.meshGroup);
     this.meshGroup.visible = false;
+  }
+
+  /**
+   * T04 look parameters that come from the mutation set rather than a symbol:
+   * petal count and leaf/seed scale. A change forces a geometry rebuild.
+   */
+  setMutationAppearance(appearance: MeshAppearance): void {
+    this.appearanceByPlant.set('own', { ...appearance });
+    this.structureDirty = true;
+  }
+
+  /** Store a plant's look (own or a rival's, from the sync payload). */
+  setPlantAppearance(plantId: string, appearance: MeshAppearance): void {
+    this.appearanceByPlant.set(plantId, { ...appearance });
+    this.structureDirty = true;
+  }
+
+  /** Store a plant's composed looks (own plant, or a rival's when synced). */
+  setPlantLook(plantId: string, look: MutationLookStack): void {
+    this.lookByPlant.set(plantId, look);
+    const key = geometryKey(look);
+    if (key !== this.lookGeometryKey) {
+      // Bark thickness and spines are built into the tube meshes, so a change
+      // there has to drop the existing segments or the plant keeps its old
+      // silhouette for the rest of its life.
+      this.lookGeometryKey = key;
+      this.geometryRevision += 1;
+    }
+    this.structureDirty = true;
+  }
+
+  /** The composed look that applies to a node's plant; neutral when unknown. */
+  private lookFor(node: MeshNode): MutationLook {
+    const stack =
+      (node.plantId ? this.lookByPlant.get(node.plantId) : undefined) ??
+      (node.isOwnPlant ? this.lookByPlant.get('own') : undefined) ??
+      NEUTRAL_STACK;
+    return organLook(stack, node.nodeType);
+  }
+
+  /** Look parameters for the plant this node belongs to (defaults if unknown). */
+  private appearanceFor(node: MeshNode): MeshAppearance {
+    return (
+      (node.plantId ? this.appearanceByPlant.get(node.plantId) : undefined) ??
+      this.appearanceByPlant.get(node.isOwnPlant ? 'own' : 'rival') ??
+      DEFAULT_APPEARANCE
+    );
+  }
+
+  /** Woody organs: bark thickness and spines belong here, leaves do not. */
+  private static isWoodyType(nodeType: string): boolean {
+    return organFamily(nodeType) === 'woody';
+  }
+
+  /** Tinted material for one organ and one pigment; cached per variant. */
+  private materialFor(nodeType: string, look: MutationLook): THREE.MeshStandardMaterial {
+    const tint = look.tint.map((v) => v.toFixed(2)).join(',');
+    const key = [
+      nodeType,
+      look.signature,
+      tint,
+      look.tintStrength.toFixed(2),
+      look.variegation.toFixed(2),
+      look.variegationColor.map((v) => v.toFixed(2)).join(','),
+      look.glow.toFixed(2),
+      look.glowColor.map((v) => v.toFixed(2)).join(','),
+      look.barkDarken.toFixed(2),
+      look.pattern,
+    ].join(':');
+    const cached = this.materialVariants.get(key);
+    if (cached) return cached;
+    const material = baseMaterialFor(nodeType).clone();
+    // `.clone()` does not carry the fog patch across, so each new variant is
+    // attached to the shared atmosphere as it is created.
+    applyAtmosphereToStandardMaterial(material, atmosphereParams, atmosphereSunDir);
+    // Only the mutation's own organs are repainted: "variegated foliage" must
+    // not frost the trunk, and "thickened bark" must not tint the leaves.
+    if (lookAppliesTo(look, nodeType)) {
+      // The tint is already composed and clamped by the look builder, so it is
+      // applied as a straight multiplier: no extra strength here to double it.
+      material.color.multiply(TMP_TINT.setRGB(...look.tint));
+      // Variegation is a pale mottle in the mutation's own variegation colour.
+      if (look.variegation > 0) {
+        material.color.lerp(TMP_TINT.setRGB(...look.variegationColor), look.variegation);
+      }
+      if (look.barkDarken > 0) {
+        material.color.multiplyScalar(1 - look.barkDarken);
+      }
+      if (look.glow > 0) {
+        material.emissive.setRGB(...look.glowColor).multiplyScalar(look.glow * 0.6);
+        material.emissiveIntensity = 1;
+      }
+    }
+    this.materialVariants.set(key, material);
+    return material;
   }
 
   updatePlantData(nodes: PlantNodeData[]): void {
@@ -350,6 +545,8 @@ export class MeshPlantRenderer {
       nextFirstSeen.set(n.id, firstSeen);
       const node: MeshNode = {
         id: n.id,
+        plantId: (n as { plantId?: string }).plantId,
+        mutationFlags: n.mutationFlags ?? 0,
         position: n.position.clone(),
         radius: n.radius,
         nodeType: n.nodeType ?? 'stem',
@@ -359,6 +556,7 @@ export class MeshPlantRenderer {
         health: n.health ?? 0.5,
         isOwnPlant: n.isOwnPlant ?? true,
         growthProgress: n.growthProgress ?? 1.0,
+        attachFraction: n.attachFraction,
         spawnTime: n.spawnTime ?? 0,
         age: n.age ?? 0,
         firstSeenMs: firstSeen,
@@ -391,6 +589,13 @@ export class MeshPlantRenderer {
     }
 
     this.nodeFirstSeen = nextFirstSeen;
+    // A signature change must rebuild meshes so each node picks up the material
+    // variant for its own signature; the old leak painted shared materials.
+    const signatureKey = nodes.map((n) => n.mutationFlags ?? 0).join(',');
+    if (signatureKey !== this.lastSignatureKey) {
+      this.lastSignatureKey = signatureKey;
+      this.structureDirty = true;
+    }
 
     for (const [id, node] of this.nodeMap) {
       if (node.parentId && this.nodeMap.has(node.parentId)) {
@@ -405,22 +610,34 @@ export class MeshPlantRenderer {
     this.structureDirty = true;
   }
 
+  /** Drop every mesh a segment owns; geometry is disposed, materials are shared. */
+  private disposeSegment(seg: MeshSegmentData): void {
+    this.meshGroup.remove(seg.mesh);
+    seg.mesh.geometry.dispose();
+    if (seg.jointMesh) {
+      this.meshGroup.remove(seg.jointMesh);
+      seg.jointMesh.geometry.dispose();
+    }
+    for (const leaf of seg.leafMeshes) {
+      this.meshGroup.remove(leaf);
+      leaf.geometry.dispose();
+    }
+    for (const spine of seg.spineMeshes) {
+      this.meshGroup.remove(spine);
+      spine.geometry.dispose();
+    }
+    if (seg.ornament) {
+      this.meshGroup.remove(seg.ornament);
+    }
+  }
+
   private rebuildIfNeeded(): void {
     if (!this.structureDirty) return;
 
     // Remove segments whose nodes no longer exist
     for (const [id, seg] of this.segments) {
       if (!this.nodeMap.has(id)) {
-        this.meshGroup.remove(seg.mesh);
-        seg.mesh.geometry.dispose();
-        if (seg.jointMesh) {
-          this.meshGroup.remove(seg.jointMesh);
-          seg.jointMesh.geometry.dispose();
-        }
-        for (const leaf of seg.leafMeshes) {
-          this.meshGroup.remove(leaf);
-          leaf.geometry.dispose();
-        }
+        this.disposeSegment(seg);
         this.segments.delete(id);
       }
     }
@@ -433,18 +650,37 @@ export class MeshPlantRenderer {
         node.parentId === null && (node.nodeType === 'seed' || node.id.startsWith('seed'));
       if (!isSeed) continue;
       activeSeedIds.add(id);
-      if (this.seedMeshes.has(id)) continue;
-      const radius = visualRadius('seed', node.radius, node.biomass);
+      const existingSeed = this.seedMeshes.get(id);
+      if (existingSeed) {
+        // Seeds are created once and kept; a later mutation still has to
+        // repaint the coat, or the seed keeps the material it was born with.
+        existingSeed.material = this.materialFor('seed', this.lookFor(node));
+        // The seed has to follow its node. It was positioned once at birth, so
+        // after a reroot crawl the body crawled away and left its seed standing
+        // on the old ground - the plant looked like it had not moved at all.
+        const builtAt = existingSeed.userData.sourcePosition as THREE.Vector3 | undefined;
+        if (builtAt) {
+          existingSeed.position.x += node.position.x - builtAt.x;
+          existingSeed.position.y += node.position.y - builtAt.y;
+          existingSeed.position.z += node.position.z - builtAt.z;
+          builtAt.copy(node.position);
+        }
+        continue;
+      }
+      const radius = resolveDrawnRadius('seed', node.radius, node.biomass);
       const geo = new THREE.SphereGeometry(radius, 20, 14);
-      const mat = getMaterial('seed');
+      const mat = this.materialFor('seed', this.lookFor(node));
       const mesh = new THREE.Mesh(geo, mat);
       // Slightly ovoid: a little taller than wide and flattened front-to-back.
       // The vertical scale is the shared seed aspect, so this ovoid is the same
       // shape and height as the one the WebGPU pass builds.
-      mesh.scale.set(0.95, getSeedBodyHeightRatio(), 0.85);
+      const seedScale = this.appearanceFor(node).seedScale;
+      mesh.scale.set(0.95 * seedScale, getSeedBodyHeightRatio() * seedScale, 0.85 * seedScale);
       // Sit the rounded base on the ground: the stored y is the contact point,
       // not the centre.
       mesh.position.set(node.position.x, seedBodyCentreY(node.position.y, radius), node.position.z);
+      // Remember where it was drawn so later moves can be applied as a delta.
+      mesh.userData.sourcePosition = node.position.clone();
       mesh.castShadow = true;
       mesh.receiveShadow = true;
       this.meshGroup.add(mesh);
@@ -462,21 +698,47 @@ export class MeshPlantRenderer {
     // Build segments for nodes with parents
     for (const [id, node] of this.nodeMap) {
       if (!node.parentId || !this.nodeMap.has(node.parentId)) continue;
-      if (this.segments.has(id)) continue;
+      const existingSegment = this.segments.get(id);
+      if (existingSegment) {
+        const attach = node.parentAttachPosition;
+        const builtAttach = existingSegment.sourceAttach;
+        // Compared as the joint's offset *from the part*, not its absolute
+        // position: a whole body that moves rigidly keeps that offset, so a
+        // crawl does not rebuild every tube once a tick, while a joint that
+        // changes relative to its own segment (lift, tilt, reroot) does.
+        const jointMoved =
+          attach !== undefined &&
+          builtAttach !== undefined &&
+          builtAttach
+            .clone()
+            .sub(existingSegment.sourcePosition)
+            .distanceToSquared(attach.clone().sub(node.position)) > 1e-8;
+        if (!jointMoved && existingSegment.lookRevision === this.geometryRevision) continue;
+        // The look changed shape (bark thickness, spines), or the joint moved
+        // under the tube: rebuild this part.
+        this.disposeSegment(existingSegment);
+        this.segments.delete(id);
+      }
 
       const parent = this.nodeMap.get(node.parentId);
       if (!parent) continue;
-      const children = this.childrenMap.get(node.id) ?? [];
-
-      // Murray's law taper (server radii), converted to visual radii below.
-      const taperedServerRadius = this.murrayTaper(parent.radius, Math.max(1, children.length));
+      // The server already applied Murray's law and shipped the drawn radius.
+      // Re-tapering here ignored the part's own biomass, so a starving node
+      // kept its old full thickness even after the model said it had shrunk.
 
       // Determine segment end (target if growing)
       const segmentEnd = node.targetPosition ?? node.position.clone();
 
-      const parentVisualRadius = visualRadius(parent.nodeType, parent.radius, parent.biomass);
+      const parentVisualRadius = resolveDrawnRadius(parent.nodeType, parent.radius, parent.biomass);
       let tubeStartRadius = parentVisualRadius;
-      let tubeEndRadius = visualRadius(node.nodeType, taperedServerRadius, node.biomass);
+      let tubeEndRadius = resolveDrawnRadius(node.nodeType, node.radius, node.biomass);
+      const softPart =
+        node.nodeType === 'leaf' ||
+        node.nodeType === 'cotyledon' ||
+        node.nodeType === 'flower' ||
+        node.nodeType === 'spore_sac';
+      if (softPart) tubeStartRadius = Math.min(tubeStartRadius, tubeEndRadius);
+
       // Anything emerging from a seed starts thin so the seed never turns into
       // a cone with a giant base.
       if (parent.nodeType === 'seed') {
@@ -489,37 +751,89 @@ export class MeshPlantRenderer {
         }
       }
 
-      // Start on the parent where the server attached this node. For a lateral
-      // bud that is part-way along the parent's segment, and without it the bud
-      // drew its tube from the parent's tip; for a seed it is out on the coat,
-      // with upward growth leaving the coat's top and downward growth the buried
-      // base. `node.parentAttachPosition` is already in draw space.
-      const start = segmentStartFor({
-        attach: node.parentAttachPosition,
-        parentPosition: parent.position,
-        seedCoatTopY:
-          parent.nodeType === 'seed'
-            ? parent.position.y + seedBodyHalfHeight(parentVisualRadius) * 2
-            : undefined,
-        growsUp: segmentEnd.y > parent.position.y,
-      });
-      const segmentStart = new THREE.Vector3(start.x, start.y, start.z);
+      // Start on the parent where it is drawn this frame. A child of a growing
+      // parent used to start at the parent's final tip, leaving a visible gap
+      // until the parent caught up.
+      const parentType = (parent.nodeType ?? '').toLowerCase();
+      const parentAnchor = parent.parentAttachPosition ?? parent.position;
+      const parentGrowth = parent.growthProgress ?? 1;
+      const parentDrawnEnd = parentAnchor.clone().lerp(parent.position, parentGrowth);
+      let segmentStart: THREE.Vector3;
+      if (parentType === 'seed') {
+        const start = segmentStartFor({
+          attach: node.parentAttachPosition,
+          parentPosition: parent.position,
+          seedCoatTopY: parent.position.y + seedBodyHalfHeight(parentVisualRadius) * 2,
+          growsUp: segmentEnd.y > parent.position.y,
+        });
+        segmentStart = new THREE.Vector3(start.x, start.y, start.z);
+      } else if (
+        typeof node.attachFraction === 'number' &&
+        node.attachFraction < 1 &&
+        parent.parentAttachPosition
+      ) {
+        segmentStart = parentAnchor.clone().lerp(parentDrawnEnd, Math.max(0, node.attachFraction));
+      } else {
+        segmentStart = parentDrawnEnd.clone();
+      }
 
-      const dir = new THREE.Vector3().subVectors(segmentEnd, segmentStart);
-      const length = dir.length();
+      let dir = new THREE.Vector3().subVectors(segmentEnd, segmentStart);
+      let length = dir.length();
       if (length < 0.001) continue;
 
+      // Leave the parent's centre line on its surface. The tube still overlaps
+      // the parent by more than half its radius, so the joint reads as grown
+      // tissue instead of a pin pushed through the middle.
+      if (parentType !== 'seed') {
+        const socket = Math.min(parentVisualRadius * 0.9, length * 0.4);
+        segmentStart.addScaledVector(dir.clone().normalize(), socket);
+        dir = new THREE.Vector3().subVectors(segmentEnd, segmentStart);
+        length = dir.length();
+        if (length < 0.001) continue;
+      }
+
       const bend = segmentBend(node, length);
+      // Bark thickness is geometry, not paint: a thickened-bark plant is
+      // physically fatter, and the same look also darkens the tube.
+      const organLookNow = this.lookFor(node);
+      const woody = MeshPlantRenderer.isWoodyType(node.nodeType);
+      const barkScale = woody ? organLookNow.barkScale : 1;
+      if (barkScale > 1) {
+        tubeStartRadius *= barkScale;
+        tubeEndRadius *= barkScale;
+      }
       const geo = buildTubeGeometry(tubeStartRadius, tubeEndRadius, length, this.quality, bend);
       const mat =
         node.nodeType === 'flower' || node.nodeType === 'spore_sac'
-          ? stemMaterial
-          : getMaterial(node.nodeType);
+          ? this.materialFor('stem', this.lookFor(node))
+          : this.materialFor(node.nodeType, this.lookFor(node));
       const mesh = new THREE.Mesh(geo, mat);
       mesh.position.copy(segmentStart);
       if (length > 0.001) {
         // The tube geometry grows along +Y from its base now.
         mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.clone().normalize());
+      }
+      this.meshGroup.add(mesh);
+
+      // `spined_epidermis` bristles: spines share the tube's transform so they
+      // grow, bend and vanish with the part they sit on.
+      const spineMeshes: THREE.Mesh[] = [];
+      if (woody && organLookNow.spines > 0) {
+        const spineGeo = buildSpineGeometry(
+          tubeStartRadius,
+          tubeEndRadius,
+          length,
+          organLookNow.spines,
+        );
+        if (spineGeo) {
+          const spineMat = this.materialFor('stem', organLookNow);
+          const spines = new THREE.Mesh(spineGeo, spineMat);
+          spines.position.copy(mesh.position);
+          spines.quaternion.copy(mesh.quaternion);
+          spines.castShadow = true;
+          this.meshGroup.add(spines);
+          spineMeshes.push(spines);
+        }
       }
 
       // Joint sphere at segment end
@@ -547,7 +861,7 @@ export class MeshPlantRenderer {
         const leafLength = isCotyledon
           ? THREE.MathUtils.clamp(parentVisualRadius * 6.2, 0.3, this.quality.maxLeafSize * 1.2)
           : THREE.MathUtils.clamp(
-              visualRadius(node.nodeType, node.radius, node.biomass) * 14,
+              resolveDrawnRadius(node.nodeType, node.radius, node.biomass) * 14,
               0.14,
               Math.min(0.3, this.quality.maxLeafSize),
             );
@@ -558,12 +872,12 @@ export class MeshPlantRenderer {
         const axis = dir.clone().normalize();
         for (let i = 0; i < leafCount; i++) {
           const leafGeo = buildLeafGeometry(
-            leafLength,
-            leafWidth,
+            leafLength * this.appearanceFor(node).leafScale,
+            leafWidth * this.appearanceFor(node).leafScale,
             this.quality.leafSegments,
             isCotyledon,
           );
-          const leaf = new THREE.Mesh(leafGeo, getMaterial(node.nodeType));
+          const leaf = new THREE.Mesh(leafGeo, this.materialFor(node.nodeType, this.lookFor(node)));
           const angle = (i / Math.max(1, leafCount)) * Math.PI * 2;
           this.placeLeaf(leaf, segmentEnd, axis, angle, isCotyledon);
           this.meshGroup.add(leaf);
@@ -593,9 +907,13 @@ export class MeshPlantRenderer {
         mesh,
         jointMesh,
         leafMeshes,
+        spineMeshes,
+        lookRevision: this.geometryRevision,
         ornament,
         parentPosition: segmentStart.clone(),
         targetPosition: segmentEnd.clone(),
+        sourcePosition: node.position.clone(),
+        sourceAttach: node.parentAttachPosition?.clone(),
         originalRadius0: tubeStartRadius,
         originalRadius1: tubeEndRadius,
         originalLength: length,
@@ -651,20 +969,24 @@ export class MeshPlantRenderer {
     const safeAxis = axis.lengthSq() < 1e-6 ? new THREE.Vector3(0, 1, 0) : axis.clone().normalize();
     group.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), safeAxis);
     const r = THREE.MathUtils.clamp(
-      visualRadius(node.nodeType, node.radius, node.biomass) * 9,
+      resolveDrawnRadius(node.nodeType, node.radius, node.biomass) * 9,
       0.045,
       0.1,
     );
     const petalGeo = new THREE.SphereGeometry(1, 10, 6);
-    for (let i = 0; i < 6; i += 1) {
-      const angle = (i / 6) * Math.PI * 2;
-      const petal = new THREE.Mesh(petalGeo, flowerMaterial);
+    const petalCount = Math.max(3, Math.min(16, Math.round(this.appearanceFor(node).petalCount)));
+    for (let i = 0; i < petalCount; i += 1) {
+      const angle = (i / petalCount) * Math.PI * 2;
+      const petal = new THREE.Mesh(petalGeo, this.materialFor('flower', this.lookFor(node)));
       petal.position.set(Math.cos(angle) * r * 0.62, 0, Math.sin(angle) * r * 0.62);
       petal.rotation.y = -angle;
       petal.scale.set(r * 0.62, r * 0.1, r * 0.3);
       group.add(petal);
     }
-    const centre = new THREE.Mesh(new THREE.SphereGeometry(1, 12, 8), flowerCentreMaterial);
+    const centre = new THREE.Mesh(
+      new THREE.SphereGeometry(1, 12, 8),
+      this.materialFor('flower_centre', this.lookFor(node)),
+    );
     centre.scale.set(r * 0.28, r * 0.16, r * 0.28);
     group.add(centre);
     return group;
@@ -677,7 +999,7 @@ export class MeshPlantRenderer {
     const safeAxis = axis.lengthSq() < 1e-6 ? new THREE.Vector3(0, 1, 0) : axis.clone().normalize();
     group.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), safeAxis);
     const r = THREE.MathUtils.clamp(
-      visualRadius(node.nodeType, node.radius, node.biomass) * 10,
+      resolveDrawnRadius(node.nodeType, node.radius, node.biomass) * 10,
       0.04,
       0.085,
     );
@@ -691,18 +1013,33 @@ export class MeshPlantRenderer {
     return group;
   }
 
-  private murrayTaper(parentRadius: number, totalChildren: number): number {
-    if (totalChildren <= 1) return parentRadius * 0.85;
-    const childRadius = parentRadius / totalChildren ** (1 / 3);
-    return childRadius;
-  }
-
   updateGrowth(deltaTime: number): void {
     let needsUpdate = false;
 
     for (const [id, seg] of this.segments) {
       const node = this.nodeMap.get(id);
       if (!node) continue;
+
+      // Follow the live skeleton. Everything above this point was placed once, at
+      // build time, so a body that moved afterwards - an uproot crawl, a plant
+      // anchored somewhere else - was drawn at the spot it had left while Root
+      // Sight's pit followed the server. The move is rigid, so every mesh the
+      // segment owns is translated by the same delta; no geometry is rebuilt.
+      const shiftX = node.position.x - seg.sourcePosition.x;
+      const shiftY = node.position.y - seg.sourcePosition.y;
+      const shiftZ = node.position.z - seg.sourcePosition.z;
+      if (shiftX * shiftX + shiftY * shiftY + shiftZ * shiftZ > 1e-10) {
+        const shift = new THREE.Vector3(shiftX, shiftY, shiftZ);
+        seg.mesh.position.add(shift);
+        seg.jointMesh?.position.add(shift);
+        for (const leaf of seg.leafMeshes) leaf.position.add(shift);
+        for (const spine of seg.spineMeshes) spine.position.add(shift);
+        seg.ornament?.position.add(shift);
+        seg.parentPosition.add(shift);
+        seg.targetPosition.add(shift);
+        seg.sourcePosition.copy(node.position);
+        needsUpdate = true;
+      }
 
       const targetProgress = node.growthProgress ?? 1.0;
       let currentProgress = seg.growthProgress;

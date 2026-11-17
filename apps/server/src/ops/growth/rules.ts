@@ -17,6 +17,7 @@ import {
   getNodeTypeDefinition,
   NODE_GROWTH_CONSTRAINTS,
   nodeRenderRadius,
+  plantHealth,
 } from '@plant-legacy/shared/growth';
 
 export interface GrowthCostQuote {
@@ -29,12 +30,71 @@ export interface GrowthCostQuote {
 }
 
 /**
+ * What the world adds to a quote before charging it.
+ *
+ * A quote is not the charge: roots open compact, deep soil (`growth_resistance`)
+ * and a mutation can make every part cost more energy or grow slower. The menu
+ * used to quote the bare `computeGrowthCostQuote` figure, so a root card said
+ * "6 energy", the server charged 11, and growth was refused for energy the card
+ * had promised was enough. Both sides now read this one scale.
+ */
+export interface GrowthChargeScale {
+  /** Soil the part grows out of, clamped by `growth_resistance_min/max`. */
+  resistance: number;
+  /** Multiplier on the quoted energy: resistance × mutation growth cost. */
+  energyMultiplier: number;
+  /** Multiplier on the quoted seconds: resistance ÷ mutation growth speed. */
+  timeMultiplier: number;
+}
+
+export const NEUTRAL_GROWTH_SCALE: GrowthChargeScale = {
+  resistance: 1,
+  energyMultiplier: 1,
+  timeMultiplier: 1,
+};
+
+/**
+ * Apply a charge scale to a quote, rounding energy up.
+ *
+ * Rounding up means the card can only ever be pessimistic: it may ask for one
+ * more energy than the charge needs, never promise a price the charge beats.
+ */
+export function scaleGrowthQuote(
+  quote: GrowthCostQuote,
+  scale: GrowthChargeScale,
+): GrowthCostQuote {
+  const energyMultiplier =
+    Number.isFinite(scale.energyMultiplier) && scale.energyMultiplier > 0
+      ? scale.energyMultiplier
+      : 1;
+  const timeMultiplier =
+    Number.isFinite(scale.timeMultiplier) && scale.timeMultiplier > 0 ? scale.timeMultiplier : 1;
+  const growthTimeSeconds = Math.max(0.1, quote.growthTimeSeconds * timeMultiplier);
+  const timeRatio = quote.growthTimeSeconds > 0 ? growthTimeSeconds / quote.growthTimeSeconds : 1;
+  return {
+    energyCost:
+      energyMultiplier === 1 ? quote.energyCost : Math.ceil(quote.energyCost * energyMultiplier),
+    biomassGain: quote.biomassGain,
+    growthTimeSeconds,
+    waterCost: quote.waterCost * timeRatio,
+    nutrientCost: quote.nutrientCost * timeRatio,
+    mineralCost: quote.mineralCost * timeRatio,
+  };
+}
+
+/**
  * Single source of truth for growth energy and resource costs (INV-GR-13).
  * Ensures getGrowthOptions quotes exactly what tryGrow and step charge.
  */
 export function computeGrowthCostQuote(
   config: GrowthConfig,
   nodeDef: NodeTypeDefinition,
+  /**
+   * How much tissue the part ends up holding per unit of build cost. A size
+   * mutation raises it (`scale³`), so the same growth is materially bigger: the
+   * quote has to carry that or the menu promises a mass the part never has.
+   */
+  massScale = 1,
 ): GrowthCostQuote {
   // Energy is what the plant spends; biomass is what it keeps. Building tissue
   // respires part of the fixed carbon, so the stored mass is a share of the
@@ -44,7 +104,8 @@ export function computeGrowthCostQuote(
   // the number claimed. `growth_biomass_yield` keeps the two consistent.
   const yieldFraction = config.growthBiomassYield ?? 1;
   const energyCost = Math.ceil(nodeDef.biomass_cost);
-  const biomassGain = roundMass(nodeDef.biomass_cost * yieldFraction);
+  const safeScale = Number.isFinite(massScale) && massScale > 0 ? massScale : 1;
+  const biomassGain = roundMass(nodeDef.biomass_cost * yieldFraction * safeScale ** 3);
   const growthTimeSeconds = nodeDef.growth_time_seconds ?? config.defaultGrowthTimeSeconds;
   const waterCost = growthTimeSeconds * config.growthWaterConsumptionRate * nodeDef.biomass_cost;
   const mineralCost =
@@ -180,26 +241,50 @@ export function maxCotyledonsForPlant(config: GrowthConfig): number {
   return config.maxCotyledons;
 }
 
-/** Whether the plant's internal storage allows another growth step. */
-export function canGrow(plant: Plant, config: GrowthConfig): { ok: boolean; reason?: string } {
-  // Check plant's internal resource storage for growth requirements
-  if (plant.storedWater < config.growthMinWater) {
+/**
+ * Whether the plant's internal storage allows another growth step.
+ *
+ * `storedResourceSharing` is the share of the requirement a clonal network
+ * covers for a part grown from root tissue (T04: `clonal_rhizome`,
+ * `clonal_network`). The rhizome network subsidises the new ramet, so a shoot
+ * can be raised from reserves the parent never held in its own right.
+ */
+export function canGrow(
+  plant: Plant,
+  config: GrowthConfig,
+  storedResourceSharing = 0,
+): { ok: boolean; reason?: string } {
+  // T04 health: a wilting plant may not extend until it has rebuilt tissue.
+  const health = plantHealth(plant, config);
+  const minHealth = config.growthMinHealth ?? 0;
+  if (health < minHealth) {
     return {
       ok: false,
-      reason: `Insufficient stored water (${plant.storedWater.toFixed(1)} < ${config.growthMinWater})`,
+      reason: `Plant health ${(health * 100).toFixed(0)}% (needs ${(minHealth * 100).toFixed(0)}%)`,
     };
   }
-  if (plant.storedMinerals < config.growthMinNutrients) {
+  const sharing = Math.min(0.9, Math.max(0, storedResourceSharing));
+  const waterNeed = config.growthMinWater * (1 - sharing);
+  const mineralNeed = config.growthMinMinerals * (1 - sharing);
+  const nutrientNeed = config.growthMinNutrients * (1 - sharing);
+  // Check plant's internal resource storage for growth requirements
+  if (plant.storedWater < waterNeed) {
     return {
       ok: false,
-      reason: `Insufficient stored minerals (${plant.storedMinerals.toFixed(1)} < ${config.growthMinNutrients})`,
+      reason: `Insufficient stored water (${plant.storedWater.toFixed(1)} < ${waterNeed.toFixed(1)})`,
+    };
+  }
+  if (plant.storedMinerals < nutrientNeed) {
+    return {
+      ok: false,
+      reason: `Insufficient stored minerals (${plant.storedMinerals.toFixed(1)} < ${nutrientNeed.toFixed(1)})`,
     };
   }
   // Minerals are used for both nutrients and structural minerals
-  if (plant.storedMinerals < config.growthMinMinerals) {
+  if (plant.storedMinerals < mineralNeed) {
     return {
       ok: false,
-      reason: `Insufficient stored minerals (${plant.storedMinerals.toFixed(1)} < ${config.growthMinMinerals})`,
+      reason: `Insufficient stored minerals (${plant.storedMinerals.toFixed(1)} < ${mineralNeed.toFixed(1)})`,
     };
   }
   return { ok: true };
@@ -245,9 +330,18 @@ export function validateGrowthDirection(
 
   // Calculate horizontal distance
   const horizontalDist = Math.sqrt(dir.x * dir.x + dir.z * dir.z);
+  // The clamp and these bounds describe the same sector, but the table is not
+  // always exactly feasible at a corner: `minY` -0.25 for a radicle implies a
+  // horizontal of 0.96824 against a declared 0.968 maximum. A legal clamped
+  // vector must never be refused for that 2e-4 of rounding.
+  const BOUND_TOLERANCE = 1e-3;
 
-  // Validate Y bounds from constraints (authoritative)
-  if (dir.y < constraints.minY || dir.y > constraints.maxY) {
+  // Validate Y bounds from constraints (authoritative). The same rounding
+  // tolerance the horizontal bounds already use applies here: `clampGrowthDirectionByGene`
+  // lands exactly on a sector bound, and the resulting 0.6500000000000001 was
+  // refused as "outside [-0.4, 0.65]" - which is why a whole gallery of plants
+  // had a stem and no branches.
+  if (dir.y < constraints.minY - BOUND_TOLERANCE || dir.y > constraints.maxY + BOUND_TOLERANCE) {
     return {
       ok: false,
       reason: `Direction Y (${dir.y.toFixed(2)}) outside allowed range [${constraints.minY}, ${constraints.maxY}] for ${targetType}`,
@@ -255,7 +349,10 @@ export function validateGrowthDirection(
   }
 
   // Validate horizontal bounds from constraints
-  if (horizontalDist < constraints.minHorizontal || horizontalDist > constraints.maxHorizontal) {
+  if (
+    horizontalDist < constraints.minHorizontal - BOUND_TOLERANCE ||
+    horizontalDist > constraints.maxHorizontal + BOUND_TOLERANCE
+  ) {
     return {
       ok: false,
       reason: `Horizontal distance (${horizontalDist.toFixed(2)}) outside allowed range [${constraints.minHorizontal}, ${constraints.maxHorizontal}] for ${targetType}`,

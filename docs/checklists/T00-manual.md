@@ -8,7 +8,7 @@ the stated result observed.
 - [x] `pnpm config:validate`
   - Expected at T00: `config: 73 file(s)` and `config: OK`, exit 0.
   - Observed at T00: 73 files, OK.
-  - Today: 78 files, OK (five files were added after T00 by later tasks;
+  - Today: 79 files, OK (five files were added after T00 by later tasks;
     `docs/tunables.md` lists them).
 
 ## 2. Every Part 6.2 file exists

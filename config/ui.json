@@ -89,6 +89,36 @@
       "value": 8,
       "range": [0, 32],
       "notes": "HUD padding from the device safe-area edge."
+    },
+    "hud_update_interval_ms": {
+      "type": "integer",
+      "value": 100,
+      "range": [50, 1000],
+      "notes": "Minimum time between plant-status HUD text updates (DESIGN 18.2 caps HUD at 10 Hz)."
+    },
+    "damage_vignette_ms": {
+      "type": "integer",
+      "value": 420,
+      "range": [100, 2000],
+      "notes": "Length of the edge vignette shown when the plant takes damage."
+    },
+    "health_healthy_fraction": {
+      "type": "number",
+      "value": 0.75,
+      "range": [0.1, 1],
+      "notes": "Structural fraction at or above which the plant reads Healthy."
+    },
+    "health_stressed_fraction": {
+      "type": "number",
+      "value": 0.5,
+      "range": [0.05, 0.95],
+      "notes": "Structural fraction at or above which the plant reads Stressed."
+    },
+    "health_withering_fraction": {
+      "type": "number",
+      "value": 0.25,
+      "range": [0.01, 0.9],
+      "notes": "Structural fraction at or above which the plant reads Withering; below it reads Dying."
     }
   }
 }

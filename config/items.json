@@ -1,11 +1,11 @@
 {
   "_meta": {
     "system": "items",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "schema": "extended-1",
     "owner_task": "T08A",
     "status": "active",
-    "notes": "Item definitions per DESIGN.md Part 6.1"
+    "notes": "Item definitions per DESIGN.md Part 6.1. Every item declares use_kind: 'resources' means the server can use it and the numbers come from the category's effect keys below; 'unavailable' means it cannot be used yet, and use_reason says why the server refuses. Descriptions state the specific effect, so the panel never promises something the code does not do."
   },
   "values": {
     "item_definitions": {
@@ -15,6 +15,8 @@
         "category": "string",
         "name": "string",
         "description": "string",
+        "use_kind": "string",
+        "use_reason": "string",
         "stack_limit": "integer",
         "tradeable": "boolean",
         "mailable": "boolean",
@@ -26,7 +28,9 @@
           "id": "starter_fertilizer",
           "category": "fertilizer",
           "name": "Starter Fertilizer",
-          "description": "Basic fertilizer to boost soil minerals. Consumed on use.",
+          "description": "Worked into the soil under your crown, where it feeds the plant and enriches the dirt beneath it.",
+          "use_kind": "resources",
+          "use_reason": "",
           "stack_limit": 99,
           "tradeable": false,
           "mailable": false,
@@ -37,7 +41,9 @@
           "id": "starter_dung",
           "category": "dung",
           "name": "Starter Dung",
-          "description": "Organic matter to boost soil moisture and nutrients. Consumed on use.",
+          "description": "Organic matter with water still in it. Feeds the plant and enriches the soil under its root.",
+          "use_kind": "resources",
+          "use_reason": "",
           "stack_limit": 99,
           "tradeable": false,
           "mailable": false,
@@ -48,7 +54,9 @@
           "id": "gene_booster_basic",
           "category": "booster",
           "name": "Basic Gene Booster",
-          "description": "Temporarily increases growth speed. Consumed on use.",
+          "description": "A tuned gene compound, held for the booster system. Timed boosters are not implemented yet.",
+          "use_kind": "unavailable",
+          "use_reason": "Timed boosters are not implemented yet",
           "stack_limit": 10,
           "tradeable": false,
           "mailable": false,
@@ -59,7 +67,9 @@
           "id": "heirloom_seed_basic",
           "category": "heirloom_seed",
           "name": "Basic Heirloom Seed",
-          "description": "A seed with stable genetics. Can be planted to start a new plant.",
+          "description": "A blank vessel for a future life. The heirloom planting flow is not implemented yet.",
+          "use_kind": "unavailable",
+          "use_reason": "Heirloom planting is not implemented yet",
           "stack_limit": 1,
           "tradeable": true,
           "mailable": true,
@@ -70,7 +80,9 @@
           "id": "offspring_seed_basic",
           "category": "offspring_seed",
           "name": "Offspring Seed",
-          "description": "A seed from your plant. Contains mixed genetics.",
+          "description": "A seed carrying mixed genetics from your plant. Planting from the pouch is not implemented yet.",
+          "use_kind": "unavailable",
+          "use_reason": "Planting from the pouch is not implemented yet",
           "stack_limit": 1,
           "tradeable": true,
           "mailable": true,
@@ -81,7 +93,9 @@
           "id": "essence_growth",
           "category": "essence",
           "name": "Growth Essence",
-          "description": "Pure growth energy. Instantly restores 500 energy when consumed.",
+          "description": "Bottled growth energy, drunk straight from the pouch.",
+          "use_kind": "resources",
+          "use_reason": "",
           "stack_limit": 10,
           "tradeable": false,
           "mailable": false,
@@ -114,7 +128,7 @@
       "type": "number",
       "value": 50,
       "range": [1, 1000],
-      "notes": "Minerals added to the plant when a fertilizer item is used (clamped to capacity)."
+      "notes": "Minerals added to the plant when a fertilizer item is used (clamped to capacity). This is the number a fertilizer's description quotes."
     },
     "dung_water_gain": {
       "type": "number",
@@ -132,7 +146,7 @@
       "type": "number",
       "value": 500,
       "range": [1, 10000],
-      "notes": "Energy restored when an essence item is used (clamped to capacity)."
+      "notes": "Energy restored when an essence item is used (clamped to capacity). This is the number an essence's description quotes."
     }
   }
 }

@@ -3,6 +3,7 @@
  * No simulation, no game rules — those live in apps/server.
  */
 export * from './config/index.ts';
+export * from './damage/index.ts';
 export * from './events/index.ts';
 export * from './growth/index.ts';
 export * from './ids/index.ts';

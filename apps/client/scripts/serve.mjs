@@ -37,7 +37,7 @@ function proxy(request, response, pathname) {
   request.pipe(upstream);
 }
 
-createServer(async (request, response) => {
+const server = createServer(async (request, response) => {
   const url = new URL(request.url ?? '/', 'http://localhost');
 
   // The static shell calls same-origin `/health`; forward it to the game server
@@ -63,6 +63,19 @@ createServer(async (request, response) => {
     response.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
     response.end('not found');
   }
-}).listen(port, '127.0.0.1', () => {
+});
+
+// A busy port is reported as one line with the fix, not a stack trace from an
+// unhandled 'error' event that reads like the preview server itself is broken.
+server.on('error', (error) => {
+  if (error.code === 'EADDRINUSE') {
+    console.error(`client preview: port ${port} is already in use; stop that process and retry.`);
+    process.exit(2);
+  }
+  console.error(`client preview: ${error.message}`);
+  process.exit(1);
+});
+
+server.listen(port, '127.0.0.1', () => {
   console.log(`client preview: http://127.0.0.1:${port} (serving ${root})`);
 });

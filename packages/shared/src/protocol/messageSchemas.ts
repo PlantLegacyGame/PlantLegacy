@@ -465,6 +465,9 @@ export const MESSAGE_SCHEMAS: Record<number, Record<string, FieldRule>> = {
     plantId: { type: 'string', required: true },
     // Why it died. Optional so an older server's removal still validates.
     cause: { type: 'string' },
+    // What did it, when the cause is too coarse: 'tool', 'weather', 'uprooted',
+    // 'thirst', 'minerals', 'no_energy'. Optional for the same reason.
+    source: { type: 'string' },
   },
   31: {
     // SEASON_UPDATE
@@ -530,6 +533,9 @@ export const MESSAGE_SCHEMAS: Record<number, Record<string, FieldRule>> = {
       },
     },
     maxSlots: { type: 'integer', required: true },
+    // Item definitions travel with the slots so the panel can show the name,
+    // description and the exact use the server will perform.
+    definitions: { type: 'array', required: false },
   },
   32: {
     // TERRAIN_REGION_REQUEST (client -> server)

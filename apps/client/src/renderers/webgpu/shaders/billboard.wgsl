@@ -18,6 +18,8 @@ struct VertexOutput {
 
 @group(0) @binding(0) var<uniform> frame: FrameUniforms;
 @group(0) @binding(1) var<storage, read> renderData: array<PlantRenderData>;
+// T04 appearance: the plant's composed whole-plant look.
+@group(0) @binding(12) var<storage, read> plantLooks_billboard: array<PlantLook>;
 @group(0) @binding(2) var<storage, read> plants: array<PlantData>;
 // C02b: Impostor atlas
 @group(0) @binding(9) var impostorAtlas: texture_2d<f32>;
@@ -181,15 +183,13 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4f {
   let rim = pow(1.0 - max(dot(approxNormal, viewDir), 0.0), 2.0) * 0.15;
   color += vec3f(0.12, 0.22, 0.12) * rim;
 
-  // C02b: mutation signatures. Billboards are per plant, not per node, so the
-  // plant's mask decides which signatures show at distance.
-  if ((input.mutationMask & 4u) != 0u) {
-    let mottle = 0.5 + 0.5 * sin(input.worldPosition.x * 9.0) * sin(input.worldPosition.z * 7.0);
-    color = mix(color, color * vec3f(0.82, 1.08, 0.62), mottle * frame.mutation2Param);
+  // T04 appearance: a billboard is a whole plant, so it paints the composed
+  // whole-plant look rather than guessing an organ family (ADR-059).
+  var discLook = neutralLookOrgan();
+  if (input.plantIndex < arrayLength(&plantLooks_billboard)) {
+    discLook = plantLooks_billboard[input.plantIndex].disc;
   }
-  if ((input.mutationMask & 1u) != 0u && frame.mutation0Param > 0.01) {
-    color += vec3f(0.20, 0.75, 0.45) * (frame.mutation0Param * 0.18);
-  }
+  color = applyPlantLook(color, discLook, input.worldPosition, frame);
 
   // C02b: Texture array sampling for plant variation on billboards
   // Select texture array based on LOD tier (similar to mesh shader nodeType logic)
@@ -203,6 +203,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4f {
   );
   color = mix(color, texColor, 0.5); // Blend with procedural color
 
+  color += lookEmissive(discLook, input.worldPosition, frame);
   color = applyRootSight(color, input.worldPosition, 1.0, input.isOwn, frame).rgb;
   
   // C02b: Impostor atlas sampling

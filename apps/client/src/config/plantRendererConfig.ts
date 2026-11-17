@@ -35,6 +35,11 @@ export interface PlantRendererConfig {
   mutation0Param: number;
   mutation1Param: number;
   mutation2Param: number;
+  /**
+   * Legacy strength defaults for the SDF fallback's three mutation uniforms.
+   * Mutation appearance is now per mutation in config/mutation_visuals.json
+   * (ADR-059); these remain only so an older uniform slot still has a value.
+   */
   mutationBioluminescenceStrength: number;
   mutationBarkThicknessScale: number;
   mutationVariegationStrength: number;

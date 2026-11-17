@@ -14,6 +14,18 @@
       "range": [5, 500],
       "notes": "Radius of the underground cutaway sphere around the camera target"
     },
+    "aperture_radius_ratio": {
+      "type": "number",
+      "value":   0.7,
+      "range": [0.1, 1],
+      "notes": "Radius of the circular hole in the ground as a fraction of cutaway_radius; the cavity bowl's mouth reads the same number"
+    },
+    "aperture_min_m": {
+      "type": "number",
+      "value": 0.28,
+      "range": [0.05, 5],
+      "notes": "Floor for the aperture radius in metres, so a seedling's cavity still reaches daylight"
+    },
     "transition_ms": {
       "type": "integer",
       "value": 500,
@@ -97,9 +109,47 @@
     },
     "cut_rim_dither_m": {
       "type": "number",
-      "value": 0.35,
-      "range": [0.05, 2],
-      "notes": "Width of the dithered rim where the soil cut fades out instead of ending on a hard discard."
+      "value": 0,
+      "range": [0, 2],
+      "notes": "Width of the dithered rim where the soil cut fades out instead of ending on a hard discard. 0 cuts a clean edge with no speckles: the dithered rim read as brown dots scattered over the opening's lip rather than as a soft edge, and it hid the actual aperture boundary."
+    },
+    "min_extent_m": {
+      "type": "number",
+      "value": 0.05,
+      "range": [0.001, 1],
+      "notes": "Smallest underground extent reported for a plant, metres. Below this there is nothing to size a cavity from."
+    },
+    "surface_progress": {
+      "type": "number",
+      "value": 0.001,
+      "range": [0, 0.2],
+      "notes": "Below this transition progress the plant is treated as still on the surface and the configured radius is reported unchanged."
+    },
+    "min_cutaway_radius_m": {
+      "type": "number",
+      "value": 0.7,
+      "range": [0.1, 5],
+      "notes": "Smallest cutaway radius, metres, so a newly germinated seed still opens a usable view."
+    },
+    "extent_to_radius": {
+      "type": "number",
+      "value": 1.6,
+      "range": [1, 4],
+      "notes": "The pit is this many root-extents wide. The bowl mouth is 70% of this radius, so the factor leaves room for the full root spread."
+    },
+    "auto_open_on_root_growth": {
+      "type": "boolean",
+      "value": true,
+      "notes": "Open Root Sight by itself the moment a buried part starts growing, so a player who grows a root sees the ground open instead of having to know about R. It fires once per new buried part, so a hand-close (R) still stands until the next one starts."
+    },
+    "eye_window_radius_m": {
+      "type": "number",
+      "value": 1.1,
+      "range": [
+        0,
+        4
+      ],
+      "notes": "Radius of the air bubble cut around a buried camera, metres. Root Sight is a hole seen from above, but the camera can fly down into the cavity; the eye then sits inside the soil skin and saw a wall of dirt with no roots behind it. This window keeps air around the eye and fuses with the root bubbles, so a tunnel to the cavity stays open wherever the camera is. Zero disables it and leaves the soil intact around the eye."
     }
   }
 }

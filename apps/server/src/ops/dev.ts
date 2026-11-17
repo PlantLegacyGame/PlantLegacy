@@ -232,6 +232,7 @@ export type DevActionType =
   | 'dev_set_growth'
   | 'dev_fill_energy'
   | 'dev_fill_biomass'
+  | 'dev_fill_resources'
   | 'dev_kill_plant'
   | 'dev_set_tick_rate'
   | 'dev_pause_simulation'
@@ -250,6 +251,8 @@ export type DevActionType =
   | 'dev_regenerate_plant'
   | 'dev_end_season'
   | 'dev_set_weather'
+  | 'dev_grant_mutation'
+  | 'dev_clear_mutations'
   | 'dev_set_config';
 
 export interface DevActionPayload {

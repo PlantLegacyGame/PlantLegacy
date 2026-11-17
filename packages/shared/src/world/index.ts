@@ -32,7 +32,19 @@ export {
   type SurfacePoint,
 } from './sphericalGrid.ts';
 export {
+  DEFAULT_SURFACE_WATER_OPTIONS,
+  SurfaceWaterGrid,
+  type SurfaceWaterOptions,
+  type SurfaceWaterStepResult,
+} from './surfaceWater.ts';
+export {
   DEFAULT_TERRAIN_FIELD,
+  type RiverChannelHit,
+  type RiverPath,
+  type RiverStation,
+  riverChannelAt,
+  riverNearest,
+  riverPath,
   sampleTerrain,
   type TerrainFieldParams,
   type TerrainMaterial,

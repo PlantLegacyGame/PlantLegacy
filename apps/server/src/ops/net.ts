@@ -11,7 +11,6 @@ export interface NetProtoConfig {
   positionQuantization: number;
   angleQuantizationBits: number;
   keyframeIntervalTicks: number;
-  maxVelocityUnitsPerTick: number;
   worldBounds: {
     minX: number;
     maxX: number;
@@ -19,13 +18,21 @@ export interface NetProtoConfig {
     maxZ: number;
   };
   clientSendRateHz: number;
+  /** Broadcast cadence for weather/day-night, independent of the tick rate. */
+  weatherSendRateHz: number;
   helloTimeoutMs: number;
   reconnectWindowMs: number;
 }
 
 import type { ConfigFile } from '@plant-legacy/shared/config';
-import { readInteger, readNumber, readObject } from '@plant-legacy/shared/config';
-import type { Layer, NodeStatModifiers, NodeType } from '@plant-legacy/shared/growth';
+import { readInteger, readObject } from '@plant-legacy/shared/config';
+import type { Layer, NodeStatModifiers, NodeType, PlantNode } from '@plant-legacy/shared/growth';
+
+// One table for the wire, owned by the shared package. This module re-exports it
+// so existing server call sites keep importing from here.
+export { MESSAGE_TYPE } from '@plant-legacy/shared/protocol';
+
+import { type MESSAGE_TYPE, PROTOCOL_VERSION } from '@plant-legacy/shared/protocol';
 
 export function loadNetProtoConfig(configs: Map<string, ConfigFile>): NetProtoConfig {
   const rawWorldBounds = readObject<{
@@ -35,8 +42,20 @@ export function loadNetProtoConfig(configs: Map<string, ConfigFile>): NetProtoCo
     max_z: number;
   }>(configs, 'net_proto', 'world_bounds');
 
+  // One protocol version, in code. `protocol_version` stays in the config so
+  // docs/tasks and the config validator keep describing it, but the two used to
+  // be independent: editing only the JSON changed the server's handshake while
+  // the client kept the constant, and everyone got a version mismatch. The boot
+  // check makes the config agree with the code instead of overriding it.
+  const configuredProtocolVersion = readInteger(configs, 'net_proto', 'protocol_version');
+  if (configuredProtocolVersion !== PROTOCOL_VERSION) {
+    throw new Error(
+      `net_proto.json: protocol_version ${configuredProtocolVersion} must equal PROTOCOL_VERSION ${PROTOCOL_VERSION}; bump both together in @plant-legacy/shared/protocol`,
+    );
+  }
+
   return {
-    protocolVersion: readInteger(configs, 'net_proto', 'protocol_version'),
+    protocolVersion: PROTOCOL_VERSION,
     maxMessageSizeBytes: readInteger(configs, 'net_proto', 'max_message_size_bytes'),
     maxBufferedBytes: readInteger(configs, 'net_proto', 'max_buffered_bytes'),
     maxMessagesPerSecond: readInteger(configs, 'net_proto', 'max_messages_per_second'),
@@ -45,7 +64,6 @@ export function loadNetProtoConfig(configs: Map<string, ConfigFile>): NetProtoCo
     positionQuantization: readInteger(configs, 'net_proto', 'position_quantization'),
     angleQuantizationBits: readInteger(configs, 'net_proto', 'angle_quantization_bits'),
     keyframeIntervalTicks: readInteger(configs, 'net_proto', 'keyframe_interval_ticks'),
-    maxVelocityUnitsPerTick: readNumber(configs, 'net_proto', 'max_velocity_units_per_tick'),
     worldBounds: {
       minX: rawWorldBounds.min_x,
       maxX: rawWorldBounds.max_x,
@@ -53,59 +71,15 @@ export function loadNetProtoConfig(configs: Map<string, ConfigFile>): NetProtoCo
       maxZ: rawWorldBounds.max_z,
     },
     clientSendRateHz: readInteger(configs, 'net_proto', 'client_send_rate_hz'),
+    weatherSendRateHz: readInteger(configs, 'net_proto', 'weather_send_rate_hz'),
     helloTimeoutMs: readInteger(configs, 'net_proto', 'hello_timeout_ms'),
     reconnectWindowMs: readInteger(configs, 'net_proto', 'reconnect_window_ms'),
   };
 }
 
-export const MESSAGE_TYPE = {
-  // Client -> Server
-  HELLO: 1,
-  INPUT: 2,
-  PING: 3,
-  GROWTH_INTENT: 4,
-  RESOURCE_QUERY: 5,
-  PLANT_SYNC_REQUEST: 6,
-  GROWTH_OPTIONS_REQUEST: 7,
-  DEV_ACTION: 8, // Client -> Server: dev panel actions
-  CHAT_MESSAGE: 9, // Client -> Server: chat message
-  // 10 is reserved for WELCOME (server -> client). REPORT used to share it,
-  // which made validateMessage(10, reportPayload) check the WELCOME schema and
-  // silently drop every report.
-  REPORT: 29, // Client -> Server: report a player/message
-  BLOCK: 30, // Client -> Server: mute or unmute a player's chat
-  INVENTORY_REQUEST: 24, // Client -> Server: request full inventory sync
-  INVENTORY_SLOT_USE: 25, // Client -> Server: use item from slot
-  INVENTORY_SLOT_SWAP: 26, // Client -> Server: swap inventory slots
-
-  // Server -> Client
-  WELCOME: 10,
-  STATE: 11,
-  KEYFRAME: 12,
-  REJECT: 13,
-  PONG: 14,
-  ERROR: 15,
-  GROWTH_EVENT: 16,
-  RESOURCE_UPDATE: 17,
-  PLANT_SYNC: 18,
-  PLANT_CREATED: 19,
-  PLANT_REMOVED: 20,
-  WEATHER_UPDATE: 21,
-  SEASON_UPDATE: 31, // Server -> Client: current season and time left before the calamity
-  GROWTH_OPTIONS_RESULT: 22,
-  CHAT_BROADCAST: 23, // Server -> Client: chat message from another player
-  INVENTORY_SYNC: 27, // Server -> Client: full inventory state
-  INVENTORY_SLOT_UPDATE: 28, // Server -> Client: single slot changed
-
-  // T25 terrain (sparse soil edits)
-  TERRAIN_REGION_REQUEST: 32, // Client -> Server: chunks around a point
-  TERRAIN_REGION: 33, // Server -> Client: height deltas and moisture
-  TERRAIN_EDITS: 34, // Server -> Client: tunnels/voids since a revision
-
-  // Dev commands (server -> client)
-  DEV_RESPONSE: 99,
-} as const;
-
+// The message table itself lives in `@plant-legacy/shared/protocol` (imported and
+// re-exported at the top of this file). Two copies of the wire numbers is how
+// REPORT once shared WELCOME's number 10 and every report was silently dropped.
 export type MessageType = (typeof MESSAGE_TYPE)[keyof typeof MESSAGE_TYPE];
 
 export interface PlayerInput {
@@ -130,6 +104,111 @@ export interface SeasonUpdatePayload {
   lengthTicks: number;
   /** True only on the update that announces a rollover. */
   calamity: boolean;
+}
+
+export interface MutationStatePayload {
+  plantId: string;
+  mutations: Array<{
+    id: string;
+    name: string;
+    kind: string;
+    visualSignature: number;
+    energyPerSecond: number;
+    biomassPerSecond: number;
+    level: number;
+    maxLevel: number;
+    levelCostEnergy: number;
+    levelCostBiomass: number;
+    levelBlocked?: string;
+  }>;
+  totalUpkeepEnergyPerSecond: number;
+  /** Plant-wide look parameters (petal count, leaf and seed scale). */
+  appearance: { petalCount: number; leafScale: number; seedScale: number };
+  /** Adaptive pressure per growth category; the readout, never a rule. */
+  pressure: Record<string, number>;
+  /** Strongest visual signature held (0 = none). */
+  signature: number;
+  shedCooldownRemainingS: number;
+  /**
+   * Cards laid out for a pending level-up. Null unless the player asked, so the
+   * panel only shows a deal that came from the server.
+   */
+  levelOffer: {
+    mutationId: string;
+    level: number;
+    cards: Array<{ id: string; label: string; step: number }>;
+  } | null;
+}
+
+export interface MutationShedPayload {
+  plantId: string;
+  mutationId: string;
+}
+
+/**
+ * Level a mutation: no `cardId` deals the cards, a `cardId` takes one of them.
+ */
+export interface MutationLevelPayload {
+  plantId: string;
+  mutationId: string;
+  cardId?: string;
+}
+
+export interface RerootIntentPayload {
+  /** World XZ direction the player is steering the crawl. Normalised server-side. */
+  dirX: number;
+  dirZ: number;
+}
+
+export interface PlantDamagePayload {
+  plantId: string;
+  nodeId: string | null;
+  destroyedNodeIds: string[];
+  source: 'weather' | 'tool' | 'herbivore' | 'terrain';
+  amount: number;
+  totalBiomass: number;
+}
+
+export interface PlantUprootPayload {
+  plantId: string;
+  phase: 'rooted' | 'uprooted' | 'tumbling' | 'rerooting';
+  cause?: 'saturation' | 'gust' | 'collapse' | 'structural_damage';
+  x: number;
+  y: number;
+  z: number;
+  tiltRad: number;
+  headingRad: number;
+  /** Seconds left to reach soil before settling is refused. */
+  windowRemainingS: number;
+  /** Node positions after the rigid uproot transform, for immediate redraw. */
+  nodes?: Array<{ id: string; x: number; y: number; z: number }>;
+}
+
+export interface DropSpawnPayload {
+  id: string;
+  kind: 'fragment' | 'remains' | 'dung';
+  x: number;
+  y: number;
+  z: number;
+  sourcePlantId: string | null;
+  expiresAtMs: number;
+}
+
+export interface FaunaEventPayload {
+  phase: 'start' | 'end';
+  x: number;
+  z: number;
+  radiusM: number;
+}
+
+export interface KillCreditPayload {
+  plantId: string;
+  credit: {
+    kind: 'player' | 'plant' | 'none';
+    playerId: string | null;
+    plantId: string | null;
+    amount: number;
+  };
 }
 
 export interface WelcomePayload {
@@ -158,7 +237,7 @@ export interface WelcomePayload {
    * Set when this player's previous plant died while they were away and the
    * server has just handed them a replacement seed.
    */
-  previousPlantDied?: { cause: string; secondsAgo: number };
+  previousPlantDied?: { cause: string; source?: string; secondsAgo: number };
   // Full node set for immediate client render (ADR-021)
   nodes?: Array<{
     id: string;
@@ -169,6 +248,8 @@ export interface WelcomePayload {
     y: number;
     z: number;
     biomass: number;
+    /** 0..1 tissue health against this part's own quota. */
+    health?: number;
     age: number;
     parentId: string | null;
     children: string[];
@@ -180,6 +261,8 @@ export interface WelcomePayload {
     lastGrowthTick: number;
     growthProgress: number;
     isSeed: boolean;
+    /** T04: signature index this node draws (0 = none). */
+    mutationFlags?: number;
     // Server-authoritative target position for connected growth rendering
     targetX?: number;
     targetY?: number;
@@ -275,6 +358,8 @@ export interface GrowthEventNode {
   y: number;
   z: number;
   biomass: number;
+  /** 0..1 tissue health against this part's own quota. */
+  health?: number;
   age: number;
   parentId: string | null;
   children: string[];
@@ -286,6 +371,8 @@ export interface GrowthEventNode {
   lastGrowthTick: number;
   growthProgress?: number;
   isSeed?: boolean;
+  /** T04: signature index this node draws (0 = none). */
+  mutationFlags?: number;
   // Server-authoritative growth timing for client sync
   growthTimeSeconds?: number;
   growthStartTick?: number;
@@ -315,6 +402,14 @@ export interface PlantSyncPayload {
     totalBiomass: number;
     totalEnergy: number;
     totalUpkeep: number;
+    /** T04 look parameters, so a rival draws its own petals and scales. */
+    appearance?: { petalCount: number; leafScale: number; seedScale: number };
+    /** Dominant mutation's pigment, so a rival draws its own colours. */
+    pigment?: {
+      visualSignature: number;
+      visualParams: [number, number, number];
+      visualTarget: 'foliage' | 'woody' | 'seed' | 'bloom' | 'whole' | 'bark';
+    };
     nodes: Array<{
       id: string;
       plantId: string;
@@ -324,6 +419,8 @@ export interface PlantSyncPayload {
       y: number;
       z: number;
       biomass: number;
+      /** 0..1 tissue health against this part's own quota. */
+      health?: number;
       age: number;
       parentId: string | null;
       children: string[];
@@ -335,6 +432,7 @@ export interface PlantSyncPayload {
       lastGrowthTick: number;
       growthProgress?: number;
       isSeed?: boolean;
+      mutationFlags?: number;
       // Server-authoritative growth timing for client sync
       growthTimeSeconds?: number;
       growthStartTick?: number;
@@ -350,6 +448,14 @@ export interface PlantCreatedPayload {
     totalBiomass: number;
     totalEnergy: number;
     totalUpkeep: number;
+    /** T04 look parameters, so a rival draws its own petals and scales. */
+    appearance?: { petalCount: number; leafScale: number; seedScale: number };
+    /** Dominant mutation's pigment, so a rival draws its own colours. */
+    pigment?: {
+      visualSignature: number;
+      visualParams: [number, number, number];
+      visualTarget: 'foliage' | 'woody' | 'seed' | 'bloom' | 'whole' | 'bark';
+    };
     nodes: Array<{
       id: string;
       plantId: string;
@@ -359,6 +465,8 @@ export interface PlantCreatedPayload {
       y: number;
       z: number;
       biomass: number;
+      /** 0..1 tissue health against this part's own quota. */
+      health?: number;
       age: number;
       parentId: string | null;
       children: string[];
@@ -370,6 +478,7 @@ export interface PlantCreatedPayload {
       lastGrowthTick: number;
       growthProgress: number;
       isSeed: boolean;
+      mutationFlags?: number;
       // Server-authoritative growth timing for client sync
       growthTimeSeconds?: number;
       growthStartTick?: number;
@@ -394,33 +503,57 @@ export function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
 
-export interface MovementValidationResult {
-  valid: boolean;
-  newX?: number;
-  newZ?: number;
-  newRotation?: number;
-  reason?: string;
-}
+// `validateMovement` used to live here: it checked INPUT against a velocity
+// limit and world bounds, and no message handler ever called it, because there
+// is no server-side avatar to move (DESIGN Rule 1 - WASD pans the camera). Its
+// tests therefore certified a rule the running game did not have. INPUT is an
+// ack-only heartbeat; the server keeps `lastInputTick` and nothing else.
 
-export function validateMovement(
-  input: PlayerInput,
-  config: NetProtoConfig,
-  _currentTick: number,
-): MovementValidationResult {
-  // Camera pan validation - camera is independent entity (DESIGN.md Rule 1)
-  // Check velocity bounds
-  const maxVelocity = config.maxVelocityUnitsPerTick;
-  let moveX = 0;
-  let moveZ = 0;
-  if (input.moveForward) moveZ -= 1;
-  if (input.moveBackward) moveZ += 1;
-  if (input.moveLeft) moveX -= 1;
-  if (input.moveRight) moveX += 1;
-  const velocity = Math.sqrt(moveX * moveX + moveZ * moveZ);
-  if (velocity > maxVelocity) {
-    return { valid: false, reason: 'exceeds_max_velocity' };
-  }
-  // World bounds check - camera can move freely within world bounds
-  // The actual position is managed client-side; server just validates velocity
-  return { valid: true };
+/**
+ * The wire form of one plant node.
+ *
+ * Every payload that carries nodes - WELCOME, PLANT_SYNC, the growth event and
+ * PLANT_CREATED - has to carry the same fields. It did not: PLANT_CREATED
+ * shipped positions only, so every rival plant (and every body in the mutation
+ * gallery) was drawn with guessed joints, and the attach fraction was missing
+ * everywhere, so a lateral root or a branch could not be placed part-way down
+ * its parent. One builder for all four means a field can no longer be
+ * forgotten in one of them.
+ */
+export function nodeWireFields(node: PlantNode, health?: number) {
+  return {
+    id: node.id,
+    plantId: node.plantId,
+    type: node.type,
+    layer: node.layer,
+    x: node.x,
+    y: node.y,
+    z: node.z,
+    biomass: node.biomass,
+    health,
+    age: node.age,
+    parentId: node.parentId,
+    children: node.children,
+    statModifiers: node.statModifiers,
+    resourceDrawWater: node.resourceDrawWater,
+    resourceDrawNutrients: node.resourceDrawNutrients,
+    upkeepBiomassPerSecond: node.upkeepBiomassPerSecond,
+    growthDirectionBias: node.growthDirectionBias,
+    lastGrowthTick: node.lastGrowthTick,
+    growthProgress: node.growthProgress ?? 1,
+    isSeed: node.isSeed ?? false,
+    mutationFlags: node.mutationFlags ?? 0,
+    radius: node.radius,
+    // Where this part is drawn: the point it left its parent, the point it is
+    // growing toward, and how far along its parent segment it leaves.
+    parentAttachX: node.parentAttachX,
+    parentAttachY: node.parentAttachY,
+    parentAttachZ: node.parentAttachZ,
+    attachFraction: node.attachFraction,
+    targetX: node.targetX,
+    targetY: node.targetY,
+    targetZ: node.targetZ,
+    growthTimeSeconds: node.growthTimeSeconds,
+    growthStartTick: node.growthStartTick,
+  };
 }

@@ -27,6 +27,8 @@ export interface PlantNodeData {
   mutations?: string[];
   biomass: number;
   isOwnPlant?: boolean;
+  /** Server plant id, so per-plant appearance survives the flat node list. */
+  plantId?: string;
   spawnTime?: number;
   growthProgress?: number;
   isSeed?: boolean;
@@ -37,6 +39,17 @@ export interface PlantNodeData {
   parentAttachZ?: number;
   /** Where along the parent's own segment this node leaves it (1 = its end). */
   attachFraction?: number;
+  /**
+   * Joint offset from the parent's drawn position, in metres.
+   *
+   * A streamed crawl pose is interpolated, so the attachment point cannot be
+   * taken from the packet while the node positions are still easing: it is a
+   * fixed offset on the same rigid body and is re-derived from the parent's
+   * drawn position every frame.
+   */
+  parentAttachOffsetX?: number;
+  parentAttachOffsetY?: number;
+  parentAttachOffsetZ?: number;
   // Server-authoritative target position where a growing node ends up.
   // When present and growthProgress < 1, the connector tube/segment runs from
   // the parent to this target (scaled by growthProgress), so new growth is

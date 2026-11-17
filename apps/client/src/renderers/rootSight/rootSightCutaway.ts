@@ -10,18 +10,35 @@
  */
 import type { PlantNodeData } from '../plant/plantNodeData.js';
 
-/** Smallest extent reported for a plant, in world units. */
-const MIN_EXTENT = 0.05;
-/** Inside this progress the plant is treated as still on the surface. */
-const SURFACE_PROGRESS = 0.001;
-/** Smallest cutaway, so a newly germinated seed still opens a usable view. */
-const MIN_CUTAWAY_RADIUS = 0.7;
 /**
- * The pit is drawn this many root-extents wide. The bowl mouth is only 70% of
- * this radius (see CAVITY_MOUTH_FRACTION), so the extent factor has to leave
- * room for the full root spread, not just the tip distance.
+ * Sizing rules for the cutaway, all from `config/root_sight.json`.
+ *
+ * They used to be four literals in this file (RULE_3): the configured radius
+ * capped the pit but the floor, the extent factor and the smallest radius a
+ * seedling could open were compiled in, so tuning the file could not change
+ * the shape of the hole.
  */
-const EXTENT_TO_RADIUS = 1.6;
+export interface RootSightSizing {
+  /** Smallest extent reported for a plant, metres (`min_extent_m`). */
+  minExtentM: number;
+  /** Inside this progress the plant is treated as still on the surface. */
+  surfaceProgress: number;
+  /** Smallest cutaway, so a germinated seed still opens a usable view. */
+  minCutawayRadiusM: number;
+  /**
+   * The pit is drawn this many root-extents wide. The bowl mouth is only 70% of
+   * this radius, so the factor leaves room for the full root spread.
+   */
+  extentToRadius: number;
+}
+
+/** Fallbacks matching `config/root_sight.json`, for tests and a failed load. */
+export const DEFAULT_ROOT_SIGHT_SIZING: RootSightSizing = {
+  minExtentM: 0.05,
+  surfaceProgress: 0.001,
+  minCutawayRadiusM: 0.7,
+  extentToRadius: 1.6,
+};
 
 /**
  * True for the parts that live under the soil line. Client nodes are placed in
@@ -31,6 +48,11 @@ const EXTENT_TO_RADIUS = 1.6;
  * roots spread.
  */
 function underground(node: PlantNodeData): boolean {
+  // Type and layer only. The last test used to be `position.y < -0.01`, the
+  // same absolute-world-Y assumption that was fixed for underground detection:
+  // on a planet the soil line is not Y = 0, so a buried root on a rise has a
+  // positive Y and a surface node near the pole can sit below zero. The type
+  // flags describe the part; the height frame must come from the terrain.
   return (
     node.layer === 'root' ||
     node.isSeed === true ||
@@ -38,8 +60,7 @@ function underground(node: PlantNodeData): boolean {
     node.nodeType === 'radicle' ||
     node.nodeType === 'root' ||
     node.nodeType === 'lateral_root' ||
-    node.type === 0 ||
-    node.position.y < -0.01
+    node.type === 0
   );
 }
 
@@ -50,18 +71,22 @@ function underground(node: PlantNodeData): boolean {
  * not widen the root cavity by five metres. The seed itself is the anchor even
  * though it sits on the surface.
  */
-export function plantExtent(nodes: Iterable<PlantNodeData>): number {
+export function plantExtent(
+  nodes: Iterable<PlantNodeData>,
+  sizing: RootSightSizing = DEFAULT_ROOT_SIGHT_SIZING,
+): number {
+  const minExtent = Math.max(0.001, sizing.minExtentM);
   const own: PlantNodeData[] = [];
   for (const node of nodes) {
     if (node.isOwnPlant) own.push(node);
   }
-  if (own.length === 0) return MIN_EXTENT;
+  if (own.length === 0) return minExtent;
 
   const root = own.find((node) => node.parentId === null) ?? own[0];
   const roots = own.filter(underground);
-  if (roots.length === 0) return MIN_EXTENT;
+  if (roots.length === 0) return minExtent;
 
-  let extent = MIN_EXTENT;
+  let extent = minExtent;
   for (const node of roots) {
     // A newly requested node is in the plant graph at its full target position
     // before its growth animation starts. Sizing the cavity from that target
@@ -92,7 +117,11 @@ export function resolveCutawayRadius(
   extent: number,
   easedProgress: number,
   configuredRadius: number,
+  sizing: RootSightSizing = DEFAULT_ROOT_SIGHT_SIZING,
 ): number {
-  if (easedProgress <= SURFACE_PROGRESS) return configuredRadius;
-  return Math.min(configuredRadius, Math.max(MIN_CUTAWAY_RADIUS, extent * EXTENT_TO_RADIUS));
+  if (easedProgress <= sizing.surfaceProgress) return configuredRadius;
+  return Math.min(
+    configuredRadius,
+    Math.max(sizing.minCutawayRadiusM, extent * sizing.extentToRadius),
+  );
 }

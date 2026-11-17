@@ -22,3 +22,10 @@ coverage/
 /screens/
 /screenshots/
 /docs/verify/
+
+# Abyssal Garden reference checkout (MIT, study only — never imported by code)
+/tools/abyssal-garden-reference/
+
+# sim-bots run output
+/tools/sim-bots/last-run.json
+/tools/bot/last-run/

@@ -14,7 +14,14 @@
  * This class owns the GL state, the uniforms and the render order.
  */
 import * as THREE from 'three';
+import type { AtmosphereParams } from './environment/atmosphere.js';
 import { MeshPlantRenderer } from './MeshPlantRenderer.js';
+import {
+  type MutationLook,
+  type MutationLookStack,
+  NEUTRAL_LOOK,
+  signatureStyle,
+} from './plant/mutations.js';
 import type { PlantNodeData } from './plant/plantNodeData.js';
 import {
   buildSdfGeometry,
@@ -192,6 +199,7 @@ class PlantRenderer {
 
   // Mesh-based L0/L1 renderer (replaces SDF raymarch for close plants)
   private meshRenderer: MeshPlantRenderer | null = null;
+  private lastLook: MutationLook = NEUTRAL_LOOK;
   private useMeshL0L1 = true;
 
   constructor(config: PlantRendererConfig) {
@@ -219,6 +227,26 @@ class PlantRenderer {
     });
   }
 
+  /**
+   * AL-04: the plants, the ground and the sky share one atmosphere model, so a
+   * plant at distance fades into the same air as the terrain behind it.
+   */
+  setAtmosphere(params: AtmosphereParams): void {
+    const extinction = this.uniforms.uAtmoExtinction;
+    if (!extinction) return;
+    (extinction.value as THREE.Vector3).set(
+      params.extinction[0],
+      params.extinction[1],
+      params.extinction[2],
+    );
+    this.uniforms.uAtmoScaleHeight.value = params.scaleHeightM;
+    this.uniforms.uAtmoSunPhaseG.value = params.sunPhaseG;
+    this.uniforms.uAtmoInScatter.value = params.inScatter;
+    this.uniforms.uAtmoHorizonBoost.value = params.horizonBoost;
+    // Near plants are meshes; they need the same air as the raymarched ones.
+    this.meshRenderer?.setAtmosphere(params, this.uniforms.uSunDir.value as THREE.Vector3);
+  }
+
   /** Create the SDF raymarching shader material and its uniforms. */
   private createSDFShader(): void {
     this.uniforms = {
@@ -241,17 +269,13 @@ class PlantRenderer {
       uNodeCount: new THREE.Uniform(0),
       uSegments: new THREE.Uniform(null),
       uNodes: new THREE.Uniform(null),
-      uRootSightEnabled: new THREE.Uniform(false),
-      uRootSightProgress: new THREE.Uniform(0),
-      uRootSightCenter: new THREE.Uniform(new THREE.Vector3()),
-      uRootSightRadius: new THREE.Uniform(0),
-      uRootSightCutawayRadius: new THREE.Uniform(this.config.rootSightCutawayRadius),
-      uRootSightSoilOpacity: new THREE.Uniform(this.config.rootSightSoilOpacity),
       // Root Sight SDF aura
       uRootSightAuraEnabled: new THREE.Uniform(false),
       uRootAuraNodeCount: new THREE.Uniform(0),
       uRootAuraTex: new THREE.Uniform(null),
-      uRootAuraRadius: new THREE.Uniform(this.config.rootSightCutawayRadius * 0.1),
+      // The aura is its own tunable (`root_aura_radius`), not a tenth of the
+      // cutaway radius. Deriving it meant editing the hole resized the glow.
+      uRootAuraRadius: new THREE.Uniform(this.config.rootAuraRadius),
       uOwnRootHighlightColor: new THREE.Uniform(new THREE.Color(this.config.ownRootHighlightColor)),
       uRivalRootHighlightColor: new THREE.Uniform(
         new THREE.Color(this.config.rivalRootHighlightColor),
@@ -262,12 +286,19 @@ class PlantRenderer {
       uMutation0: new THREE.Uniform(this.config.mutation0Param),
       uMutation1: new THREE.Uniform(this.config.mutation1Param),
       uMutation2: new THREE.Uniform(this.config.mutation2Param),
+      uMutationTint: new THREE.Uniform(new THREE.Color(1, 1, 1)),
       uPhotosynthesisViz: new THREE.Uniform(this.config.photosynthesisViz),
       uWaterFlowViz: new THREE.Uniform(this.config.waterFlowViz),
       uNutrientFlowViz: new THREE.Uniform(this.config.nutrientFlowViz),
       uBoundingBoxPadding: new THREE.Uniform(this.config.boundingBoxPadding),
       // Sun lighting
       uSunDir: new THREE.Uniform(new THREE.Vector3(0.5, 1.0, 0.3).normalize()),
+      // AL-04: shared atmosphere, in place of the shader's own fog.
+      uAtmoExtinction: new THREE.Uniform(new THREE.Vector3(0.00075, 0.0009, 0.0013)),
+      uAtmoScaleHeight: new THREE.Uniform(700),
+      uAtmoSunPhaseG: new THREE.Uniform(0.72),
+      uAtmoInScatter: new THREE.Uniform(0.6),
+      uAtmoHorizonBoost: new THREE.Uniform(0.4),
       uSunColor: new THREE.Uniform(new THREE.Color(0xffffee)),
       uSunIntensity: new THREE.Uniform(1.4),
     };
@@ -310,7 +341,29 @@ class PlantRenderer {
    * Accepts both the legacy format (type: number) and the typed format.
    */
   updatePlantData(nodes: PlantNodeData[]): void {
+    this.updateSdfFrame(nodes);
+
+    // Feed the mesh-based L0/L1 renderer (used when SDF raymarching is disabled).
+    this.meshRenderer?.updatePlantData(nodes);
+
+    this.updateRootAura(nodes);
+  }
+
+  /**
+   * Refresh the raymarched body only.
+   *
+   * Uprooted poses are interpolated between ticks, and the SDF pass draws
+   * straight from node data: the texture has to be re-packed for every eazed
+   * frame or the body would step at the tick rate while the ground, camera and
+   * Root Sight move smoothly. Rebuilding the mesh geometry per frame is not part
+   * of this - that path is not what draws a plant at this range.
+   */
+  updateSdfFrame(nodes: PlantNodeData[]): void {
     const geometry = buildSdfGeometry(nodes);
+
+    // The mutation state owns the pigment (signature + that mutation's own
+    // visual_params); deriving it again from node flags would overwrite the
+    // per-mutation look with the bare signature.
 
     this.uploadSegmentData(geometry.segments);
     this.uploadNodeData(geometry.nodes);
@@ -320,11 +373,6 @@ class PlantRenderer {
 
     this.uniforms.uSegmentCount.value = this.segmentCount;
     this.uniforms.uNodeCount.value = this.nodeCount;
-
-    // Feed the mesh-based L0/L1 renderer (used when SDF raymarching is disabled).
-    this.meshRenderer?.updatePlantData(nodes);
-
-    this.updateRootAura(nodes);
   }
 
   /**
@@ -333,12 +381,14 @@ class PlantRenderer {
    */
   private updateRootAura(nodes: PlantNodeData[]): void {
     // Collect subterranean nodes (y < 0 or root layer) of player or rivals
-    const rootNodes = nodes.filter(
-      (n) => n.layer === 'root' || (n.position && n.position.y < -0.01) || n.type === 0,
-    );
+    // Type and layer only: `position.y < -0.01` assumed the soil line is Y = 0,
+    // so on the planet it matched every buried root and no surface node (or the
+    // reverse near the pole). The flags describe the part; the height frame
+    // belongs to the terrain.
+    const rootNodes = nodes.filter((n) => n.layer === 'root' || n.type === 0);
 
     this.rootAuraNodeCount = Math.min(rootNodes.length, ROOT_AURA_CAPACITY);
-    this.rootAuraRadius = this.config.rootSightCutawayRadius * 0.1;
+    this.rootAuraRadius = this.config.rootAuraRadius;
 
     const data = new Float32Array(ROOT_AURA_CAPACITY * 4);
     for (let i = 0; i < this.rootAuraNodeCount; i++) {
@@ -422,19 +472,77 @@ class PlantRenderer {
   /** Set Root Sight mode. */
   setRootSightState(
     enabled: boolean,
-    progress: number,
-    center: THREE.Vector3,
-    radiusM?: number,
+    _progress: number,
+    _center: THREE.Vector3,
+    _radiusM: number,
   ): void {
-    this.uniforms.uRootSightEnabled.value = enabled;
-    this.uniforms.uRootSightProgress.value = progress;
-    this.uniforms.uRootSightCenter.value.copy(center);
-    this.uniforms.uRootSightRadius.value = radiusM ?? this.config.rootSightCutawayRadius;
-    // Enable aura when root sight is active
+    // Only the aura is drawn by this pass: the hole itself belongs to the soil
+    // shader, and roots are exposed by the plant pass's soil test. The cutaway
+    // uniforms this used to write were declared in GLSL and never read.
     this.uniforms.uRootSightAuraEnabled.value = enabled;
     this.uniforms.uRootAuraNodeCount.value = this.rootAuraNodeCount;
     this.uniforms.uRootAuraTex.value = this.rootAuraTexture;
     this.uniforms.uRootAuraRadius.value = this.rootAuraRadius;
+  }
+
+  /** Map a T04 signature index onto the shader's three mutation parameters. */
+  /** Plant-wide shape parameters from the mutation set (petals, leaf and seed scale). */
+  setMutationAppearance(appearance: {
+    petalCount: number;
+    leafScale: number;
+    seedScale: number;
+  }): void {
+    this.meshRenderer?.setMutationAppearance(appearance);
+  }
+
+  /** The pigment currently applied to the drawn plant (own plant). */
+  getPlantLook(): MutationLook {
+    return this.lastLook;
+  }
+
+  /**
+   * Pigment for the plant this renderer draws (own plant).
+   *
+   * The SDF pass draws one organism, so it maps the composed stack onto its
+   * three mutation uniforms at lower fidelity (ADR-054); the mesh renderer it
+   * feeds gets the full per-organ stack.
+   */
+  setPlantLook(plantId: string, look: MutationLookStack): void {
+    this.lastLook = look.looks.foliage;
+    this.applyMutationUniforms(look.looks.foliage);
+    this.meshRenderer?.setPlantLook(plantId, look);
+    this.meshRenderer?.setPlantLook('own', look);
+  }
+
+  /** A rival's pigment: mesh-only, never the global own-plant uniforms. */
+  setRivalLook(plantId: string, look: MutationLookStack): void {
+    this.meshRenderer?.setPlantLook(plantId, look);
+    this.meshRenderer?.setPlantLook('rival', look);
+  }
+
+  /** Write one composed look into the SDF pass's three mutation uniforms. */
+  private applyMutationUniforms(look: MutationLook): void {
+    this.uniforms.uMutation0.value = look.glow;
+    this.uniforms.uMutation1.value = look.barkScale;
+    this.uniforms.uMutation2.value = look.variegation;
+    (this.uniforms.uMutationTint.value as THREE.Color).setRGB(
+      look.tint[0],
+      look.tint[1],
+      look.tint[2],
+    );
+  }
+
+  /** A rival's own look, from the plant sync payload. */
+  setPlantAppearance(
+    plantId: string,
+    appearance: { petalCount: number; leafScale: number; seedScale: number },
+  ): void {
+    this.meshRenderer?.setPlantAppearance(plantId, appearance);
+  }
+
+  applyMutationSignature(signature: number): void {
+    // Legacy entry point: a bare signature becomes a one-mutation stack.
+    this.applyMutationUniforms(signatureStyle(signature));
   }
 
   /** Update configuration. */
@@ -447,14 +555,12 @@ class PlantRenderer {
     this.uniforms.uWindStrength.value = this.config.windStrength;
     this.uniforms.uWindSpeed.value = this.config.windSpeed;
     this.uniforms.uHealthTintStrength.value = this.config.healthTintStrength;
-    this.uniforms.uMutation0.value = this.config.mutation0Param;
-    this.uniforms.uMutation1.value = this.config.mutation1Param;
-    this.uniforms.uMutation2.value = this.config.mutation2Param;
+    // Mutation uniforms are owned by applyMutationSignature; a config update
+    // must not wipe the plant's current signature.
     this.uniforms.uPhotosynthesisViz.value = this.config.photosynthesisViz;
     this.uniforms.uWaterFlowViz.value = this.config.waterFlowViz;
     this.uniforms.uNutrientFlowViz.value = this.config.nutrientFlowViz;
-    this.uniforms.uRootSightCutawayRadius.value = this.config.rootSightCutawayRadius;
-    this.uniforms.uRootSightSoilOpacity.value = this.config.rootSightSoilOpacity;
+    this.uniforms.uRootAuraRadius.value = this.config.rootAuraRadius;
     this.uniforms.uOwnRootHighlightColor.value.set(this.config.ownRootHighlightColor);
     this.uniforms.uRivalRootHighlightColor.value.set(this.config.rivalRootHighlightColor);
     this.uniforms.uEmergenceDuration.value = this.config.emergenceDuration;

@@ -117,6 +117,37 @@ describe('EntryFlowStateMachine', () => {
     assert.equal(machine.step, 'connecting');
   });
 
+  it('keeps death stats for the lost screen and clears them on the next seed', () => {
+    const machine = createEntryFlowStateMachine();
+    entryFlowBoot(machine, true);
+    entryFlowWorldReady(machine);
+
+    const stats = {
+      healthFraction: 0,
+      biomass: 0,
+      biomassRatePerSecond: null,
+      peakBiomass: 12.5,
+      energy: 0,
+      storedWater: 0,
+      waterCapacity: 40,
+      storedMinerals: 0,
+      mineralCapacity: 10,
+      nodeCount: 0,
+      peakNodeCount: 4,
+      mutationCount: 0,
+      mutationUpkeepPerSecond: 0,
+      ageSeconds: 120,
+      dayNumber: 2,
+      clock: '07:30',
+    };
+    entryFlowPlantLost(machine, 'Dried out', { cause: 'dehydration', stats });
+    assert.equal(machine.lostStats?.cause, 'dehydration');
+    assert.equal(machine.lostStats?.stats.peakBiomass, 12.5);
+
+    entryFlowReseed(machine);
+    assert.equal(machine.lostStats, null);
+  });
+
   it('signing out forgets the session identity', () => {
     const machine = createEntryFlowStateMachine();
     entryFlowBoot(machine, false);

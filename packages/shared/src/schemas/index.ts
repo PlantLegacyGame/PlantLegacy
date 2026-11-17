@@ -1,5 +1,13 @@
 export type { DeathRecord } from './death-record.ts';
-export type { ItemCategory, ItemDefinition, ItemFlags } from './item.ts';
+export type {
+  ItemCategory,
+  ItemDefinition,
+  ItemFlags,
+  ItemResourceUse,
+  ItemUnavailableUse,
+  ItemUse,
+  ItemUseKind,
+} from './item.ts';
 export {
   flagsAllowListing,
   flagsAllowMail,

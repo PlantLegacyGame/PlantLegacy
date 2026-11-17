@@ -343,3 +343,119 @@ describe('season calendar persistence', () => {
     assert.deepEqual(seen[1], ['world_0', 5, 10, null]);
   });
 });
+
+describe('T04 mutation block (PLNT v2, levels in v4)', () => {
+  it('restores mutations, levels, cards, pressure and the shed cooldown', () => {
+    const plant = makePlant(3);
+    plant.mutations = [
+      { id: 'thickened_bark', acquiredTick: 4242, nodeId: null, level: 1, cards: [] },
+      {
+        id: 'spined_epidermis',
+        acquiredTick: 9001,
+        nodeId: 'p_node_2',
+        level: 3,
+        cards: ['sizeMultiplier', 'energyUpkeepMultiplier'],
+      },
+    ];
+    plant.mutationPressure = {
+      root: 1.5,
+      stem: 2.5,
+      leaf: 0.25,
+      flower: 0,
+      spore_sac: 0,
+      vine: 0,
+      defense: 0,
+      storage: 3,
+    };
+    plant.mutationShedCooldownUntil = 9000;
+    plant.mutationSignature = 12;
+
+    const restored = deserializePlant(serializePlant(plant));
+
+    assert.deepEqual(restored.mutations, plant.mutations);
+    assert.equal(restored.mutations?.[1].level, 3);
+    assert.deepEqual(restored.mutations?.[1].cards, ['sizeMultiplier', 'energyUpkeepMultiplier']);
+    assert.equal(restored.mutationPressure?.stem, 2.5);
+    assert.equal(restored.mutationPressure?.storage, 3);
+    assert.equal(restored.mutationShedCooldownUntil, 9000);
+    assert.equal(restored.mutationSignature, 12);
+  });
+
+  it('restores a plant with no mutations as an empty set', () => {
+    const restored = deserializePlant(serializePlant(makePlant(2)));
+    assert.deepEqual(restored.mutations, []);
+    assert.equal(restored.mutationSignature, 0);
+  });
+});
+
+describe('event log persistence (INV-PR-07)', () => {
+  it('loads snapshots together with their saved event logs', async () => {
+    const plant = makePlant(2);
+    const events = [{ type: 'growth' as const, tick: 7, data: { nodeId: 'n1' } }];
+    const pool = {
+      query: async () => ({ rows: [{ snapshot: serializePlant(plant), event_log: events }] }),
+    } as unknown as Pool;
+    const persistence = new PlantPersistence(pool, 'w1');
+
+    const loaded = await persistence.loadAllPlantsWithEvents();
+
+    assert.equal(loaded.length, 1);
+    assert.equal(loaded[0]?.snapshot.id, plant.id);
+    assert.deepEqual(loaded[0]?.events, events);
+  });
+
+  it('keeps the plant when only its event log is malformed', async () => {
+    const plant = makePlant(2);
+    const errors: unknown[] = [];
+    const pool = {
+      query: async () => ({ rows: [{ snapshot: serializePlant(plant), event_log: '{not json' }] }),
+    } as unknown as Pool;
+    const persistence = new PlantPersistence(pool, 'w1', (error) => errors.push(error));
+
+    const loaded = await persistence.loadAllPlantsWithEvents();
+
+    assert.equal(loaded.length, 1);
+    assert.deepEqual(loaded[0]?.events, []);
+    assert.equal(errors.length, 1);
+  });
+
+  it('skips a corrupt snapshot without losing the other rows', async () => {
+    const good = makePlant(2);
+    const pool = {
+      query: async () => ({
+        rows: [
+          { snapshot: Buffer.from('not-a-snapshot'), event_log: '[]' },
+          { snapshot: serializePlant(good), event_log: '[]' },
+        ],
+      }),
+    } as unknown as Pool;
+    const persistence = new PlantPersistence(pool, 'w1');
+
+    const loaded = await persistence.loadAllPlantsWithEvents();
+
+    assert.equal(loaded.length, 1);
+    assert.equal(loaded[0]?.snapshot.id, good.id);
+  });
+
+  it('writes world events with the world id and tick', async () => {
+    const calls: unknown[][] = [];
+    const pool = {
+      query: async (...args: unknown[]) => {
+        calls.push(args);
+        return { rows: [] };
+      },
+    } as unknown as Pool;
+    const persistence = new PlantPersistence(pool, 'w1');
+
+    await persistence.saveWorldEvent('plant_death', 42, { plantId: 'p1', cause: 'damage' });
+
+    assert.equal(calls.length, 1);
+    const params = calls[0]?.[1] as unknown[];
+    assert.deepEqual(params, [
+      'w1',
+      'plant_death',
+      JSON.stringify({ plantId: 'p1', cause: 'damage' }),
+      42,
+    ]);
+  });
+});

@@ -9,11 +9,48 @@
  * RULE_3: every tunable here comes from config. Nothing is hardcoded.
  */
 
+import { type BenchmarkPose, DEFAULT_BENCHMARK_POSES } from '../dev/benchmark.js';
+
+/** ADR-027: one organism size class, as framing and detail multipliers. */
+export interface SizeClassConfig {
+  id: string;
+  cameraMaxDistanceMultiplier: number;
+  detailedPlantBudgetMultiplier: number;
+  lodSizeBias: number;
+}
+
 export interface RenderConfig {
   targetFps: number;
   fpsWarningThreshold: number;
   resolutionFloor: number;
   maxPixelRatio: number;
+  /** AL-03: frame cost below which detail is restored, in ms. */
+  gpuBandMinMs: number;
+  /** AL-03: frame cost above which detail is spent, in ms. */
+  gpuBandMaxMs: number;
+  /** AL-03: minimum time between band decisions, in ms. */
+  qualityHoldMs: number;
+  /** AL-03: lowest draw-distance scale before the tier is lowered. */
+  drawDistanceFloor: number;
+  /** AL-03: cost is ignored for this long after the first sample, in ms. */
+  qualityWarmupMs: number;
+  /** AL-03: EMA weight for a new frame-cost sample, 0.01..1. */
+  qualitySmoothing: number;
+  /** AL-04: per-channel extinction per metre at sea level (linear RGB). */
+  atmosphereExtinction: [number, number, number];
+  /** AL-04: height over which air density falls by 1/e, in metres. */
+  atmosphereScaleHeightM: number;
+  /** AL-04: Henyey-Greenstein anisotropy, -1..1. */
+  atmosphereSunPhaseG: number;
+  /** AL-04: strength of sun in-scatter in the air. */
+  atmosphereInScatter: number;
+  /** AL-04: extra optical depth at grazing angles. */
+  atmosphereHorizonBoost: number;
+  /**
+   * ADR-027: organism size classes. A giant is framed from further away and may
+   * hold more detailed plants, because LOD assigns tiers by projected size.
+   */
+  sizeClasses: SizeClassConfig[];
   cameraSmoothing: number;
   cameraMinDistance: number;
   cameraMinDistanceRoot: number;
@@ -65,6 +102,8 @@ export interface RenderConfig {
   sunIntensityNight: number;
   ambientIntensityDay: number;
   ambientIntensityNight: number;
+  /** Seconds for the ambient day/night fade; frame step is exp(-dt/tau). */
+  ambientFadeTauS: number;
   fogNearClear: number;
   fogFarClear: number;
   fogNearRain: number;
@@ -95,6 +134,10 @@ export interface RenderConfig {
   soilWetColor: string;
   soilMineralTint: string;
   soilGrainStrength: number;
+  /** AL-04 dirt: dried fissures darkening the topsoil, 0..1. */
+  soilCrackStrength: number;
+  /** AL-04 dirt: rounded stones in colour and relief, 0..1. */
+  soilPebbleStrength: number;
   soilMineralStrength: number;
   // Root Sight underground backdrop.
   undergroundViewColor: string;
@@ -166,12 +209,21 @@ export interface UIConfig {
   panelAnimationMs: number;
   reducedMotion: boolean;
   safeAreaPaddingPx: number;
+  hudUpdateIntervalMs: number;
+  damageVignetteMs: number;
+  healthHealthyFraction: number;
+  healthStressedFraction: number;
+  healthWitheringFraction: number;
 }
 
 export interface RootSightConfig {
   cutawayRadius: number;
   transitionMs: number;
   soilOpacity: number;
+  /** Hole radius as a fraction of `cutawayRadius` (`aperture_radius_ratio`). */
+  apertureRadiusRatio: number;
+  /** Floor for the hole radius in metres (`aperture_min_m`). */
+  apertureMinM: number;
   ownRootHighlightColor: string;
   rivalRootHighlightColor: string;
   substrateMultiplier: number;
@@ -185,6 +237,24 @@ export interface RootSightConfig {
   cavityClearanceM: number;
   rebuildHz: number;
   cutRimDitherM: number;
+  /** Smallest underground extent a cavity can be sized from, metres. */
+  minExtentM: number;
+  /** Progress below which the plant still counts as on the surface. */
+  surfaceProgress: number;
+  /** Smallest cutaway radius, so a seedling still opens a usable view. */
+  minCutawayRadiusM: number;
+  /** Pit width as a multiple of the root extent. */
+  extentToRadius: number;
+  /**
+   * Open Root Sight by itself when a buried part starts growing. The R key
+   * still owns the mode: a hand-close stands until the next buried part starts.
+   */
+  autoOpenOnRootGrowth: boolean;
+  /**
+   * Radius of the air bubble cut around a buried camera, metres. Zero leaves the
+   * soil intact around the eye and Root Sight shows nothing from down there.
+   */
+  eyeWindowRadius: number;
 }
 
 export interface TerrainConfig {
@@ -214,6 +284,17 @@ export interface TerrainConfig {
   runoffFraction: number;
   evaporationPerS: number;
   rainAbsorptionPerS: number;
+  /** River channel carved into the shared ground field (config/terrain.json). */
+  riverEnabled: boolean;
+  riverCenterZM: number;
+  riverWidthM: number;
+  riverDepthM: number;
+  riverPathCellM: number;
+  riverBankSlope: number;
+  riverBankApronM: number;
+  riverWaterDepthM: number;
+  riverFlowSpeedMps: number;
+  riverLengthM: number;
 }
 
 export interface PhysicsConfig {
@@ -268,6 +349,16 @@ interface QualityTierResponse {
   antialiasing?: boolean;
 }
 
+interface SizeClassResponse {
+  id?: string;
+  camera_max_distance_multiplier?: number;
+  cameraMaxDistanceMultiplier?: number;
+  detailed_plant_budget_multiplier?: number;
+  detailedPlantBudgetMultiplier?: number;
+  lod_size_bias?: number;
+  lodSizeBias?: number;
+}
+
 interface RenderConfigResponse {
   target_fps?: number;
   targetFps?: number;
@@ -277,6 +368,34 @@ interface RenderConfigResponse {
   resolutionFloor?: number;
   max_pixel_ratio?: number;
   maxPixelRatio?: number;
+  gpu_band_min_ms?: number;
+  gpuBandMinMs?: number;
+  gpu_band_max_ms?: number;
+  gpuBandMaxMs?: number;
+  quality_hold_ms?: number;
+  qualityHoldMs?: number;
+  quality_warmup_ms?: number;
+  qualityWarmupMs?: number;
+  quality_smoothing?: number;
+  qualitySmoothing?: number;
+  draw_distance_floor?: number;
+  drawDistanceFloor?: number;
+  atmosphere_extinction_r?: number;
+  atmosphereExtinctionR?: number;
+  atmosphere_extinction_g?: number;
+  atmosphereExtinctionG?: number;
+  atmosphere_extinction_b?: number;
+  atmosphereExtinctionB?: number;
+  atmosphere_scale_height_m?: number;
+  atmosphereScaleHeightM?: number;
+  atmosphere_sun_phase_g?: number;
+  atmosphereSunPhaseG?: number;
+  atmosphere_in_scatter?: number;
+  atmosphereInScatter?: number;
+  atmosphere_horizon_boost?: number;
+  atmosphereHorizonBoost?: number;
+  size_classes?: SizeClassResponse[];
+  sizeClasses?: SizeClassResponse[];
   camera_smoothing?: number;
   cameraSmoothing?: number;
   camera_min_distance?: number;
@@ -361,6 +480,8 @@ interface RenderConfigResponse {
   ambientIntensityDay?: number;
   ambient_intensity_night?: number;
   ambientIntensityNight?: number;
+  ambient_fade_tau_s?: number;
+  ambientFadeTauS?: number;
   fog_near_clear?: number;
   fogNearClear?: number;
   fog_far_clear?: number;
@@ -413,6 +534,10 @@ interface RenderConfigResponse {
   soilMineralTint?: string;
   soil_grain_strength?: number;
   soilGrainStrength?: number;
+  soil_crack_strength?: number;
+  soilCrackStrength?: number;
+  soil_pebble_strength?: number;
+  soilPebbleStrength?: number;
   soil_mineral_strength?: number;
   soilMineralStrength?: number;
   underground_view_color?: string;
@@ -513,6 +638,16 @@ interface UIConfigResponse {
   reducedMotion?: boolean;
   safe_area_padding_px?: number;
   safeAreaPaddingPx?: number;
+  hud_update_interval_ms?: number;
+  hudUpdateIntervalMs?: number;
+  damage_vignette_ms?: number;
+  damageVignetteMs?: number;
+  health_healthy_fraction?: number;
+  healthHealthyFraction?: number;
+  health_stressed_fraction?: number;
+  healthStressedFraction?: number;
+  health_withering_fraction?: number;
+  healthWitheringFraction?: number;
 }
 
 interface RootSightConfigResponse {
@@ -522,6 +657,10 @@ interface RootSightConfigResponse {
   transitionMs?: number;
   soil_opacity?: number;
   soilOpacity?: number;
+  aperture_radius_ratio?: number;
+  apertureRadiusRatio?: number;
+  aperture_min_m?: number;
+  apertureMinM?: number;
   own_root_highlight_color?: string;
   ownRootHighlightColor?: string;
   rival_root_highlight_color?: string;
@@ -548,6 +687,37 @@ interface RootSightConfigResponse {
   rebuildHz?: number;
   cut_rim_dither_m?: number;
   cutRimDitherM?: number;
+  min_extent_m?: number;
+  minExtentM?: number;
+  surface_progress?: number;
+  surfaceProgress?: number;
+  min_cutaway_radius_m?: number;
+  minCutawayRadiusM?: number;
+  extent_to_radius?: number;
+  extentToRadius?: number;
+  auto_open_on_root_growth?: boolean;
+  eye_window_radius_m?: number;
+  eyeWindowRadius?: number;
+}
+
+/**
+ * Size classes arrive either snake_case from `/config/render` or already
+ * normalised from the fallback; both shapes resolve to one list.
+ */
+function normalizeSizeClasses(
+  entries: ReadonlyArray<SizeClassResponse | SizeClassConfig>,
+): SizeClassConfig[] {
+  return entries.map((entry) => {
+    const raw = entry as SizeClassResponse & SizeClassConfig;
+    return {
+      id: raw.id ?? 'normal',
+      cameraMaxDistanceMultiplier:
+        raw.camera_max_distance_multiplier ?? raw.cameraMaxDistanceMultiplier ?? 1,
+      detailedPlantBudgetMultiplier:
+        raw.detailed_plant_budget_multiplier ?? raw.detailedPlantBudgetMultiplier ?? 1,
+      lodSizeBias: raw.lod_size_bias ?? raw.lodSizeBias ?? 1,
+    };
+  });
 }
 
 function normalizeRenderConfig(data: RenderConfigResponse, fallback: RenderConfig): RenderConfig {
@@ -560,6 +730,65 @@ function normalizeRenderConfig(data: RenderConfigResponse, fallback: RenderConfi
       data.fps_warning_threshold ?? data.fpsWarningThreshold ?? fallback.fpsWarningThreshold,
     resolutionFloor: data.resolution_floor ?? data.resolutionFloor ?? fallback.resolutionFloor,
     maxPixelRatio: data.max_pixel_ratio ?? data.maxPixelRatio ?? fallback.maxPixelRatio,
+    gpuBandMinMs: data.gpu_band_min_ms ?? data.gpuBandMinMs ?? fallback.gpuBandMinMs,
+    gpuBandMaxMs: data.gpu_band_max_ms ?? data.gpuBandMaxMs ?? fallback.gpuBandMaxMs,
+    qualityHoldMs: data.quality_hold_ms ?? data.qualityHoldMs ?? fallback.qualityHoldMs,
+    qualityWarmupMs: Math.max(
+      0,
+      data.quality_warmup_ms ?? data.qualityWarmupMs ?? fallback.qualityWarmupMs,
+    ),
+    qualitySmoothing: Math.max(
+      0.01,
+      Math.min(1, data.quality_smoothing ?? data.qualitySmoothing ?? fallback.qualitySmoothing),
+    ),
+    drawDistanceFloor:
+      data.draw_distance_floor ?? data.drawDistanceFloor ?? fallback.drawDistanceFloor,
+    atmosphereExtinction: [
+      Math.max(
+        0,
+        data.atmosphere_extinction_r ??
+          data.atmosphereExtinctionR ??
+          fallback.atmosphereExtinction[0],
+      ),
+      Math.max(
+        0,
+        data.atmosphere_extinction_g ??
+          data.atmosphereExtinctionG ??
+          fallback.atmosphereExtinction[1],
+      ),
+      Math.max(
+        0,
+        data.atmosphere_extinction_b ??
+          data.atmosphereExtinctionB ??
+          fallback.atmosphereExtinction[2],
+      ),
+    ],
+    atmosphereScaleHeightM: Math.max(
+      1,
+      data.atmosphere_scale_height_m ??
+        data.atmosphereScaleHeightM ??
+        fallback.atmosphereScaleHeightM,
+    ),
+    atmosphereSunPhaseG: Math.max(
+      -0.95,
+      Math.min(
+        0.95,
+        data.atmosphere_sun_phase_g ?? data.atmosphereSunPhaseG ?? fallback.atmosphereSunPhaseG,
+      ),
+    ),
+    atmosphereInScatter: Math.max(
+      0,
+      data.atmosphere_in_scatter ?? data.atmosphereInScatter ?? fallback.atmosphereInScatter,
+    ),
+    atmosphereHorizonBoost: Math.max(
+      0,
+      data.atmosphere_horizon_boost ??
+        data.atmosphereHorizonBoost ??
+        fallback.atmosphereHorizonBoost,
+    ),
+    sizeClasses: normalizeSizeClasses(
+      data.size_classes ?? data.sizeClasses ?? fallback.sizeClasses,
+    ),
     cameraSmoothing: data.camera_smoothing ?? data.cameraSmoothing ?? fallback.cameraSmoothing,
     cameraMinDistance:
       data.camera_min_distance ?? data.cameraMinDistance ?? fallback.cameraMinDistance,
@@ -636,6 +865,7 @@ function normalizeRenderConfig(data: RenderConfigResponse, fallback: RenderConfi
       data.ambient_intensity_day ?? data.ambientIntensityDay ?? fallback.ambientIntensityDay,
     ambientIntensityNight:
       data.ambient_intensity_night ?? data.ambientIntensityNight ?? fallback.ambientIntensityNight,
+    ambientFadeTauS: data.ambient_fade_tau_s ?? data.ambientFadeTauS ?? fallback.ambientFadeTauS,
     fogNearClear: data.fog_near_clear ?? data.fogNearClear ?? fallback.fogNearClear,
     fogFarClear: data.fog_far_clear ?? data.fogFarClear ?? fallback.fogFarClear,
     fogNearRain: data.fog_near_rain ?? data.fogNearRain ?? fallback.fogNearRain,
@@ -676,6 +906,17 @@ function normalizeRenderConfig(data: RenderConfigResponse, fallback: RenderConfi
     soilMineralTint: data.soil_mineral_tint ?? data.soilMineralTint ?? fallback.soilMineralTint,
     soilGrainStrength:
       data.soil_grain_strength ?? data.soilGrainStrength ?? fallback.soilGrainStrength,
+    soilCrackStrength: Math.max(
+      0,
+      Math.min(1, data.soil_crack_strength ?? data.soilCrackStrength ?? fallback.soilCrackStrength),
+    ),
+    soilPebbleStrength: Math.max(
+      0,
+      Math.min(
+        1,
+        data.soil_pebble_strength ?? data.soilPebbleStrength ?? fallback.soilPebbleStrength,
+      ),
+    ),
     soilMineralStrength:
       data.soil_mineral_strength ?? data.soilMineralStrength ?? fallback.soilMineralStrength,
     undergroundViewColor:
@@ -779,6 +1020,19 @@ function normalizeUIConfig(data: UIConfigResponse, fallback: UIConfig): UIConfig
     reducedMotion: data.reduced_motion ?? data.reducedMotion ?? fallback.reducedMotion,
     safeAreaPaddingPx:
       data.safe_area_padding_px ?? data.safeAreaPaddingPx ?? fallback.safeAreaPaddingPx,
+    hudUpdateIntervalMs:
+      data.hud_update_interval_ms ?? data.hudUpdateIntervalMs ?? fallback.hudUpdateIntervalMs,
+    damageVignetteMs: data.damage_vignette_ms ?? data.damageVignetteMs ?? fallback.damageVignetteMs,
+    healthHealthyFraction:
+      data.health_healthy_fraction ?? data.healthHealthyFraction ?? fallback.healthHealthyFraction,
+    healthStressedFraction:
+      data.health_stressed_fraction ??
+      data.healthStressedFraction ??
+      fallback.healthStressedFraction,
+    healthWitheringFraction:
+      data.health_withering_fraction ??
+      data.healthWitheringFraction ??
+      fallback.healthWitheringFraction,
   };
 }
 
@@ -790,6 +1044,9 @@ function normalizeRootSightConfig(
     cutawayRadius: data.cutaway_radius ?? data.cutawayRadius ?? fallback.cutawayRadius,
     transitionMs: data.transition_ms ?? data.transitionMs ?? fallback.transitionMs,
     soilOpacity: data.soil_opacity ?? data.soilOpacity ?? fallback.soilOpacity,
+    apertureRadiusRatio:
+      data.aperture_radius_ratio ?? data.apertureRadiusRatio ?? fallback.apertureRadiusRatio,
+    apertureMinM: data.aperture_min_m ?? data.apertureMinM ?? fallback.apertureMinM,
     ownRootHighlightColor:
       data.own_root_highlight_color ?? data.ownRootHighlightColor ?? fallback.ownRootHighlightColor,
     rivalRootHighlightColor:
@@ -811,6 +1068,13 @@ function normalizeRootSightConfig(
     cavityClearanceM: data.cavity_clearance_m ?? data.cavityClearanceM ?? fallback.cavityClearanceM,
     rebuildHz: data.rebuild_hz ?? data.rebuildHz ?? fallback.rebuildHz,
     cutRimDitherM: data.cut_rim_dither_m ?? data.cutRimDitherM ?? fallback.cutRimDitherM,
+    minExtentM: data.min_extent_m ?? data.minExtentM ?? fallback.minExtentM,
+    surfaceProgress: data.surface_progress ?? data.surfaceProgress ?? fallback.surfaceProgress,
+    minCutawayRadiusM:
+      data.min_cutaway_radius_m ?? data.minCutawayRadiusM ?? fallback.minCutawayRadiusM,
+    extentToRadius: data.extent_to_radius ?? data.extentToRadius ?? fallback.extentToRadius,
+    autoOpenOnRootGrowth: data.auto_open_on_root_growth ?? fallback.autoOpenOnRootGrowth,
+    eyeWindowRadius: data.eye_window_radius_m ?? data.eyeWindowRadius ?? fallback.eyeWindowRadius,
   };
 }
 
@@ -910,6 +1174,37 @@ export async function loadRenderConfig(serverOrigin: string): Promise<RenderConf
     fpsWarningThreshold: 0.85,
     resolutionFloor: 0.25,
     maxPixelRatio: 2.0,
+    gpuBandMinMs: 10.0,
+    gpuBandMaxMs: 13.6,
+    qualityHoldMs: 600,
+    qualityWarmupMs: 4000,
+    qualitySmoothing: 0.12,
+    drawDistanceFloor: 0.5,
+    atmosphereExtinction: [0.00075, 0.0009, 0.0013],
+    atmosphereScaleHeightM: 700,
+    atmosphereSunPhaseG: 0.72,
+    atmosphereInScatter: 0.6,
+    atmosphereHorizonBoost: 0.4,
+    sizeClasses: [
+      {
+        id: 'normal',
+        cameraMaxDistanceMultiplier: 1,
+        detailedPlantBudgetMultiplier: 1,
+        lodSizeBias: 1,
+      },
+      {
+        id: 'large',
+        cameraMaxDistanceMultiplier: 2,
+        detailedPlantBudgetMultiplier: 2,
+        lodSizeBias: 1.5,
+      },
+      {
+        id: 'giant',
+        cameraMaxDistanceMultiplier: 4,
+        detailedPlantBudgetMultiplier: 2.5,
+        lodSizeBias: 2,
+      },
+    ],
     cameraSmoothing: 0.05,
     cameraMinDistance: 10.0,
     cameraMinDistanceRoot: 0.15,
@@ -974,6 +1269,7 @@ export async function loadRenderConfig(serverOrigin: string): Promise<RenderConf
     sunIntensityNight: 0.15,
     ambientIntensityDay: 0.6,
     ambientIntensityNight: 0.15,
+    ambientFadeTauS: 0.35,
     fogNearClear: 70.0,
     fogFarClear: 320.0,
     fogNearRain: 25.0,
@@ -1000,6 +1296,8 @@ export async function loadRenderConfig(serverOrigin: string): Promise<RenderConf
     soilWetColor: '#2E2418',
     soilMineralTint: '#5A8FA8',
     soilGrainStrength: 0.02,
+    soilCrackStrength: 0.32,
+    soilPebbleStrength: 0.28,
     soilMineralStrength: 0.05,
     undergroundViewColor: '#241D16',
     growthAimRingScale: 1.6,
@@ -1068,14 +1366,21 @@ export async function loadUIConfig(serverOrigin: string): Promise<UIConfig> {
     panelAnimationMs: 200,
     reducedMotion: false,
     safeAreaPaddingPx: 8,
+    hudUpdateIntervalMs: 100,
+    damageVignetteMs: 420,
+    healthHealthyFraction: 0.75,
+    healthStressedFraction: 0.5,
+    healthWitheringFraction: 0.25,
   });
 }
 
 export async function loadRootSightConfig(serverOrigin: string): Promise<RootSightConfig> {
   return fetchFlat<RootSightConfig>(serverOrigin, '/config/root_sight', {
-    cutawayRadius: 50,
+    cutawayRadius: 7,
     transitionMs: 500,
-    soilOpacity: 0.3,
+    soilOpacity: 0.45,
+    apertureRadiusRatio: 0.7,
+    apertureMinM: 0.28,
     ownRootHighlightColor: '#4CAF50',
     rivalRootHighlightColor: '#FF5722',
     substrateMultiplier: 0.5,
@@ -1089,6 +1394,12 @@ export async function loadRootSightConfig(serverOrigin: string): Promise<RootSig
     cavityClearanceM: 0.2,
     rebuildHz: 10,
     cutRimDitherM: 0.35,
+    minExtentM: 0.05,
+    surfaceProgress: 0.001,
+    minCutawayRadiusM: 0.7,
+    extentToRadius: 1.6,
+    autoOpenOnRootGrowth: true,
+    eyeWindowRadius: 1.1,
   });
 }
 
@@ -1120,6 +1431,16 @@ export async function loadTerrainConfig(serverOrigin: string): Promise<TerrainCo
     runoffFraction: 0.15,
     evaporationPerS: 0.002,
     rainAbsorptionPerS: 0.05,
+    riverEnabled: true,
+    riverCenterZM: 0,
+    riverWidthM: 7,
+    riverDepthM: 1.2,
+    riverPathCellM: 2,
+    riverBankSlope: 0.9,
+    riverBankApronM: 12,
+    riverWaterDepthM: 0.35,
+    riverFlowSpeedMps: 1.4,
+    riverLengthM: 320,
   };
   try {
     const response = await fetch(`${serverOrigin}/config/terrain`, { cache: 'no-store' });
@@ -1157,6 +1478,19 @@ export async function loadTerrainConfig(serverOrigin: string): Promise<TerrainCo
       growthResistanceMin: num('growth_resistance_min', fallback.growthResistanceMin),
       growthResistanceMax: num('growth_resistance_max', fallback.growthResistanceMax),
       runoffFraction: num('runoff_fraction', fallback.runoffFraction),
+      riverEnabled:
+        typeof data.river_enabled === 'boolean'
+          ? data.river_enabled
+          : (fallback.riverEnabled ?? true),
+      riverCenterZM: num('river_center_z_m', fallback.riverCenterZM ?? 0),
+      riverWidthM: num('river_width_m', fallback.riverWidthM ?? 7),
+      riverDepthM: num('river_depth_m', fallback.riverDepthM ?? 1.2),
+      riverPathCellM: num('river_path_cell_m', fallback.riverPathCellM ?? 2),
+      riverBankSlope: num('river_bank_slope', fallback.riverBankSlope ?? 0.9),
+      riverBankApronM: num('river_bank_apron_m', fallback.riverBankApronM ?? 12),
+      riverWaterDepthM: num('river_water_depth_m', fallback.riverWaterDepthM ?? 0.35),
+      riverFlowSpeedMps: num('river_flow_speed_mps', fallback.riverFlowSpeedMps ?? 1.4),
+      riverLengthM: num('river_length_m', fallback.riverLengthM ?? 320),
       evaporationPerS: num('evaporation_per_s', fallback.evaporationPerS),
       rainAbsorptionPerS: num('rain_absorption_per_s', fallback.rainAbsorptionPerS),
     };
@@ -1364,4 +1698,57 @@ export async function loadReportsConfig(serverOrigin: string): Promise<ReportsCo
     reportFreeTextMax: 500,
     reportRateLimitPerMin: 5,
   });
+}
+
+export interface DevSettings {
+  /** Dev-only organism size class (`config/dev.json` seed_size_class). */
+  seedSizeClass: 'normal' | 'large' | 'giant';
+  /** AL-01: frames discarded after each pose is applied. */
+  benchmarkWarmupMs: number;
+  /** AL-01: measured window per fixed pose. */
+  benchmarkPoseMs: number;
+  /** AL-01: the fixed comparison poses, in order. */
+  benchmarkPoses: BenchmarkPose[];
+}
+
+/**
+ * Dev-only settings the client needs to behave correctly: the size class scales
+ * framing and detail (ADR-027), and the benchmark poses are the AL-01 baseline.
+ * Reading them from the same file the dev panel edits keeps one source of truth.
+ */
+export async function loadDevSettings(serverOrigin: string): Promise<DevSettings> {
+  const fallback: DevSettings = {
+    seedSizeClass: 'normal',
+    benchmarkWarmupMs: 1500,
+    benchmarkPoseMs: 6000,
+    benchmarkPoses: DEFAULT_BENCHMARK_POSES,
+  };
+  try {
+    const response = await fetch(`${serverOrigin}/config/dev`, { cache: 'no-store' });
+    if (!response.ok) return fallback;
+    const data = (await response.json()) as Record<string, unknown>;
+    const sizeClass = data.seed_size_class;
+    const poses = Array.isArray(data.benchmark_poses)
+      ? (data.benchmark_poses as Array<Record<string, unknown>>)
+          .map((entry) => ({
+            id: String(entry.id ?? ''),
+            distanceM: Number(entry.distance_m ?? entry.distanceM ?? 0),
+            azimuthDeg: Number(entry.azimuth_deg ?? entry.azimuthDeg ?? 0),
+            elevationDeg: Number(entry.elevation_deg ?? entry.elevationDeg ?? 0),
+            targetLiftM: Number(entry.target_lift_m ?? entry.targetLiftM ?? 0),
+          }))
+          .filter((pose) => pose.id !== '' && Number.isFinite(pose.distanceM))
+      : [];
+    return {
+      seedSizeClass:
+        sizeClass === 'large' || sizeClass === 'giant' || sizeClass === 'normal'
+          ? sizeClass
+          : fallback.seedSizeClass,
+      benchmarkWarmupMs: Number(data.benchmark_warmup_ms ?? fallback.benchmarkWarmupMs),
+      benchmarkPoseMs: Number(data.benchmark_pose_ms ?? fallback.benchmarkPoseMs),
+      benchmarkPoses: poses.length > 0 ? poses : fallback.benchmarkPoses,
+    };
+  } catch {
+    return fallback;
+  }
 }

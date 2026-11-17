@@ -7,6 +7,8 @@
  * the data".
  */
 
+import type { UprootCause, UprootPhase } from '../damage/index.ts';
+
 export type NodeType =
   | 'seed'
   | 'radicle'
@@ -14,6 +16,22 @@ export type NodeType =
   | 'lateral_root'
   | 'stem'
   | 'branch'
+  /** Secondary, woody stem: the only tissue that carries bark. */
+  | 'trunk'
+  /** Underground horizontal stem that can raise new shoots (clonal growth). */
+  | 'rhizome'
+  /** Hollow, segmented shoot (bamboo-like): light, quick, water-holding. */
+  | 'culm'
+  /** Buoyant leaf that floats on the surface instead of standing in air. */
+  | 'floating_leaf'
+  /** Aerial breathing root lifted out of waterlogged soil (mangrove-like). */
+  | 'pneumatophore'
+  /** Hardened defensive shoot: short, rigid, silica-tipped. */
+  | 'thorn'
+  /** Above-ground horizontal runner with long internodes that roots at nodes. */
+  | 'stolon'
+  /** Swollen storage stem at the end of a rhizome (starch and water reserve). */
+  | 'tuber'
   | 'vine'
   | 'leaf'
   | 'cotyledon'
@@ -44,6 +62,10 @@ export interface NodeStatModifiers {
   spore_production?: number;
   climbing?: number;
   horizontal_spread?: number;
+  /** Air tissue: how much oxygen the part can move into the root system. */
+  aeration?: number;
+  /** Hard tissue: how much browsing and abrasion the part resists. */
+  defense?: number;
   [key: string]: number | undefined;
 }
 
@@ -82,6 +104,28 @@ export interface GrowthConfig {
   flowerNode: NodeTypeDefinition;
   sporeSacNode: NodeTypeDefinition;
   vineNode: NodeTypeDefinition;
+  trunkNode: NodeTypeDefinition;
+  rhizomeNode: NodeTypeDefinition;
+  culmNode: NodeTypeDefinition;
+  floatingLeafNode: NodeTypeDefinition;
+  /** Aerial breathing root; optional so configs that predate it still boot. */
+  pneumatophoreNode?: NodeTypeDefinition;
+  /** Defensive hardened shoot; optional so configs that predate it still boot. */
+  thornNode?: NodeTypeDefinition;
+  /** Above-ground runner; optional so configs that predate it still boot. */
+  stolonNode?: NodeTypeDefinition;
+  /** Swollen storage stem; optional so configs that predate it still boot. */
+  tuberNode?: NodeTypeDefinition;
+  /** Lowest plant health (0..1) at which growth may proceed. */
+  growthMinHealth?: number;
+  /** Share of photosynthesis kept at zero health. */
+  healthPhotosynthesisFloor?: number;
+  /** Groundwater (0..100) a floating pad needs under the point it occupies. */
+  floatingLeafMinGroundwater?: number;
+  /** Biomass a part regrows per second while the plant is unstressed. */
+  tissueRepairPerSecond?: number;
+  /** Energy spent per unit of biomass regrown. */
+  tissueRepairEnergyPerBiomass?: number;
   growthIntentCooldown: number;
   germinationMinMoisture: number;
   germinationMinLight: number;
@@ -123,6 +167,10 @@ export interface GrowthConfig {
   waterDeficitBiomassLoss?: number;
   /** Biomass lost per unit of unmet mineral upkeep. */
   mineralDeficitBiomassLoss?: number;
+  /** Seconds an under-quota stem waits before unhealed damage starts thinning it. */
+  stemDamageWitherDelayS?: number;
+  /** Fraction of its quota an unhealed stem loses per second after that delay. */
+  stemDamageWitherPerS?: number;
   // Minimum resource levels required for growth to proceed
   growthMinWater: number;
   growthMinNutrients: number;
@@ -177,6 +225,33 @@ export interface PlantNode {
    * the parent's endpoint; a lateral root or branch leaves part-way along.
    */
   attachFraction?: number;
+  /** T04: visual signature index this node draws (0 = none). Transient. */
+  mutationFlags?: number;
+  /**
+   * T04: the widest linear scale this part was built under. It widens the
+   * profile's radius ceiling so a size mutation can actually draw a thicker
+   * part. It only ever grows, so shedding a mutation never snaps the body at
+   * the moment of the shed.
+   */
+  massScale?: number;
+  /** Seconds this stem has been under its tissue quota without repair. Transient. */
+  damageStressSeconds?: number;
+}
+
+/** One mutation a living plant carries (T04). */
+export interface PlantMutation {
+  id: string;
+  acquiredTick: number;
+  /** Node the change is expressed through, when one node owns it. */
+  nodeId: string | null;
+  /** 1-based level. Absent means level 1, which is how old saves load. */
+  level?: number;
+  /**
+   * Card ids chosen at each level above 1, in order: `cards[N - 2]` is the card
+   * taken to reach level `N`. Effects compound from these, so a level is
+   * whatever the player picked on the way up.
+   */
+  cards?: string[];
 }
 
 export interface Plant {
@@ -198,6 +273,67 @@ export interface Plant {
   maxNodesPerPlant?: number;
   // Growth sequence number for client mirror gap detection
   growthSeq: number;
+  /** T04: mutations this plant has acquired. Additive; absent on old saves. */
+  mutations?: PlantMutation[];
+  /** T04: recent investment per growth category, for adaptive pressure. */
+  mutationPressure?: Record<string, number>;
+  /** T04: tick until which shedding is refused. */
+  mutationShedCooldownUntil?: number;
+  /** T04: strongest visual signature held (0 = none), sent to renderers. */
+  mutationSignature?: number;
+  /**
+   * T06: uproot/damage state. Absent means rooted and undamaged, which is what
+   * every pre-T06 save and every fresh seed is.
+   */
+  uproot?: PlantUprootState;
+}
+
+/**
+ * T06 uproot bookkeeping kept on the plant itself.
+ *
+ * `basePose` is the rigid pose captured when the plant came up. The visible node
+ * positions are recomputed from it on every transform change, so a long tumble
+ * cannot accumulate rounding drift and a reroot can put the body back upright.
+ * It is deliberately not part of the save format: a restored plant adopts its
+ * saved positions as the new pose.
+ */
+export interface PlantUprootState {
+  phase: UprootPhase;
+  cause: UprootCause | null;
+  sinceTick: number;
+  /** Unhealed structural damage in biomass points, decaying every tick. */
+  damageHp: number;
+  /** Continuous seconds the root tile has been saturated. */
+  saturatedSeconds: number;
+  /** Continuous seconds the root has been on valid soil while rerooting. */
+  settledSeconds: number;
+  tiltRad: number;
+  headingRad: number;
+  rollRad: number;
+  rollSpeedRad: number;
+  offsetX: number;
+  offsetY: number;
+  offsetZ: number;
+  velocityX: number;
+  velocityY: number;
+  velocityZ: number;
+  /** Direction the player is crawling, in world XZ; zero when idle. */
+  crawlX: number;
+  crawlZ: number;
+  /** Tumble time, so a body settles even if it keeps drifting. */
+  tumbleSeconds: number;
+  /** True once the body has come to rest; it must not re-enter tumbling. */
+  tumbleSettled: boolean;
+  basePose: Map<string, { x: number; y: number; z: number }>;
+  /**
+   * Each node's attachment point on its parent, captured with `basePose`.
+   *
+   * A joint is a second point on the same rigid body. Moving `basePose` alone
+   * left every lateral root hanging at the spot its parent had occupied before
+   * the crawl, so an uprooted plant came apart at the joints even though each
+   * node's own position was correct.
+   */
+  baseAttach: Map<string, { x: number; y: number; z: number }>;
 }
 
 export type GrowthMode = 'apical' | 'lateral';

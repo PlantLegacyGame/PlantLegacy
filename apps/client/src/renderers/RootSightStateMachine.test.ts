@@ -42,10 +42,33 @@ describe('RootSightStateMachine', () => {
 
     rootSightStateMachineToggle(machine);
     assert.equal(machine.target, 'surface');
+    assert.equal(machine.state, 'transitioning_to_surface');
+    // The cavity is still open while it closes, so everything that decides
+    // "is the underground view current?" must keep saying yes.
+    assert.equal(rootSightStateMachineIsEnabled(machine), true);
 
     rootSightStateMachineUpdate(machine, 0.4);
     assert.equal(machine.state, 'surface');
     assert.equal(machine.progress, 0);
+    assert.equal(rootSightStateMachineIsEnabled(machine), false);
+  });
+
+  it('re-opens while closing and reports the opening direction at once', () => {
+    const machine = createRootSightStateMachine(CONFIG);
+    rootSightStateMachineToggle(machine);
+    rootSightStateMachineUpdate(machine, 0.5);
+
+    rootSightStateMachineToggle(machine);
+    assert.equal(machine.state, 'transitioning_to_surface');
+
+    rootSightStateMachineToggle(machine);
+    assert.equal(machine.target, 'underground');
+    assert.equal(machine.state, 'transitioning_to_underground');
+    assert.equal(rootSightStateMachineIsEnabled(machine), true);
+
+    rootSightStateMachineUpdate(machine, 0.5);
+    assert.equal(machine.state, 'underground');
+    assert.equal(machine.progress, 1);
   });
 
   it('snaps immediately when the transition duration is zero', () => {

@@ -213,6 +213,13 @@ describe('configurable geometry', () => {
     assert.equal(getSeedBodyHeightRatio(), SEED_BODY_HEIGHT_RATIO);
   });
 
+  it('starts a zero-mass part at its minimum thickness, not its mature size', () => {
+    const sprout = nodeRenderRadius('stem', 0);
+    const mature = nodeRenderRadius('stem', 10);
+    assert.ok(sprout > 0, 'even a new part needs a drawable radius');
+    assert.ok(sprout < mature, `a new part must start thinner,  vs `);
+  });
+
   it('ignores an invalid profile instead of breaking every radius', () => {
     try {
       setGrowthGeometryTunables({

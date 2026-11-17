@@ -19,7 +19,7 @@
 | Recenter camera | `Space` / Double-click ground / Double-tap | Frames root node |
 | Select node | Left-click / Tap | In Grow Mode: opens growth options. In Normal Mode: focuses camera on node |
 | Grow Mode toggle | `G` | Toggles between Normal Mode and Grow Mode |
-| Root Sight toggle | `R` | Toggles organic ground cutaways & subterranean camera elevation |
+| Root Sight toggle | `R` | Toggles organic ground cutaways & subterranean camera elevation. It also opens by itself when a radicle or root starts growing (`root_sight.auto_open_on_root_growth`); a hand-close then stands until the next buried part starts |
 | Emote wheel | `E` | Opens emote selection |
 | Inventory / Overview | `I` | Toggles combined inventory + plant overview panel |
 | Inventory slot 1–10 | `1`–`9`, `0` | Selects inventory slot |
@@ -31,10 +31,10 @@
 | Regenerate plant (dev) | `R` (dev context) | Generates test plant at origin |
 
 Input is sampled and sent to the server at 20 Hz. The camera is client-side and
-server-unvalidated: `INPUT` frames are stored but not consumed, and
-`validateMovement` in `apps/server/src/ops/net.ts` has no call sites (verified
-2026-11-12). `REJECT` is returned for invalid growth intents, not for movement.
-The client never moves its own cube.
+server-unvalidated: `INPUT` frames are stored and only advance `lastInputTick`
+(ack-only heartbeat), and the unused `validateMovement` helper has been deleted
+rather than left as a pretend movement check. `REJECT` is returned for invalid
+growth intents, not for movement. The client never moves its own cube.
 
 The first-spawn hint card auto-hides after
 `onboarding.show_hint_card_duration_ms`; `H` toggles it back on.

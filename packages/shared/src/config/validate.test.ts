@@ -222,19 +222,5 @@ describe('extended-1 config validation', () => {
       );
       assert.ok(issues.some((i) => i.code === 'resources.max_light_below_base'));
     });
-
-    it('accepts valid tier rate within max velocity', () => {
-      const issues = validateCrossFieldRules(
-        configs({}, {}, { root_growth_speed: 0.85 }, { max_velocity_units_per_tick: 5 }),
-      );
-      assert.deepEqual(issues, []);
-    });
-
-    it('rejects root growth speed exceeding max velocity', () => {
-      const issues = validateCrossFieldRules(
-        configs({}, {}, { root_growth_speed: 8 }, { max_velocity_units_per_tick: 5 }),
-      );
-      assert.ok(issues.some((i) => i.code === 'growth.root_speed_exceeds_max_velocity'));
-    });
   });
 });

@@ -26,10 +26,12 @@ design document.
 `pnpm verify` is green. Work order is fixed by ADR-023, amended by ADR-026
 through ADR-029 and by ADR-041/ADR-048:
 
-1. AL-01 then AL-03 — client measurement (benchmark, six fixed poses, GPU
-   timing, zero-alloc audit) and the GPU-band quality controller.
-2. Atmosphere, audio and scatter polish (Wave 0 after measurement).
-3. Remaining C02b work. Shared depth is **not** a C02b blocker: ADR-041 gates it
+1. **T06** — damage, uproot and tumbling (ADR-051/ADR-052). **Done** except the in-browser checklist; record: [T06.md](./T06.md).
+2. **C04** — HUD and panels landed (health words, reroot controls, Inspect/Inventory, Settings/Controls, death stats); rebinding and the notification log remain. Record: [C04.md](./C04.md).
+3. **T08A** Postgres inventory, then the ADR-044 burial fix.
+4. AL-01 then AL-03 — client measurement, per **ADR-050** (gameplay first).
+5. Atmosphere, audio and scatter polish (Wave 0 after measurement).
+6. Remaining C02b work. Shared depth is **not** a C02b blocker: ADR-041 gates it
    on volumetric terrain (T56).
 
 Full programme: [`../PlantLegacy-Abyssal-Integration-Plan.md`](../PlantLegacy-Abyssal-Integration-Plan.md).
@@ -52,11 +54,14 @@ Full programme: [`../PlantLegacy-Abyssal-Integration-Plan.md`](../PlantLegacy-Ab
 | T25 | Terrain, colliders, physical dirt | `[ ]` Shared terrain/cavity fields, two-patch LOD ground with exact colliders, bounded plant colliders, root tunnels with collapse and persistence, protocol 32–34. Client height-texture application, debris/rain wiring and dev overlay pending | [T25.md](./T25.md) |
 | C03b | Ground LOD and relief | `[x]` inner detail + 620 m outer patch from one shared field, exact trimesh colliders | [C03b.md](./C03b.md) |
 | C03 | Environment Rendering | `[x]` Sky dome, sun/moon arcs, atmospheric fog, rain particles, storm lightning flashes, soil moisture/mineral tinting, and Root Sight cutaway refinement | [C03.md](./C03.md) |
+| C04 | HUD and Controls v1 | `[~]` **Partial.** Health-word HUD (biomass/rate, health, mutations, `Day N` clock and forecast), damage vignette/toast, reroot countdown and camera-relative D-pad + movement-key steering, Inspect/Inventory side panels with per-node health, Settings/Controls tabs, death-screen stats, server `structure` and `dayNumber` fields. **Open:** rebinding screen, notification log, in-browser checklist | [C04.md](./C04.md) |
 | C02b | WebGPU Compute-Driven Plant Renderer | `[ ]` v1 slice + impostor baking (readRenderData-driven, 16-view texture array + atlas copy) + VRAM pool budgeting (256MB default, allocateOrThrow) + GPU skinning for 0.9s emergence + texture arrays (Bark/Leaf/Flower/SporeSac/Seed) + cross-fade between tiers 1↔2 (blendFactor in PlantRenderData, mesh fades out, billboard fades in); mutation signatures (per-node mask, three documented signatures); planet-body occlusion in the cull pass; missing: shared depth between the WebGPU plant pass and the WebGL environment pass (separate canvases; no browser exposes WebGL depth to WebGPU without a readback) | [C02b.md](./C02b.md) |
 | C02c | Client physics and collider budgets | `[ ]` no task record yet; `config/physics.json` owns the values (`owner_task: C02c`) | — |
 | D01 | Dev settings engine | `[x]` `?dev=1` gate, server `/dev/config` endpoints, `config/dev.json`, DevPanel wired to server, persistence switch wired to disconnect logic, key binding added | [D01.md](./D01.md) |
 | T05 | Communication | `[x]` Proximity/world chat, data-driven emotes, block and report. Record written retrospectively 2026-11-14; report entry points on non-chat surfaces await T14/T43/T08A/T29 | [T05.md](./T05.md) |
-| T08A | Inventory | `[ ]` **partial, non-compliant** — item definitions, stacking and protocol 24–28 exist, but the inventory is in-memory, has no Postgres transactions or row locks, and `item_flags.json` is a stub — DESIGN T08A forbids in-memory inventories | [T08A.md](./T08A.md) |
+| T04 | Mutation | `[~]` **Partial.** Data-driven table (36 mutations), adaptive pressure over 8 categories with decay, scaled maintenance that can kill, shedding with cooldown and penalty, `mutation_acquired`/`mutation_shed`, PLNT v2, protocol v2 messages, 12 visual signatures, unlocked node types, size/growth-speed/diet effects. **Open:** translocation (post-MVP locomotion); `movement.reroot_speed` is consumed by T06 since 2026-11-15 | [T04.md](./T04.md) |
+| T06 | Uproot, damage, tumbling | `[~]` Implemented server-side: four-source damage pipeline, saturation/gust/collapse/structural uproot, reroot crawl and starvation, deterministic tumbling, kill credit, world drops, protocol 37–43, PLNT v3, client redraw and dev buttons. **Open:** in-browser checklist not run; T02 substrate multiplier is still 1.0; drop pickup is T51/T08A | [T06.md](./T06.md) |
+| T08A | Inventory | `[~]` **Partial; Postgres saving not implemented.** In-memory inventory hardened and tested (stacking, invalid counts, slot bounds, RULE_23 flag invariant); no inventory table, row locks or restart survival | [T08A.md](./T08A.md) |
 | — | Bugfix: camera, environment, growth | `[x]` Unindexed run of fixes; record kept as evidence | [bugfix-camera-environment-growth.md](./bugfix-camera-environment-growth.md) |
 
 ## Approved V5.4 tasks (not started)

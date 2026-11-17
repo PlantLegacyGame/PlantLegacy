@@ -1,11 +1,20 @@
 /**
- * Client entry flow: the states between opening the page and being in the world.
+  Client entry flow: the states between opening the page and being in the world.
  *
  * Accounts existed only on the server until now: nothing in the client ever
  * called `/auth/*`, so `accessToken` could never be obtained and "signed-in
  * accounts resume their plant" was unreachable. This machine is the missing
  * client half, kept pure so the transitions can be tested without a DOM.
  */
+
+import type { PlantStatsSummary } from './plantStats.js';
+
+export interface PlantDeathStats {
+  /** Server death cause code. */
+  cause: string;
+  /** The same body/history rows the Inspect panel shows. */
+  stats: PlantStatsSummary;
+}
 
 export type EntryStep =
   | 'booting'
@@ -26,6 +35,8 @@ export interface EntryFlowStateMachine {
   error: string | null;
   /** Why the plant was lost, when the server said. Factual, never consoling. */
   lostReason: string | null;
+  /** Detailed plant statistics captured at death; null for older flows. */
+  lostStats: PlantDeathStats | null;
   displayName: string | null;
   isGuest: boolean;
 }
@@ -37,6 +48,7 @@ export function createEntryFlowStateMachine(): EntryFlowStateMachine {
     busy: false,
     error: null,
     lostReason: null,
+    lostStats: null,
     displayName: null,
     isGuest: true,
   };
@@ -105,6 +117,7 @@ export function entryFlowWorldReady(machine: EntryFlowStateMachine): void {
   machine.busy = false;
   machine.error = null;
   machine.lostReason = null;
+  machine.lostStats = null;
 }
 
 export function entryFlowConnectionFailed(machine: EntryFlowStateMachine, message: string): void {
@@ -117,11 +130,13 @@ export function entryFlowConnectionFailed(machine: EntryFlowStateMachine, messag
 export function entryFlowPlantLost(
   machine: EntryFlowStateMachine,
   reason: string | null = null,
+  stats: PlantDeathStats | null = null,
 ): void {
   machine.step = 'plant_lost';
   machine.busy = false;
   machine.error = null;
   machine.lostReason = reason;
+  machine.lostStats = stats;
 }
 
 /** Reconnecting after a loss: same "connecting" screen as the first join. */
@@ -131,6 +146,7 @@ export function entryFlowReseed(machine: EntryFlowStateMachine): void {
   machine.busy = false;
   machine.error = null;
   machine.lostReason = null;
+  machine.lostStats = null;
 }
 
 /** Signing out returns to the title without a session. */
@@ -140,5 +156,7 @@ export function entryFlowSignedOut(machine: EntryFlowStateMachine): void {
   machine.busy = false;
   machine.error = null;
   machine.displayName = null;
+  machine.lostReason = null;
+  machine.lostStats = null;
   machine.isGuest = true;
 }

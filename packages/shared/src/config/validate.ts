@@ -531,37 +531,11 @@ export function validateCrossFieldRules(configs: Map<string, ConfigFile>): Valid
     }
   }
 
-  // --- Tier rates consistency (growth.json <-> net_proto.json / plant_renderer.json)
-  // Tier rates in growth.json (germination, etc.) must be within net_proto's
-  // allowed velocity/time bounds and non-negative.
-  const growth = configs.get('growth');
-  const netProto = configs.get('net_proto');
-  if (growth && netProto) {
-    const g = growth.values as Record<string, unknown> | undefined;
-    const n = netProto.values as Record<string, unknown> | undefined;
-    const numG = (key: string): number | undefined => {
-      const entry = g?.[key];
-      if (typeof entry !== 'object' || entry === null) return undefined;
-      const raw = (entry as Record<string, unknown>).value;
-      return typeof raw === 'number' ? raw : undefined;
-    };
-    const numN = (key: string): number | undefined => {
-      const entry = n?.[key];
-      if (typeof entry !== 'object' || entry === null) return undefined;
-      const raw = (entry as Record<string, unknown>).value;
-      return typeof raw === 'number' ? raw : undefined;
-    };
-    const rate = numG('root_growth_speed');
-    const maxVel = numN('max_velocity_units_per_tick');
-    if (typeof rate === 'number' && typeof maxVel === 'number' && maxVel > 0 && rate > maxVel) {
-      push(
-        'growth',
-        'root_growth_speed',
-        'growth.root_speed_exceeds_max_velocity',
-        `root_growth_speed (${rate}) exceeds net_proto.max_velocity_units_per_tick (${maxVel}).`,
-      );
-    }
-  }
+  // The root-speed ceiling used to live here, comparing growth.root_growth_speed
+  // against net_proto.max_velocity_units_per_tick. That key was a movement limit
+  // nothing consumes (there is no server-side avatar, so no movement to bound),
+  // so both the key and this rule are gone: a rule against a deleted tunable was
+  // a permanent pass with a reassuring code name.
 
   return issues;
 }

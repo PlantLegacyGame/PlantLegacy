@@ -1,11 +1,72 @@
 {
   "_meta": {
     "system": "tumbling",
-    "version": "0.1.0",
+    "version": "1.0.0",
     "schema": "extended-1",
     "owner_task": "T06",
-    "status": "stub",
-    "notes": "Declared by T00. Populated by T06 per DESIGN.md Part 5."
+    "status": "active",
+    "notes": "T06 tumbling motion after an uproot: a deterministic rigid-body hop, bounce and roll. Values are data so the fall can be tuned without touching code."
   },
-  "values": {}
+  "values": {
+    "impulse_min_mps": {
+      "type": "number",
+      "value": 2.5,
+      "range": [0.5, 20],
+      "notes": "Slowest launch speed an uproot can give the body."
+    },
+    "impulse_max_mps": {
+      "type": "number",
+      "value": 6.5,
+      "range": [1, 30],
+      "notes": "Fastest launch speed an uproot can give the body."
+    },
+    "gravity_mps2": {
+      "type": "number",
+      "value": 9.81,
+      "range": [1, 30],
+      "notes": "Downward acceleration during the tumble."
+    },
+    "ground_friction_per_s": {
+      "type": "number",
+      "value": 3.5,
+      "range": [0, 20],
+      "notes": "Horizontal speed bled off per second while the body touches the ground."
+    },
+    "bounce_damping": {
+      "type": "number",
+      "value": 0.35,
+      "range": [0, 1],
+      "notes": "Share of vertical speed kept after each ground contact. 0 stops dead, 1 never loses height."
+    },
+    "max_tumble_seconds": {
+      "type": "number",
+      "value": 6,
+      "range": [1, 60],
+      "notes": "Longest a body tumbles before it is treated as settled even if still drifting."
+    },
+    "impact_damage_per_mps": {
+      "type": "number",
+      "value": 0.8,
+      "range": [0, 50],
+      "notes": "Damage per m/s of vertical impact above impact_damage_min_speed_mps."
+    },
+    "impact_damage_min_speed_mps": {
+      "type": "number",
+      "value": 5,
+      "range": [0, 20],
+      "notes": "Impact speed below which landing on the ground does no further damage."
+    },
+    "roll_speed_max_rad_per_s": {
+      "type": "number",
+      "value": 3.2,
+      "range": [0, 20],
+      "notes": "Fastest roll the body picks up when it is thrown."
+    },
+    "settle_speed_mps": {
+      "type": "number",
+      "value": 0.4,
+      "range": [0, 5],
+      "notes": "Speed under which a grounded body counts as settled."
+    }
+  }
 }

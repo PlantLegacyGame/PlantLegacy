@@ -41,7 +41,16 @@ struct FrameUniforms {
   planetCenterY: f32,
   planetCenterZ: f32,
   planetRadius: f32,
-  _pad6: f32,
+  // Is the eye itself under the soil? A buried eye looks at roots through the
+  // same medium, so the analytic surface test must not hide them.
+  cameraUnderSoil: u32,
+  // The radius of the actual hole in the soil, in plan view. Above ground this
+  // is what decides which roots are exposed through the opening.
+  rootSightApertureRadius: f32,
+  // Radius of the air bubble cut around a buried eye (`eye_window_radius_m`).
+  // Only this bubble is exempt from the soil test while the eye is under the
+  // surface; the rest of the world still hides what the earth stands in front of.
+  rootSightEyeWindow: f32,
 }
 
 // C02b: Per-vertex emergence data for GPU skinning
@@ -70,6 +79,126 @@ struct PlantRenderData {
   visible: u32,
   projectedSize: f32,
   blendFactor: f32,
+}
+
+// T04 appearance, per plant and per organ family (ADR-059).
+//
+// One composed look per organ family, so a plant holding several mutations shows
+// all of them at once instead of only the strongest (C1). The JS side composes
+// and clamps, so the shader only applies what it is handed.
+struct LookOrgan {
+  // rgb = tint multiplier, a = tint strength
+  tintPlus: vec4f,
+  // rgb = variegation colour, a = variegation amount
+  varPlus: vec4f,
+  // rgb = emission colour, a = glow strength
+  glowPlus: vec4f,
+  // x = pattern id, y = pattern scale, z = bark darkening, w = spare
+  patternPlus: vec4f,
+}
+
+struct PlantLook {
+  foliage: LookOrgan,
+  woody: LookOrgan,
+  seed: LookOrgan,
+  bloom: LookOrgan,
+  // Everything the plant is painted with, for the billboard tiers that draw a
+  // whole plant as one disc and so cannot choose an organ family.
+  disc: LookOrgan,
+}
+
+fn lookPatternMottle(p: vec3f, scale: f32) -> f32 {
+  let value = sin(p.x * 9.0 * scale + p.y * 5.0 * scale) * sin(p.z * 7.0 * scale - p.y * 3.0 * scale);
+  return clamp(0.5 + 0.5 * value, 0.0, 1.0);
+}
+
+fn lookPatternSpots(p: vec3f, scale: f32) -> f32 {
+  // Two crossed rings read as flecks at any viewing angle, unlike a flat grid.
+  let a = sin(p.x * 14.0 * scale) * sin(p.y * 11.0 * scale) * sin(p.z * 13.0 * scale);
+  let fleck = smoothstep(0.35, 0.95, abs(a));
+  return fleck;
+}
+
+fn lookPatternStripes(p: vec3f, scale: f32) -> f32 {
+  // Bands across the axis of growth, so a culm reads as segmented.
+  return smoothstep(0.1, 0.9, 0.5 + 0.5 * sin(p.y * 22.0 * scale));
+}
+
+fn lookPatternVeins(p: vec3f, scale: f32) -> f32 {
+  let radial = sqrt(p.x * p.x + p.z * p.z);
+  let midrib = 1.0 - smoothstep(0.0, 0.06, radial);
+  let branches = abs(sin(atan2(p.z, p.x) * 3.0 + p.y * scale * 4.0));
+  return clamp(midrib + smoothstep(0.85, 1.0, branches) * 0.7, 0.0, 1.0);
+}
+
+fn lookPatternSheen(p: vec3f, scale: f32) -> f32 {
+  // A waxy glaze follows the surface, so it is bright where the normal turns
+  // away from the sun - approximated from position noise here.
+  let value = sin(p.y * 3.0 * scale) * cos(p.x * 2.0 * scale + p.z * 2.0 * scale);
+  return clamp(0.5 + 0.5 * value, 0.0, 1.0);
+}
+
+/** A look that paints nothing; also the fallback for an unknown plant. */
+fn neutralLookOrgan() -> LookOrgan {
+  return LookOrgan(
+    vec4f(1.0, 1.0, 1.0, 0.0),
+    vec4f(1.0, 1.0, 1.0, 0.0),
+    vec4f(0.0, 0.0, 0.0, 0.0),
+    vec4f(0.0, 1.0, 0.0, 0.0),
+  );
+}
+
+/** Paint one organ with its composed look. */
+fn applyPlantLook(
+  color: vec3f,
+  look: LookOrgan,
+  worldPosition: vec3f,
+  frame: FrameUniforms,
+) -> vec3f {
+  var result = color;
+  // Tint: mix(1, tint, strength) keeps a light pigment light.
+  result = result * mix(vec3f(1.0), look.tintPlus.rgb, look.tintPlus.a);
+  // Bark darkening is geometry-modulated shading, not a colour change.
+  result = result * (1.0 - clamp(look.patternPlus.z, 0.0, 0.6));
+
+  let patternId = u32(round(look.patternPlus.x));
+  let patternScale = max(0.05, look.patternPlus.y);
+  let variegation = clamp(look.varPlus.a, 0.0, 1.0);
+  if (variegation > 0.001 && patternId != 0u) {
+    var figure = 0.0;
+    if (patternId == 1u) {
+      figure = lookPatternMottle(worldPosition, patternScale);
+    } else if (patternId == 2u) {
+      figure = lookPatternSpots(worldPosition, patternScale);
+    } else if (patternId == 3u) {
+      figure = lookPatternStripes(worldPosition, patternScale);
+    } else if (patternId == 4u) {
+      figure = lookPatternVeins(worldPosition, patternScale);
+    } else if (patternId == 5u) {
+      figure = lookPatternSheen(worldPosition, patternScale);
+    }
+    if (figure > 0.001) {
+      let figureColor = look.varPlus.rgb * (0.62 + 0.38 * figure);
+      result = mix(result, figureColor, variegation * figure);
+    }
+  }
+  return result;
+}
+
+/**
+ * Additive emission, applied after lighting.
+ *
+ * A bioluminescent lamina has to glow from the tissue, not be shaded like
+ * pigment: adding it into the albedo multiplied the glow by the sun and left a
+ * night-time plant dark, which is the opposite of what the name promises.
+ */
+fn lookEmissive(look: LookOrgan, worldPosition: vec3f, frame: FrameUniforms) -> vec3f {
+  let glow = clamp(look.glowPlus.a, 0.0, 1.0);
+  if (glow <= 0.001) {
+    return vec3f(0.0);
+  }
+  let pulse = 0.68 + 0.32 * sin(frame.time * 1.7 + worldPosition.y * 0.6);
+  return look.glowPlus.rgb * (glow * 0.32 * pulse);
 }
 
 fn windOffset(position: vec3f, frame: FrameUniforms, swayStiffness: f32) -> vec3f {
@@ -148,13 +277,31 @@ fn soilOccludes(worldPos: vec3f) -> bool {
     return false;
   }
 
-  // The earth is between the eye and the fragment. Fragments inside the Root
-  // Sight bubble are visible; the rest are buried.
+  // The earth is between the eye and the fragment. The soil is cut in plan view
+  // around the cavity, so the test is a cylinder, not a sphere: every root under
+  // the opening is exposed whatever its depth, which is what the hole in the
+  // ground actually is.
   if (frame.rootSightEnabled != 0u && frame.rootSightProgress > 0.05) {
     let cavityRadius = frame.rootSightRadius * frame.rootSightProgress;
-    if (distance(worldPos, frame.rootSightCenter.xyz) <= cavityRadius) {
+    if (frame.rootSightApertureRadius > 0.0) {
+      cavityRadius = frame.rootSightApertureRadius * frame.rootSightProgress;
+    }
+    if (distance(worldPos.xz, frame.rootSightCenter.xz) <= cavityRadius) {
       return false;
     }
+  }
+  if (frame.cameraUnderSoil != 0u) {
+    // A buried eye is exempt only inside the air bubble around itself. The old
+    // blanket `return false` stopped the eye's own cavity reading as solid dirt,
+    // but it did it for every fragment in the world: rival plants and their
+    // roots were drawn straight through hills from underground.
+    if (
+      frame.rootSightEyeWindow > 0.0 &&
+      distance(worldPos, frame.cameraPos.xyz) <= frame.rootSightEyeWindow * 1.5
+    ) {
+      return false;
+    }
+    return true;
   }
   return true;
 }

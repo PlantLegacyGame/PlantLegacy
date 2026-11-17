@@ -1,11 +1,215 @@
 {
   "_meta": {
     "system": "damage",
-    "version": "0.1.0",
+    "version": "1.0.0",
     "schema": "extended-1",
     "owner_task": "T06",
-    "status": "stub",
-    "notes": "Declared by T00. Populated by T06 per DESIGN.md Part 5."
+    "status": "active",
+    "notes": "T06 damage pipeline: weather, tool (accepted, unused MVP), scripted herbivore swarms and terrain collapse/debris. Roots are not a damage source (ADR-051). Drops and kill credit are tuned here; fragment item rules stay with T51 in fragments.json."
   },
-  "values": {}
+  "values": {
+    "weather_damage_per_s": {
+      "type": "number",
+      "value": 0.45,
+      "range": [
+        0,
+        20
+      ],
+      "notes": "Structural damage per second to a plant exposed to an active thunderstorm. 1.2/s killed a young plant inside one storm; a storm should cost tissue and force repair, not end the run before the reroot game is even reachable."
+    },
+    "weather_min_biomass": {
+      "type": "number",
+      "value": 8,
+      "range": [
+        0,
+        100
+      ],
+      "notes": "Structural biomass a plant needs before a storm's absolute damage applies. Below it the plant is small enough to shrug the weather off; without a floor a freshly germinated sprout died inside one storm tick."
+    },
+    "weather_max_biomass_fraction_per_s": {
+      "type": "number",
+      "value": 0.008,
+      "range": [
+        0,
+        1
+      ],
+      "notes": "Ceiling on storm damage as a share of the plant's own biomass per second. 0.008/s is about a quarter of the plant gone across a full storm, which is a wound, not a death sentence."
+    },
+    "lightning_max_biomass_fraction": {
+      "type": "number",
+      "value": 0.4,
+      "range": [
+        0,
+        1
+      ],
+      "notes": "A strike can never take more than this share of the plant's biomass, so it hurts a young plant instead of executing it."
+    },
+    "storm_gust_speed_mps": {
+      "type": "number",
+      "value": 28,
+      "range": [
+        0,
+        100
+      ],
+      "notes": "Gust a plant catches during the active thunderstorm phase. Compared against the uproot threshold after height scaling."
+    },
+    "lightning_damage_amount": {
+      "type": "number",
+      "value": 8,
+      "range": [
+        0,
+        1000
+      ],
+      "notes": "One-off structural damage of a lightning strike inside the weather lightning radius. 18 could take a whole young plant in one unlucky hit; a strike should be memorable, not an execution."
+    },
+    "herbivore_swarm_auto_enabled": {
+      "type": "boolean",
+      "value": false,
+      "notes": "Automatic swarms are off until T54 renders fauna. An invisible swarm that damages every plant near spawn is not a fair hazard; dev_herbivore_swarm still forces one."
+    },
+    "herbivore_swarm_interval_s": {
+      "type": "integer",
+      "value": 240,
+      "range": [
+        30,
+        3600
+      ],
+      "notes": "How often a scripted swarm passes through the region. Swarms are events, not pathfinding agents."
+    },
+    "herbivore_swarm_radius_m": {
+      "type": "number",
+      "value": 35,
+      "range": [
+        5,
+        200
+      ],
+      "notes": "Radius of the swarm's browse area."
+    },
+    "herbivore_swarm_duration_s": {
+      "type": "number",
+      "value": 20,
+      "range": [
+        1,
+        300
+      ],
+      "notes": "Seconds the swarm keeps browsing before it moves on."
+    },
+    "herbivore_swarm_damage_per_s": {
+      "type": "number",
+      "value": 2.5,
+      "range": [
+        0,
+        20
+      ],
+      "notes": "Browse damage per second to every plant inside the swarm radius."
+    },
+    "herbivore_swarm_spread_m": {
+      "type": "number",
+      "value": 60,
+      "range": [
+        5,
+        500
+      ],
+      "notes": "Half-width of the region a swarm centre may appear in around the world origin."
+    },
+    "tool_damage_per_hit": {
+      "type": "number",
+      "value": 10,
+      "range": [
+        0,
+        1000
+      ],
+      "notes": "Damage an accepted tool hit would deal. The source is wired into the pipeline; no tool verb ships in the MVP."
+    },
+    "terrain_collapse_damage": {
+      "type": "number",
+      "value": 15,
+      "range": [
+        0,
+        1000
+      ],
+      "notes": "Damage a collapsing void deals to a plant whose root plate sits inside terrain_collapse_radius_m."
+    },
+    "terrain_collapse_radius_m": {
+      "type": "number",
+      "value": 4,
+      "range": [
+        0.5,
+        30
+      ],
+      "notes": "Distance from a collapse at which it still rattles the plant."
+    },
+    "damage_memory_decay_per_s": {
+      "type": "number",
+      "value": 1.5,
+      "range": [
+        0,
+        100
+      ],
+      "notes": "Unhealed structural damage forgotten per second. Crossing uproot.damage_threshold_hp before it decays tears the plant out."
+    },
+    "fragment_drop_chance": {
+      "type": "number",
+      "value": 0.45,
+      "range": [
+        0,
+        1
+      ],
+      "notes": "Chance that a node destroyed by damage leaves a fragment. T51 turns the drop into an item."
+    },
+    "remains_fragment_count": {
+      "type": "integer",
+      "value": 4,
+      "range": [
+        0,
+        64
+      ],
+      "notes": "Fragments left where a plant died."
+    },
+    "fragment_lifetime_s": {
+      "type": "integer",
+      "value": 900,
+      "range": [
+        10,
+        86400
+      ],
+      "notes": "How long a dropped fragment stays in the world before it decays."
+    },
+    "dung_per_death": {
+      "type": "integer",
+      "value": 1,
+      "range": [
+        0,
+        16
+      ],
+      "notes": "Dung left by a dying plant."
+    },
+    "dung_per_swarm": {
+      "type": "integer",
+      "value": 2,
+      "range": [
+        0,
+        32
+      ],
+      "notes": "Dung a swarm leaves when it moves on."
+    },
+    "dung_lifetime_s": {
+      "type": "integer",
+      "value": 1800,
+      "range": [
+        10,
+        86400
+      ],
+      "notes": "How long dung stays in the world before it decays."
+    },
+    "kill_credit_window_s": {
+      "type": "integer",
+      "value": 60,
+      "range": [
+        5,
+        300
+      ],
+      "notes": "Damage older than this is not counted when the killing blow is credited to a player source."
+    }
+  }
 }

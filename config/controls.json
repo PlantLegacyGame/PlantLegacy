@@ -31,6 +31,7 @@
         { "action": "root_sight_toggle", "keys": ["KeyR"], "mouse": "", "mode": "toggle", "context": "" },
         { "action": "emote_wheel", "keys": ["KeyE"], "mouse": "", "mode": "press", "context": "" },
         { "action": "inventory_overview_toggle", "keys": ["KeyI"], "mouse": "", "mode": "toggle", "context": "" },
+        { "action": "settings_toggle", "keys": ["KeyO"], "mouse": "", "mode": "toggle", "context": "" },
         { "action": "inventory_slot_1", "keys": ["Digit1"], "mouse": "", "mode": "press", "context": "" },
         { "action": "inventory_slot_2", "keys": ["Digit2"], "mouse": "", "mode": "press", "context": "" },
         { "action": "inventory_slot_3", "keys": ["Digit3"], "mouse": "", "mode": "press", "context": "" },

@@ -278,6 +278,12 @@
             "range": [0.3, 20],
             "notes": "Depth of an empty water table below the local surface. A full cavity raises the table to the surface, which is what pools visible water in low ground after a storm."
         },
+        "groundwater_table_smoothing_m": {
+            "type": "number",
+            "value": 5,
+            "range": [0, 50],
+            "notes": "Radius averaged to get the regional ground level the water table sits under. The table is a level, not a copy of the ground: without this it dips into every hollow and follows every dug tunnel down, so no hollow ever holds water. Larger values give broader, flatter bodies of water."
+        },
         "canopy_shade_reduction": {
             "type": "number",
             "value": 0.1,

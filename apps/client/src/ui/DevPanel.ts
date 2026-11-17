@@ -86,6 +86,21 @@ export interface DevPanelConfig {
     getPlantId: () => string | null;
     getPlantNodes: () => Map<string, unknown> | null;
   };
+  /** Inventory grants, so every configured item can be read in the panel. */
+  inventory: {
+    getDefinitions: () => Array<{ id: string; name: string }>;
+    grant: (itemId: string, count: number) => void;
+  };
+  /** AL-01: the six-pose benchmark. Absent outside dev mode. */
+  benchmark?: {
+    start: () => void;
+    isRunning: () => boolean;
+    getReport: () => {
+      overall: { p95FrameMs: number; avgFrameMs: number };
+      poses: Array<{ id: string; avgFrameMs: number; p95FrameMs: number; avgGpuMs: number | null }>;
+      gpuMeasured: boolean;
+    } | null;
+  };
   sendToServer: (type: number, payload: unknown) => void;
 }
 
@@ -520,11 +535,42 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
             1,
           ),
         ]);
+        addSection(container, 'Mutation Gallery', [
+          createButtonGroup('Test Row', [
+            {
+              label: 'Build Gallery',
+              primary: true,
+              action: () => {
+                send(8, { type: 'dev_mutation_gallery' });
+                // The gallery plants are created server-side after this message,
+                // so ask for the plant list once they exist.
+                window.setTimeout(() => send(6, {}), 400);
+              },
+            },
+            {
+              label: 'Request Full Sync',
+              action: () => send(6, {}),
+            },
+          ]),
+        ]);
+        addSection(container, 'Inventory', [
+          createButtonGroup(
+            'Give One',
+            cfg.inventory.getDefinitions().map((definition) => ({
+              label: definition.name,
+              action: () => cfg.inventory.grant(definition.id, 1),
+            })),
+          ),
+        ]);
         addSection(container, 'Actions', [
           createButtonGroup('Instant', [
             { label: 'Regenerate', action: () => pw.regeneratePlant(), primary: true },
             { label: 'Fill Energy', action: () => send(8, { type: 'dev_fill_energy' }) },
             { label: 'Fill Biomass', action: () => send(8, { type: 'dev_fill_biomass' }) },
+            {
+              label: 'Fill Water+Minerals',
+              action: () => send(8, { type: 'dev_fill_resources' }),
+            },
             {
               label: 'Kill Plant',
               action: () => {
@@ -532,6 +578,27 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
               },
               danger: true,
             },
+          ]),
+        ]);
+        addSection(container, 'Uproot & Damage (T06)', [
+          createButtonGroup('Damage', [
+            { label: 'Tool Hit', action: () => send(8, { type: 'dev_damage_plant' }) },
+            { label: 'Force Uproot', action: () => send(8, { type: 'dev_uproot_plant' }) },
+            {
+              label: 'Herbivore Swarm',
+              action: () => send(8, { type: 'dev_herbivore_swarm' }),
+            },
+            {
+              label: 'Collapse',
+              action: () => send(8, { type: 'dev_terrain_collapse' }),
+            },
+          ]),
+          createButtonGroup('Reroot Crawl', [
+            { label: 'East', action: () => send(8, { type: 'dev_reroot', dirX: 1, dirZ: 0 }) },
+            { label: 'West', action: () => send(8, { type: 'dev_reroot', dirX: -1, dirZ: 0 }) },
+            { label: 'North', action: () => send(8, { type: 'dev_reroot', dirX: 0, dirZ: -1 }) },
+            { label: 'South', action: () => send(8, { type: 'dev_reroot', dirX: 0, dirZ: 1 }) },
+            { label: 'Stop', action: () => send(8, { type: 'dev_reroot', dirX: 0, dirZ: 0 }) },
           ]),
         ]);
       },
@@ -809,12 +876,13 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
             1,
           ),
           createNumberInput(
-            'Active Hz',
+            'Simulation Hz',
             () => 20,
             (v) => send(8, { type: 'dev_set_simulation', active_tick_rate_hz: v }),
             10,
             60,
             1,
+            'Hz',
           ),
           createNumberInput(
             'Near Hz',
@@ -968,6 +1036,32 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
             { label: 'Dump Shaders', action: () => send(8, { type: 'dev_dump_shaders' }) },
           ]),
         ]);
+        if (cfg.benchmark) {
+          const bench = cfg.benchmark;
+          addSection(container, 'Benchmark (AL-01)', [
+            createButtonGroup('Six fixed poses', [
+              { label: 'Run 6 poses', action: () => bench.start() },
+              {
+                label: 'Log report',
+                action: () => {
+                  const report = bench.getReport();
+                  if (!report) return;
+                  console.table(report.poses);
+                  console.log(
+                    `p95 ${report.overall.p95FrameMs.toFixed(1)} ms (GPU ${
+                      report.gpuMeasured ? 'measured' : 'estimated'
+                    })`,
+                  );
+                },
+              },
+            ]),
+            createReadonly('Status', () => (bench.isRunning() ? 'running...' : 'idle')),
+            createReadonly('Last p95', () => {
+              const report = bench.getReport();
+              return report ? `${report.overall.p95FrameMs.toFixed(1)} ms` : 'no run yet';
+            }),
+          ]);
+        }
         addSection(container, 'Stress Test', [
           createButtonGroup('Load', [
             {

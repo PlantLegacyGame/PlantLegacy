@@ -59,6 +59,8 @@ export interface ResourcesConfig {
   groundwaterFlowPerS?: number;
   /** Depth of an empty water table below the surface, in metres. */
   groundwaterTableDepthM?: number;
+  /** Radius averaged to get the regional level the water table sits under. */
+  groundwaterTableSmoothingM?: number;
   canopyShadeReduction: number;
   maxLight: number;
   maxMoisture: number;
@@ -238,6 +240,8 @@ export function loadResourcesConfig(configs: Map<string, ConfigFile>): Resources
     groundwaterFlowPerS: optionalNumber(configs, 'resources', 'groundwater_flow_per_s') ?? 0.35,
     groundwaterTableDepthM:
       optionalNumber(configs, 'resources', 'groundwater_table_depth_m') ?? 2.5,
+    groundwaterTableSmoothingM:
+      optionalNumber(configs, 'resources', 'groundwater_table_smoothing_m') ?? 5,
     canopyShadeReduction: readNumber(configs, 'resources', 'canopy_shade_reduction'),
     maxLight: readInteger(configs, 'resources', 'max_light'),
     maxMoisture: readInteger(configs, 'resources', 'max_moisture'),
@@ -326,6 +330,12 @@ export class ResourceWorld {
    * tests and for a world whose terrain has not been configured yet.
    */
   private surfaceHeightProvider: ((x: number, z: number) => number) | null = null;
+  /**
+   * Terrain height before any digging. The water table is measured against this
+   * and not against the edited surface: a root tunnel does not lower the region's
+   * groundwater, it simply opens a hole that the existing table fills.
+   */
+  private baseHeightProvider: ((x: number, z: number) => number) | null = null;
 
   constructor(config: ResourcesConfig, worldBounds: TileBounds, planetRadiusM = 0) {
     this.config = config;
@@ -348,8 +358,38 @@ export class ResourceWorld {
     this.surfaceHeightProvider = provider;
   }
 
+  /** Inject the undug terrain field used to place the water table. */
+  setBaseHeightProvider(provider: (x: number, z: number) => number): void {
+    this.baseHeightProvider = provider;
+  }
+
   private surfaceHeightAt(x: number, z: number): number {
     return this.surfaceHeightProvider?.(x, z) ?? 0;
+  }
+
+  private baseHeightAt(x: number, z: number): number {
+    return this.baseHeightProvider?.(x, z) ?? this.surfaceHeightAt(x, z);
+  }
+
+  /**
+   * Regional ground level: the base terrain averaged over a few metres.
+   *
+   * A water table is a level, not a copy of the ground. Measuring it against the
+   * point's own height made it dip into every hollow and follow every dug tunnel
+   * down, so no hollow ever held water. A smooth regional level lets low ground
+   * sit *below* the table and pool, which is what makes nearby pools connect.
+   */
+  private regionalHeightAt(x: number, z: number): number {
+    const r = Math.max(0, this.config.groundwaterTableSmoothingM ?? 5);
+    if (r <= 0) return this.baseHeightAt(x, z);
+    return (
+      (this.baseHeightAt(x, z) +
+        this.baseHeightAt(x + r, z) +
+        this.baseHeightAt(x - r, z) +
+        this.baseHeightAt(x, z + r) +
+        this.baseHeightAt(x, z - r)) /
+      5
+    );
   }
 
   /** One resource record per cell, plus the lattice tiles that sample each. */
@@ -550,6 +590,24 @@ export class ResourceWorld {
       tile.groundwater = clamp(resources.groundwater, 0, this.config.groundwaterCapacity);
     this.sunIntensityCache = null;
     this.markCellDirty(cell);
+  }
+
+  /**
+   * Height of the water table at a world point, in the same metres as the
+   * surface height provider.
+   *
+   * A full cell puts its table at the surface, an empty one `table_depth_m`
+   * below it, and everything in between is linear in saturation. This is the
+   * number the client draws water from: it is per tile, so a plant that drains
+   * its own ground lowers the water under itself while the neighbouring tiles
+   * stay wet, and rising rain lifts it everywhere.
+   */
+  getWaterTableHeightAt(worldX: number, worldZ: number): number {
+    const tile = this.getTileResources(worldX, worldZ);
+    const capacity = Math.max(1, this.config.groundwaterCapacity);
+    const level = clamp((tile.groundwater ?? 0) / capacity, 0, 1);
+    const depth = Math.max(0.1, this.config.groundwaterTableDepthM ?? 2.5);
+    return this.regionalHeightAt(worldX, worldZ) - (1 - level) * depth;
   }
 
   /** Maximum water a soil cell can hold below the surface. */
@@ -932,9 +990,11 @@ export class ResourceWorld {
     for (let cell = 0; cell < this.cells.length; cell += 1) {
       const centre = this.cellCentres[cell];
       const level = clamp((this.cells[cell].groundwater ?? 0) / capacity, 0, 1);
-      // A full cell has its table at the surface; an empty one has it maxDepth
-      // below. That is what makes a filled hollow pool and a dry rise stay dry.
-      elevations[cell] = this.surfaceHeightAt(centre.x, centre.z) - (1 - level) * maxDepth;
+      // A full cell has its table at the regional ground level; an empty one has
+      // it maxDepth below. Measuring against the same regional level the render
+      // uses is what makes a filled hollow pool and a dry rise stay dry, and it
+      // keeps dug tunnels from acting as drains.
+      elevations[cell] = this.regionalHeightAt(centre.x, centre.z) - (1 - level) * maxDepth;
     }
 
     const transferFactor = Math.min(1, rate * dt);

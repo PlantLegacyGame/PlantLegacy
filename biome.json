@@ -1,7 +1,14 @@
 {
   "$schema": "https://biomejs.dev/schemas/2.6.6/schema.json",
   "files": {
-    "includes": ["**", "!**/node_modules", "!**/dist", "!config", "!**/*.md"]
+    "includes": [
+      "**",
+      "!**/node_modules",
+      "!**/dist",
+      "!config",
+      "!tools/abyssal-garden-reference",
+      "!**/*.md"
+    ]
   },
   "formatter": {
     "enabled": true,

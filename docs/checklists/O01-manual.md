@@ -14,7 +14,7 @@ gaps.
 - [x] `pnpm typecheck`
   - Expected: all 4 projects `Done`.
 - [x] `pnpm config:validate`
-  - Expected: 78 files, OK.
+  - Expected: 79 files, OK.
 - [x] `pnpm test`
   - Expected: 57 shared tests + 127 server tests pass, 0 fail (184 total).
 - [x] `pnpm build`

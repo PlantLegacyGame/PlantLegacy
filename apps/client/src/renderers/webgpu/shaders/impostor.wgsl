@@ -49,6 +49,29 @@ struct ImpostorViewUniforms {
 @group(0) @binding(7) var sporeSacTextureArray: texture_2d_array<f32>;
 @group(0) @binding(8) var seedTextureArray: texture_2d_array<f32>;
 @group(0) @binding(9) var textureArraySampler: sampler;
+// T04 appearance: the composed look of the plant being baked.
+@group(0) @binding(10) var<storage, read> impostorLooks: array<PlantLook>;
+
+/** The composed look for one organ of the plant being baked. */
+fn impostorLook(nodeType: f32) -> LookOrgan {
+  if (impostor.targetPlantIndex >= arrayLength(&impostorLooks)) {
+    return neutralLookOrgan();
+  }
+  let look = impostorLooks[impostor.targetPlantIndex];
+  if (nodeType < 2.5) {
+    return look.woody;
+  }
+  if (nodeType > 2.5 && nodeType < 3.5) {
+    return look.foliage;
+  }
+  if (nodeType > 3.5 && nodeType < 4.5) {
+    return look.seed;
+  }
+  if (nodeType > 4.5 && nodeType < 6.5) {
+    return look.bloom;
+  }
+  return look.foliage;
+}
 
 fn hiddenVertex() -> VertexOutput {
   return VertexOutput(
@@ -195,6 +218,13 @@ fn fs_main(input: VertexOutput, @builtin(front_facing) frontFacing: bool) -> @lo
     }
   }
 
+  // T04: the atlas is baked with the plant's own mutations, on their own
+  // organs, so a distant plant keeps its colours instead of going generic.
+  let look = impostorLook(input.nodeType);
+  if (!isOutline) {
+    baseColor = applyPlantLook(baseColor, look, input.worldPosition, frame);
+  }
+
   let healthFactor = 1.0 - frame.healthTintStrength * 0.3;
   baseColor = mix(vec3f(0.42, 0.30, 0.16), baseColor, healthFactor);
 
@@ -206,11 +236,10 @@ fn fs_main(input: VertexOutput, @builtin(front_facing) frontFacing: bool) -> @lo
   let rim = pow(1.0 - max(dot(normal, viewDirection), 0.0), 3.0) * 0.18;
   lit += vec3f(0.18, 0.30, 0.18) * rim;
 
-  if (frame.mutation0Param > 0.01) {
-    let emissive = frame.mutation0Param * 0.25;
-    let glowColor = vec3f(0.20, 0.75, 0.45);
-    let pulse = 0.6 + 0.4 * sin(frame.time * 2.0 + input.worldPosition.y * 0.5);
-    lit += glowColor * (emissive * pulse);
+  // The old glow read a single global parameter, so every baked impostor glowed
+  // green whether or not it held a bioluminescent mutation. The look now says.
+  if (!isOutline) {
+    lit += lookEmissive(look, input.worldPosition, frame);
   }
 
   lit = applyRootSight(lit, input.worldPosition, input.nodeType, input.isOwn, frame).rgb;

@@ -34,6 +34,18 @@ export function terrainFieldFromConfig(
     rimFadeFraction: config.rimFadeFraction,
     maxDepthM: config.maxDepthM,
     soilDepthM,
+    // The river is part of the ground field, not a mesh laid on top of it: the
+    // server cuts the same channel, so roots and physics agree with what is drawn.
+    riverEnabled: config.riverEnabled,
+    riverCenterZM: config.riverCenterZM,
+    riverWidthM: config.riverWidthM,
+    riverDepthM: config.riverDepthM,
+    riverPathCellM: config.riverPathCellM,
+    riverBankSlope: config.riverBankSlope,
+    riverBankApronM: config.riverBankApronM,
+    riverWaterDepthM: config.riverWaterDepthM,
+    riverFlowSpeedMps: config.riverFlowSpeedMps,
+    riverLengthM: config.riverLengthM,
   };
 }
 

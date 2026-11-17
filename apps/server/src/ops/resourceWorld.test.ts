@@ -67,7 +67,7 @@ function ringZeroSamples(world: ResourceWorld): Map<string, { tileX: number; til
   for (let tileZ = 0; tileZ < world.getHeight(); tileZ += 1) {
     for (let tileX = 0; tileX < world.getWidth(); tileX += 1) {
       const key = world.getTileCell(tileX, tileZ);
-      if (!key || !key.startsWith('0:')) continue;
+      if (!key?.startsWith('0:')) continue;
       if (!samples.has(key)) samples.set(key, { tileX, tileZ });
     }
   }
@@ -438,6 +438,26 @@ describe('ResourceWorld plant tile coverage', () => {
 
     const coverage = world.getPlantTileCoverage(makePlant('p-mixed', [root, leaf]));
     assert.equal(coverage.count, 2, 'two parts over the same two tiles count them once');
+  });
+
+  it('measures the water table against the undug regional ground, not a pit', () => {
+    const world = makeWorld();
+    world.setBaseHeightProvider(() => 0);
+    // The surface provider is the *edited* terrain: a pit two metres deep at the
+    // origin. The table must not follow it down, or no hole could ever fill.
+    world.setSurfaceHeightProvider((x, z) => (Math.abs(x) < 2 && Math.abs(z) < 2 ? -2 : 0));
+    const origin = world.getTileCoordinates(0, 0);
+    for (let dx = -1; dx <= 1; dx += 1) {
+      for (let dz = -1; dz <= 1; dz += 1) {
+        world.setTileResources(origin.tileX + dx, origin.tileZ + dz, {
+          groundwater: world.getGroundwaterCapacity(),
+        });
+      }
+    }
+
+    const table = world.getWaterTableHeightAt(0, 0);
+    assert.ok(table > -2, `a saturated pit should hold water, table was ${table}`);
+    assert.ok(Math.abs(table) < 0.05, `a saturated table sits at the regional level, got ${table}`);
   });
 
   it('treats a node over a tile and a node under it as the same tile', () => {

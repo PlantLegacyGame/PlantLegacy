@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import type { PlantNodeData } from '../PlantRenderer.js';
+import type { PlantNodeData } from '../plant/plantNodeData.js';
 
 /**
  * Rest-pose joint matrix for one plant node in the WebGPU mesh pass.

@@ -48,6 +48,8 @@ export interface DayNightConfig {
 }
 
 export interface WeatherBroadcast {
+  /** 1-based in-game day; one day is `cycleLengthS` (1 real hour by default). */
+  dayNumber: number;
   timeOfDay: number;
   isDay: boolean;
   sunIntensity: number;
@@ -277,6 +279,7 @@ export function weatherStateMachineGetNextState(machine: WeatherStateMachine): W
 }
 
 export function weatherStateMachineGetBroadcast(machine: WeatherStateMachine): {
+  dayNumber: number;
   timeOfDay: number;
   isDay: boolean;
   sunIntensity: number;
@@ -300,6 +303,10 @@ export function weatherStateMachineGetBroadcast(machine: WeatherStateMachine): {
   const sunIntensity = Math.max(0, sunElev) * weatherStateMachineGetLightMultiplier(machine);
 
   return {
+    // The world starts at 06:00, so a day rolls over at midnight rather than
+    // at an arbitrary hour after the process started.
+    dayNumber:
+      1 + Math.floor((machine.totalElapsedS + machine.cycleLengthS * 0.25) / machine.cycleLengthS),
     timeOfDay: machine.timeOfDay,
     isDay: isDayTime,
     sunIntensity,
@@ -325,4 +332,20 @@ export function weatherStateMachineGetTimeOfDay(machine: WeatherStateMachine): n
 
 export function weatherStateMachineGetWeatherState(machine: WeatherStateMachine): WeatherStateName {
   return machine.currentState;
+}
+
+/**
+ * Dev hook: move the world clock to a given fraction of the day.
+ *
+ * The sun is server-authoritative, so a client cannot brighten the world for a
+ * screenshot - `setTimeOfDay` on the renderer is overwritten by the next
+ * broadcast. 0 midnight, 0.25 sunrise, 0.5 noon, 0.75 sunset, matching the sun
+ * arc used by the broadcast and the renderer.
+ */
+export function weatherStateMachineSetTimeOfDay(
+  machine: WeatherStateMachine,
+  timeOfDay: number,
+): void {
+  if (!Number.isFinite(timeOfDay)) return;
+  machine.timeOfDay = ((timeOfDay % 1) + 1) % 1;
 }

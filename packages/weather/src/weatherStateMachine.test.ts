@@ -59,6 +59,15 @@ describe('T07 WeatherStateMachine', () => {
     assert.ok(updatedTime > initialTime);
   });
 
+  it('counts days from elapsed cycle time', () => {
+    const machine = createWeatherStateMachine(weatherConfig, dayNightConfig);
+    assert.equal(weatherStateMachineGetBroadcast(machine).dayNumber, 1);
+    weatherStateMachineUpdate(machine, 1000);
+    assert.equal(weatherStateMachineGetBroadcast(machine).dayNumber, 2);
+    weatherStateMachineUpdate(machine, 500);
+    assert.equal(weatherStateMachineGetBroadcast(machine).dayNumber, 2);
+  });
+
   it('reports day only while the sun is above the horizon', () => {
     const machine = createWeatherStateMachine(weatherConfig, dayNightConfig);
     // 0.25 is sunrise exactly, so step into the morning first.

@@ -1,11 +1,125 @@
 {
   "_meta": {
     "system": "uproot",
-    "version": "0.1.0",
+    "version": "1.0.0",
     "schema": "extended-1",
     "owner_task": "T06",
-    "status": "stub",
-    "notes": "Declared by T00. Populated by T06 per DESIGN.md Part 5."
+    "status": "active",
+    "notes": "T06 uproot, reroot crawl and settlement. Uproot is caused by saturation, a storm gust or a collapse under the root plate (ADR-052); there is no desperation buff."
   },
-  "values": {}
+  "values": {
+    "damage_threshold_hp": {
+      "type": "integer",
+      "value": 120,
+      "range": [1, 10000],
+      "notes": "Cumulative unhealed structural damage, in biomass points, that tears the root plate free."
+    },
+    "reroot_window_s": {
+      "type": "integer",
+      "value": 45,
+      "range": [3, 120],
+      "notes": "Seconds after uprooting during which a crawl can still reach soil. After it closes the plant can only starve."
+    },
+    "reroot_soil_min_moisture": {
+      "type": "number",
+      "value": 18,
+      "range": [0, 100],
+      "notes": "Tile moisture a root must find before it can settle again, in the same units as the resource grid."
+    },
+    "reroot_settle_seconds": {
+      "type": "number",
+      "value": 2.5,
+      "range": [0, 60],
+      "notes": "Continuous seconds on valid soil before the plant is rooted again."
+    },
+    "reroot_crawl_speed_mps": {
+      "type": "number",
+      "value": 1.0,
+      "range": [0.1, 2.0],
+      "notes": "Base crawl speed. Multiplied by the substrate and by mutation movement.rerootSpeed (T04)."
+    },
+    "uprooted_biomass_drain_per_s": {
+      "type": "number",
+      "value": 0.35,
+      "range": [0, 100],
+      "notes": "Structural biomass a detached plant loses each second when it has no water to draw on. Being torn free is a slow bleed, not a countdown: a plant lying in wet ground bleeds at detached_watered_drain_multiplier of this and can live there indefinitely, like a cutting in a glass of water. A failed reroot on dry ground still starves."
+    },
+    "detached_watered_drain_multiplier": {
+      "type": "number",
+      "value": 0.2,
+      "range": [0, 1],
+      "notes": "Share of the detached bleed that still applies when the ground under the plant is at or above detached_min_tile_moisture. 1 disables hydroponic survival; 0 makes a wet detached plant effectively immortal."
+    },
+    "detached_min_tile_moisture": {
+      "type": "number",
+      "value": 22,
+      "range": [0, 100],
+      "notes": "Tile moisture at which a detached plant counts as lying in water rather than on dry ground, in the resource grid's units."
+    },
+    "detached_photosynthesis_multiplier": {
+      "type": "number",
+      "value": 0.45,
+      "range": [0, 1],
+      "notes": "Photosynthesis while detached. The canopy still catches light, but without root pressure it cannot fix carbon at the rooted rate. This is the quality-of-life cost of surviving unrooted."
+    },
+    "detached_dry_grace_s": {
+      "type": "number",
+      "value": 90,
+      "range": [0, 600],
+      "notes": "Seconds a detached plant may lie on dry ground before the bleed is at full rate. Below this it still finds enough capillary water to slow the loss."
+    },
+    "detached_growth_enabled": {
+      "type": "boolean",
+      "value": false,
+      "notes": "Whether a detached plant may grow new parts. False by default: a plant with no roots has nothing to supply a new shoot, so the only way forward is the reroot crawl."
+    },
+    "saturation_uproot_moisture": {
+      "type": "number",
+      "value": 92,
+      "range": [0, 100],
+      "notes": "Tile moisture at which soil counts as saturated. Ordinary rain does not reach it; sustained storm rain does."
+    },
+    "saturation_uproot_seconds": {
+      "type": "number",
+      "value": 20,
+      "range": [1, 600],
+      "notes": "Continuous saturated seconds before the root plate gives way. The counter resets when the tile drains."
+    },
+    "saturation_check_interval_s": {
+      "type": "number",
+      "value": 1,
+      "range": [0.1, 10],
+      "notes": "How often each rooted plant's tile is sampled for saturation."
+    },
+    "gust_uproot_threshold_mps": {
+      "type": "number",
+      "value": 22,
+      "range": [0, 100],
+      "notes": "Wind a plant must catch to be torn out. Effective wind scales with exposed height."
+    },
+    "gust_height_reference_m": {
+      "type": "number",
+      "value": 2.5,
+      "range": [0.2, 20],
+      "notes": "Height at which a plant catches the configured storm gust unchanged. Shorter plants catch less, taller ones more."
+    },
+    "collapse_uproot_radius_m": {
+      "type": "number",
+      "value": 3,
+      "range": [0, 30],
+      "notes": "A collapse this close to the root plate takes the plant with it."
+    },
+    "uproot_lift_m": {
+      "type": "number",
+      "value": 0.25,
+      "range": [0, 2],
+      "notes": "How far the root plate is lifted clear of the soil when the plant comes up, so the roots are visible."
+    },
+    "uproot_tilt_degrees": {
+      "type": "number",
+      "value": 72,
+      "range": [0, 90],
+      "notes": "Lean of the body at the moment the root plate tears free."
+    }
+  }
 }

@@ -15,5 +15,6 @@
 
 export * from './constraints.ts';
 export * from './geometry.ts';
+export * from './health.ts';
 export * from './nodeTypes.ts';
 export * from './types.ts';

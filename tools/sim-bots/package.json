@@ -1,0 +1,14 @@
+{
+  "name": "@plant-legacy/sim-bots",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Headless player bots: connect over the real WebSocket protocol, play a plant, and report anomalies. Zero dependencies (Node's built-in WebSocket).",
+  "scripts": {
+    "start": "node src/run.ts",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@plant-legacy/shared": "workspace:*"
+  }
+}

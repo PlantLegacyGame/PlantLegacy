@@ -1,7 +1,6 @@
 import { type ConfigFile, readBoolean, readNumber } from '@plant-legacy/shared/config';
 
 export interface WorldConfig {
-  tickRateHz: number;
   maxPlayersPerWorld: number;
   reconnectWindowMin: number;
   persistenceEnabled: boolean;
@@ -15,7 +14,6 @@ export interface WorldConfig {
   perClientEntityCap: number;
   snapshotIntervalTicks: number;
   eventLogCompactionThreshold: number;
-  activeTickRateHz: number;
   nearTickRateHz: number;
   dormantStepIntervalSec: number;
   tickBudgetActiveShare: number;
@@ -29,7 +27,6 @@ export function loadWorldConfig(configs: Map<string, ConfigFile>): WorldConfig {
     | { L0: number; L1: number; L2: number }
     | undefined;
   return {
-    tickRateHz: readNumber(configs, 'world', 'tick_rate_hz'),
     maxPlayersPerWorld: readNumber(configs, 'world', 'max_players_per_world'),
     reconnectWindowMin: readNumber(configs, 'world', 'reconnect_window_min'),
     persistenceEnabled: readBoolean(configs, 'world', 'persistence_enabled'),
@@ -41,7 +38,6 @@ export function loadWorldConfig(configs: Map<string, ConfigFile>): WorldConfig {
     perClientEntityCap: readNumber(configs, 'world', 'per_client_entity_cap'),
     snapshotIntervalTicks: readNumber(configs, 'world', 'snapshot_interval_ticks'),
     eventLogCompactionThreshold: readNumber(configs, 'world', 'event_log_compaction_threshold'),
-    activeTickRateHz: readNumber(configs, 'world', 'active_tick_rate_hz'),
     nearTickRateHz: readNumber(configs, 'world', 'near_tick_rate_hz'),
     dormantStepIntervalSec: readNumber(configs, 'world', 'dormant_step_interval_sec'),
     tickBudgetActiveShare: readNumber(configs, 'world', 'tick_budget_active_share'),

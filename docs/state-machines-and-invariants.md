@@ -327,6 +327,39 @@ returns the machine to `hidden` or `options_visible` with an error.
 
 ---
 
+## SM-13 — Damage, uproot and tumble (T06)
+
+**Location:** `apps/server/src/ops/damage/damagePipeline.ts`, with pure decisions
+in `packages/shared/src/damage`.
+
+**States:**
+
+```
+rooted -> uprooted -> tumbling -> uprooted (settled) -> rerooting -> rooted
+                    |__________________________________________| -> dead (starvation)
+```
+
+Uproot causes are saturation, a height-scaled gust, a collapse under the root
+plate, or accumulated structural damage; there is no random roll and no
+root-vs-root source (ADR-051, ADR-052). Damage removes node biomass, so HP is
+structural mass (ADR-055).
+
+**Enforced today:** one uproot at a time per plant; every transform is
+recomputed from a captured base pose; the reroot window stops settling but does
+not kill directly; a failed reroot starves through the normal death path; drop
+expiry is checked every tick; kill credit is the largest total inside
+`kill_credit_window_s`; the snapshot is at **PLNT v4** — v2 added the mutation
+list, v3 the uproot state (restored as settled), v4 each mutation's level and its
+chosen level cards — and v1/v2 snapshots still load.
+
+**Open:** the crawl substrate multiplier is fixed at 1.0 until T02 exposes one;
+the client has no reroot control (C04) and only the Dev Panel steers it; drops
+are world objects that no one can pick up until T51/T08A (ADR-056).
+
+**Related:** INV-DM-01..05, INV-GR-01, INV-PR-01.
+
+---
+
 # Part 2 — Invariant catalog
 
 Status legend: `ENFORCED`, `PARTIAL`, `UNENFORCED`, `BROKEN`.
@@ -364,25 +397,34 @@ Status legend: `ENFORCED`, `PARTIAL`, `UNENFORCED`, `BROKEN`.
 | INV-GR-10 | Germination is the only way out of `seed`. | FIXED (2026-11-08) | Seed is offered `lateral_root`/`stem` (`plantWorld.ts:223-250`); `canCrossLayer` allows `seed -> stem` (`:992-999`). | Require `isSeed === false` for non-radicle growth; gate options. |
 | INV-GR-11 | Germinating a seed happens at most once. | PARTIAL | No check against `rootNodeId`/`isSeed` after load. | Guard in `handleGermination`. |
 | INV-GR-12 | `maxNodesPerPlant` is never exceeded. | FIXED (2026-11-08) | Checked before germination, which adds ~3 nodes (`:780`). | Check after the planned node batch. |
-| INV-GR-13 | A quoted growth cost equals the charged cost. | ENFORCED (2026-11-10) | Single source of truth `computeGrowthCostQuote` used across `getGrowthOptions` quotes, `tryGrow` deductions, and `step()` resource consumption. Tested in `plantWorld.test.ts`. | Maintain shared cost computation helper. |
+| INV-GR-13 | A quoted growth cost equals the charged cost. | ENFORCED (2026-11-16) | `computeGrowthCostQuote` is the base for all three sites, and `growthChargeScale(plant, node, layer)` is the only place the extras are combined: soil resistance × mutation growth cost for energy, resistance ÷ growth speed for time. `buildGrowthOptions` quotes through `scaleGrowthQuote` (energy rounded **up**, so a card can only be pessimistic) and `tryGrow` charges through the same scale. Before this the menu quoted the bare cost while the charge multiplied it, so a root card said 6 and the server wanted 11. Test: "quotes the soil and mutation charge, so a card never offers growth that is refused". | Keep the scale in `PlantWorld`; the menu must never recompute a multiplier. |
 | INV-GR-14 | Death deposits minerals exactly once. | FIXED (2026-11-10) | `killPlant` calls `eventBus.publishSync(PLANT_DEATH)` and queues death; `processPlantDeaths` drains queue and calls `resourceWorld.onPlantDeath` exactly once per death (`main.ts:125-147`, `plantWorld.ts:1262-1299`). | Keep single deposit path in `processPlantDeaths`. |
 | INV-GR-15 | The spatial index matches the plant's node set. | PARTIAL | Add/remove paths paired; no reconciliation. | Dev assertion comparing index vs node sets. |
 | INV-GR-16 | Broadcast node metadata equals server node metadata. | FIXED (2026-11-10) | Germination broadcasts inserted nodes verbatim with full stats (`plantWorld.ts:1239-1244`). | — |
 | INV-GR-17 | `totalBiomass` tracks the biomass actually owned by the plant. | PARTIAL | Growth, germination, photosynthesis, damage, and shedding mutate it independently; no reconciliation. | Dev-mode assert against a derived value where node biomass is authoritative. |
+| INV-GR-18 | A node's `y` is a height above the soil line under that node. | ENFORCED (2026-11-16) | `createPlant` puts a seed at `y = 0` wherever it is planted, growth places every node relative to its parent, and the client adds each node's own terrain relief (`planetTerrainY`) when it draws. Nothing may re-base a body onto `terrain.heightAt()`: `completeReroot` did, and rerooting onto a 16 m rise lifted the crown to `y = 16`. Test: `keeps the body on the ground when it reroots onto a rise`. | A move changes x and z only; a body keeps its shape relative to the ground. |
+| INV-GR-19 | An organ in the growth menu can actually continue the body it belongs to. | ENFORCED (2026-11-16) | A `stem` offers `stem`, so a shoot stacks internodes; before this a plant with no `trunk`/`culm` unlock could not grow above one 35 cm segment and every body was a fan off a stump. Mutation-only tissues stay out of the base menu (`trunk`, `culm`, `rhizome`, `floating_leaf`). Test: `packages/shared/src/growth/nodeTypes.test.ts`. | Any new continuing organ needs a parent that offers it (E8, E11). |
 
 ## C. Time and simulation (`INV-TM`)
 
 | ID | Invariant | Status | Evidence / failure | Fix |
 |---|---|---|---|---|
-| INV-TM-01 | One authoritative tick clock. | BROKEN | `World.tick`, `PlantWorld.tick`, `ResourceWorld.tick` advance independently. | Pass one tick/dt into every subsystem; derive all timers from it. |
+| INV-TM-01 | One authoritative tick clock. | FIXED (2026-11-15) | One `TickClock` calls `World.onTick(tick, dt)` and every subsystem is stepped from that call. Near/dormant ticks are deliberate config sub-cadences banked inside `PlantWorld`, not independent clocks. Tests: `PlantWorld tier rates`. | Keep all new subsystems on the injected `dt`/`tick`; no wall-clock timers in simulation. |
 | INV-TM-02 | Cooldowns and intent ticks use that clock. | PARTIAL | `growthCooldownUntil` uses `PlantWorld.tick`; intents are processed before the step. | Process intents after the tick increment, or use explicit ordering docs. |
-| INV-TM-03 | `dt` matches the configured tick rate. | BROKEN | `World` uses `net_proto.tickRateHz`; `PlantWorld` uses `activeTickRateHz` (default 20). | Derive `activeTickRateHz` from the same config. |
+| INV-TM-03 | `dt` matches the configured tick rate. | FIXED (2026-11-15) | `net_proto.tick_rate_hz` is the one rate: the clock, the wire and `PlantWorld`'s active tier all use it, and `World.setTickRate` updates the tier machine in the same call. `world.tick_rate_hz` and `world.active_tick_rate_hz` were deleted. | Keep one rate; a dev tick change must go through `setTickRate`. |
 | INV-TM-04 | Tier rates come from config. | FIXED (2026-11-13) | Rates are stored and near/dormant tiers are scheduled by banking elapsed time, so each rate is exactly what config says. The old `dt * (active/near)` scale ran near plants at 4x upkeep and growth. | — |
 | INV-TM-05 | Dormant catch-up uses elapsed wall time. | FIXED (2026-11-13) | The active/near path now writes `plant.lastTick` every step and a never-simulated plant records the mark instead of settling a phantom backlog. Catch-up also charges upkeep, advances growth already in flight, and credits photosynthesis for the skipped span, so an offline plant behaves like a live one except that it starts no new growth. The credit is bounded twice: `photosynthesisOverSpan` caps fixation at what the plant's stored water and minerals can pay for (so a multi-day span cannot multiply a per-second rate into an absurd number), and energy lands through `addPhotosynthesisEnergy`, which clamps to `computePlantCapacity`. Active plants are excluded from the tier hook because the online loop already credits them (no double-count), and a `lastTick` restored ahead of a fresh tick counter is re-anchored instead of exempting the plant. Tests: `finishes in-flight growth while dormant, and starts nothing new`, `feeds dormant plants with photosynthesis over the span they skipped`, `never photosynthesises an active plant through the hook`, `re-anchors a stale future lastTick instead of exempting the plant`, `bounds a very long catch-up by what the plant actually holds`, `fixes nothing for a zero, negative or non-finite span`. | Catch-up itself is still uncapped across a long server downtime. |
-| INV-TM-06 | Roots never damage each other by contact. | REMOVED BY DESIGN (2026-11-13) | Root-overlap pressure damage, `offline_damage_multiplier` and the dormant damage multiplier were deleted: players may be symbiotic or grafted, so touching roots must not harm. | — |
+| INV-TM-06 | Roots never damage each other by contact. | REMOVED BY DESIGN (2026-11-13), clarified by ADR-051 | Root-overlap pressure damage, `offline_damage_multiplier` and the dormant damage multiplier were deleted: players may be symbiotic or grafted, so touching roots must not harm. Competition is resource theft from the shared tile, not HP. | Any future plant-vs-plant damage needs its own task and ADR. |
 | INV-TM-07 | Photosynthesis fills energy. | FIXED (2026-11-09) | Only biomass is added (`main.ts:555`); `addPhotosynthesisEnergy` is never called. | Call it with the configured energy rate. |
 | INV-TM-08 | Simulation time tracks wall time. | FIXED (2026-11-12) | The clock capped each callback's elapsed time at `max_frame_time_ms` and discarded the rest; with a ~114 ms tick against a fixed 50 ms step the server ran ~8.7 ticks/s and the day cycle stretched to 7 877–8 264 s against 3 600 configured. | Accumulator now adds real elapsed time (only a backlog beyond `max_frame_time_ms` is dropped), whole-grid soil passes run at 4 Hz, and the dirty-tile array is only built when a broadcast is actually due. Measured after: 20.0 ticks/s, day cycle 3 597 s. |
-| INV-TM-09 | Broadcast rates honour config. | UNENFORCED | `clientSendRateHz` unused; STATE/KEYFRAME/RESOURCE/WEATHER every tick. Measured 2026-11-12 with a live client: `STATE` ~18/s, `WEATHER_UPDATE` ~20/s, `RESOURCE_UPDATE` 20–40/s (two shapes), `KEYFRAME` ~1.8/s. | Throttle per config. |
+| INV-MU-01 | A held mutation is charged and visible. | ENFORCED (2026-11-16) | `PlantWorld.chargeMutationMaintenance` bills every held mutation in the active and dormant paths; `MUTATION_STATE` carries the same set to the owner. Upkeep never removes a mutation and never kills: the bill is paid out of energy, then biomass, and biomass stops at `upkeep_biomass_floor`, so an unpaid bill stalls the plant until it earns again. `mutation_upkeep` survives only as a legacy death cause in old saves. | Test: `holds an unpaid mutation bill at the floor instead of shedding or killing`. |
+| INV-MU-03 | A size mutation is real tissue, and losing it is gradual. | ENFORCED (2026-11-16) | `syncMutationMass` fills parts to `quota × scale³` when the set grows; `absorbOversizeMass` drains the excess at `oversize_wilt_per_s` in both the active and dormant paths. Radii are derived from biomass only. | Tests: `keeps a shed size mutation's tissue and wilts it back gradually`, `levels a size mutation on the card the player picks, and grows the body`. |
+| INV-MU-04 | Levels are server-dealt and player-chosen. | ENFORCED (2026-11-16) | `MUTATION_LEVEL` may only take a card from the deal the server laid out; cost, level cap and resources are checked in `checkLevelUp`. | `T04 mutation levels` tests. |
+| INV-MU-05 | Every mutation has exactly one style record in `config/mutation_visuals.json`, keyed by its id, with a unique ordinal; a style that names no mutation is a startup error. | `loadVisuals` in `ops/mutations/config.ts`; tests "gives every mutation exactly one style", "ships a distinct style per mutation" |
+| INV-MU-06 | A composed look never leaves its caps: tint inside `min_tint..max_tint`, variegation, glow, bark thickness, darkening and thorns at or below their ceilings, whatever the stack or the levels. | `composeFamily` in `client/renderers/plant/mutations.ts`; tests "stacked tints are clamped", "bark thickness ... stop at their ceilings", "a levelled mutation is visibly stronger, up to the caps" |
+| INV-MU-07 | Appearance never changes simulation. A style paints; behaviour comes from `effects` (`vertical_bias`/`drooping_bias` are effects, not styles), so two mutations can never differ only by a shader. | `mutationEffects` in `ops/mutations/service.ts`; `applyMutationShapeBias` |
+| INV-MU-02 | Mutation acquisition is server-only. | ENFORCED (2026-11-14) | `rollMutation` runs inside `tryGrow`; `MUTATION_SHED` can only remove, never add. | Keep the client free of acquisition paths. |
+| INV-TM-09 | Broadcast rates honour config. | ENFORCED | `broadcastCadence.ts` banks elapsed ms against `net_proto.client_send_rate_hz` for STATE/KEYFRAME and the root readout; `net_proto.weather_send_rate_hz` (2 Hz) gates weather/day-night; keyframes ignore the state gate. `dev_log_network` reports sent/skipped counters. | `broadcastCadence.test.ts`; live check pending. |
 | INV-TM-10 | `InterestManager` filters what each client receives. | PARTIAL (2026-11-13) | Growth events and new-plant payloads are now cell-filtered (`broadcastNear`); STATE/KEYFRAME totals and the whole-grid terrain update are still sent to everyone because they are world-wide data. | Filter remaining per-plant payloads if they grow. |
 | INV-TER-01 | Client and server derive the same base surface. | HOLDS (2026-11-13) | Both call `terrainHeightAt` from `packages/shared/src/world/terrainField.ts` with the same seed/amplitude/octaves; only edits are streamed. | Keep the field free of THREE and platform randomness. |
 | INV-TER-02 | Only edited chunks are stored. | HOLDS (2026-11-13) | `TerrainService` creates a chunk on the first edit; `terrain_chunks` has one row per active chunk and the base field is never serialised. | — |
@@ -409,7 +451,9 @@ Status legend: `ENFORCED`, `PARTIAL`, `UNENFORCED`, `BROKEN`.
 | INV-RS-10 | Dirty thresholds come from config. | UNENFORCED | Hardcoded 0.05/0.1. | Read from `resources.json`. |
 | INV-RS-11 | Death deposit happens exactly once per death. | FIXED (2026-11-10) | Same as INV-GR-14; `killPlant` queues death, `processPlantDeaths` calls `onPlantDeath` once (`main.ts:125-147`). | Keep single deposit path. |
 | INV-RS-12 | Consumption triggers reflect consumed items. | BROKEN | `checkConsumptionTriggers` returns config booleans as if they were world state (`resourceWorld.ts`). | Track actual consumption events. |
-| INV-RS-13 | Canopy shading has a single source of truth. | PARTIAL | `getCanopyShadingAt` and `updateLight` duplicate a hardcoded radius-4 model. | One shared shade function. |
+| INV-RS-13 | Canopy shading has a single source of truth. | ENFORCED (2026-11-14) | `getCanopyShadingAt` was removed with root attack; `ResourceWorld.updateLight` is the only shade path and reads `resources.canopy_shade_reduction`. | Keep the radius and strength in config. |
+| INV-RS-14 | A root is visible exactly where the ground is open. | ENFORCED (2026-11-16) | The plant passes hide a fragment when the planet stands between the eye and it (`soilOccludes`). Above ground that test is a cylinder the size of the aperture, because the soil is cut in plan view — a sphere around the crown both hid deep roots that sat in the hole and exposed shallow ones outside it. Tests: `shaderSmoke`, `groundCutaway`. | Keep the aperture radius as the one source: `uRootSightApertureRadius` feeds the soil cut, the bowl mouth and the plant pass. |
+| INV-RS-15 | A buried eye sees the cavity it opened. | ENFORCED (2026-11-16) | Two rules. The eye is told to the plant pass (`setCameraUnderSoil`) and the surface test is skipped, because dirt between a buried eye and a root is the medium the eye stands in. And a bubble of air (`root_sight.eye_window_radius_m`) is fused into the same envelope as the roots, so the soil skin is cut around the eye. Without both, a camera flown down into the pit saw a brown wall and no roots. | The window is added only when the cavity is already open, so a buried camera cannot excavate a hole the plant never dug. |
 
 ## E. Protocol and client mirror (`INV-NET`)
 
@@ -441,8 +485,8 @@ Status legend: `ENFORCED`, `PARTIAL`, `UNENFORCED`, `BROKEN`.
 | INV-PR-03 | Persisted tier reflects state. | ENFORCED | Fixed 2026-11-08: `savePlant` writes `plant.tier ?? 'dormant'`. | Keep the fallback for legacy rows. |
 | INV-PR-04 | `last_tick` reflects simulation time. | ENFORCED | Fixed 2026-11-08: `savePlant` writes `plant.lastTick ?? plant.lastGrowthTick`. | Validate on load. |
 | INV-PR-05 | Saves are atomic under concurrency. | PARTIAL | Periodic + shutdown save race; no row lock/version. | Serialize saves or use a version column. |
-| INV-PR-06 | Load accepts only valid plants. | PARTIAL | `validatePlantGraph` called on load but `totalUpkeep` not recomputed. | `validateLoadedPlant` before insertion. |
-| INV-PR-07 | Event log is append-only and complete. | BROKEN | Always `'[]'`; `world_events` never written. | Implement or mark the feature not built. |
+| INV-PR-06 | Load accepts only valid plants. | FIXED (2026-11-15) | `loadPlant` reconciles structural mass/upkeep, repairs segment drift, then runs `validatePlantGraph`; a corrupt snapshot throws and is skipped with a log (`plantWorld.test.ts`). | — |
+| INV-PR-07 | Event log is append-only and complete. | FIXED (2026-11-15) | `PlantEventLog` records growth, damage, uproot, reroot and tier changes; written with every save, bounded by `event_log_compaction_threshold`, and seeded from `event_log` on boot. Deaths are appended to `world_events` before the plant row is deleted. | `plantEventLog.test.ts`, persistence tests. |
 | INV-PR-08 | Migrations are ordered and unique. | PARTIAL | Version parsed as text split on `_`; no checksum. | Numeric version + applied table. |
 
 ## G. Accounts and security (`INV-AU`)
@@ -496,6 +540,16 @@ features.
 
 ---
 
+## I. Damage and uproot (`INV-DM`)
+
+| ID | Invariant | Status | Evidence / failure | Fix |
+|---|---|---|---|---|
+| INV-DM-01 | A plant is in at most one uproot phase at a time. | ENFORCED | `uprootPlant` refuses when `plant.uproot` is already set; phase transitions happen in `updateUprootedPlant`. | Keep the guard on every new uproot trigger. |
+| INV-DM-02 | Uproot always has a recorded cause. | ENFORCED | `UprootCause` is written into `PlantUprootState` and persisted from PLNT v3 (current snapshot: v4). | Keep the cause required in new triggers. |
+| INV-DM-03 | Root contact never deals damage. | ENFORCED | `DamageSource` has weather/tool/herbivore/terrain only; no root-attack call site (ADR-051). | Reject any future plant-vs-plant source that is not a new task + ADR. |
+| INV-DM-04 | A reroot places the plant on valid soil inside the window. | ENFORCED | `updateUprootedPlant` requires `windowRemainingS > 0`, a settled phase and `rerootSoilIsValid` before accumulating `settledSeconds`. | Keep the window and moisture check together. |
+| INV-DM-05 | Every drop expires. | ENFORCED | `expireDrops` runs each tick against `expiresAtMs`; `DROP_EXPIRED` is broadcast. | Expiry must remain tick-driven, not client-driven. |
+
 # Part 4 — Remediation plan (retired)
 
 The phased plan and its progress log live in [`history.md`](./history.md) for the
@@ -513,3 +567,10 @@ rg "as [A-Z]" apps/server/src/main.ts apps/client/src/main.ts   # trust boundari
 rg "durationMinS|durationFixedS" apps/server/src/ops/weatherStateMachine.ts
 rg "setTileResources|maxLight|maxMoisture" apps/server/src/ops/resourceWorld.ts
 ```
+
+**INV-RS-03 — Root Sight opens for a buried part, once, and yields to the key.**
+A part that starts growing underground opens the view (`decideAutoOpenRootSight`)
+when it is not already open or opening. The rule fires on the growth event, not
+on a per-frame condition, so closing the view by hand stands until the next new
+buried part. The cavity treats a part at 0% growth as soil-opening with a
+25%-radius floor: growth and the opening start together.

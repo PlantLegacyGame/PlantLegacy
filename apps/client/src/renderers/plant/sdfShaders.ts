@@ -6,6 +6,8 @@
  * `sdfBuffers.ts`. Nothing here decides anything: it is the drawing program.
  */
 
+import { GLSL_ATMOSPHERE } from '../environment/atmosphere.js';
+
 /** Fullscreen-quad vertex shader. */
 export const SDF_VERTEX_SHADER = /* glsl */ `
 varying vec2 vUv;
@@ -56,12 +58,11 @@ uniform int uSegmentCount;
 uniform int uNodeCount;
 uniform sampler2D uSegments;
 uniform sampler2D uNodes;
-uniform bool uRootSightEnabled;
-uniform float uRootSightProgress;
-uniform vec3 uRootSightCenter;
-uniform float uRootSightRadius;
-uniform float uRootSightCutawayRadius;
-uniform float uRootSightSoilOpacity;
+// Root Sight in this pass is the aura alone. The old cutaway uniforms
+// (uRootSightCutawayRadius, uRootSightSoilOpacity, uRootSightRadius) were never
+// read by any line of this shader; the soil shader owns the hole, and this pass
+// owns the root glow. Two dead cutaway implementations with their own hardcoded
+// defaults (50 m / 0.3 opacity) could only drift from the real one.
 uniform vec3 uOwnRootHighlightColor;
 uniform vec3 uRivalRootHighlightColor;
 // Root Sight SDF aura
@@ -72,9 +73,10 @@ uniform float uRootAuraRadius;
 uniform float uEmergenceProgress;
 uniform float uEmergenceDuration;
 uniform float uHealthTintStrength;
-uniform float uMutation0;
-uniform float uMutation1;
-uniform float uMutation2;
+uniform float uMutation0; // glow strength (bioluminescence, photic nodes)
+uniform float uMutation1; // bark scale (>1 thickens and darkens)
+uniform float uMutation2; // variegation strength
+uniform vec3 uMutationTint; // whole-organism pigment tint (1,1,1 = none)
 uniform bool uPhotosynthesisViz;
 uniform bool uWaterFlowViz;
 uniform bool uNutrientFlowViz;
@@ -83,6 +85,14 @@ uniform float uBoundingBoxPadding;
 uniform vec3 uSunDir;
 uniform vec3 uSunColor;
 uniform float uSunIntensity;
+// AL-04: the shared atmosphere model. Plants fade into the same air the ground
+// and the sky use instead of their own squared-exponential fog.
+uniform vec3 uAtmoExtinction;
+uniform float uAtmoScaleHeight;
+uniform float uAtmoSunPhaseG;
+uniform float uAtmoInScatter;
+uniform float uAtmoHorizonBoost;
+${GLSL_ATMOSPHERE}
 
 // Segment data layout (7 vec4 per segment), produced by packSegments():
 // 0: p0.x, p0.y, p0.z, r0
@@ -363,7 +373,7 @@ void main() {
   vec3 p = raymarch(ro, rd);
   float d = map(p);
 
-  // Background color (used for fog on hits)
+  // Colour of a ray that misses: transparent, so it is only a fill value.
   vec3 bgColor = vec3(0.08, 0.10, 0.06);
   vec3 col = bgColor;
   float alpha = 0.0;
@@ -390,6 +400,14 @@ void main() {
     // Apply light color
     col *= lightColor;
 
+    // T04 signatures (ADR-054). The fallback has one plant-wide signature, so
+    // these three terms carry the whole look: pigment tint, bark, variegation,
+    // and a soft emissive glow for the luminous signatures.
+    col *= uMutationTint;
+    col = mix(col, col * vec3(0.72, 0.66, 0.58), clamp((uMutation1 - 1.0) * 2.0, 0.0, 1.0));
+    col *= 1.0 + uMutation2 * 0.45 * sin(p.y * 7.0 + p.x * 5.0);
+    col += vec3(0.10, 0.42, 0.46) * uMutation0 * (0.45 + 0.55 * diff);
+
     // Emergence animation
     if (uEmergenceProgress < 1.0) {
       float emergeAlpha = smoothstep(0.0, 1.0, uEmergenceProgress);
@@ -400,12 +418,13 @@ void main() {
     alpha = 1.0;
   }
 
-  // Fog (only applied to hit pixels, missed rays are transparent)
+  // AL-04: the same air the ground uses, applied in linear space before the
+  // gamma conversion. Missed rays stay transparent and take no fog.
   if (alpha > 0.0) {
-    float fogDensity = 0.002;
-    float dist = length(p - uCameraPos);
-    float fog = exp(-fogDensity * dist * dist);
-    col = mix(col, bgColor, 1.0 - fog);
+    vec3 toFragment = p - uCameraPos;
+    float dist = length(toFragment);
+    vec3 viewDir = dist > 1e-4 ? toFragment / dist : normalize(uCameraDir);
+    col = atmoApply(col, viewDir, normalize(uSunDir), dist, max(0.0, p.y));
   }
 
   // Gamma correction

@@ -33,5 +33,8 @@ jobs:
       - name: Unit tests
         run: pnpm test
 
+      - name: Documentation guardrail
+        run: pnpm docs:check
+
       - name: Build
         run: pnpm build

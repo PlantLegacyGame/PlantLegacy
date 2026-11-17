@@ -51,6 +51,27 @@ export function loadGrowthConfig(configs: Map<string, ConfigFile>): GrowthConfig
     branchAttachFraction: optionalNumber(configs, 'growth', 'branch_attach_fraction'),
   });
 
+  // The four newer tissues are optional so a config that predates them (and the
+  // test fixtures that mirror one) still boots; they fall back to the nearest
+  // existing tissue until growth.json defines them.
+  const stemNode = readObject<NodeTypeDefinition>(configs, 'growth', 'stem_node');
+  const rootNode = readObject<NodeTypeDefinition>(configs, 'growth', 'root_node');
+  const leafNode = readObject<NodeTypeDefinition>(configs, 'growth', 'leaf_node');
+  const trunkNode = optionalObject<NodeTypeDefinition>(configs, 'growth', 'trunk_node') ?? stemNode;
+  const rhizomeNode =
+    optionalObject<NodeTypeDefinition>(configs, 'growth', 'rhizome_node') ?? rootNode;
+  const culmNode = optionalObject<NodeTypeDefinition>(configs, 'growth', 'culm_node') ?? stemNode;
+  const floatingLeafNode =
+    optionalObject<NodeTypeDefinition>(configs, 'growth', 'floating_leaf_node') ?? leafNode;
+  const branchNode = readObject<NodeTypeDefinition>(configs, 'growth', 'branch_node');
+  const pneumatophoreNode =
+    optionalObject<NodeTypeDefinition>(configs, 'growth', 'pneumatophore_node') ?? rootNode;
+  const thornNode =
+    optionalObject<NodeTypeDefinition>(configs, 'growth', 'thorn_node') ?? branchNode;
+  const stolonNode =
+    optionalObject<NodeTypeDefinition>(configs, 'growth', 'stolon_node') ?? branchNode;
+  const tuberNode = optionalObject<NodeTypeDefinition>(configs, 'growth', 'tuber_node') ?? rootNode;
+
   return {
     rootGrowthSpeed: readNumber(configs, 'growth', 'root_growth_speed'),
     canopyGrowthSpeed: readNumber(configs, 'growth', 'canopy_growth_speed'),
@@ -60,15 +81,35 @@ export function loadGrowthConfig(configs: Map<string, ConfigFile>): GrowthConfig
     lightBlockingPerNode: readInteger(configs, 'growth', 'light_blocking_per_node'),
     seedNode: readObject<NodeTypeDefinition>(configs, 'growth', 'seed_node'),
     radicleNode: readObject<NodeTypeDefinition>(configs, 'growth', 'radicle_node'),
-    rootNode: readObject<NodeTypeDefinition>(configs, 'growth', 'root_node'),
+    rootNode,
     lateralRootNode: readObject<NodeTypeDefinition>(configs, 'growth', 'lateral_root_node'),
-    stemNode: readObject<NodeTypeDefinition>(configs, 'growth', 'stem_node'),
-    branchNode: readObject<NodeTypeDefinition>(configs, 'growth', 'branch_node'),
-    leafNode: readObject<NodeTypeDefinition>(configs, 'growth', 'leaf_node'),
+    stemNode,
+    branchNode,
+    leafNode,
     cotyledonNode: readObject<NodeTypeDefinition>(configs, 'growth', 'cotyledon_node'),
     flowerNode: readObject<NodeTypeDefinition>(configs, 'growth', 'flower_node'),
     sporeSacNode: readObject<NodeTypeDefinition>(configs, 'growth', 'spore_sac_node'),
     vineNode: readObject<NodeTypeDefinition>(configs, 'growth', 'vine_node'),
+    trunkNode,
+    rhizomeNode,
+    culmNode,
+    floatingLeafNode,
+    pneumatophoreNode,
+    thornNode,
+    stolonNode,
+    tuberNode,
+    // T04 health and aquatic gate. Optional so older configs boot unchanged.
+    growthMinHealth: optionalNumber(configs, 'growth', 'growth_min_health') ?? 0.35,
+    healthPhotosynthesisFloor:
+      optionalNumber(configs, 'growth', 'health_photosynthesis_floor') ?? 0.5,
+    floatingLeafMinGroundwater:
+      optionalNumber(configs, 'growth', 'floating_leaf_min_groundwater') ?? 0,
+    // Damage and slow repair: drought sheds tissue, calm weather rebuilds it.
+    tissueRepairPerSecond: optionalNumber(configs, 'growth', 'tissue_repair_per_second') ?? 0,
+    tissueRepairEnergyPerBiomass:
+      optionalNumber(configs, 'growth', 'tissue_repair_energy_per_biomass') ?? 0,
+    stemDamageWitherDelayS: optionalNumber(configs, 'growth', 'stem_damage_wither_delay_s') ?? 30,
+    stemDamageWitherPerS: optionalNumber(configs, 'growth', 'stem_damage_wither_per_s') ?? 0.01,
     growthIntentCooldown: readNumber(configs, 'growth', 'growth_intent_cooldown'),
     germinationMinMoisture: readNumber(configs, 'growth', 'germination_min_moisture'),
     germinationMinLight: readNumber(configs, 'growth', 'germination_min_light'),

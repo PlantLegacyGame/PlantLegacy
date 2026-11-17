@@ -8,6 +8,7 @@ export const GAME_EVENTS = [
   // plant + damage
   'mutation_acquired',
   'mutation_shed',
+  'mutation_leveled',
   'plant_died',
   'plant_uprooted',
   'kill_credited',

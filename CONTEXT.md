@@ -4,12 +4,60 @@ Current context for any human or AI session working in this repository. Keep it
 current at the end of every task (DESIGN.md, Session Protocol). `DESIGN.md` wins
 over this file whenever they disagree.
 
-**Phase:** 1 — The Living Sprout (in progress). **Implemented:** T00, O01, T03P, C01, **T00A** (resource model + onboarding), T01 (growth simulation), **T03** (persistence, offline tiers, interest management, event bus), **T08C** (accounts + sessions), **C02** (Raymarched SDF procedural organism renderer with `smin` organic fusion, Murray's law allometric tapering, thin-lamina foliage, and 0.9s real-time emergence animation), **T02** (Root Sight unified organism integration), **T25** (shared terrain field, two-patch LOD ground with exact trimesh colliders, bounded Rapier plant colliders, one cavity field for Root Sight, sparse persistent soil edits with root tunnels, collapse and growth resistance; client height-texture application still pending), **T07** (Weather state machine, day/night cycle, forecast broadcast, ResourceWorld integration), **C03** (Environment rendering: sky dome gradient, sun/moon arcs, atmospheric fog, rain particle system, storm lightning flashes, soil moisture tinting, Root Sight cutaway refinement), **C02b slice** (WebGPU v1 compute-driven plant renderer: transparent overlay canvas, merged mesh tiers 0/1, billboard tiers 2–4, per-plant culling/LOD with hysteresis, Root Sight highlight, WebGL2 fallback; impostor baking, GPU skinning, texture arrays), **D01** (dev settings engine: `?dev=1` gate, server `/dev/config` endpoints, `config/dev.json`, DevPanel wired to server, persistence switch wired to disconnect logic, key binding added). **Added:** config/resources.json, config/world.json, config/network.json, config/accounts.json, config/plant_renderer.json, config/root_sight.json, config/weather.json, config/daynight.json, config/render.json (expanded), config/dev.json, server resource model, PlantPersistence (versioned binary snapshot + event log with CRC32), PlantWorld tiers, InterestManager, EventBus, AccountsService (Argon2id, JWT rotation, atomic rate limits, lockout), WeatherSystem, EnvironmentRenderer, WebGPU renderer (`apps/client/src/renderers/webgpu/`), seeded RNG (`hash32`, `hash01`, `mulberry32`). **Approved 2026-11-09 (not built): v5.4 extension program** — T54 reactive non-sapient fauna, T55 material simulation, T56 volumetric terrain, C10 terrain/material rendering, T57 parametric terrain features, T58 world-object streaming and behaviour, T59 ecological succession, C11 fauna rendering, O04 cloud-native World orchestration. Rule amendments (RULE_2, RULE_8, RULE_19, RULE_22) and task specs are in `DESIGN.md` Part 11 and Part 16; the programme is [`docs/PlantLegacy-Abyssal-Integration-Plan.md`](./docs/PlantLegacy-Abyssal-Integration-Plan.md). **Last updated:** 2026-11-13.
+**Phase:** 1 — The Living Sprout (in progress). **Implemented:** T00, O01, T03P, C01, **T00A** (resource model + onboarding), T01 (growth simulation), **T03** (persistence, offline tiers, interest management, event bus), **T08C** (accounts + sessions), **C02** (Raymarched SDF procedural organism renderer with `smin` organic fusion, Murray's law allometric tapering, thin-lamina foliage, and 0.9s real-time emergence animation), **T02** (Root Sight unified organism integration), **T25** (shared terrain field, two-patch LOD ground with exact trimesh colliders, bounded Rapier plant colliders, one cavity field for Root Sight, sparse persistent soil edits with root tunnels, collapse and growth resistance; client height-texture application still pending), **T07** (Weather state machine, day/night cycle, forecast broadcast, ResourceWorld integration), **C03** (Environment rendering: sky dome gradient, sun/moon arcs, atmospheric fog, rain particle system, storm lightning flashes, soil moisture tinting, Root Sight cutaway refinement), **C02b slice** (WebGPU v1 compute-driven plant renderer: transparent overlay canvas, merged mesh tiers 0/1, billboard tiers 2–4, per-plant culling/LOD with hysteresis, Root Sight highlight, WebGL2 fallback; impostor baking, GPU skinning, texture arrays), **D01** (dev settings engine: `?dev=1` gate, server `/dev/config` endpoints, `config/dev.json`, DevPanel wired to server, persistence switch wired to disconnect logic, key binding added). **Added:** config/resources.json, config/world.json, config/network.json, config/accounts.json, config/plant_renderer.json, config/root_sight.json, config/weather.json, config/daynight.json, config/render.json (expanded), config/dev.json, server resource model, PlantPersistence (versioned binary snapshot + event log with CRC32), PlantWorld tiers, InterestManager, EventBus, AccountsService (Argon2id, JWT rotation, atomic rate limits, lockout), WeatherSystem, EnvironmentRenderer, WebGPU renderer (`apps/client/src/renderers/webgpu/`), seeded RNG (`hash32`, `hash01`, `mulberry32`). **Approved 2026-11-09 (not built): v5.4 extension program** — T54 reactive non-sapient fauna, T55 material simulation, T56 volumetric terrain, C10 terrain/material rendering, T57 parametric terrain features, T58 world-object streaming and behaviour, T59 ecological succession, C11 fauna rendering, O04 cloud-native World orchestration. Rule amendments (RULE_2, RULE_8, RULE_19, RULE_22) and task specs are in `DESIGN.md` Part 11 and Part 16; the programme is [`docs/PlantLegacy-Abyssal-Integration-Plan.md`](./docs/PlantLegacy-Abyssal-Integration-Plan.md). **C04 HUD slice (2026-11-15):** plant-status panel with health words (Healthy/Stressed/Withering/Dying), biomass rate, health against the uproot ceiling, mutation bill and `Day N · clock` weather forecast; damage vignette and toast; reroot countdown plus camera-relative D-pad and movement-key steering. `I` opens Inspect (left) and Inventory (right) with per-node health; the mutation list moved into Inspect. HUD also shows energy, water, minerals against capacity, node count, and split mutation energy/biomass upkeep; Inspect adds mutation kind, per-mutation share bars, totals and growth-pressure bars. Settings sheet has Settings/Controls tabs; the plant-lost screen repeats the detailed stats and clears the toast stack. Growth now starts parts at their minimum radius and thickens them with biomass; damage/drought recomputes radius, canopy is shed before roots, and unhealed stem damage decays after a configurable delay. Server sends `structure` in STATE/KEYFRAME and PLANT_DAMAGE, and `dayNumber` in WEATHER_UPDATE. **2026-11-16 batch:** mutation upkeep is a stall that never sheds or kills and never removes a mutation (only `MUTATION_SHED` does); a size mutation holds real tissue — `quota × scale³` mass, radius from biomass, passive wilt when oversized (ADR-057); mutations have levels with body-scaled costs and universal cards (ADR-058); appearance is `config/mutation_visuals.json` composed per organ family, one style per mutation, clamped in `caps`, with shape mutations biasing growth and `spined_epidermis` drawing real thorn geometry (ADR-059, C1–C9); the dev mutation gallery grants each mutation first and grows a mature 20–34 node body. The player's body has one anchor — `rootNodeId`, else a seed, else the last streamed crown — used by recentre and Root Sight, and the soil aperture is cut on both faces so the cavity works from inside the ground (ADR-060, G1–G4, A10). Root Sight opens itself when a buried part starts growing and the cavity opens on the first frame of growth (A7/A11, `player/rootSightAutoOpen.ts`, INV-RS-03). The growth card quotes the price the charge takes: one `growthChargeScale` (soil resistance × mutation cost/speed) feeds both the menu and `tryGrow`, energy rounded up (E9, ADR-061, INV-GR-13). Every child tube starts at the server's shipped `parentAttach*`, so branches sit on their parent instead of hanging below it (E10). Water is a medium as well as a surface: `renderers/environment/underwater.ts` derives depth/transmission/tint from the water field's own surfaces and `EnvironmentRenderer` applies shortened tinted fog, a dimmed sun, and a water shader that shades its underside as Snell's window (W1, ADR-062); the three water colours are config entries (W3). Config routes that served a subset of their file now serve the file (root_sight 7→17, ui 11→16, plant_renderer merges its 37 entries). **Second 2026-11-16 batch:** water sheets end radially (`sheet_edge_fade`) so a high camera cannot see the grid as a square of water (W4). Root Sight visibility follows the opening in volume: a root is drawn when it is inside the aperture cylinder, a buried eye skips the surface test (`cameraUnderSoil`) and gets an air window fused into the cavity envelope (`root_sight.eye_window_radius_m`), and the soil shader cuts that envelope while the eye is under the soil (A13, INV-RS-14/15, ADR-064). The growth gizmo anchors on the drawn part (`resolveDrawnNodePosition`), clamps a stale attach point to its own part, and reads as 3D (taper, landing ring, ground marker) (E12). `PLANT_CREATED` now mirrors WELCOME and every node payload carries `attachFraction`, so rival plants and the mutation gallery are drawn with the server's own joints, and each gallery body grows from a per-mutation seed with 4–8 internodes for a range of shapes (C10). A stem can grow a stem — an internode stack — so a plant without a trunk can finally get tall (E11, INV-GR-19). Rerooting no longer re-bases node `y` onto the landing terrain height, which had lifted a crawling plant into the sky (G5, INV-GR-18), and Space frames the whole grown body instead of the start distance (G6). **Last updated:** 2026-11-16.
 
 **Also implemented since the list above:** **T05** (proximity/world chat, data-driven
-emotes, block and report) and **C03b** (inner detail + 620 m outer ground patch
-from one shared field, exact trimesh colliders). **T08A** inventory is partial and
-non-compliant — in-memory only; see `docs/tasks/T08A.md`.
+emotes, block and report), **C03b** (inner detail + 620 m outer ground patch
+from one shared field, exact trimesh colliders) and **T04** (data-driven
+mutations, adaptive pressure, maintenance/shedding, PLNT v2 snapshots, protocol
+v2 `MUTATION_STATE`/`MUTATION_SHED`, twelve visual signatures). **T06** damage, uproot and tumbling is implemented: one four-source damage pipeline (weather, tool, scripted herbivore swarm, terrain collapse/landing), uproot from sustained saturation, a height-scaled storm gust, a collapse or accumulated structural damage, a steered reroot crawl with a starvation failure, deterministic tumbling, kill credit, fragment/remains/dung world drops, protocol 37–43 and PLNT v3 snapshots (ADR-055, ADR-056). The in-browser checklist is outstanding and drop pickup belongs to T51/T08A — see `docs/tasks/T06.md`. **T08A** inventory
+is partial and non-compliant — in-memory only; see `docs/tasks/T08A.md`.
+
+**P0 (2026-11-15).** Measurement and budget foundations, records in
+`docs/tasks/AL-01.md` and `AL-03.md`. Client gains
+`src/dev/benchmark.ts` (six configurable poses, p50/p95/p99/max, CPU and real
+GPU time), `src/render/GpuTimer.ts` (`EXT_disjoint_timer_query_webgl2`, null
+timer when absent) and `src/render/PlantInterpolation.ts` (one-tick interpolation
+for streamed node positions). `QualityController` is a measured-cost band now:
+resolution, then draw distance (via `WebGPURenderer.setLodThresholdScale`), then
+tier, with `gpu_band_min_ms` / `gpu_band_max_ms` / `quality_hold_ms` /
+`draw_distance_floor` in `config/render.json`. `render.json` also carries
+`size_classes` (`normal` / `large` / `giant`) so framing and detail scale with
+the organism (ADR-027); `camera_max_distance` is 2000 m, `webgpu_max_plants`
+20000. `world.json` raises `per_client_entity_cap` to 1000 and
+`detailed_plant_budget` to 256. The server serves `/config/dev` (size class and
+benchmark poses) through its generic `/config/<system>` route.
+
+**Bug-fix session (2026-11-15).** A headless player bot now exists at
+`tools/sim-bots/` (zero dependencies; Node's global `WebSocket`) and drives the
+real protocol: it germinates, grows in a plant's proper order, backs off from
+refusals and reports findings. Its first run reproduced the growth-damage bug:
+a root tunnel collapsed two seconds after the radicle grew and the collapse was
+billed to the plant that dug it, destroying the radicle and re-offering it. The
+void and its collapse edit now carry `actorPlantId` and `applyCollapse` skips
+that plant (ADR-051). Two tests cover both sides. Chat's Send and X buttons were
+dead because `createChatUI` appended the panel to the `hud` layer (CSS
+`pointer-events: none`) without opting in; the panel now opts in and its input
+row is fixed so the button cannot clip. `MESSAGE_TYPE` moved into
+`@plant-legacy/shared/protocol` so the client and server cannot drift again. The current defect list, with evidence and status per item, is
+[`docs/bug-inventory.md`](./docs/bug-inventory.md).
+
+**Gate and underground pass (2026-11-16).** The gate is green and it now fails
+honestly: `pnpm lint` passes, and `pnpm docs:check` treats a quoted config
+default that disagrees with `config/` as an error rather than printing it and
+exiting 0. The 24 wrong defaults in five task records were corrected against
+`config/` (record: [`docs/tasks/DOC-01.md`](./docs/tasks/DOC-01.md)). Underground
+detection no longer assumes the soil is Y=0: `apps/client/src/player/underground.ts`
+(`groundWorldY`, `isBelowSoil`) compares against `planetTerrainY` plus the terrain
+skin, and the five `main.ts` sites that tested `y < 0` (camera floor, spring-arm
+skip, both root-pick paths, the `setUndergroundView` gate) now use it, so an eye
+under a hill is underground whatever its world Y. Root Sight's cutaway uniforms
+start closed and take `cutaway_radius`, `soil_opacity` and the new
+`aperture_radius_ratio` / `aperture_min_m` from `config/root_sight.json` the
+moment it loads, instead of the old 50 m / 0.3 literal, so the first drawn frame
+matches the file. Tests: `player/underground.test.ts`,
+`renderers/environment/rootSightUniforms.test.ts`. Order, evidence and what is
+still open: [`docs/bugfix-plan.md`](./docs/bugfix-plan.md).
 
 ## 1. Stack
 
@@ -39,7 +87,7 @@ requires it.
 pnpm dev              # one command: install if needed, server + Vite dev server
 pnpm dev:server       # server only, watch mode
 pnpm dev:client       # Vite dev server only
-pnpm verify           # lint + typecheck + config:validate + test
+pnpm verify           # lint + typecheck + config:validate + docs:check + test
 pnpm lint             # biome check .
 pnpm typecheck        # tsc -p in every package
 pnpm config:validate  # schema + rarity ban over config/*.json
@@ -67,6 +115,10 @@ committed; CI installs with `--frozen-lockfile`.
 │   │   ├── src/main.ts        # Three.js scene, WebSocket client, input, hint card
 │   │   ├── src/config/clientConfig.ts    # C01 config loaders
 │   │   ├── src/config/plantRendererConfig.ts
+│   │   ├── src/config/waterConfig.ts     # T31 water tuning + the three water colours
+│   │   ├── src/config/mutationVisuals.ts # T04 mutation style table (ADR-059)
+│   │   ├── src/player/                   # own-body anchor (ADR-060), root-sight auto-open
+│   │   ├── src/renderers/environment/underwater.ts  # being in water: depth, fog, sun, Snell window
 │   │   ├── src/ui/DevPanel.ts            # D01 dev settings panel
 │   │   ├── src/render/QualityController.ts  # C01 dynamic resolution
 │   │   ├── src/renderers/PlantRenderer.ts  # C02 Raymarched SDF plant renderer (GL state, uniforms)
@@ -104,6 +156,7 @@ committed; CI installs with `--frozen-lockfile`.
 │       │   └── plantPersistence.ts
 │       ├── src/ops/plantWorld.ts    # T01 growth + T03 offline tiers
 │       ├── src/ops/growth/          # T01 pure rules (rules.ts) + growth menu (options.ts)
+│       ├── src/ops/damage/          # T06 pipeline, config loaders, drops and uproot rules
 │       ├── src/ops/accounts/        # T08C accounts + sessions
 │       │   ├── config.ts            # config loader
 │       │   ├── service.ts           # Argon2id, JWT, rate limits, lockout
@@ -114,6 +167,7 @@ committed; CI installs with `--frozen-lockfile`.
 ├── packages/shared/
 │   └── src/
 │       ├── config/{types,validate,loader,index}.ts
+│       ├── damage/            # T06 damage, uproot, tumble and kill-credit rules
 │       ├── config/validate.test.ts
 │       ├── events/index.ts    # GAME_EVENTS vocabulary (Appendix E)
 │       ├── growth/           # growth types, gene constraints, geometry, node types
@@ -196,7 +250,9 @@ preflight. Other methods are `405`. Responses carry
 | GET | `/config/render` | 200 | flat `render` values (quality tiers, camera smoothing, …) |
 | GET | `/config/controls` | 200 | flat `controls` values (bindings, text scale, …) |
 | GET | `/config/ui` | 200 | flat `ui` values (theme tokens, z-indexes, …) |
-| GET | `/config/root_sight` | 200 | flat `root_sight` values (`cutaway_radius`, `soil_opacity`, …) |
+| GET | `/config/root_sight` | 200 | flat `root_sight` values (`cutaway_radius`, `soil_opacity`, `auto_open_on_root_growth`, `eye_window_radius_m`, …) |
+| GET | `/config/water` | 200 | flat `water` values (sheet depth, absorption, the three water colours, the sheet's radial `sheet_edge_fade`, …) |
+| GET | `/config/mutation_visuals` | 200 | flat `mutation_visuals` values (`caps`, `styles`) |
 | GET | `/config/daynight` | 200 | flat `daynight` values (`cycle_length_s` = 3600, i.e. a 60-minute day/night) |
 | GET | `/config/resources` | 200 | flat `resources` values (`tile_light_base`, `max_light/moisture/minerals`) |
 | * | anything else | 404 | `{ error: "not_found" }` |
@@ -205,6 +261,19 @@ The `/config/*` routes read the file from `CONFIG_DIR` on each request and fall
 back to built-in defaults if the file cannot be read. They exist so the static
 client can load T00A/T01 tunables without a bundler rebuild.
 
+The generic route serves **every** `values` entry of the named file, so adding a
+tunable needs no route change. Three routes used to send a hand-written subset
+instead, and the client silently ran on compiled-in defaults for whatever was
+missing: `/config/root_sight` served 7 of 17 entries, `/config/ui` 11 of 16, and
+`/config/plant_renderer` asked its file for keys the file does not contain while
+dropping the ones the client's parser reads. All three now merge the file's
+entries (the explicit fields win where a name is derived, such as `ui.layers`).
+
+Two routes are deliberate projections rather than the whole file:
+`/config/growth` (per-type segment lengths/costs/growth times plus the organism
+geometry the client draws and aims with) and `/config/controls` (desktop and touch
+bindings merged into one `bindings` map).
+
 ```ts
 interface HealthReport {
   status: 'ok' | 'degraded';
@@ -212,7 +281,7 @@ interface HealthReport {
   uptime_s: number;           // floor(seconds since start)
   checks: {
     config: 'ok';
-    config_files: number;     // 78, per docs/tunables.md
+    config_files: number;     // 79, per docs/tunables.md
     database: 'ok' | 'down' | 'skipped';
   };
 }
@@ -316,15 +385,25 @@ process itself.
 `world_plants` (binary snapshot + event log) and `world_events` tables with
 migrations in `apps/server/src/ops/persistence/001_create_plants_table.sql`.
 
+`PlantEventLog` keeps a bounded per-plant history of growth, damage, uproot,
+reroot and tier changes. Each save writes it to `world_plants.event_log`, the
+boot path reads it back and seeds the in-memory log, and
+`world.event_log_compaction_threshold` drops the oldest entries. Plant deaths are
+appended to `world_events` before the per-plant row is deleted, so the audit trail
+covers the plant's whole life.
+
 ### 5.6 Wire protocol (T03P)
 
 WebSocket at `/ws`, JSON messages `{ type: number, payload: object }`.
-`PROTOCOL_VERSION = 1`; the client sends `HELLO { clientVersion: 1 }` and the
-server answers with `WELCOME`. Client → server: `HELLO`, `INPUT`, `PING`, `GROWTH_INTENT`, `RESOURCE_QUERY`, `PLANT_SYNC_REQUEST`, `GROWTH_OPTIONS_REQUEST`, `DEV_ACTION`, `CHAT_MESSAGE`, `INVENTORY_REQUEST`, `INVENTORY_SLOT_USE`, `INVENTORY_SLOT_SWAP`, `REPORT`, `BLOCK`.
-Server → client: `WELCOME`, `STATE`, `KEYFRAME`, `REJECT`, `PONG`, `ERROR`, `GROWTH_EVENT`, `RESOURCE_UPDATE`, `PLANT_SYNC`, `PLANT_CREATED`, `PLANT_REMOVED`, `WEATHER_UPDATE`, `GROWTH_OPTIONS_RESULT`, `CHAT_BROADCAST`, `INVENTORY_SYNC`, `INVENTORY_SLOT_UPDATE`, `DEV_RESPONSE`.
-The server validates movement (velocity, world bounds, quantization) and sends
-`REJECT` plus authoritative state. Only the velocity check is exercised; a bounds
-check is not implemented. Full table, payload schemas:
+`PROTOCOL_VERSION = 3` (v2 added the T04 mutation messages, v3 adds mutation
+levels); the client sends `HELLO { clientVersion: 3 }` and the server answers with
+`WELCOME`. `net_proto.protocol_version` must equal that constant or the server
+refuses to boot, so the two cannot drift apart silently. Client → server: `HELLO`, `INPUT`, `PING`, `GROWTH_INTENT`, `RESOURCE_QUERY`, `PLANT_SYNC_REQUEST`, `GROWTH_OPTIONS_REQUEST`, `DEV_ACTION`, `CHAT_MESSAGE`, `INVENTORY_REQUEST`, `INVENTORY_SLOT_USE`, `INVENTORY_SLOT_SWAP`, `REPORT`, `BLOCK`, `MUTATION_SHED` (36), `REROOT_INTENT` (37), `TERRAIN_REGION_REQUEST` (32).
+Server → client: `WELCOME`, `STATE`, `KEYFRAME`, `REJECT`, `PONG`, `ERROR`, `GROWTH_EVENT`, `RESOURCE_UPDATE`, `PLANT_SYNC`, `PLANT_CREATED`, `PLANT_REMOVED`, `WEATHER_UPDATE`, `SEASON_UPDATE` (31), `GROWTH_OPTIONS_RESULT`, `CHAT_BROADCAST`, `INVENTORY_SYNC`, `INVENTORY_SLOT_UPDATE`, `MUTATION_STATE` (35), `PLANT_DAMAGE` (38), `PLANT_UPROOT` (39), `DROP_SPAWN` (40), `DROP_EXPIRED` (41), `FAUNA_EVENT` (42), `KILL_CREDIT` (43), `TERRAIN_REGION` (33), `TERRAIN_EDITS` (34), `DEV_RESPONSE`.
+The server does **not** validate movement: the camera is client-side and there is
+no server avatar, so `INPUT` only advances `lastInputTick` and `validateMovement`
+was deleted. `REJECT` answers growth intents, never movement. Full table, payload
+schemas:
 [`docs/protocol.md`](./docs/protocol.md).
 
 ### 5.7 Events and ids
@@ -411,8 +490,9 @@ enforcement changes.
 
 ## 8. Not built yet
 
-Economy, marketplace/mail/trade, admin/compliance tooling, and the full damage
-pipeline. Chat, emotes and reports are implemented; inventory is partial and non-compliant — see [`docs/tasks/T08A.md`](./docs/tasks/T08A.md).
+Economy, marketplace/mail/trade, admin/compliance tooling. The T06 damage pipeline
+is implemented; drop pickup, reroot controls and the damage HUD belong to
+T51/T08A and C04. Chat, emotes and reports are implemented; inventory is partial and non-compliant — see [`docs/tasks/T08A.md`](./docs/tasks/T08A.md).
 
 **V5.4 extension program (approved 2026-11-09, not built; the integration plan schedules T54/C11 before volumetric terrain — ADR-047):** T54 reactive fauna, T55 material simulation, T56 volumetric terrain, C10 terrain/material rendering, T57 parametric terrain features, T58 world-object streaming, T59 ecological succession, C11 fauna rendering, O04 cloud-native orchestration. Nothing in this list exists in code. See the programme in [`docs/PlantLegacy-Abyssal-Integration-Plan.md`](./docs/PlantLegacy-Abyssal-Integration-Plan.md).
 
@@ -499,8 +579,10 @@ stay in the pole-local coordinate frame. Spherical physics is planned stage 2
   `@plant-legacy/shared/config`. Never inline a gameplay number (RULE_3).
 - **The validator runs at server startup.** Invalid config exits before
   `listen`, so a boot failure is usually a config error.
-- **Movement is not server-validated.** `validateMovement` has no call sites;
-  WASD pans the camera. See `docs/protocol.md`.
+- **Movement is not server-validated.** There is no server-side avatar: WASD
+  pans the camera and `INPUT` is an ack-only heartbeat (`lastInputTick`). The
+  unused `validateMovement` helper was deleted rather than left to imply
+  enforcement that never ran. See `docs/protocol.md`.
 - **Known RULE_3 gaps:** WASD bindings and camera limits in
   `apps/client/src/main.ts`. The RULE rows in §7 name the enforcement.
 

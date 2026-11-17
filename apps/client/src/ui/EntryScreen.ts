@@ -13,6 +13,7 @@
  */
 
 import type { EntryFlowStateMachine } from './EntryFlowStateMachine.js';
+import { type PlantStatsSummary, plantStatRows } from './plantStats.js';
 
 export interface EntryScreenCallbacks {
   onContinue(): void;
@@ -267,6 +268,20 @@ const STYLE = `
     color: var(--ink-dim);
   }
 
+  .pl-entry__stats {
+    display: grid; gap: 2px; margin: 16px 0 4px; padding: 10px 12px;
+    border-radius: 10px; border: 1px solid rgba(126, 154, 74, 0.3);
+    background: rgba(34, 42, 24, 0.42); font-variant-numeric: tabular-nums;
+  }
+  .pl-entry__stat {
+    display: flex; justify-content: space-between; gap: 12px; padding: 2px 0;
+    color: var(--ink-muted);
+  }
+  .pl-entry__stat b { color: var(--bone-100); font-weight: 600; }
+  .pl-entry__stat--cause { padding-bottom: 5px; margin-bottom: 3px;
+    border-bottom: 1px solid rgba(126, 154, 74, 0.22); }
+  .pl-entry__stat--cause b { color: var(--ember-400); text-transform: capitalize; }
+
   /* Connecting: three leaves breathing, not a generic spinner. */
   .pl-entry__pulse { display: flex; gap: 8px; margin: 20px 0 4px; }
   .pl-entry__pulse i {
@@ -480,6 +495,7 @@ export class EntryScreen {
           <h2>Your plant is gone</h2>
           <p class="pl-entry__lede">${state.lostReason ? escapeHtml(state.lostReason) : 'It dried out, starved, or the seed never sprouted.'} The soil is still there.</p>
           ${this.errorBlock(state)}
+          ${state.lostStats ? this.statsTable(state.lostStats.cause, state.lostStats.stats) : ''}
           <div class="pl-entry__actions">
             <button class="primary" type="button" data-action="reseed">Plant a new seed</button>
           </div>
@@ -499,6 +515,20 @@ export class EntryScreen {
           <button class="ghost" type="button" data-action="guest">Play as a guest</button>
         </div>
         <p class="pl-entry__note">A guest plant is tied to this browser session. Sign in to keep it across devices.</p>
+      </div>`;
+  }
+
+  private statsTable(cause: string, stats: PlantStatsSummary): string {
+    const rows = plantStatRows(stats)
+      .map(
+        ([label, value]) =>
+          `<div class="pl-entry__stat"><span>${escapeHtml(label)}</span><b>${escapeHtml(value)}</b></div>`,
+      )
+      .join('');
+    return `
+      <div class="pl-entry__stats">
+        <div class="pl-entry__stat pl-entry__stat--cause"><span>Cause</span><b>${escapeHtml(cause.replace(/_/g, ' '))}</b></div>
+        ${rows}
       </div>`;
   }
 

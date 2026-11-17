@@ -1,6 +1,7 @@
 import { mulberry32 } from '@plant-legacy/shared/math';
 import * as THREE from 'three';
-import type { PlantNodeData } from '../PlantRenderer.js';
+import { type MutationLookStack, NEUTRAL_STACK } from '../plant/mutations.ts';
+import type { PlantNodeData } from '../plant/plantNodeData.js';
 import { jointMatrixFor } from './jointMatrix.js';
 import { buildPlantMesh, type PlantRenderPlant } from './PlantMeshBuilder.js';
 import {
@@ -40,6 +41,64 @@ const IMPOSTOR_VIEWS_HORIZONTAL = 8; // 8 horizontal angles (0-360)
 const IMPOSTOR_VIEWS_VERTICAL = 2; // 2 vertical angles (top, side)
 const IMPOSTOR_VIEWS = IMPOSTOR_VIEWS_HORIZONTAL * IMPOSTOR_VIEWS_VERTICAL; // 16 views per plant
 const IMPOSTOR_TILE_SIZE = IMPOSTOR_ATLAS_SIZE / IMPOSTOR_VIEWS_HORIZONTAL; // 128x128 per view
+
+/**
+ * One plant look record: five organ families (foliage, woody, seed, bloom,
+ * disc), each four vec4f. Mirrors `PlantLook` in common.wgsl.
+ */
+const LOOK_ORGAN_VEC4S = 4;
+const LOOK_ORGAN_COUNT = 5;
+const LOOK_VEC4_BYTES = 16;
+const LOOK_BYTES_PER_PLANT = LOOK_ORGAN_COUNT * LOOK_ORGAN_VEC4S * LOOK_VEC4_BYTES;
+const LOOK_FLOATS_PER_PLANT = LOOK_ORGAN_COUNT * LOOK_ORGAN_VEC4S * 4;
+
+/** Pattern ids the shader understands (0 = none). */
+const LOOK_PATTERN_ID: Record<string, number> = {
+  none: 0,
+  mottle: 1,
+  spots: 2,
+  stripes: 3,
+  veins: 4,
+  sheen: 5,
+  glow: 6,
+};
+
+/**
+ * Write one composed look into the storage layout the shaders read.
+ *
+ * Every value was composed and clamped in `plant/mutations.ts`; this only packs
+ * it. Keeping the packing in one place is what lets the shader stay a painter.
+ */
+function writePlantLook(data: Float32Array, offset: number, stack: MutationLookStack): void {
+  const families = [
+    stack.looks.foliage,
+    stack.looks.woody,
+    stack.looks.seed,
+    stack.looks.bloom,
+    stack.disc,
+  ];
+  for (let organ = 0; organ < families.length; organ += 1) {
+    const look = families[organ];
+    const base = offset + organ * LOOK_ORGAN_VEC4S * 4;
+    const pattern = LOOK_PATTERN_ID[look.pattern] ?? 0;
+    data[base + 0] = look.tint[0];
+    data[base + 1] = look.tint[1];
+    data[base + 2] = look.tint[2];
+    data[base + 3] = look.tintStrength;
+    data[base + 4] = look.variegationColor[0];
+    data[base + 5] = look.variegationColor[1];
+    data[base + 6] = look.variegationColor[2];
+    data[base + 7] = look.variegation;
+    data[base + 8] = look.glowColor[0];
+    data[base + 9] = look.glowColor[1];
+    data[base + 10] = look.glowColor[2];
+    data[base + 11] = look.glow;
+    data[base + 12] = pattern;
+    data[base + 13] = look.patternScale;
+    data[base + 14] = look.barkDarken;
+    data[base + 15] = 0;
+  }
+}
 
 /** Mesh growth easing in PlantMeshBuilder lasts 0.9 s; keep rebuilding a little longer. */
 const GROWTH_ACTIVE_MS = 1100;
@@ -219,6 +278,15 @@ class VRAMPool {
 export class WebGPURenderer {
   private readonly device: WebGPUDevice;
   private readonly config: WebGPURendererConfig;
+  private readonly appearanceByPlant = new Map<
+    string,
+    { petalCount: number; leafScale: number; seedScale: number }
+  >();
+  // T04 appearance: the composed look per plant, keyed by plant id ('own' and
+  // 'rival' stand in for a plant the client has no id for).
+  private readonly lookByPlant = new Map<string, MutationLookStack>();
+  /** Per-plant look records the mesh and billboard passes read. */
+  private plantLookBuffer: GPUBuffer | null = null;
 
   private initialized = false;
   private camera: THREE.PerspectiveCamera | null = null;
@@ -228,6 +296,12 @@ export class WebGPURenderer {
   private soilUniformBuffer: GPUBuffer | null = null;
   private readonly soilData = new Float32Array(16);
   private soilMoisture = 0.2;
+  /**
+   * AL-03 draw-distance lever: multiplies the projected-size tier thresholds.
+   * Below 1 a plant must be closer before it earns a detailed tier, so the
+   * band controller spends draw distance before it drops the whole tier.
+   */
+  private lodThresholdScale = 1;
   private plantBuffer: GPUBuffer | null = null;
   private renderBuffer: GPUBuffer | null = null;
   private vertexBuffer: GPUBuffer | null = null;
@@ -307,6 +381,12 @@ export class WebGPURenderer {
     this.undergroundView = enabled;
   }
   private rootSightAuraRadius = 3.0;
+  /** Radius of the hole cut in the soil, in plan view (0 = unknown). */
+  private rootSightApertureRadius = 0;
+  /** Air bubble around a buried eye, metres (`eye_window_radius_m`). */
+  private rootSightEyeWindow = 0;
+  /** The eye is below the soil surface while Root Sight is open. */
+  private cameraUnderSoil = false;
   private rootSightSoilOpacity = 0.45;
   // Shader time base. Vertex spawnTime values come from performance.now()/1000,
   // so anchor frame.time to the same clock instead of starting at zero.
@@ -441,6 +521,15 @@ export class WebGPURenderer {
       'WebGPU render data',
       this.config.maxPlants * RENDER_STRIDE,
       GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
+    );
+
+    // T04 appearance: one composed look per plant, read by the mesh and
+    // billboard passes. Allocated for the full plant budget so the bind group
+    // never has to be rebuilt mid-session.
+    this.plantLookBuffer = allocateOrThrow(
+      'WebGPU plant looks',
+      this.config.maxPlants * LOOK_BYTES_PER_PLANT,
+      GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
     );
 
     // Rain uniform buffer
@@ -596,6 +685,12 @@ export class WebGPURenderer {
               texture: { sampleType: 'float', viewDimension: '2d-array' },
             },
             { binding: 8, visibility: GPUShaderStage.FRAGMENT, sampler: { type: 'filtering' } },
+            // T04 appearance: composed looks, one record per plant.
+            {
+              binding: 9,
+              visibility: GPUShaderStage.FRAGMENT,
+              buffer: { type: 'read-only-storage' },
+            },
           ],
         }),
       ],
@@ -699,6 +794,11 @@ export class WebGPURenderer {
         {
           binding: 11,
           visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
+          buffer: { type: 'read-only-storage' },
+        },
+        {
+          binding: 12,
+          visibility: GPUShaderStage.FRAGMENT,
           buffer: { type: 'read-only-storage' },
         },
       ],
@@ -928,6 +1028,14 @@ export class WebGPURenderer {
               .createView({ dimension: '2d-array' }),
         },
         { binding: 8, resource: this.textureArraySampler ?? device.createSampler() },
+        {
+          binding: 9,
+          resource: {
+            buffer:
+              this.plantLookBuffer ??
+              device.createBuffer({ size: 320, usage: GPUBufferUsage.STORAGE }),
+          },
+        },
       ],
     });
 
@@ -1026,6 +1134,14 @@ export class WebGPURenderer {
               .createView({ dimension: '2d-array' }),
         },
         { binding: 9, resource: this.textureArraySampler ?? device.createSampler() },
+        {
+          binding: 10,
+          resource: {
+            buffer:
+              this.plantLookBuffer ??
+              device.createBuffer({ size: 320, usage: GPUBufferUsage.STORAGE }),
+          },
+        },
       ],
     });
 
@@ -1122,6 +1238,14 @@ export class WebGPURenderer {
             ? { buffer: this.impostorSlotsBuffer }
             : { buffer: device.createBuffer({ size: 8, usage: GPUBufferUsage.STORAGE }) },
         },
+        {
+          binding: 12,
+          resource: {
+            buffer:
+              this.plantLookBuffer ??
+              device.createBuffer({ size: 320, usage: GPUBufferUsage.STORAGE }),
+          },
+        },
       ],
     });
   }
@@ -1162,6 +1286,8 @@ export class WebGPURenderer {
     radius: number,
     auraRadius = 3.0,
     soilOpacity = 0.45,
+    apertureRadius = 0,
+    eyeWindowRadius = 0,
   ): void {
     this.rootSightEnabled = enabled;
     this.rootSightProgress = THREE.MathUtils.clamp(progress, 0, 1);
@@ -1169,6 +1295,25 @@ export class WebGPURenderer {
     this.rootSightRadius = Math.max(0.1, radius);
     this.rootSightAuraRadius = Math.max(0.1, auraRadius);
     this.rootSightSoilOpacity = THREE.MathUtils.clamp(soilOpacity, 0, 1);
+    this.rootSightApertureRadius = Math.max(0, apertureRadius);
+    this.rootSightEyeWindow = Math.max(0, eyeWindowRadius);
+  }
+
+  /**
+   * Whether the eye is under the soil surface.
+   *
+   * Told, not inferred: the soil occlusion test in the plant passes hides every
+   * fragment the planet stands in front of, which is right for a camera above
+   * ground and wrong for one inside the ground. A buried camera shares the
+   * medium with the roots it is inspecting.
+   */
+  setCameraUnderSoil(under: boolean): void {
+    this.cameraUnderSoil = under;
+  }
+
+  /** AL-03: scale every projected-size tier threshold (1 = untouched). */
+  setLodThresholdScale(scale: number): void {
+    this.lodThresholdScale = Number.isFinite(scale) && scale > 0 ? scale : 1;
   }
 
   /**
@@ -1203,6 +1348,44 @@ export class WebGPURenderer {
     }
   }
 
+  /** One plant's mutation appearance; other plants keep their own or default. */
+  setPlantAppearance(
+    plantId: string,
+    appearance: { petalCount: number; leafScale: number; seedScale: number },
+  ): void {
+    this.appearanceByPlant.set(plantId, { ...appearance });
+    this.rebuildMesh();
+  }
+
+  /** A plant's composed mutation look (own plant or a rival). */
+  setPlantLook(plantId: string, look: MutationLookStack): void {
+    this.lookByPlant.set(plantId, look);
+    this.rebuildMesh();
+  }
+
+  /**
+   * Upload one composed look per plant.
+   *
+   * The layout mirrors `PlantLook` in common.wgsl: five organ records of four
+   * vec4f each. Everything is already clamped in JS, so the shader only applies
+   * it (ADR-059).
+   */
+  private uploadPlantLooks(device: GPUDevice, looks: readonly MutationLookStack[]): void {
+    if (!this.plantLookBuffer) return;
+    const count = Math.min(this.config.maxPlants, Math.max(1, looks.length));
+    const data = new Float32Array(count * LOOK_FLOATS_PER_PLANT);
+    for (let index = 0; index < count; index += 1) {
+      writePlantLook(data, index * LOOK_FLOATS_PER_PLANT, looks[index] ?? NEUTRAL_STACK);
+    }
+    device.queue.writeBuffer(
+      this.plantLookBuffer,
+      0,
+      data.buffer as ArrayBuffer,
+      0,
+      data.byteLength,
+    );
+  }
+
   private rebuildMesh(): void {
     // console.log('[WebGPURenderer] rebuildMesh with', this.pendingNodes.length, 'nodes');
     const device = this.device.getDevice();
@@ -1217,8 +1400,12 @@ export class WebGPURenderer {
       rootSides: this.config.rootSides,
       now: this.pendingNowMs,
       sunDirection: this.sunDirection,
-      mutationBarkThicknessScale: this.config.mutationBarkThicknessScale,
+      appearanceForPlant: (plantId) => this.appearanceByPlant.get(plantId),
+      lookForPlant: (plantId, isOwn) =>
+        this.lookByPlant.get(plantId) ?? this.lookByPlant.get(isOwn ? 'own' : 'rival'),
     });
+
+    this.uploadPlantLooks(device, built.plantLooks);
 
     this.uploadVertices(device, built.vertices);
     this.uploadIndices(device, built.indices);
@@ -2044,10 +2231,11 @@ export class WebGPURenderer {
     data[73] = this.rootSightProgress;
     data[74] = this.rootSightRadius;
     data[75] = this.rootSightAuraRadius;
-    data[77] = this.config.tierThresholds[0];
-    data[78] = this.config.tierThresholds[1];
-    data[79] = this.config.tierThresholds[2];
-    data[80] = this.config.tierThresholds[3];
+    const lodScale = this.lodThresholdScale;
+    data[77] = this.config.tierThresholds[0] * lodScale;
+    data[78] = this.config.tierThresholds[1] * lodScale;
+    data[79] = this.config.tierThresholds[2] * lodScale;
+    data[80] = this.config.tierThresholds[3] * lodScale;
     data[81] = this.config.hysteresisPromote;
     data[82] = this.config.hysteresisDemote;
     data[83] = this.config.minDwellTime;
@@ -2061,6 +2249,12 @@ export class WebGPURenderer {
     data[89] = -planetRadius;
     data[90] = 0;
     data[91] = planetRadius;
+    this.frameU32[92] = this.cameraUnderSoil ? 1 : 0;
+    data[93] = this.rootSightApertureRadius;
+    // The frame struct's last slot is the buried-eye bubble, so the occlusion
+    // test can be limited to the air the eye is standing in.
+    data[94] = this.rootSightEyeWindow;
+    data[95] = 0;
 
     device.queue.writeBuffer(this.frameUniformBuffer, 0, data);
 
@@ -2408,7 +2602,7 @@ export class WebGPURenderer {
     this.initialized = false;
   }
 
-  /** Handle window resize - update canvas and uniform buffers */
+  /** Handle a resize - update canvas and uniform buffers */
   onResize(): void {
     if (!this.initialized) return;
     const device = this.device.getDevice();
@@ -2417,8 +2611,11 @@ export class WebGPURenderer {
     if (!canvas) return;
     const context = this.device.getContext();
     if (!context) return;
-    canvas.width = window.innerWidth;
-    canvas.height = window.innerHeight;
+    // The canvas's own box, not the window: the two differ whenever the game is
+    // embedded in a container (the desktop browser panel, an iframe), and the
+    // WebGPU layer then covered a different area than the WebGL one below it.
+    canvas.width = canvas.clientWidth || window.innerWidth;
+    canvas.height = canvas.clientHeight || window.innerHeight;
     context.configure({
       device,
       format: navigator.gpu.getPreferredCanvasFormat(),

@@ -22,7 +22,10 @@ Message format:
 
 ## Protocol Version
 
-`PROTOCOL_VERSION = 1` — bumped on any breaking wire change.
+`PROTOCOL_VERSION = 3` — bumped on any breaking wire change. v2 adds
+`MUTATION_STATE` (35) and `MUTATION_SHED` (36); v3 adds `MUTATION_LEVEL` (45) and
+carries each mutation's level, level cost and any open card deal in
+`MUTATION_STATE`.
 Client sends `HELLO { clientVersion: 1, accessToken?: string, plantId?: string }` on connect.
 Server rejects with `ERROR { code: "VERSION_MISMATCH", ... }` if mismatch.
 
@@ -47,6 +50,7 @@ Server rejects with `ERROR { code: "VERSION_MISMATCH", ... }` if mismatch.
 | 29 | `REPORT` | `ReportPayload` | File a player/message report (rate-limited, T05) |
 | 30 | `BLOCK` | `{ targetPlayerId: string, blocked: boolean }` | Mute or unmute a player's chat (T05) |
 | 32 | `TERRAIN_REGION_REQUEST` | `{ worldX: number, worldZ: number, radiusM: number, revision?: number }` | Ask for sparse soil chunks around a point; radius is capped at 120 m (T25) |
+| 37 | `REROOT_INTENT` | `{ dirX: number, dirZ: number }` | Steer an uprooted plant's crawl in world XZ; zero stops it. Ignored unless the plant is uprooted (T06) |
 
 ### Server → Client
 
@@ -66,11 +70,20 @@ Server rejects with `ERROR { code: "VERSION_MISMATCH", ... }` if mismatch.
 | 21 | `WEATHER_UPDATE` | `WeatherUpdatePayload` | Weather/day-night state |
 | 22 | `GROWTH_OPTIONS_RESULT` | `GrowthOptionsResultPayload` | Legal options, costs and plain reasons for a node |
 | 23 | `CHAT_BROADCAST` | `ChatBroadcastPayload` | Chat or emote from another player |
-| 27 | `INVENTORY_SYNC` | `{ slots: Array<{ itemId: string \| null, count: number \| null }>, maxSlots: number }` | Full inventory |
+| 27 | `INVENTORY_SYNC` | `{ slots: Array<{ itemId: string \| null, count: number \| null }>, maxSlots: number, definitions: Array<{ id, name, description, category, stackLimit, use }> }` | Full inventory plus the definitions behind it: the panel's name, prose and "Use:" line are the server's own text and numbers, never invented by the client |
 | 28 | `INVENTORY_SLOT_UPDATE` | `{ slotIndex: number, itemId: string \| null, count: number \| null }` | One slot changed |
 | 31 | `SEASON_UPDATE` | `{ season: number, remainingSeconds: number, lengthTicks: number, calamity: boolean }` | Current season, seconds left before the rollover, and whether the next rollover is the calamity. Sent on join, on every rollover and when the calamity runs; the client counts down locally |
 | 33 | `TERRAIN_REGION` | `{ originX, originZ, cellSizeM, cols, rows, revision, heightsBase64, materialBase64 }` | Height deltas (Float32) and moisture (Uint8) for the requested region (T25) |
 | 34 | `TERRAIN_EDITS` | `{ revision: number, edits: TerrainEdit[] }` | Root tunnels/voids since the client's revision; also broadcast near a new root (T25) |
+| 35 | `MUTATION_STATE` | `MutationStatePayload` | The plant's mutation set with upkeep, level/cost per mutation, the adaptive-pressure readout, the shed cooldown and any open level-up card deal. Sent on join and after every growth, shed or level (T04) |
+| 36 | `MUTATION_SHED` | `{ plantId: string, mutationId: string }` | Client asks to shed one mutation; the server refuses during cooldown |
+| 45 | `MUTATION_LEVEL` | `{ plantId: string, mutationId: string, cardId?: string }` | Client raises a held mutation. Without `cardId` the server deals that mutation's cards; with one it takes that card, spends the stored resources and applies the level. A card the server did not deal is refused (T04) |
+| 38 | `PLANT_DAMAGE` | `PlantDamagePayload` | A plant lost tissue to weather, a tool, a herbivore swarm or a collapse, including any parts destroyed and the structural damage left against the uproot threshold (T06, C04) |
+| 39 | `PLANT_UPROOT` | `PlantUprootPayload` | Uproot phase, root position, lean and the reroot window left. Phase `rooted` announces a successful reroot (T06) |
+| 40 | `DROP_SPAWN` | `DropSpawnPayload` | A fragment, remains pile or dung appeared in the world with its expiry time (T06) |
+| 41 | `DROP_EXPIRED` | `{ id: string }` | A drop decayed and should be removed (T06) |
+| 42 | `FAUNA_EVENT` | `FaunaEventPayload` | A scripted herbivore swarm started browsing or moved on. Swarms are events, not pathfinding agents (T06) |
+| 43 | `KILL_CREDIT` | `KillCreditPayload` | Who is credited for a plant's death: the player or plant with the most damage inside `kill_credit_window_s` (T06) |
 | 99 | `DEV_RESPONSE` | `{ ... }` | Dev-panel response (dev builds only) |
 
 Type `10` is `WELCOME`: `REPORT` was moved to `29` after it collided with the
@@ -97,11 +110,12 @@ Applied server-side before broadcast. Client receives already-quantized values.
 ## Camera Pan (Client-Side)
 
 The client handles camera panning locally using WASD/arrow keys. `INPUT` frames
-are accepted and stored in `player.pendingInputs`, but nothing reads them:
-`validateMovement` in `apps/server/src/ops/net.ts` has **no call sites**, so the
-velocity and world-bounds checks it implements never run against a live client
-(verified 2026-11-12). `REJECT` is used for growth intents, not for movement.
-Plant growth bounds are enforced separately inside `PlantWorld`.
+are accepted; the only thing the server does with them is advance
+`lastInputTick` (ack-only heartbeat), because there is no server-side avatar
+position. `validateMovement` - which checked velocity and world bounds but had
+**no call sites** - was deleted, so `docs` and code agree that movement is not
+server-validated. `REJECT` is used for growth intents, not for movement. Plant
+growth bounds are enforced separately inside `PlantWorld`.
 
 ## Payload Schemas
 
@@ -127,6 +141,8 @@ interface WelcomePayload {
     y: number;
     z: number;
     biomass: number;
+    /** 0..1 tissue health against this part's own quota; shrinks its radius. */
+    health?: number;
     age: number;
     parentId: string | null;
     children: string[];
@@ -153,8 +169,10 @@ interface StatePayload {
   plants: Array<{
     id: string;
     totalBiomass: number;
+    totalEnergy: number;
     totalUpkeep: number;
-    tier: 'active' | 'near' | 'dormant';
+    /** Damage taken and the ceiling that tears the plant free (C04 HUD). */
+    structure?: { damageHp: number; threshold: number };
   }>;
 }
 
@@ -163,8 +181,9 @@ interface KeyframePayload {
   plants: Array<{
     id: string;
     totalBiomass: number;
+    totalEnergy: number;
     totalUpkeep: number;
-    tier: 'active' | 'near' | 'dormant';
+    structure?: { damageHp: number; threshold: number };
   }>;
 }
 
@@ -228,6 +247,9 @@ interface PlantSyncPayload {
 
 interface WeatherUpdatePayload {
   tick: number;
+  /** 1-based in-game day; one day is one real hour by default. */
+  dayNumber: number;
+  isDay: boolean;
   weatherState: 'clear' | 'rain' | 'thunderstorm_telegraph' | 'thunderstorm_active' | 'thunderstorm_aftermath';
   timeOfDay: number;        // 0–1
   sunElevation: number;     // radians
@@ -326,15 +348,15 @@ All tunables in extended-1 format:
 
 | Key | Type | Default | Range |
 |-----|------|---------|-------|
-| `protocol_version` | integer | 1 | [1, 255] |
+| `protocol_version` | integer | 3 | [1, 255] |
 | `max_message_size_bytes` | integer | 16384 | [1024, 1048576] |
 | `tick_rate_hz` | integer | 20 | [10, 60] |
 | `position_quantization` | integer | 64 | [16, 256] |
 | `angle_quantization_bits` | integer | 16 | [8, 32] |
 | `keyframe_interval_ticks` | integer | 10 | [1, 60] |
-| `max_velocity_units_per_tick` | number | 0.5 | [0.1, 10.0] |
 | `world_bounds` | object | ±1000 | — |
 | `client_send_rate_hz` | integer | 20 | [5, 60] |
+| `weather_send_rate_hz` | integer | 2 | [1, 20] |
 
 ## Acceptance (T03P + T03)
 
