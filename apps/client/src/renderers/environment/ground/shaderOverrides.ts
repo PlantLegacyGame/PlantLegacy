@@ -53,7 +53,6 @@ uniform float uRootSightApertureRadius;
 // Vertical bounds of the cut: the aperture is a volume, not a plan-view disc.
 uniform float uRootSightApertureTopY;
 uniform float uRootSightApertureBottomY;
-uniform float uRootSightRimDitherM;
 uniform vec3 uRootSightWallColor;
 uniform vec3 uRootSightCamera;
 // T02 organic envelope: every subterranean root node, fused with a smooth
@@ -145,8 +144,8 @@ vec3 soilBumpNormal(vec3 normal, vec2 uv, float strength) {
 `,
     )
     .replace(
-      '#include <dithering_fragment>',
-      `#include <dithering_fragment>
+      '#include <colorspace_fragment>',
+      `#include <colorspace_fragment>
   // T02 Root Sight cutaway: the earth peels back along the subterranean root
   // system. Each underground node contributes an envelope sphere and the whole
   // set is fused with a smooth minimum, so the opening follows branching root
@@ -154,11 +153,6 @@ vec3 soilBumpNormal(vec3 normal, vec2 uv, float strength) {
   // camera-facing cone.
   float cutMask = 0.0;
   float envelope = 1e6;
-  // Per-pixel stochastic edge. The rim used to be a hard smoothstep a fraction
-  // of a pixel wide, so the opening ended on an aliased circle.
-  float rimNoise = fract(
-    52.9829189 * fract(0.06711056 * gl_FragCoord.x + 0.00583715 * gl_FragCoord.y)
-  );
   // Marched interior wall of the bubble, applied after the surface lighting so
   // the dug earth inside stays readable at night instead of going pure black.
   // Is the eye buried? Decides whether this is a surface view or a view from
@@ -206,15 +200,15 @@ vec3 soilBumpNormal(vec3 normal, vec2 uv, float strength) {
     // used the full cutaway radius: a 1.8 m hole over a 4.9 m mouth left the
     // bowl's buried rim crossing the sightline through the opening, which is
     // what painted dirt across the hole from some angles.
-    // The bowl's lip is built at exactly this radius, and it is a polygon: its
-    // chords dip a hair inside the exact circle, and on a slope the terrain
-    // between two rim vertices can rise above the chord. Either way a cut that
-    // reaches the lip opens a hairline of sky along the rim. Stopping the cut a
-    // percent short of the lip tucks the seam under intact soil instead; a lip
-    // that is covered cannot show, and a ring of overhang in the other direction
-    // is what used to draw a second contour around the hole.
-    const float ROOT_SIGHT_CUT_INSET = 0.99;
-    float apertureRadius = max(0.05, uRootSightApertureRadius) * ROOT_SIGHT_CUT_INSET;
+    // The bowl's lip is a polygon at this radius: its chords dip a hair inside
+    // the exact circle, and on a slope the surface between two rim vertices
+    // stands above the chord. A cut that stops at the lip therefore leaves the
+    // lip poking through intact soil as a dotted ring, and one that stops short
+    // of it opens a hairline of sky instead. Cutting a hair *wider* than the lip
+    // puts the whole ring inside the opening, where the seam collar behind the
+    // soil's edge covers it.
+    const float ROOT_SIGHT_CUT_OVERREACH = 1.02;
+    float apertureRadius = max(0.05, uRootSightApertureRadius) * ROOT_SIGHT_CUT_OVERREACH;
     // Open with the transition. The bowl is scaled by the same progress; a
     // full-size aperture over a half-size bowl leaves a void ring around the
     // opening for the first frames.
@@ -228,13 +222,13 @@ vec3 soilBumpNormal(vec3 normal, vec2 uv, float strength) {
     bool insideColumn =
       vSoilWorldPos.y <= uRootSightApertureTopY &&
       vSoilWorldPos.y >= uRootSightApertureBottomY;
-    // cut_rim_dither_m is the configured width, capped at half the hole so a
-    // seedling's aperture is softened rather than erased. Outside the dither
-    // band nothing is cut; inside the core everything is, so the hole is the
-    // bowl's mouth and the rim is a speckle instead of a hard edge.
-    float dither = min(max(uRootSightRimDitherM, 0.0), apertureRadius * 0.5);
-    float outside =
-      smoothstep(max(0.0, apertureRadius - dither), apertureRadius, apertureDist);
+    // One screen pixel of ramp, measured in derivatives rather than in metres:
+    // the opening's edge is exactly as soft as the sampling grid needs and no
+    // wider, so a seedling's pit is not eaten by a band sized for a root cavity
+    // and a big one does not get a stair-stepped lip. Alpha-to-coverage resolves
+    // that ramp into a smooth edge.
+    float edge = max(fwidth(apertureDist), 1e-5);
+    float outside = smoothstep(apertureRadius - edge, apertureRadius + edge, apertureDist);
     float apertureMask = insideColumn ? (1.0 - outside) : 0.0;
     // Above ground the aperture is the only hole in the surface: cutting the
     // root bubbles there too opened sky outside the bowl whenever a bubble
@@ -445,10 +439,11 @@ vec3 soilBumpNormal(vec3 normal, vec2 uv, float strength) {
     // cavity bowl), so the surface has nothing left to shade here: it simply
     // stops. Faking the inside in this shader is what produced the dome, the
     // flat disc and every other angle-dependent artefact.
-    // Dithered, so the opening's edge is a stochastic rim rather than an
-    // aliased circle. Deep inside the mask is 1 and always discards; outside it
-    // is 0 and never does.
-    if (cavityMask > rimNoise) discard;
+    // The hole is coverage, not colour: the mask goes out as alpha and the
+    // multisampled buffer decides the edge. Deep inside the mask is 1 and the
+    // fragment is dropped outright; outside it is 0 and the soil is untouched.
+    gl_FragColor.a = min(gl_FragColor.a, 1.0 - cavityMask);
+    if (gl_FragColor.a < 0.01) discard;
   }
 
   // The bubble interior keeps its own lighting; only the surface soil is

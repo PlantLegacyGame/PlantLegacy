@@ -33,12 +33,6 @@ export interface RootSightUniforms {
    */
   uRootSightApertureTopY: { value: number };
   uRootSightApertureBottomY: { value: number };
-  /**
-   * Width of the dithered rim, metres (`cut_rim_dither_m`). The cut used to end
-   * on a hard `smoothstep` a fraction of a pixel wide, so the opening's edge
-   * was an aliased circle.
-   */
-  uRootSightRimDitherM: { value: number };
   uRootSightSoilOpacity: { value: number };
   /**
    * T02 organic envelope: subterranean node positions (xyz) with a validity
@@ -107,7 +101,6 @@ export function createRootSightUniforms(): RootSightUniforms {
     uRootSightApertureRadius: { value: 0 },
     uRootSightApertureTopY: { value: 0 },
     uRootSightApertureBottomY: { value: 0 },
-    uRootSightRimDitherM: { value: 0 },
     uRootSightSoilOpacity: { value: 0 },
     uRootSightNodes: {
       value: Array.from({ length: 64 }, () => new THREE.Vector4(0, 0, 0, 0)),

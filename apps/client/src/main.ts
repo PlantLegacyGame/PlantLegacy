@@ -2735,9 +2735,6 @@ function updateRootSight(deltaTime: number): void {
   soilCutawayUniforms.uRootSightApertureRadius.value = cavityOpen ? cavityApertureM : 0;
   soilCutawayUniforms.uRootSightApertureTopY.value = cavityOpen ? cavityTopY : 0;
   soilCutawayUniforms.uRootSightApertureBottomY.value = cavityOpen ? cavityBottomY : 0;
-  soilCutawayUniforms.uRootSightRimDitherM.value = cavityOpen
-    ? Math.min(rootSightConfig.cutRimDitherM, cavityApertureM * 0.5)
-    : 0;
   soilCutawayUniforms.uRootSightSoilOpacity.value = rootSightConfig.soilOpacity;
 
   const isEnabled = rootSightStateMachineIsEnabled(rootSightMachine);

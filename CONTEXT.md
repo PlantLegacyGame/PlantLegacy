@@ -499,7 +499,7 @@ T51/T08A and C04. Chat, emotes and reports are implemented; inventory is partial
 
 **C02 procedural plant renderer** is completed using **Raymarched Signed Distance Fields (SDF) with smooth minimum (`smin`) organic fusion** inspired by the procedural creature architecture of *Hatched* by SublimeOrange (`https://www.reddit.com/r/IndieDev/comments/1x9mmly/im_a_solo_dev_building_hatched_a/`). Instead of floating primitive cylinders clipping with flat caps, the organism's tapered capsule segments, joint spheres, root crown, and parametric foliage melt into a continuous living membrane with smooth branch collars and seamless root-to-canopy transition at $y = 0$.
 
-**T02 Root Sight & Subterranean Visualization:** Two-mode camera with subterranean elevation tilting (`maxPolarAngle` extended to $177^\circ$) and organic ground cutaways. Rather than artificial spherical cuts or neon recoloring, the cutaway shader dynamically evaluates the multi-node smooth minimum distance (`smin`) across all subterranean roots and underground growths of player and rival plants. Soil opens up organically along root branches like smooth air bubble cavities with dithered soft edges and earthen rim shading, preserving natural botanical bark and root coloration. Selecting root growth options or subterranean nodes automatically opens Root Sight.
+**T02 Root Sight & Subterranean Visualization:** Two-mode camera with subterranean elevation tilting (`maxPolarAngle` extended to $177^\circ$) and organic ground cutaways. Rather than artificial spherical cuts or neon recoloring, the cutaway shader dynamically evaluates the multi-node smooth minimum distance (`smin`) across all subterranean roots and underground growths of player and rival plants. Soil opens up organically along root branches like smooth air bubble cavities with soft edges and earthen rim shading, preserving natural botanical bark and root coloration. Selecting root growth options or subterranean nodes automatically opens Root Sight.
 
 **T01 Growth Interaction & Gene Clamping:** Silky-smooth growth direction drawing with exponential damping (`0.35` factor) and camera-facing plane projection, eliminating choppiness, jitter, and grazing ray singularities. Fully legible 2D HUD displays the allowed gene growth sector/cone (`minY`/`maxY`), maximum reach ring, glowing trajectory vector, directional arrowhead, concentric ghost bud preview, and real-time floating pill badge with organ name, meter reach, and constraint feedback (e.g., `(Max Reach)`, `(Gene Angle Clamped)`). Server-authoritative `clampGrowthDirectionByGene` mirrors client limits. Clicking a player plant node smoothly centers and frames the node at an appropriate zoom level; keyboard zoom (`-`/`+`) is smoothly damped; browser page zoom gestures are intercepted to protect the UI.
 
@@ -537,7 +537,7 @@ Root Sight no longer draws a soil dome. It cuts a cone out of the terrain from
 the camera through the inspected node (`ground.ts` cone discard driven by
 `uRootSightCamera`/`uRootSightCenter`/`uRootSightRadius`), so the opening follows
 the view, stays round at any angle and shows the background through it. The rim
-is a dither fade (interleaved gradient noise) rather than a hard discard. The
+is a coverage edge one pixel wide rather than a hard discard. The
 WebGL `soilDome`, the WebGPU `dome.wgsl` bowl and the unused WebGPU
 `ground.wgsl` bubble cutaway were the source of the concentric rings and were
 deleted. The dirt backdrop the dome used to give now comes from blending the sky

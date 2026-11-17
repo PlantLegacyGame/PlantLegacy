@@ -107,12 +107,6 @@
       "range": [1, 30],
       "notes": "How often the cavity bubble set is rebuilt from root data."
     },
-    "cut_rim_dither_m": {
-      "type": "number",
-      "value": 0,
-      "range": [0, 2],
-      "notes": "Width of the dithered rim where the soil cut fades out instead of ending on a hard discard. 0 cuts a clean edge with no speckles: the dithered rim read as brown dots scattered over the opening's lip rather than as a soft edge, and it hid the actual aperture boundary."
-    },
     "min_extent_m": {
       "type": "number",
       "value": 0.05,

@@ -234,8 +234,8 @@ float bowlNoise(vec2 p) {
     uBowlLight;`,
       )
       .replace(
-        '#include <dithering_fragment>',
-        `#include <dithering_fragment>
+        '#include <colorspace_fragment>',
+        `#include <colorspace_fragment>
   // Seen from a buried eye beside the pit, the bowl may only be visible where
   // the line of sight actually leaves through the opening. Follow the ray from
   // the eye to this fragment; where it crosses the surface plane it must land

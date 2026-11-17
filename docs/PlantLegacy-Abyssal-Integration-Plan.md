@@ -290,7 +290,7 @@ One render frame per device:
 6. Water surface and underwater volume.
 7. Sky and atmosphere.
 8. Transparent particles, light shafts, bioluminescence.
-9. Post: bloom, tonemap, color grade, vignette, grain, dither.
+9. Post: bloom, tonemap, color grade, vignette, grain.
 10. UI is DOM, not in-frame.
 
 ### Primary path
@@ -326,7 +326,7 @@ Every entity has a tier derived from projected size, importance, and visibility:
 - Tier changes are hysteretic (promote 1.15×, demote 0.85×) with minimum dwell (0.5 s), as AG does.
 - A tier never changes gameplay truth. A T3 plant still grows, starves, and dies.
 - Own plant is pinned to T0 (or the best tier the device can afford) for readability.
-- Cross-fades are dithered over 0.3 s; transitions are capped per frame.
+- Cross-fades are blended over 0.3 s; transitions are capped per frame.
 - New entities arrive at T3 and promote progressively; never pop in at T0.
 
 ## 4.5 Budget model
@@ -789,7 +789,7 @@ begin frame
   sky
   impostors/billboards (alpha-tested, sorted by tier)
   transparent particles / shafts / bioluminescence
-  post (bloom, tonemap, grade, dither)
+  post (bloom, tonemap, grade)
 end frame
 ```
 
@@ -848,7 +848,7 @@ No `rarity` field. No glow that implies tier.
 - T2: ellipsoid SDF impostor — one sphere trace per pixel, no quad and no atlas.
 - T3: one instanced quad draw sampling the colour-only atlas.
 - Own plant: pinned T0, separate draw for outline/highlight if needed.
-- Cross-fade: dither in fragment shader; render both tiers for the transition window.
+- Cross-fade: blue-noise transparency in the fragment shader; render both tiers for the transition window.
 
 ### Budgets
 - 10k headers + 200 visible plants is trivial. 10k full node graphs is not; only interest plants upload nodes.
@@ -944,8 +944,8 @@ Use the same function in every custom material, so terrain, plants, fauna, water
 - Config scale/strength.
 
 ### Post
-- Bloom with Karis average (AG), tonemap, vignette, grain, dither.
-- Desktop only by default; phone gets tonemap + dither only.
+- Bloom with Karis average (AG), tonemap, vignette, grain.
+- Desktop only by default; phone gets tonemap only.
 - No full-screen post that hides gameplay readability.
 - Photosensitivity: lightning/bloom limits configurable; no strobing beyond design 19.4.
 
@@ -1541,7 +1541,7 @@ AL-13, AL-15.
 3. Add sky: scattering, sun/moon/stars, procedural clouds, weather coverage.
 4. Add a half-res light-shaft pass with shadow compare and depth-aware blur/upsample (WebGL post first).
 5. Add a one-time procedural detail texture for rock/soil; triplanar sample.
-6. Add bloom/tonemap/grade/vignette/grain/dither; desktop only by default.
+6. Add bloom/tonemap/grade/vignette/grain; desktop only by default.
 7. Add weather/time-of-day/biome params.
 8. Add photosensitivity limits.
 

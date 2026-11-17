@@ -8,7 +8,7 @@ Run with the local stack (`pnpm dev`). A box is checked only when the command or
   - Expected: 79 file(s), OK.
   - Observed: OK for every file then present (75 at the time of the first run; the count is owned by [`docs/tunables.md`](../tunables.md) and is 79 today), `config/root_sight.json` valid extended-1 schema.
 - [x] `curl http://127.0.0.1:8080/config/root_sight`
-  - Expected: 200 JSON with **every** entry in `config/root_sight.json` — `cutaway_radius`, `transition_ms`, `soil_opacity`, both highlight colours, `substrate_multiplier`, `camera_target`, `max_cavity_bubbles`, `bubble_merge_cell_m`, `bubble_padding_m`, `rival_bubble_budget`, `camera_burrow_enabled`, `max_burrow_depth_m`, `cavity_clearance_m`, `rebuild_hz`, `cut_rim_dither_m`, `auto_open_on_root_growth`, `eye_window_radius_m` (18 entries).
+  - Expected: 200 JSON with **every** entry in `config/root_sight.json` — `cutaway_radius`, `transition_ms`, `soil_opacity`, both highlight colours, `substrate_multiplier`, `camera_target`, `max_cavity_bubbles`, `bubble_merge_cell_m`, `bubble_padding_m`, `rival_bubble_budget`, `camera_burrow_enabled`, `max_burrow_depth_m`, `cavity_clearance_m`, `rebuild_hz`, `auto_open_on_root_growth`, `eye_window_radius_m` (18 entries).
   - Observed (2026-11-16): 200 with all 17 keys. It used to serve 7 of them from a hand-written whitelist, so the cavity ran on compiled-in defaults; see A12 in [`docs/bug-inventory.md`](../bug-inventory.md).
 
 ## 2. Root Sight two-mode camera
@@ -19,7 +19,7 @@ Run with the local stack (`pnpm dev`). A box is checked only when the command or
 - [x] Press `R` to toggle Root Sight (`root_sight_toggle` in `config/controls.json`):
   - Transition smoothly animates over configured `transition_ms` (500 ms) using cubic ease-out.
   - The soil opens as an organic envelope around the subterranean root nodes (multi-node `smin`), sized from `cutaway_radius` and the plant extent.
-  - The cavity rim fades with alpha, not dithering, and shows packed earth behind the roots; the sky above the horizon keeps its normal colours.
+  - The cavity rim is resolved by coverage rather than a speckled band, and shows packed earth behind the roots; the sky above the horizon keeps its normal colours.
   - Grid lines fade down to prevent underground clutter.
   - Root tubes and root crown highlight in vivid green (`own_root_highlight_color: #4CAF50`).
 - [x] Press `R` again to exit Root Sight:

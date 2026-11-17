@@ -2620,7 +2620,7 @@ Rules:
 - **Projected size decides the tier; distance is a consequence.** C02's distance ranges remain useful as defaults for a 1080p camera but are not the definition.
 - **Render tiers are not simulation tiers.** `world_plants.tier` is `active | near | dormant` (Part 13.6, `docs/data-model.md`); T0–T4 above are *render representation* only. A plant is simultaneously, say, simulation-tier Active and render-tier T2.
 - **A tier never changes gameplay truth.** A T4 plant still grows, starves and dies by the same rules (RULE_27, and DESIGN Part 13.7).
-- Promotion at 1.15×, demotion at 0.85×, minimum dwell ~0.5 s. Cross-fades are dithered over ~0.3 s, capped per frame.
+- Promotion at 1.15×, demotion at 0.85×, minimum dwell ~0.5 s. Cross-fades are blended over ~0.3 s, capped per frame.
 - The player's own plant is pinned to the best tier the device can afford.
 
 ## 14.2.1 VRAM Budget and Pool Management
@@ -2736,7 +2736,7 @@ All layers in array share size (e.g., 256² leaves, 512² bark). Add second arra
 - Hysteresis: promote at 1.15×, demote at 0.85×, min dwell ~0.5 s.
 
 **Hiding the swap:**
-- Cross-fade with dithered (blue-noise) transparency over ~0.3 s, rendering both tiers during overlap. Cap transitions/frame (protects generation budget).
+- Cross-fade with blue-noise transparency over ~0.3 s, rendering both tiers during overlap. Cap transitions/frame (protects generation budget).
 - Impostors baked as albedo/normal/emission (not lit color) → relit live. Weather, time, glow match mesh.
 - Impostor quads bent with same wind field + stiffness → motion matches at switch.
 - Prefetch next tier at ~0.7× threshold (velocity prediction). Show lower tier until ready, never nothing. New arrivals = Tier 3 → upgrade progressively.

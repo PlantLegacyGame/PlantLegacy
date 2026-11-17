@@ -33,9 +33,9 @@ test('the cavity aperture is cut on both faces', () => {
     !/if \(vSurfaceCut > 0\.5 && uRootSightProgress > 0\.01 && gl_FrontFacing\)/.test(shader),
     'a front-face-only cut leaves the earth closed from underneath',
   );
-  // The discard itself must not be rebuilt from a cut mask that only the front
+  // The opening itself must not be rebuilt from a cut mask that only the front
   // face ever computed - that was the actual mechanism of the closed ceiling.
-  assert.match(shader, /if \(cavityMask > rimNoise\) discard;/);
+  assert.match(shader, /gl_FragColor\.a = min\(gl_FragColor\.a, 1\.0 - cavityMask\);/);
 });
 
 test('the aperture is cut as a volume, not a plan-view disc', () => {
@@ -48,15 +48,10 @@ test('the aperture is cut as a volume, not a plan-view disc', () => {
   assert.match(shader, /uniform float uRootSightApertureBottomY;/);
 });
 
-test('the configured rim dither is the edge, not a hard smoothstep', () => {
-  // `cut_rim_dither_m` was parsed and never used, so the opening ended on an
-  // aliased circle no matter what the file said.
-  assert.match(shader, /uniform float uRootSightRimDitherM;/);
-  assert.match(
-    shader,
-    /float dither = min\(max\(uRootSightRimDitherM, 0\.0\), apertureRadius \* 0\.5\);/,
-  );
-  assert.match(shader, /float rimNoise = fract\(/);
+test('the rim is a coverage edge a pixel wide, with no fixed-width band', () => {
+  assert.match(shader, /float edge = max\(fwidth\(apertureDist\), 1e-5\);/);
+  assert.match(shader, /gl_FragColor\.a = min\(gl_FragColor\.a, 1\.0 - cavityMask\);/);
+  assert.doesNotMatch(shader, /rimNoise/);
 });
 
 test('every soil patch is cut, so the pit does not vanish past the detail edge', () => {

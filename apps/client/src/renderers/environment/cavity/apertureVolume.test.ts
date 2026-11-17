@@ -5,9 +5,6 @@ import {
   APERTURE_RIM_MARGIN_M,
   apertureVolumeFor,
   insideApertureVolume,
-  interleavedGradientNoise,
-  rimDitherWidthM,
-  rimKeepsFragment,
 } from './apertureVolume.ts';
 
 describe('aperture volume', () => {
@@ -52,38 +49,5 @@ describe('aperture volume', () => {
       depthM: 2,
     });
     assert.equal(insideApertureVolume({ x: 0, y: 0, z: 0 }, closed), false);
-  });
-});
-
-describe('rim dither', () => {
-  it('caps the configured width at half the hole', () => {
-    assert.equal(rimDitherWidthM(4, 0.35), 0.35);
-    assert.equal(rimDitherWidthM(0.4, 0.35), 0.2);
-    assert.equal(rimDitherWidthM(0, 0.35), 0);
-  });
-
-  it('cuts the core and keeps everything outside the rim', () => {
-    assert.equal(rimKeepsFragment(0.2, 2, 0.35, 0.9), false);
-    assert.equal(rimKeepsFragment(2.2, 2, 0.35, 0.1), true);
-  });
-
-  it('leaves a speckled band instead of a hard circle', () => {
-    const dither = 0.35;
-    const mid = 2 - dither * 0.5;
-    const kept = [0.05, 0.3, 0.55, 0.8, 0.95].filter((noise) =>
-      rimKeepsFragment(mid, 2, dither, noise),
-    );
-    assert.ok(kept.length > 0 && kept.length < 5, 'the rim band is all-or-nothing');
-  });
-
-  it('produces noise in [0, 1)', () => {
-    for (const [x, y] of [
-      [0, 0],
-      [13.7, 41.2],
-      [1023.5, 767.25],
-    ]) {
-      const noise = interleavedGradientNoise(x, y);
-      assert.ok(noise >= 0 && noise < 1, `noise ${noise} outside [0, 1)`);
-    }
   });
 });

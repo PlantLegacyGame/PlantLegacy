@@ -35,7 +35,7 @@ rarity, keeps the player a plant, and fits the phone budget.
 | Openness/skylight volume | `world.js` half-res volume | Cheap AO/skylight bake from canopy and terrain | C03 canopy shade, cave darkness, ambient occlusion | Revisioned when canopy or terrain changes; server canopy state |
 | Light shafts | `shaders.js` `W_RAYS`, `W_RBLUR`, `W_POST` | Half-res jittered march, shadow compare, depth-aware blur/upsample | C03 sun shafts through canopy and caves | WebGL post first; weather-driven; no water-only phase |
 | Baked detail texture | `shaders.js` `W_DETAIL` | Tileable slope/height/mottle, triplanar sample | C03/C10 rock and soil detail without visible tiling | Procedural cache at startup; no asset file |
-| Post chain | `shaders.js` `W_BLIT`, `W_POST` | Karis bloom, tonemap, vignette, grain, dither | C03 desktop post; mobile fallback | Config tiers; no full-screen post on phone by default |
+| Post chain | `shaders.js` `W_BLIT`, `W_POST` | Karis bloom, tonemap, vignette, grain | C03 desktop post; mobile fallback | Config tiers; no full-screen post on phone by default |
 | Closed-loop quality | `main.js` `resize/frame`; `quality.js` | GPU timestamp band; pixels then draw distance; persist settings; device-loss fallback | C01/RULE_26 | WebGL timer query + WebGPU timestamps; per-device persistence |
 | Procedural audio | `audio.js` | Noise loops, convolution reverb, pooled voices, camera-speed coupling | C06 | Land/weather/fauna/plant layers; server events |
 | Fly-through benchmark | `main.js` `FLY`, `flyLUT`; `dev.js` | Catmull-Rom path, arc-length LUT, avg/p99/max frame and GPU | C01/D01/H01 | Plant and world paths, fixed visual poses, CI evidence |

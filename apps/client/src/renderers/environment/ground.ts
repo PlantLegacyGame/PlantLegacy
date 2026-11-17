@@ -235,10 +235,14 @@ export function createGround(
     metalness: 0.02,
     // Opaque on purpose: a transparent ground moves the whole terrain into the
     // transparent pass, where it sorts after opaque geometry and fights rain,
-    // the cavity wall and the backdrop. The Root Sight rim is smoothed by
-    // colour instead of alpha, so the material stays opaque and depth-correct.
+    // the cavity wall and the backdrop.
     transparent: false,
     depthWrite: true,
+    // The opening's edge is resolved per multisample: the shader writes the cut
+    // mask to alpha and coverage turns it into a smooth boundary instead of a
+    // stair-stepped discard. Coverage of a hole, not colour, so the material
+    // stays opaque and depth-correct.
+    alphaToCoverage: true,
     // Root Sight puts the camera under the surface. A single-sided cap leaves
     // the hole floating against the sky; the shader already flips the normal
     // for back faces, so the ground renders from below as the surrounding soil.
@@ -262,7 +266,6 @@ export function createGround(
     shader.uniforms.uRootSightApertureRadius = soilUniforms.uRootSightApertureRadius;
     shader.uniforms.uRootSightApertureTopY = soilUniforms.uRootSightApertureTopY;
     shader.uniforms.uRootSightApertureBottomY = soilUniforms.uRootSightApertureBottomY;
-    shader.uniforms.uRootSightRimDitherM = soilUniforms.uRootSightRimDitherM;
     shader.uniforms.uRootSightWallColor = soilUniforms.uRootSightWallColor;
     shader.uniforms.uRootSightCamera = soilUniforms.uRootSightCamera;
     shader.uniforms.uRootSightNodes = soilUniforms.uRootSightNodes;

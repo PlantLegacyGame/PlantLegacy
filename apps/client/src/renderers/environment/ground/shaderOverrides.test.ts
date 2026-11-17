@@ -7,7 +7,6 @@ const STOCK_FRAGMENT = [
   '#include <fog_pars_fragment>',
   'void main() {',
   '  #include <colorspace_fragment>',
-  '  #include <dithering_fragment>',
   '}',
 ].join('\n');
 
@@ -40,11 +39,18 @@ test('the soil shader declares the aperture volume it cuts', () => {
     'uRootSightApertureRadius',
     'uRootSightApertureTopY',
     'uRootSightApertureBottomY',
-    'uRootSightRimDitherM',
   ]) {
     assert.match(fragment, new RegExp(`uniform[^;]*${uniform}`), `${uniform} is declared`);
     assert.ok(fragment.includes(uniform), `${uniform} is read`);
   }
+});
+
+test('the opening is a coverage edge one pixel wide, not a band in metres', () => {
+  // A band sized in metres ate a seedling's pit and still left a big one
+  // stair-stepped. The ramp is measured in derivatives, so it is exactly as
+  // soft as the sampling grid needs, and alpha-to-coverage resolves it.
+  assert.match(fragment, /float edge = max\(fwidth\(apertureDist\), 1e-5\);/);
+  assert.match(fragment, /gl_FragColor\.a = min\(gl_FragColor\.a, 1\.0 - cavityMask\);/);
 });
 
 test('the cut is bounded by the aperture volume, not an unbounded XZ disc', () => {
@@ -54,14 +60,14 @@ test('the cut is bounded by the aperture volume, not an unbounded XZ disc', () =
   assert.match(fragment, /vSoilWorldPos\.y >= uRootSightApertureBottomY/);
 });
 
-test('the cut stops short of the bowl lip so no hairline of sky opens at the rim', () => {
-  // The bowl's rim is a polygon built at exactly the aperture radius: its chords
-  // dip inside the exact circle, and on a slope the surface between two rim
-  // vertices can stand above the chord. A cut that reaches the lip therefore
-  // leaves a see-through line along the rim, so the cut is inset and the lip
-  // sits under intact soil instead.
-  assert.match(fragment, /ROOT_SIGHT_CUT_INSET = 0\.99/);
-  assert.match(fragment, /uRootSightApertureRadius\) \* ROOT_SIGHT_CUT_INSET/);
+test('the cut reaches just past the bowl lip, which is a polygon', () => {
+  // The lip's chords dip inside the exact circle, and a sloped surface between
+  // two rim vertices stands above the chord: a cut at the lip lets it poke
+  // through intact soil as a dotted ring, and a cut short of it opens a hairline
+  // of sky. Cutting a hair wider puts the whole ring inside the opening, behind
+  // the seam collar that lines the soil's edge.
+  assert.match(fragment, /ROOT_SIGHT_CUT_OVERREACH = 1\.02/);
+  assert.match(fragment, /uRootSightApertureRadius\) \* ROOT_SIGHT_CUT_OVERREACH/);
 });
 
 test('the vertex stage hands the fragment stage the surface-cut flag', () => {

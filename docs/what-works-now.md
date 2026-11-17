@@ -113,7 +113,7 @@ Honest list. No feature promises (T42, RULE_13). Updated at every gate.
   plant behind the horizon or on the far side of the globe is not drawn. Plant
   depth is still separate from the WebGL environment depth (separate canvases),
   so local relief would not occlude a plant; nothing tall exists yet.
-- **T02 Root Sight & Subterranean Visualization:** two-mode camera with subterranean elevation tilting (`maxPolarAngle = 177°`), organic root-envelope ground cutaways evaluated across all subterranean elements via multi-node `smin` with smooth dithered edges and soil rim darkening, preserving natural botanical bark and root colors without neon tints. **It opens itself when a buried part starts growing** (`player/rootSightAutoOpen.ts`): choosing a root option or receiving a root growth event opens the view, and the cavity treats a part that has just started as soil-opening with a 25%-radius floor, so the ground gives way on the first frame of the root instead of after it has emerged. `R` still owns the mode — a hand-close stands until the next buried part starts — and `root_sight.auto_open_on_root_growth` turns the rule off. **Visibility follows the opening, in volume.** Above ground a root is drawn when it is inside the aperture *cylinder* — the soil is cut in plan view, so a root under the hole is exposed at any depth — and when the eye itself goes below the soil the surface test is replaced by an air window around the eye (`root_sight.eye_window_radius_m`), so a camera flown down into the pit still sees the roots instead of the inside of a dirt skin.
+- **T02 Root Sight & Subterranean Visualization:** two-mode camera with subterranean elevation tilting (`maxPolarAngle = 177°`), organic root-envelope ground cutaways evaluated across all subterranean elements via multi-node `smin` with smooth edges and soil rim darkening, preserving natural botanical bark and root colors without neon tints. **It opens itself when a buried part starts growing** (`player/rootSightAutoOpen.ts`): choosing a root option or receiving a root growth event opens the view, and the cavity treats a part that has just started as soil-opening with a 25%-radius floor, so the ground gives way on the first frame of the root instead of after it has emerged. `R` still owns the mode — a hand-close stands until the next buried part starts — and `root_sight.auto_open_on_root_growth` turns the rule off. **Visibility follows the opening, in volume.** Above ground a root is drawn when it is inside the aperture *cylinder* — the soil is cut in plan view, so a root under the hole is exposed at any depth — and when the eye itself goes below the soil the surface test is replaced by an air window around the eye (`root_sight.eye_window_radius_m`), so a camera flown down into the pit still sees the roots instead of the inside of a dirt skin.
 - **T01 Directed Growth & Gene Clamping:** silky-smooth growth direction drawing with exponential damping (`0.35` factor) and camera-facing plane projection. Legible HUD displays gene geotropism cone (`minY`/`maxY`), maximum reach boundary ring, glowing trajectory vector, directional arrowhead, concentric ghost bud preview, and floating real-time constraint badge. Immediate preview upon option click, with server-side `clampGrowthDirectionByGene` guaranteeing full botanical rule compliance.
   **The card quotes what the charge takes.** `growthChargeScale` (soil resistance × mutation growth-cost/speed) is read by both the menu and `tryGrow`, and the menu rounds energy up, so a card can no longer offer growth the server then refuses for energy. **Every child starts on its parent:** the mesh pass begins each tube at the server's `parentAttach*` point, so branches sit on the stem's drawn surface instead of hanging under it (`renderers/webgpu/nodeAttachment.test.ts`).
 - **Camera Framing & Smooth Zoom:** clicking any player node smoothly recenters and frames the node at an appropriate zoom level; `-` and `+` keys smoothly zoom in and out with acceleration/damping; browser page zoom gestures (`Ctrl` + `+`/`-`/`0`/Wheel/pinch) are intercepted to protect UI layout.
@@ -156,7 +156,7 @@ eyes stay `[~]`.
 
 - **Root Sight.** One `apertureVolume` (mouth, radius, top Y, floor Y) replaces
 the unbounded XZ cylinder, the soil cut, the water clip and the plant occlusion
-rule all read it, the rim is dithered by `cut_rim_dither_m`, every ground patch
+rule all read it, the rim edge is resolved by coverage, every ground patch
 reports a cut, the buried-eye soil exemption is limited to the eye bubble, and
 the two dead SDF cutaway uniforms are gone. The four sizing literals are config
 keys and the absolute-Y ground test is `isBelowSoil`.
@@ -190,7 +190,7 @@ Run in Chromium against the dev stack, screenshots in
   every frame. Fixed, with a string-level regression test in
   `ground/shaderOverrides.test.ts`. Terrain, soil detail, water and the shore
   came back (`05-ground-restored.png`).
-- **Root Sight** now opens a real pit: a dithered rim, a dry bowl, and the
+- **Root Sight** now opens a real pit: a soft rim, a dry bowl, and the
   roots hanging into it, with the seed sitting at the mouth (`39`, `41`). `R`
   closes and reopens it. Getting there fixed four separate faults: the aperture
   is floored at the seed's own width (R9); the orbit cannot come closer than
@@ -202,7 +202,7 @@ Run in Chromium against the dev stack, screenshots in
   used to flare 6% wider than the cut one ring below the lip, and that flare had
   no soil behind it: it showed as a brown collar of dots and a crescent of shell
   around the mouth, which made the pit look like it sat below its own hole (R14).
-  The flare is gone, the rim dither is off, and a colour-coded pass now shows the
+  The flare is gone, the rim band is off, and a colour-coded pass now shows the
   bowl filling the aperture exactly, soil purple and water green around it (`61`)
   and the same scene with a blue pit on red soil (`60`).
 - **The pit looks like dug earth (R16-R17).** Its wall and floor are built from

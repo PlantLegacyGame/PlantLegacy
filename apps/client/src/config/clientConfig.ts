@@ -239,7 +239,6 @@ export interface RootSightConfig {
   maxBurrowDepthM: number;
   cavityClearanceM: number;
   rebuildHz: number;
-  cutRimDitherM: number;
   /** Smallest underground extent a cavity can be sized from, metres. */
   minExtentM: number;
   /** Progress below which the plant still counts as on the surface. */
@@ -684,8 +683,6 @@ interface RootSightConfigResponse {
   cavityClearanceM?: number;
   rebuild_hz?: number;
   rebuildHz?: number;
-  cut_rim_dither_m?: number;
-  cutRimDitherM?: number;
   min_extent_m?: number;
   minExtentM?: number;
   surface_progress?: number;
@@ -1060,7 +1057,6 @@ function normalizeRootSightConfig(
     maxBurrowDepthM: data.max_burrow_depth_m ?? data.maxBurrowDepthM ?? fallback.maxBurrowDepthM,
     cavityClearanceM: data.cavity_clearance_m ?? data.cavityClearanceM ?? fallback.cavityClearanceM,
     rebuildHz: data.rebuild_hz ?? data.rebuildHz ?? fallback.rebuildHz,
-    cutRimDitherM: data.cut_rim_dither_m ?? data.cutRimDitherM ?? fallback.cutRimDitherM,
     minExtentM: data.min_extent_m ?? data.minExtentM ?? fallback.minExtentM,
     surfaceProgress: data.surface_progress ?? data.surfaceProgress ?? fallback.surfaceProgress,
     minCutawayRadiusM:
@@ -1384,7 +1380,6 @@ export async function loadRootSightConfig(serverOrigin: string): Promise<RootSig
     maxBurrowDepthM: 12,
     cavityClearanceM: 0.2,
     rebuildHz: 10,
-    cutRimDitherM: 0.35,
     minExtentM: 0.05,
     surfaceProgress: 0.001,
     minCutawayRadiusM: 0.7,
