@@ -122,14 +122,26 @@ export const CAVITY_CUT_OVERREACH = 1.02;
 export const CAVITY_RIM_SINK_M = 0.02;
 
 /**
- * How far the bowl's skirt hangs below the rim, in profile units.
+ * How far the bowl's skirt hangs below the rim, in metres.
  *
  * The ground is a sheet with no thickness, so from under the cut its edge is a
  * slab with the sky behind it. The skirt is a wall under the rim at exactly the
  * cut radius: whatever the eye is doing, the edge of the hole is backed by dug
  * earth instead of by open background.
+ *
+ * Metres, not profile units. The bowl's vertical scale is a slope-stretch
+ * factor - the rim conforms to ground that can fall metres across the mouth, so
+ * the wall is stretched to follow it. A profile-unit depth multiplied by that
+ * factor gave a 9 m tall cylinder of black shell around a 2 m hole, which read
+ * as the pit growing as the camera turned. A collar is a fixed depth of earth
+ * whatever the stretch, so this is a distance.
+ *
+ * Shallow on purpose. The skirt stands on the cut circle, so anything deep hangs
+ * in front of the pit's own wall and hides the strata: at the soil's full depth
+ * it was a smooth 1.6 m band of one colour filling the hole, and the layered
+ * earth behind it was invisible. It only has to cover the sheet's cut edge.
  */
-export const CAVITY_SKIRT_DEPTH = CAVITY_PROFILE_DEPTH;
+export const CAVITY_SKIRT_DEPTH_M = 0.4;
 
 /**
  * Seam collar: how deep it hangs below the rim.

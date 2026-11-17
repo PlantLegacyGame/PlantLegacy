@@ -28,6 +28,7 @@ import { type AtmosphereParams, atmosphereFromConfig } from './environment/atmos
 const CAVITY_DAYLIGHT_REFERENCE = 1.08;
 
 import {
+  CAVITY_CUT_OVERREACH,
   createCavityBowl,
   createCavitySkirt,
   setCavityBowlLight,
@@ -306,15 +307,29 @@ export class EnvironmentRenderer {
       // needs the colour the soil actually is at that depth.
       // Wide apart on purpose: three near-identical browns read as one brown no
       // matter how much seam is drawn between them.
-      const dugTopsoil = new THREE.Color(config.soilDryColor).multiplyScalar(0.95);
-      const dugSubsoil = new THREE.Color(config.soilDryColor).multiplyScalar(0.58);
-      const dugDeep = new THREE.Color(config.soilDryColor).multiplyScalar(0.34);
+      // Different earths, not one earth at three brightnesses. Three values of
+      // the same brown read as one brown with a lighting gradient on it however
+      // wide apart they are put - a spade through a bank shows a dark humus
+      // layer, a warm ochre subsoil and cold grey deep earth, and the hue is
+      // what the eye uses to separate them.
+      const dugTopsoil = new THREE.Color(config.soilDryColor)
+        .multiplyScalar(0.72)
+        .lerp(new THREE.Color('#2f2418'), 0.3);
+      const dugSubsoil = new THREE.Color(config.soilDryColor)
+        .multiplyScalar(1.08)
+        .lerp(new THREE.Color('#9a7442'), 0.35);
+      const dugDeep = new THREE.Color(config.soilDryColor)
+        .multiplyScalar(0.5)
+        .lerp(new THREE.Color('#565349'), 0.45);
       this.cavityBowl = createCavityBowl(dugTopsoil, dugSubsoil, 96, 24, dugDeep);
       scene.add(this.cavityBowl);
       // Its own mesh, not extra rings in the bowl: ring counts drive the floor
       // depth, the rim indices and the vertex layout, and a hidden sixth ring in
       // that buffer quietly changed all three. As a child it still shares the
       // bowl's transform and material.
+      // A shallow collar, not the full soil depth: it backs the ground sheet's
+      // cut edge from below, and anything taller stands in front of the pit's
+      // wall and covers the strata (see CAVITY_SKIRT_DEPTH_M).
       this.cavitySkirt = createCavitySkirt(this.cavityBowl);
       this.cavityBowl.add(this.cavitySkirt);
       // Water is scenery, not a Root Sight effect: rain lands on the ground and
@@ -796,10 +811,15 @@ export class EnvironmentRenderer {
         // of the aperture around the plant - a silhouette of the opening cut out
         // of any lake the player stood beside.
         const cavityOpen = this.soilUniforms.uRootSightProgress.value > 0.001;
+        // The hole the *soil* actually cuts is the aperture a hair wider than
+        // the lip (CAVITY_CUT_OVERREACH), and the water has to be removed at
+        // that same radius. Clipped at the aperture instead, a ring of sheet two
+        // percent wider than the hole survived and lapped over the pit's lip - a
+        // teal collar around the opening from every angle.
         this.waterField.setCavityClip(
           this.soilUniforms.uRootSightCenter.value.x,
           this.soilUniforms.uRootSightCenter.value.z,
-          cavityOpen ? this.soilUniforms.uRootSightApertureRadius.value : 0,
+          cavityOpen ? this.soilUniforms.uRootSightApertureRadius.value * CAVITY_CUT_OVERREACH : 0,
         );
       }
       // Water is environment, not a Root Sight ornament: the surface sheet and

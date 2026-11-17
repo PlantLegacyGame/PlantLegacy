@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import * as THREE from 'three';
 import { createCavityBowl } from './bowlMesh.ts';
-import { CAVITY_PROFILE, CAVITY_SKIRT_DEPTH } from './profile.ts';
+import { CAVITY_PROFILE, CAVITY_SKIRT_DEPTH_M } from './profile.ts';
 import { createCavitySkirt, updateCavitySkirt } from './skirtMesh.ts';
 
 describe('cavity skirt', () => {
@@ -40,8 +40,37 @@ describe('cavity skirt', () => {
       assert.equal(position.getY(c * 2), rim.getY(c), 'the skirt top is off the rim height');
       assert.equal(position.getZ(c * 2), rim.getZ(c), 'the skirt left the rim');
       assert.ok(
-        Math.abs(position.getY(c * 2 + 1) - (rim.getY(c) - CAVITY_SKIRT_DEPTH)) < 1e-6,
+        Math.abs(position.getY(c * 2 + 1) - (rim.getY(c) - CAVITY_SKIRT_DEPTH_M)) < 1e-6,
         'the skirt wall is the wrong depth',
+      );
+    }
+  });
+
+  it('hangs the same depth of earth whatever the rim fit stretches the bowl by', () => {
+    // The rim conform stretches the shell to follow ground that falls away
+    // under the mouth, and the skirt is built in the bowl's local units. Left
+    // in profile units it became a 9 m cylinder of shell on a 2 m hole - the
+    // black wall the pit appeared to grow into as the camera orbited.
+    const stretched = createCavityBowl(new THREE.Color('#3a2a1c'), new THREE.Color('#6a5440'));
+    const skirt = createCavitySkirt(stretched);
+    updateCavitySkirt(skirt, stretched);
+    const flatTop = skirt.geometry.getAttribute('position').getY(0);
+    const flatBottom = skirt.geometry.getAttribute('position').getY(1);
+    assert.ok(
+      Math.abs(flatTop - flatBottom - CAVITY_SKIRT_DEPTH_M) < 1e-6,
+      'the unstretched skirt is the wrong depth',
+    );
+
+    stretched.scale.y = 9;
+    updateCavitySkirt(skirt, stretched);
+    const rim = stretched.geometry.getAttribute('position');
+    const bottom = skirt.geometry.getAttribute('position');
+    for (const c of [1, 2, 3]) {
+      const localDepth = rim.getY(c * 2) - bottom.getY(c * 2 + 1);
+      const worldDepth = localDepth * stretched.scale.y;
+      assert.ok(
+        Math.abs(worldDepth - CAVITY_SKIRT_DEPTH_M) < 1e-6,
+        `the stretched skirt hangs ${worldDepth.toFixed(2)} m of earth, not ${CAVITY_SKIRT_DEPTH_M} m`,
       );
     }
   });

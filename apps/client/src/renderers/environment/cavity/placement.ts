@@ -3,20 +3,17 @@
  *
  * Two rules live here, and they are the whole depth story:
  *
- * 1. **Stretch** is only what the rim needs to reach the lowest ground under the
- *    mouth. The shell is stretched, not capped and not sunk, so the lip stays on
- *    the hillside at every angle.
- * 2. **Floor clamp** holds the pit at the depth its roots asked for by scaling
- *    every non-rim vertex's own height, with a derived lower bound so the floor
- *    can never rise to the lip and turn the cavity inside out.
+ * 1. **The mouth is a radius, the depth is a depth.** The shell is scaled by the
+ *    depth the cavity asked for, and never by the slope.
+ * 2. **The lip conforms by rising.** The bowl is anchored on the lowest ground
+ *    under the rim, so every rim vertex reaches its own ground by moving up,
+ *    which needs no more wall than the shell already has.
  */
 import {
-  CAVITY_FLOOR_MARGIN,
   CAVITY_MOUTH_FRACTION,
   CAVITY_MOUTH_OVERHANG,
   CAVITY_PROFILE_DEPTH,
   CAVITY_RIM_SINK_M,
-  CAVITY_WALL_BASE_DEPTH,
   RIM_CIRCLE_RADIUS,
 } from './profile.ts';
 
@@ -67,41 +64,34 @@ export function cavityBowlPlacement(
 export interface RimFit {
   highestGround: number;
   lowestGround: number;
-  /** Vertical scale the shell needs to put every rim vertex on its ground. */
+  /** Vertical scale the shell is drawn at: the depth it was given, unaltered. */
   verticalScale: number;
-  /** Factor on every non-rim vertex's own height that holds the floor. */
-  floorScale: number;
 }
 
 /**
- * Fit the rim to the ground under it, then hold the floor at `depthM`.
+ * Measure the ground under the rim.
  *
- * The mouth plane is the highest ground beneath it, so every rim vertex may move
- * *down* to its own terrain height and none has to rise into a skirt that does
- * not exist. The stretch that takes is kept, because the rim must stay on the
- * hill; the depth is then recovered by the floor clamp instead of by capping the
- * stretch (a cap lifted the lip off the downhill side and left a second rim).
+ * The shell is **not** stretched to bridge a slope any more, and that is the
+ * whole rule. The old pair of tricks - stretch the wall until the lowest lip
+ * could reach its ground, then multiply every vertex's height by a floor factor
+ * to pull the floor back to the depth budget - cancelled out in the worst way:
+ * the wall kept its radius profile but lost its height profile. A pit dug into a
+ * bank came out as a shallow dish with no vertical cut and no readable strata,
+ * because a 0.28-unit straight wall had been squashed to a tenth of that.
+ *
+ * Instead the mouth is anchored on the *lowest* ground under the rim
+ * (`updateCavityBowl`), so every rim vertex moves **up** to its own ground and
+ * no extra wall length is needed. The uphill side is a shallow pit and the
+ * downhill side a deep one, which is what digging into a bank does.
  */
-export function fitRimToGround(
-  grounds: readonly number[],
-  baseVerticalScale: number,
-  depthM: number,
-): RimFit {
+export function fitRimToGround(grounds: readonly number[], baseVerticalScale: number): RimFit {
   let highestGround = Number.NEGATIVE_INFINITY;
   let lowestGround = Number.POSITIVE_INFINITY;
   for (const height of grounds) {
     if (height > highestGround) highestGround = height;
     if (height < lowestGround) lowestGround = height;
   }
-  const drop = Math.max(0, highestGround - lowestGround);
-  const verticalScale = Math.max(baseVerticalScale, drop / CAVITY_WALL_BASE_DEPTH);
-  const minFloorScale = (CAVITY_WALL_BASE_DEPTH + CAVITY_FLOOR_MARGIN) / CAVITY_PROFILE_DEPTH;
-  const floorScale = Math.min(
-    1,
-    Math.max(
-      minFloorScale,
-      Math.max(0.1, depthM) / Math.max(1e-6, verticalScale * CAVITY_PROFILE_DEPTH),
-    ),
-  );
-  return { highestGround, lowestGround, verticalScale, floorScale };
+  if (!Number.isFinite(highestGround)) highestGround = 0;
+  if (!Number.isFinite(lowestGround)) lowestGround = 0;
+  return { highestGround, lowestGround, verticalScale: Math.max(0.01, baseVerticalScale) };
 }

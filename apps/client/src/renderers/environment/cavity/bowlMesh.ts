@@ -199,7 +199,7 @@ float bowlNoise(vec2 p) {
   // Gentle, and spread over a wide arc: at 0.55 over (-0.2 .. 0.85) the term cut
   // the pit in two along a hard horizontal line, so it read as a ball with its
   // lower half painted on rather than as one cavity.
-  float bowlNearShade = 1.0 - 0.2 * smoothstep(-0.6, 1.0, bowlNear);
+  float bowlNearShade = 1.0 - 0.1 * smoothstep(-0.6, 1.0, bowlNear);
   float bowlSeams = smoothstep(
     0.90,
     1.0,
@@ -215,7 +215,9 @@ float bowlNoise(vec2 p) {
     (0.88 + 0.24 * bowlGrain) *
     (0.9 + 0.2 * bowlClods) *
     (1.0 - 0.12 * bowlSeams) *
-    (1.0 - 0.28 * bowlDepth) *
+    // 0.28 of depth darkening crushed the deepest band into the subsoil and
+    // left the pit a single brown mass. Depth still reads, the strata survive it.
+    (1.0 - 0.14 * bowlDepth) *
     (0.92 + 0.08 * bowlRimShadow) *
     bowlNearShade *
     // Daylight, but never to zero: a lit wall at night is lit by the sky it is
@@ -225,6 +227,16 @@ float bowlNoise(vec2 p) {
       .replace(
         '#include <colorspace_fragment>',
         `#include <colorspace_fragment>
+  // Sky from the mouth. A dug wall is lit by the open sky above it, not only by
+  // the sun: with no sky term the inside of the pit was one dark brown mass at
+  // every hour and at every angle the sun did not face, and the strata it is
+  // built from vanished in the shade. The floor is a fraction of the wall's own
+  // albedo, so the bands keep their hard edges and their relative values while
+  // the wall stays readable after dark.
+  gl_FragColor.rgb = max(
+    gl_FragColor.rgb,
+    diffuseColor.rgb * mix(0.22, 0.5, clamp(uBowlLight, 0.0, 1.0))
+  );
   // Seen from a buried eye beside the pit, the bowl may only be visible where
   // the line of sight actually leaves through the opening. Follow the ray from
   // the eye to this fragment; where it crosses the surface plane it must land
@@ -256,7 +268,19 @@ float bowlNoise(vec2 p) {
   // a FrontSide render showed the ribbed dome), because the pit's wall is just as
   // far outside the mouth and must stay.
   else if (uBowlClipMode > 0.5) {
-    if (gl_FrontFacing && distance(vBowlWorldPosition.xz, uBowlApertureCenter) > uBowlApertureRadius) discard;
+    // Both faces, not just the exterior. The shell is a single funnel surface,
+    // and from an eye off to one side the *inside* of the near wall is in front
+    // of the far wall: dropping only front faces left it painting over the hole,
+    // so the pit looked larger the further the camera orbited. The whole shell
+    // is built inside the cut radius (the mouth is exactly the aperture), so a
+    // strict plan-view cylinder here removes nothing the pit needs.
+    //
+    // The sightline-through-the-surface-plane rule was tried here and is wrong:
+    // on a slope the mouth's plane is not the ground, so rays that legitimately
+    // pass over the lowered lip were dropped and the pit's floor showed sky
+    // through it. The ground's own depth test already hides the wall behind
+    // intact soil.
+    if (distance(vBowlWorldPosition.xz, uBowlApertureCenter) > uBowlApertureRadius) discard;
   }
   // Whatever the eye is doing, no part of the shell may stand above the mouth
   // plane outside the mouth. That is the bowl's own back, standing in the open
@@ -273,7 +297,7 @@ float bowlNoise(vec2 p) {
   }`,
       );
   };
-  material.customProgramCacheKey = () => 'root-sight-bowl-dirt-v5';
+  material.customProgramCacheKey = () => 'root-sight-bowl-dirt-v8';
 
   const mesh = new THREE.Mesh(geometry, material);
   mesh.name = 'root-sight-bowl';

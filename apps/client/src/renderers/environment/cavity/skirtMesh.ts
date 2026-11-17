@@ -14,14 +14,22 @@
  * conformed rim every frame.
  */
 import * as THREE from 'three';
-import { CAVITY_PROFILE, CAVITY_SKIRT_DEPTH } from './profile.ts';
+import { CAVITY_PROFILE, CAVITY_SKIRT_DEPTH_M } from './profile.ts';
 
 interface SkirtState {
   cols: number;
+  /** World-space depth of the collar, in metres. */
+  depthM: number;
 }
 
-/** Build the skirt for a bowl. Add it as the bowl's child. */
-export function createCavitySkirt(bowl: THREE.Mesh): THREE.Mesh {
+/**
+ * Build the skirt for a bowl. Add it as the bowl's child.
+ *
+ * `depthM` is how much earth the collar exposes at the cut. The default is a
+ * shallow lip; the terrain passes its own soil depth, so the edge of the hole is
+ * the thickness of the soil body rather than a paper edge with a sticker on it.
+ */
+export function createCavitySkirt(bowl: THREE.Mesh, depthM = CAVITY_SKIRT_DEPTH_M): THREE.Mesh {
   const position = bowl.geometry.getAttribute('position');
   // The bowl publishes its column count. Dividing the vertex count by the
   // profile's ring count was only ever right while the wall was one ring per
@@ -52,7 +60,9 @@ export function createCavitySkirt(bowl: THREE.Mesh): THREE.Mesh {
   // A child in the bowl's local space: the bowl's transform places it, and the
   // material (with its clip uniforms) is the bowl's own.
   mesh.frustumCulled = false;
-  (mesh.userData as SkirtState).cols = cols;
+  const state = mesh.userData as SkirtState;
+  state.cols = cols;
+  state.depthM = Math.max(0.01, depthM);
   return mesh;
 }
 
@@ -68,12 +78,18 @@ export function updateCavitySkirt(skirt: THREE.Mesh, bowl: THREE.Mesh): void {
   const dst = skirt.geometry.getAttribute('position') as THREE.BufferAttribute;
   const dstColour = skirt.geometry.getAttribute('color') as THREE.BufferAttribute;
   const cols = (skirt.userData as SkirtState).cols;
+  // The skirt lives in the bowl's local space, and the bowl's vertical scale is
+  // the rim's slope stretch. `CAVITY_SKIRT_DEPTH_M` is a world distance, so it
+  // has to be divided by that scale: the collar is the same depth of earth on a
+  // cliff as on the flat, instead of growing with the pit.
+  const depthM = (skirt.userData as SkirtState).depthM ?? CAVITY_SKIRT_DEPTH_M;
+  const depthLocal = depthM / Math.max(0.01, Math.abs(bowl.scale.y));
   for (let c = 0; c < cols; c += 1) {
     const x = src.getX(c);
     const y = src.getY(c);
     const z = src.getZ(c);
     dst.setXYZ(c * 2, x, y, z);
-    dst.setXYZ(c * 2 + 1, x, y - CAVITY_SKIRT_DEPTH, z);
+    dst.setXYZ(c * 2 + 1, x, y - depthLocal, z);
     if (srcColour) {
       const r = srcColour.getX(c);
       const g = srcColour.getY(c);

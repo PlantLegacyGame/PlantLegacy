@@ -10,6 +10,7 @@
  */
 
 import { type BenchmarkPose, DEFAULT_BENCHMARK_POSES } from '../dev/benchmark.js';
+import { type ControlsBindingsSource, normalizeBindings } from './controlsBindings.ts';
 
 /** ADR-027: one organism size class, as framing and detail multipliers. */
 export interface SizeClassConfig {
@@ -601,8 +602,7 @@ interface RenderConfigResponse {
   nodePickRadius?: number;
 }
 
-interface ControlsConfigResponse {
-  bindings?: Record<string, Binding>;
+interface ControlsConfigResponse extends ControlsBindingsSource {
   touch_min_target_px?: number;
   touchMinTargetPx?: number;
   hud_max_screen_fraction?: number;
@@ -976,12 +976,12 @@ function normalizeRenderConfig(data: RenderConfigResponse, fallback: RenderConfi
   };
 }
 
-function normalizeControlsConfig(
+export function normalizeControlsConfig(
   data: ControlsConfigResponse,
   fallback: ControlsConfig,
 ): ControlsConfig {
   return {
-    bindings: data.bindings ?? fallback.bindings,
+    bindings: normalizeBindings(data) ?? fallback.bindings,
     touchMinTargetPx:
       data.touch_min_target_px ?? data.touchMinTargetPx ?? fallback.touchMinTargetPx,
     hudMaxScreenFraction:

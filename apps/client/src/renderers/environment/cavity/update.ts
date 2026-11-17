@@ -12,14 +12,11 @@ import {
   CAVITY_MOUTH_FRACTION,
   CAVITY_PROFILE,
   CAVITY_RIM_RING,
-  CAVITY_RIM_WALL_BASE,
   cavityDepthM,
 } from './profile.ts';
 
 interface CavityRimState {
   rimIndices?: number[];
-  /** The shell's own height per vertex, before any floor clamp. */
-  baseY?: Float32Array;
   rimFlags?: Uint8Array;
   lastRimKey?: string;
 }
@@ -107,20 +104,16 @@ export function updateCavityBowl(
   const position = geometry.getAttribute('position') as THREE.BufferAttribute;
   if (!state.rimIndices) {
     state.rimIndices = [];
-    state.baseY = new Float32Array(position.count);
     state.rimFlags = new Uint8Array(position.count);
     // The rim is the profile's y = 0 ring, wherever the shell sits this frame.
     const rimY = CAVITY_PROFILE[CAVITY_RIM_RING].y;
     for (let i = 0; i < position.count; i += 1) {
-      state.baseY[i] = position.getY(i);
       if (Math.abs(position.getY(i) - rimY) < 1e-4) {
         state.rimIndices.push(i);
         state.rimFlags[i] = 1;
       }
     }
   }
-  const baseY = state.baseY as Float32Array;
-  const rimFlags = state.rimFlags as Uint8Array;
   const rim = state.rimIndices;
 
   // Every rim vertex follows the ground it cuts through. The shader's cut is
@@ -132,38 +125,31 @@ export function updateCavityBowl(
     const worldZ = centre.z + position.getZ(index) * placement.horizontalScale;
     ground.push(surfaceHeight(worldX, worldZ));
   }
-  // The rim is buried by the same sink the mouth plane carries, so on level
-  // ground every rim vertex lands exactly on its own terrain height.
-  for (let i = 0; i < ground.length; i += 1) ground[i] += placement.rimOffsetY;
-
-  const fit = fitRimToGround(ground, placement.verticalScale, depthM);
-  // The mouth plane is the ground at the plant, not the highest ground under
-  // the rim. Anchoring to the highest sample put the whole opening above the
-  // plant on a slope: the seed sat at the bottom of a well and the camera looked
-  // at its uphill wall. Rim vertices still follow their own terrain, so the
-  // uphill lip is buried in the hillside and the downhill lip stretches to the
-  // ground below it - a pit dug into a slope, instead of a level ring lifted to
-  // the top of the hill.
-  bowl.position.y = surfaceY + placement.rimOffsetY;
+  const fit = fitRimToGround(ground, placement.verticalScale);
+  // The mouth plane is the *lowest* ground under the rim, not the highest and
+  // not a stretched average. Anchored here, every rim vertex reaches its own
+  // ground by moving up, and the wall between the lip and the floor is never
+  // squashed to make room: the uphill lip is a shallow pit and the downhill lip
+  // a deep one, which is what digging into a bank does. Anchoring on the ground
+  // at the plant instead made the lip float over the downhill side and forced
+  // the stretch-and-clamp pair that flattened the cut wall into a dish.
   placement.verticalScale = fit.verticalScale;
   bowl.scale.y = fit.verticalScale;
+  bowl.position.y = fit.lowestGround + placement.rimOffsetY;
   applyClip();
 
-  const rimKey = `${centre.x.toFixed(2)}|${centre.z.toFixed(2)}|${placement.horizontalScale.toFixed(2)}|${fit.verticalScale.toFixed(3)}|${fit.floorScale.toFixed(3)}|${fit.highestGround.toFixed(2)}|${fit.lowestGround.toFixed(2)}`;
+  const rimKey = `${centre.x.toFixed(2)}|${centre.z.toFixed(2)}|${placement.horizontalScale.toFixed(2)}|${fit.verticalScale.toFixed(3)}|${fit.highestGround.toFixed(2)}|${fit.lowestGround.toFixed(2)}`;
   if (state.lastRimKey === rimKey) return;
   state.lastRimKey = rimKey;
 
-  for (let i = 0; i < position.count; i += 1) {
-    if (rimFlags[i] === 0) position.setY(i, baseY[i] * fit.floorScale);
-  }
   for (let k = 0; k < rim.length; k += 1) {
-    const localY = (ground[k] - bowl.position.y) / fit.verticalScale;
     // Positive is uphill and allowed. Clamping every rim vertex to the mouth
     // plane kept the lip level while the shader's cut follows the hillside, so
     // the uphill side of the opening was a strip of cut-away soil with no bowl
     // behind it: a pale band the colour of the sky. Each rim vertex sits on its
     // own ground instead, exactly like the cut it backs.
-    position.setY(rim[k], Math.max(CAVITY_RIM_WALL_BASE, localY));
+    const localY = (ground[k] + placement.rimOffsetY - bowl.position.y) / fit.verticalScale;
+    position.setY(rim[k], Math.max(0, localY));
   }
   position.needsUpdate = true;
   geometry.computeVertexNormals();

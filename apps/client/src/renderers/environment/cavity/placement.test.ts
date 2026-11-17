@@ -27,32 +27,37 @@ describe('cavity depth budget', () => {
 
 describe('fitting the rim to the ground', () => {
   it('leaves a level mouth exactly as placed', () => {
-    const fit = fitRimToGround([0, 0, 0, 0], 3, 3.8);
+    const fit = fitRimToGround([0, 0, 0, 0], 3);
     assert.equal(fit.verticalScale, 3);
     assert.equal(fit.highestGround, 0);
     assert.equal(fit.lowestGround, 0);
   });
 
-  it('stretches only as far as the lip needs to reach the lowest ground', () => {
-    const fit = fitRimToGround([2, 0, 1, -0.5], 3, 3.8);
+  it('measures the bank but never stretches the wall for it', () => {
+    // The wall used to be stretched until the lowest lip could reach its ground,
+    // then squashed back by a floor factor. The two cancelled into a shallow
+    // dish: the profile kept its radii and lost its heights, so the vertical cut
+    // and the strata it carries were flattened away. The slope moves the mouth
+    // plane instead (see updateCavityBowl), so the scale is the depth, always.
+    const fit = fitRimToGround([2, 0, 1, -0.5], 3);
     assert.equal(fit.highestGround, 2);
-    // The whole drop is spent on the rim's own travel, so the lip lands on the
-    // hillside instead of floating over it.
-    assert.ok(fit.verticalScale * 0.27 >= 2.5 - 1e-9, 'the stretch cannot reach the drop');
+    assert.equal(fit.lowestGround, -0.5);
+    assert.equal(fit.verticalScale, 3);
   });
 
-  it('holds the floor at the depth the roots asked for, whatever the stretch', () => {
-    const fit = fitRimToGround([0, -2.9], 3, 3.8);
-    const floorDepth = fit.floorScale * fit.verticalScale * CAVITY_PROFILE_DEPTH;
+  it('gives the pit the depth it asked for on any slope', () => {
+    const fit = fitRimToGround([0, -2.9], 3.8 / CAVITY_PROFILE_DEPTH);
+    const floorDepth = fit.verticalScale * CAVITY_PROFILE_DEPTH;
     assert.ok(Math.abs(floorDepth - 3.8) < 1e-6, `floor at ${floorDepth.toFixed(2)} m`);
   });
 
-  it('never lets the floor rise to the lowest lip', () => {
-    // A cliff: the stretch needed for the rim is far more than the depth budget,
-    // so the clamp must keep the floor below the lip rather than invert the pit.
-    const fit = fitRimToGround([0, -16], 3, 2.66);
-    const floorLocal = -CAVITY_PROFILE_DEPTH * fit.floorScale;
+  it('leaves the floor a whole profile below the mouth on a cliff', () => {
+    // The mouth sits on the lowest ground, so a cliff only makes the lip rise.
+    // Nothing has to be compressed, and the floor can never reach the lip.
+    const fit = fitRimToGround([0, -16], 2.66 / CAVITY_PROFILE_DEPTH);
+    const floorLocal = -CAVITY_PROFILE_DEPTH;
     assert.ok(floorLocal < -0.27, `floor local ${floorLocal.toFixed(3)} is at or above the lip`);
+    assert.ok(fit.highestGround - fit.lowestGround === 16);
   });
 });
 

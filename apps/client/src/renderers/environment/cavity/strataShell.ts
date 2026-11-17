@@ -143,7 +143,10 @@ export function buildStrataShell(options: {
   relief?: number;
 }): StrataShellGeometry {
   const cols = Math.max(8, Math.round(options.cols ?? 96));
-  const relief = Math.max(0, options.relief ?? 0.09);
+  // 0.09 of a mouth was millimetre-scale grit once the wall was scaled to a
+  // metre-sized pit: enough to break the fill, not enough to cast a shadow that
+  // says "dug earth". 0.16 leaves clods you can see from the rim.
+  const relief = Math.max(0, options.relief ?? 0.16);
   const rings = strataRings(options.bands, options.subdivision ?? 3);
   const positions = new Float32Array(rings.length * cols * 3);
   const colors = new Float32Array(rings.length * cols * 3);

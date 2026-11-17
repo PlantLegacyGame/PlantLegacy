@@ -10,7 +10,6 @@ import {
   CAVITY_FLOOR_CLEARANCE_M,
   CAVITY_MOUTH_FRACTION,
   CAVITY_MOUTH_OVERHANG,
-  CAVITY_PROFILE,
   CAVITY_PROFILE_DEPTH,
   CAVITY_RIM_SINK_M,
   cavityBowlPlacement,
@@ -135,30 +134,32 @@ describe('opening-silhouette clip', () => {
     assert.equal(inside.clip.uBowlClipMode.value, 0);
   });
 
-  it('keeps its mouth at the crown and lets the rim follow the slope', () => {
-    // The mouth used to be lifted to the highest ground under the rim, which
-    // stood the plant at the bottom of a well and left the downhill lip hanging
-    // over the hillside as a dark crescent. The cut is centred on the crown, so
-    // the bowl is too, and every rim vertex conforms to the ground beneath it.
-    const { bowl, clip } = clipOf(new THREE.Vector3(0, 5, 0), (x) => 0.5 * x);
-    assert.ok(
-      Math.abs(bowl.position.y) <= CAVITY_RIM_SINK_M + 1e-6,
-      `the mouth was lifted off the crown by ${bowl.position.y.toFixed(3)}`,
-    );
-    assert.equal(clip.uBowlCenter.value.y, bowl.position.y);
+  it('sits its mouth on the lowest ground, so every lip vertex rises to its own', () => {
+    // Three rules tried before this one, and each broke something. Lifting the
+    // mouth to the highest ground stood the plant at the bottom of a well. The
+    // ground at the crown left the downhill lip hanging over the hillside. The
+    // stretch-and-clamp pair that followed kept the lip on the hill by squashing
+    // the wall's height profile, which turned a cut through earth into a dish.
+    // The lowest ground is the one anchor that lets every rim vertex reach its
+    // own ground by moving up - no stretch, no clamp, no dish.
+    const surface = (x: number): number => 0.5 * x;
+    const { bowl, clip } = clipOf(new THREE.Vector3(0, 5, 0), surface);
     const position = bowl.geometry.getAttribute('position');
-    const columns = Math.round(position.count / CAVITY_PROFILE.length);
+    const columns = bowl.geometry.userData.cols as number;
+    assert.ok(columns > 0, 'the bowl did not publish its column count');
     let above = 0;
-    let below = 0;
     for (let i = 0; i < columns; i += 1) {
-      const y = position.getY(i) * bowl.scale.y + bowl.position.y;
-      if (y > 0.05) above += 1;
-      if (y < -0.05) below += 1;
+      const worldX = bowl.position.x + position.getX(i) * bowl.scale.x;
+      const worldY = position.getY(i) * bowl.scale.y + bowl.position.y;
+      assert.ok(
+        Math.abs(worldY - (surface(worldX) - CAVITY_RIM_SINK_M)) < 1e-6,
+        `lip vertex is ${(worldY - surface(worldX)).toFixed(3)} m off its ground`,
+      );
+      if (worldY > bowl.position.y + 0.05) above += 1;
+      assert.ok(position.getY(i) >= 0, 'a lip vertex was pushed below the mouth');
     }
-    assert.ok(
-      above > 0 && below > 0,
-      `rim did not conform to the slope: ${above} up, ${below} down`,
-    );
+    assert.ok(above > 0, 'the rim never rose up the bank, so it is a level ring again');
+    assert.equal(clip.uBowlCenter.value.y, bowl.position.y);
   });
 });
 

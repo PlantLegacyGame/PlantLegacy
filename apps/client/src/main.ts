@@ -2885,6 +2885,15 @@ async function initC01(): Promise<void> {
 
   // Build input bus
   inputBus = createInputBus({ bindings: controlsConfig.bindings });
+  // An empty binding table is not a subtle failure: every named action - Root
+  // Sight, recenter, grow mode, emotes - stops existing and the keys do nothing
+  // with no error anywhere. Say so out loud instead of leaving a player (or a
+  // probe) to guess.
+  if (inputBus.actions.length === 0) {
+    console.error(
+      '[PlantLegacy] controls config carried no bindings: every keyboard action is dead.',
+    );
+  }
 
   // Build UI shell
   uiShell = createUIShell(uiConfig);
