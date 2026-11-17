@@ -1,5 +1,5 @@
 import type { Plant } from '@plant-legacy/shared/growth';
-import { nodeWireFields, type WelcomePayload } from '../ops/net.ts';
+import { nodeWireFields, type WelcomePayload } from './net.ts';
 
 export interface WelcomeSource {
   playerId: string;

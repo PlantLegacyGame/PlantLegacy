@@ -314,13 +314,23 @@ state machine and the socket - it moves when the context carries those.
    `World.attachConnection(ws, playerId, plantId, accountId, timeoutMessage)`;
    a fourth site, the dev `Regenerate` action, only changes the plant id and
    keeps its bare `connectionRegistrySetPlant`. The WELCOME body is
-   `net/welcomeBuilder.ts` (`buildWelcomePayload`), a pure plant-to-wire
+   `ops/welcomePayload.ts` (`buildWelcomePayload`), a pure plant-to-wire
    mapping: three attach paths had their own copy of that object, and a copy
    that missed the node set looked to the client like a plant with no nodes.
    Chat shaping and its per-minute budget are `ops/chatService.ts`
    (`resolveChatIntent`, `consumeChatBudget`); the socket fanout stays in
-   `main.ts`, where the players and the interest manager live. Both modules have
-   their own tests — the first coverage either path has had.
+   `main.ts`, where the players and the interest manager live. The inventory
+   commands are `ops/inventoryHandlers.ts` (sync, slot use, slot swap) behind an
+   `InventoryPorts` view of the world, and they use `ops/inventory.ts`'s
+   `setSlot`/`swapSlots` rather than the hand-rolled slot bookkeeping `main.ts`
+   had grown. `ops/devCommands.ts` owns the parsing for the dev commands that
+   take free-form actions (`resolveDevWeatherCommand`, `resolveDevTileCommand`).
+   The dev switch itself stays where it is: it names about forty `World` members
+   (send counters, `onTick`, `stepSimulationOnce`, persistence, the damage
+   pipeline), so moving it now would mean inventing a forty-member façade in
+   place of the world those members belong to. It moves with the `http/`+`tick/`
+   split, which is when they get real owners. Each module has its own tests —
+   the first coverage any of these paths has had.
 
 ## Tracking
 

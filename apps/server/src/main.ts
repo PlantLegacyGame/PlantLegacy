@@ -4,16 +4,10 @@ import { createServer } from 'node:http';
 import process from 'node:process';
 import { readNumber } from '@plant-legacy/shared/config';
 import { validateMessage } from '@plant-legacy/shared/protocol/messageSchemas';
-import {
-  loadDayNightConfig,
-  loadWeatherConfig,
-  type WeatherStateName,
-  WeatherSystem,
-} from '@plant-legacy/weather';
+import { loadDayNightConfig, loadWeatherConfig, WeatherSystem } from '@plant-legacy/weather';
 import { WebSocket, WebSocketServer } from 'ws';
 import { loadRuntimeConfig } from './core/config.ts';
 import { SERVICE_VERSION } from './core/version.ts';
-import { buildWelcomePayload } from './net/welcomeBuilder.ts';
 import { loadAccountsConfig } from './ops/accounts/config.ts';
 import { createAccountsHandlers, createAuthMiddleware } from './ops/accounts/http.ts';
 import { AccountsService } from './ops/accounts/service.ts';
@@ -41,6 +35,7 @@ import { loadDamageConfig, loadTumblingConfig, loadUprootConfig } from './ops/da
 import { DamagePipeline } from './ops/damage/damagePipeline.ts';
 import { DatabaseProbe } from './ops/db.ts';
 import { devToolsAllowed, handleGetDevConfig, handlePostDevConfig } from './ops/dev.ts';
+import { resolveDevTileCommand, resolveDevWeatherCommand } from './ops/devCommands.ts';
 import { loadGrowthConfig } from './ops/growth.ts';
 import {
   createGrowthIntentStateMachine,
@@ -52,6 +47,12 @@ import {
 import { buildHealthReport, isReady } from './ops/health.ts';
 import { InterestManager } from './ops/interestManager.ts';
 import { addItem, createInventory, type Inventory } from './ops/inventory.ts';
+import {
+  type InventoryPorts,
+  sendInventorySync,
+  swapInventorySlots,
+  useInventorySlot,
+} from './ops/inventoryHandlers.ts';
 import { loadItemsConfig } from './ops/items.ts';
 import { createLogger } from './ops/log.ts';
 import { loadMutationsConfig } from './ops/mutations/config.ts';
@@ -70,7 +71,7 @@ import {
 } from './ops/net.ts';
 import { type PlantEvent, PlantPersistence } from './ops/persistence/plantPersistence.ts';
 import { TerrainPersistence } from './ops/persistence/terrainPersistence.ts';
-import { clampPlantStorage, computePlantCapacity } from './ops/plantCapacity.ts';
+import { computePlantCapacity } from './ops/plantCapacity.ts';
 import { PlantEventLog } from './ops/plantEventLog.ts';
 import { canAdoptGuestPlant, isAnonymousOwner } from './ops/plantOwnership.ts';
 import { selectVisiblePlants } from './ops/plantVisibility.ts';
@@ -97,6 +98,7 @@ import {
 } from './ops/seasonClock.ts';
 import { TerrainService } from './ops/terrain.ts';
 import { createTickClock, type TickClock, tickClockStart, tickClockStop } from './ops/tickClock.ts';
+import { buildWelcomePayload } from './ops/welcomePayload.ts';
 import { loadWorldConfig } from './ops/world.ts';
 
 const STARTED_AT = Date.now();
@@ -1463,118 +1465,23 @@ class World {
     this.send(ws, MESSAGE_TYPE.PONG, {});
   }
 
-  private sendInventorySync(player: ConnectedPlayer): void {
-    const slots = player.inventory.slots.map((slot) =>
-      slot ? { itemId: slot.itemId, count: slot.count } : { itemId: null, count: null },
-    );
-    this.send(player.ws, MESSAGE_TYPE.INVENTORY_SYNC, {
-      slots,
-      maxSlots: player.inventory.maxSlots,
-      // The definitions travel with the slots. The client used to have only an
-      // item id, so it drew "Starter Dung" from a table it invented and had no
-      // description to show at all. Sending the server's own definition means
-      // the panel can never describe an effect the server would not perform.
-      definitions: Array.from(this.itemsConfig.itemDefinitions.values()).map((def) => ({
-        id: def.id,
-        name: def.name,
-        description: def.description,
-        category: def.category,
-        stackLimit: def.stack_limit,
-        use: def.use,
-      })),
-    });
-  }
-
-  private sendInventorySlotUpdate(player: ConnectedPlayer, slotIndex: number): void {
-    if (slotIndex < 0 || slotIndex >= player.inventory.maxSlots) return;
-    const slot = player.inventory.slots[slotIndex];
-    this.send(player.ws, MESSAGE_TYPE.INVENTORY_SLOT_UPDATE, {
-      slotIndex,
-      itemId: slot?.itemId ?? null,
-      count: slot?.count ?? null,
-    });
-  }
-
-  private handleInventorySlotUse(player: ConnectedPlayer, slotIndex: number): void {
-    if (slotIndex < 0 || slotIndex >= player.inventory.maxSlots) {
-      this.log.warn('Invalid inventory slot index', { playerId: player.playerId, slotIndex });
-      return;
-    }
-
-    const slot = player.inventory.slots[slotIndex];
-    if (!slot) return;
-
-    const itemDef = this.itemsConfig.itemDefinitions.get(slot.itemId);
-    if (!itemDef) return;
-
-    // One handler for every item. The definition owns what Use does; an item
-    // that cannot be used yet says so out loud instead of the old silent no-op
-    // (gene boosters and both seed types were clicked into a void).
-    if (itemDef.use.kind !== 'resources') {
-      this.send(player.ws, MESSAGE_TYPE.REJECT, {
-        reason: 'item_not_usable',
-        originalType: MESSAGE_TYPE.INVENTORY_SLOT_USE,
-      });
-      return;
-    }
-
-    if (!player.plantId) return;
-    const plant = this.plantWorld.getPlant(player.plantId);
-    if (!plant) return;
-
-    const use = itemDef.use;
-    if (use.water > 0) plant.storedWater += use.water;
-    if (use.minerals > 0) plant.storedMinerals += use.minerals;
-    if (use.energy > 0) plant.totalEnergy += use.energy;
-    clampPlantStorage(plant, this.plantWorld.getConfig());
-
-    // Enrich the soil under the root too: `dung_deposit` and
-    // `fertilizer_deposit` were configured but never applied, because nothing
-    // ever called these two methods.
-    const rootNode = plant.rootNodeId != null ? plant.nodes.get(plant.rootNodeId) : undefined;
-    if (rootNode) {
-      if (itemDef.category === 'fertilizer') {
-        this.resourceWorld.onFertilizerApplied(rootNode.x, rootNode.z);
-      } else if (itemDef.category === 'dung') {
-        this.resourceWorld.onDungApplied(rootNode.x, rootNode.z);
-      }
-    }
-
-    // Remove one from inventory
-    this.removeItemFromInventory(player, slotIndex, 1);
-    this.sendInventorySlotUpdate(player, slotIndex);
-
-    this.log.info('Item used', {
-      playerId: player.playerId,
-      itemId: slot.itemId,
-      category: itemDef.category,
-    });
-  }
-
-  private removeItemFromInventory(player: ConnectedPlayer, slotIndex: number, count: number): void {
-    const slot = player.inventory.slots[slotIndex];
-    if (!slot) return;
-
-    slot.count -= count;
-    if (slot.count <= 0) {
-      player.inventory.slots[slotIndex] = null;
-    }
-  }
-
-  private handleInventorySlotSwap(
-    player: ConnectedPlayer,
-    fromIndex: number,
-    toIndex: number,
-  ): void {
-    if (fromIndex < 0 || fromIndex >= player.inventory.maxSlots) return;
-    if (toIndex < 0 || toIndex >= player.inventory.maxSlots) return;
-
-    const temp = player.inventory.slots[fromIndex];
-    player.inventory.slots[fromIndex] = player.inventory.slots[toIndex];
-    player.inventory.slots[toIndex] = temp;
-
-    this.sendInventorySlotUpdate(player, fromIndex);
-    this.sendInventorySlotUpdate(player, toIndex);
+  /**
+   * The inventory handlers' view of this world.
+   *
+   * Built per command rather than stored once: inventory actions arrive at click
+   * rate, not frame rate, and a held object would pin the systems a config or
+   * world reload can replace.
+   */
+  private inventoryPorts(): InventoryPorts {
+    return {
+      itemsConfig: this.itemsConfig,
+      send: (ws, type, payload) => this.send(ws, type, payload),
+      getPlant: (plantId) => this.plantWorld.getPlant(plantId),
+      growthConfig: () => this.plantWorld.getConfig(),
+      depositFertilizer: (worldX, worldZ) => this.resourceWorld.onFertilizerApplied(worldX, worldZ),
+      depositDung: (worldX, worldZ) => this.resourceWorld.onDungApplied(worldX, worldZ),
+      log: this.log,
+    };
   }
 
   handlePostHelloMessage(playerId: string, data: Buffer): void {
@@ -2075,21 +1982,21 @@ class World {
         case MESSAGE_TYPE.INVENTORY_REQUEST: {
           const player = this.players.get(playerId);
           if (!player) break;
-          this.sendInventorySync(player);
+          sendInventorySync(this.inventoryPorts(), player);
           break;
         }
         case MESSAGE_TYPE.INVENTORY_SLOT_USE: {
           const payload2 = payload as { slotIndex: number };
           const player2 = this.players.get(playerId);
           if (!player2) break;
-          this.handleInventorySlotUse(player2, payload2.slotIndex);
+          useInventorySlot(this.inventoryPorts(), player2, payload2.slotIndex);
           break;
         }
         case MESSAGE_TYPE.INVENTORY_SLOT_SWAP: {
           const payload2 = payload as { fromIndex: number; toIndex: number };
           const player2 = this.players.get(playerId);
           if (!player2) break;
-          this.handleInventorySlotSwap(player2, payload2.fromIndex, payload2.toIndex);
+          swapInventorySlots(this.inventoryPorts(), player2, payload2.fromIndex, payload2.toIndex);
           break;
         }
         default: {
@@ -2681,22 +2588,13 @@ class World {
     // plant lookup: a player with no plant still has a sky, and this control
     // used to answer "no_plant" and change nothing.
     if (action.type === 'dev_set_weather') {
-      const allowed: WeatherStateName[] = [
-        'clear',
-        'rain',
-        'thunderstorm_telegraph',
-        'thunderstorm_active',
-        'thunderstorm_aftermath',
-      ];
-      const state = String(action.state ?? '');
-      if (!(allowed as string[]).includes(state)) {
-        this.sendDevResponse(ws, action.type, { ok: false, error: 'unknown_weather_state' });
+      const resolved = resolveDevWeatherCommand(action);
+      if (!resolved.ok) {
+        this.sendDevResponse(ws, action.type, { ok: false, error: resolved.error });
         return;
       }
-      const requestedDuration = Number(action.duration_s ?? 180);
-      const durationS =
-        Number.isFinite(requestedDuration) && requestedDuration > 0 ? requestedDuration : 180;
-      this.weatherSystem.forceState(state as WeatherStateName, durationS);
+      const { state, durationS } = resolved.command;
+      this.weatherSystem.forceState(state, durationS);
       // Announce at once: waiting for the next tick left the panel showing the
       // old sky until the next weather broadcast arrived.
       const forced = this.weatherSystem.getBroadcast();
@@ -2748,31 +2646,10 @@ class World {
           break;
         }
         case 'dev_set_tile': {
-          // Tile indices are what the store wants, but a caller that only knows
-          // where it is standing (a script, the pad's world point) should not
-          // have to invent the grid maths: world coordinates are converted here.
-          let x = action.x as number;
-          let z = action.z as number;
-          if (
-            (x === undefined || z === undefined) &&
-            typeof action.worldX === 'number' &&
-            typeof action.worldZ === 'number'
-          ) {
-            const tile = this.resourceWorld.getTileCoordinates(action.worldX, action.worldZ);
-            x = tile.tileX;
-            z = tile.tileZ;
-          }
-          if (x !== undefined && z !== undefined) {
-            const resources: Record<string, number> = {};
-            if (action.light !== undefined) resources.light = action.light as number;
-            if (action.moisture !== undefined) resources.moisture = action.moisture as number;
-            if (action.minerals !== undefined) resources.minerals = action.minerals as number;
-            // The water table is a tile resource too; without it there was no way
-            // to raise or drain the cavity pool and see the water surface move.
-            if (action.groundwater !== undefined)
-              resources.groundwater = action.groundwater as number;
-            this.resourceWorld.setTileResources(x, z, resources);
-          }
+          const tile = resolveDevTileCommand(action, (worldX, worldZ) =>
+            this.resourceWorld.getTileCoordinates(worldX, worldZ),
+          );
+          if (tile) this.resourceWorld.setTileResources(tile.tileX, tile.tileZ, tile.resources);
           this.sendDevResponse(ws, action.type, { ok: true });
           break;
         }
@@ -2981,7 +2858,7 @@ class World {
               ? Math.floor(action.count)
               : 1;
           const added = addItem(player.inventory, itemId, count, this.itemsConfig.itemDefinitions);
-          this.sendInventorySync(player);
+          sendInventorySync(this.inventoryPorts(), player);
           this.sendDevResponse(ws, action.type, { ok: added > 0, itemId, added });
           break;
         }

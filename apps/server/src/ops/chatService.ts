@@ -1,3 +1,5 @@
+import type { ChatConfig } from './chat.ts';
+
 /**
  * Chat message shaping and the per-minute budget.
  *
@@ -7,13 +9,13 @@
  * timestamps and does the fanout.
  */
 
-export type ChatMode = 'world' | 'proximity';
+type ChatMode = 'world' | 'proximity';
 
-/** The parts of `config/chat.json` this module reads. */
-export interface ChatLimits {
-  messageMaxChars: number;
-  emoteIds: readonly string[];
-}
+/**
+ * The parts of `config/chat.json` this module reads, taken from the loader's own
+ * type so a renamed field cannot leave a parallel copy behind.
+ */
+export type ChatLimits = Pick<ChatConfig, 'messageMaxChars' | 'emoteIds'>;
 
 export interface ChatIntent {
   mode: ChatMode;

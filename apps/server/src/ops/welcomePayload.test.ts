@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import type { Plant, PlantNode } from '@plant-legacy/shared/growth';
 import { validateMessage } from '@plant-legacy/shared/protocol/messageSchemas';
-import { buildWelcomePayload } from './welcomeBuilder.ts';
+import { buildWelcomePayload } from './welcomePayload.ts';
 
 function makeNode(overrides: Partial<PlantNode> = {}): PlantNode {
   return {
