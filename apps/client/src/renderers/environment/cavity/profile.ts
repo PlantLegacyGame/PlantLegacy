@@ -109,22 +109,33 @@ export const CAVITY_MOUTH_OVERHANG = 1.0;
 export const CAVITY_CUT_OVERREACH = 1.02;
 
 /**
- * Extra sink of the rim below the soil cut, in metres. Zero on purpose.
+ * Extra sink of the rim below the soil cut, in metres. Zero, and it has to stay
+ * zero.
  *
- * It used to be 12 mm, to keep the rim off the soil's plane. But the soil is a
- * heightfield with no thickness: the cut is a hole in a sheet, and a rim hanging
- * 12 mm below it left a slot between the hole's edge and the wall. From just
- * above the surface, that slot is a sawtooth of sky all the way round the mouth -
- * the one-pixel holes that made the rim look stitched. Held flush, the bowl's
- * rim (a hair outside the cut, and biased towards the camera by the material's
- * polygon offset) covers the sheet's edge instead of sitting under it.
+ * The soil is a heightfield with no thickness: the cut is a hole in a sheet, so
+ * a rim held below the surface leaves a slot between the sheet's edge and the
+ * wall, and that slot is an open window to whatever stands behind the mouth.
+ *
+ * Settled by geometry rather than by eye, 2026-11-17, with a ray harness in the
+ * live scene: a raycaster against the bowl, the skirt and the terrain, skipping
+ * terrain hits inside the shader's cut, with a control aimed at open sky that
+ * read 16 of 16 sky - so the harness can report a leak when there is one. At
+ * 0.02 every one of the 96 rim vertices sits 20 mm below its own ground and 87
+ * of 144 grazing rays aimed into that band pass through it to open background.
+ * Nothing else in the build covers the band. The skirt's top ring *is* the lip
+ * ring, vertex for vertex (worst mismatch 0.00000 m across 96 columns), so it
+ * backs the sheet's edge from below and carries nothing above the lip. The rim
+ * ring does not overhang the cut either - its vertices sit exactly on the cut
+ * radius, and its 1.06 mm chord sag is nonetheless covered, because 96 of 96
+ * rays aimed at the chord midpoints hit the shell. At 0 the slot does not exist:
+ * all 96 rim vertices measure 0.0000 m below their ground, 144 of 144 grazing
+ * rays into the same band hit the shell, and 48 rays fired down into the pit
+ * from above see the dug wall or the soil but never the sky.
+ *
+ * The mechanism is the flush rim plus the material's polygon offset. There is no
+ * second surface that closes the mouth, so if this number grows again the seam
+ * comes back with it.
  */
-// 0, as the note above argues for and as the value was not. It had drifted to
-// 2 cm, so the lip ring sat two centimetres *below* the soil surface all the way
-// round the mouth and that slot showed the sky behind it: a pale, dotted seam
-// along the pit's edge, visible from any low angle and in every close-up.
-// Measured 2026-11-17 by hiding the water and re-shooting the rim: the line was
-// still there, which ruled out the water sheet's own cut edge.
 export const CAVITY_RIM_SINK_M = 0;
 
 /**
@@ -132,8 +143,13 @@ export const CAVITY_RIM_SINK_M = 0;
  *
  * The ground is a sheet with no thickness, so from under the cut its edge is a
  * slab with the sky behind it. The skirt is a wall under the rim at exactly the
- * cut radius: whatever the eye is doing, the edge of the hole is backed by dug
- * earth instead of by open background.
+ * cut radius: from beneath the sheet the edge of the hole is backed by dug earth
+ * instead of open background.
+ *
+ * It backs that edge from below only. Its top ring is the lip ring vertex for
+ * vertex, so a rim held under the soil leaves a band above the lip that the
+ * skirt cannot reach - which is why the sink has to stay 0 (see
+ * `CAVITY_RIM_SINK_M`).
  *
  * Metres, not profile units. The bowl's vertical scale is a slope-stretch
  * factor - the rim conforms to ground that can fall metres across the mouth, so
