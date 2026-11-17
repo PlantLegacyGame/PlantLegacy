@@ -4402,6 +4402,9 @@ async function initPlantRenderer(): Promise<void> {
     plantRenderer.setGroundQuery((x, z) =>
       planetTerrainY(renderConfig?.planetRadiusM ?? 0, x, z, getTerrainParams()),
     );
+    // The drawn soil, not just the field: the seed rests on the triangle on
+    // screen, which stands above the field wherever the mesh is coarse.
+    plantRenderer.setGroundMesh(scene.getObjectByName('planet-terrain-detail') ?? null);
     plantRenderer.setViewportSize(renderer.domElement.width, renderer.domElement.height);
 
     // Initialize with existing plant nodes (root node from WELCOME, or empty)

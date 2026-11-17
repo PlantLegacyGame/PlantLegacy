@@ -203,6 +203,7 @@ class PlantRenderer {
   private useMeshL0L1 = true;
   /** Held until `initialize` builds the mesh pass. */
   private pendingGroundQuery: ((x: number, z: number) => number) | null = null;
+  private pendingGroundMesh: THREE.Object3D | null = null;
 
   constructor(config: PlantRendererConfig) {
     this.config = { ...DEFAULT_CONFIG, ...config };
@@ -213,6 +214,12 @@ class PlantRenderer {
   setGroundQuery(query: ((x: number, z: number) => number) | null): void {
     this.meshRenderer?.setGroundQuery(query);
     this.pendingGroundQuery = query;
+  }
+
+  /** The drawn ground mesh, forwarded to the mesh pass. */
+  setGroundMesh(mesh: THREE.Object3D | null): void {
+    this.meshRenderer?.setGroundMesh(mesh);
+    this.pendingGroundMesh = mesh;
   }
 
   /** Initialize the SDF renderer with scene and camera. */
@@ -234,6 +241,7 @@ class PlantRenderer {
       maxLeafSize: this.config.meshMaxLeafSize,
     });
     if (this.pendingGroundQuery) this.meshRenderer.setGroundQuery(this.pendingGroundQuery);
+    if (this.pendingGroundMesh) this.meshRenderer.setGroundMesh(this.pendingGroundMesh);
   }
 
   /**

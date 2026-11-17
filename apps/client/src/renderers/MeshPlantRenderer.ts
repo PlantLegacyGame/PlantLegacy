@@ -432,6 +432,33 @@ export class MeshPlantRenderer {
 
   /** Terrain under a plan position, so a seed can sit on the soil it is drawn over. */
   private groundQuery: ((x: number, z: number) => number) | null = null;
+  /** The drawn ground mesh, so a seed can rest on the triangle, not the field. */
+  private groundMesh: THREE.Object3D | null = null;
+  private readonly groundRay = new THREE.Raycaster();
+
+  /** The height of the soil actually drawn under a point, or the field's fallback. */
+  private drawnGroundY(x: number, z: number, fallback: number): number {
+    const mesh = this.groundMesh;
+    if (!mesh) return fallback;
+    this.groundRay.near = 0;
+    this.groundRay.far = 8;
+    this.groundRay.set(new THREE.Vector3(x, fallback + 4, z), new THREE.Vector3(0, -1, 0));
+    const hit = this.groundRay.intersectObject(mesh, false)[0];
+    return hit && Number.isFinite(hit.point.y) ? hit.point.y : fallback;
+  }
+
+  /**
+   * Give the mesh pass the mesh the ground is drawn as.
+   *
+   * The height field and the drawn soil are not the same surface: the terrain is
+   * a coarse triangle mesh, so between two vertices the drawn ground can stand
+   * well above the field, by tens of centimetres where the relief is steep. A
+   * seed seated on the field sank into that triangle - half a coat underwater
+   * beside a shore. Casting down onto the mesh seats it on the surface on screen.
+   */
+  setGroundMesh(mesh: THREE.Object3D | null): void {
+    this.groundMesh = mesh;
+  }
 
   /**
    * Give the mesh pass the terrain height function the ground is drawn from.
@@ -698,11 +725,10 @@ export class MeshPlantRenderer {
       // keeps the height it was placed at, so on soil drawn a few centimetres
       // lower it hung in the air. Seat it on the ground under it; never lift it
       // off that ground, so a stored point lower than the drawing still wins.
-      const groundUnder = this.groundQuery?.(node.position.x, node.position.z);
-      const contactY =
-        groundUnder === undefined || !Number.isFinite(groundUnder)
-          ? node.position.y
-          : Math.min(node.position.y, groundUnder);
+      const fieldY = this.groundQuery?.(node.position.x, node.position.z);
+      const contactY = Number.isFinite(fieldY)
+        ? this.drawnGroundY(node.position.x, node.position.z, fieldY as number)
+        : node.position.y;
       mesh.position.set(
         node.position.x,
         seedBodyCentreY(contactY, radius * seedScale),
