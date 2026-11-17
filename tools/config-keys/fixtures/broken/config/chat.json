@@ -1,0 +1,38 @@
+{
+  "_meta": {
+    "system": "chat",
+    "version": "1.0.0"
+  },
+  "values": {
+    "comment_key": {
+      "type": "integer",
+      "value": 1,
+      "range": [0, 10]
+    },
+    "regex_key": {
+      "type": "integer",
+      "value": 2,
+      "range": [0, 10]
+    },
+    "substring_key": {
+      "type": "integer",
+      "value": 3,
+      "range": [0, 10]
+    },
+    "identifier_key": {
+      "type": "integer",
+      "value": 4,
+      "range": [0, 10]
+    },
+    "exempt_key": {
+      "type": "integer",
+      "value": 5,
+      "range": [0, 10]
+    },
+    "regex_body_key": {
+      "type": "integer",
+      "value": 6,
+      "range": [0, 10]
+    }
+  }
+}

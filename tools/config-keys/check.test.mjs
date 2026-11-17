@@ -1,77 +1,98 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { checkConfigKeys, codeText } from './check.mjs';
 
-const fixtures = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures');
+const here = path.dirname(fileURLToPath(import.meta.url));
+const fixtures = path.join(here, 'fixtures');
 const check = (name) => checkConfigKeys({ root: path.join(fixtures, name) });
+const deadKey = (errors, key) => errors.some((line) => line.includes(`\`${key}\` is read by no`));
+
+/** The CLI is a separate process on purpose: the gate is its exit code. */
+const runCli = (name, ...flags) =>
+  spawnSync(
+    process.execPath,
+    [path.join(here, 'check.mjs'), '--root', path.join(fixtures, name), ...flags],
+    {
+      encoding: 'utf8',
+    },
+  );
 
 describe('checkConfigKeys', () => {
-  it('accepts a key quoted as a string literal', () => {
-    const result = check('literal');
+  it('accepts a tree where every key is read', () => {
+    const result = check('clean');
     assert.deepEqual(result.errors, []);
-    assert.deepEqual(result.readAsLiteral, ['chat.probe_key']);
-    assert.deepEqual(result.readAsIdentifierOnly, []);
+    // A literal after a regex of comment openers still counts, and a property
+    // access counts but is reported as identifier-only.
+    assert.deepEqual(result.readAsLiteral, ['chat.quoted_key', 'chat.after_regex_key']);
+    assert.deepEqual(result.readAsIdentifierOnly, ['chat.identifier_key']);
   });
 
   it('rejects a key named only in a line or block comment', () => {
-    const result = check('comment-only');
-    assert.equal(result.errors.length, 1);
-    assert.match(result.errors[0], /`probe_key` is read by no source file/);
+    const { errors } = check('broken');
+    assert.ok(deadKey(errors, 'comment_key'), 'line comment');
+    assert.ok(deadKey(errors, 'regex_key'), 'block comment');
   });
 
   it('rejects a key that only appears inside a regex body', () => {
-    const result = check('regex-body');
-    assert.equal(result.errors.length, 1);
-    assert.match(result.errors[0], /`probe_key` is read by no source file/);
-  });
-
-  it('does not let a regex of comment openers swallow the rest of the file', () => {
-    // `/[/*]/` is a regex, not the start of a comment: the literal after it must
-    // still count as a read.
-    const result = check('regex-guard');
-    assert.deepEqual(result.errors, []);
-    assert.deepEqual(result.readAsLiteral, ['chat.probe_key']);
+    assert.ok(deadKey(check('broken').errors, 'regex_body_key'));
   });
 
   it('rejects a key that is only a prefix of a longer identifier or string', () => {
-    const result = check('substring');
-    assert.equal(result.errors.length, 1);
-    assert.match(result.errors[0], /`probe_key` is read by no source file/);
+    assert.ok(deadKey(check('broken').errors, 'substring_key'));
   });
 
-  it('accepts an identifier-only read but reports it separately', () => {
-    const result = check('identifier-only');
-    assert.deepEqual(result.errors, []);
-    assert.deepEqual(result.readAsLiteral, []);
-    assert.deepEqual(result.readAsIdentifierOnly, ['chat.probe_key']);
-  });
-
-  it('fails an allowlist entry that matches no key', () => {
-    const result = check('stale-allowlist');
-    assert.equal(result.errors.length, 1);
-    assert.match(result.errors[0], /chat\.ghost_key.*stale exemption/);
-    // The valid exemption is honoured rather than reported as dead.
+  it('honours a listed exemption and fails one that matches no key', () => {
+    const result = check('broken');
     assert.equal(result.exemptions, 1);
+    assert.ok(!deadKey(result.errors, 'exempt_key'));
+    assert.match(result.errors.join('\n'), /chat\.ghost_key.*stale exemption/);
+  });
+
+  it('does not report a key that is read', () => {
+    const { errors } = check('broken');
+    assert.ok(!deadKey(errors, 'identifier_key'));
+    assert.equal(errors.length, 5);
+  });
+});
+
+describe('check.mjs CLI', () => {
+  it('exits 0 on a tree with no dead keys', () => {
+    const run = runCli('clean');
+    assert.equal(run.status, 0, run.stdout);
+    assert.match(run.stdout, /every declared key is read or allowlisted/);
+  });
+
+  it('exits 1 and names the keys on a tree with dead keys', () => {
+    const run = runCli('broken');
+    assert.equal(run.status, 1, run.stdout);
+    assert.match(run.stdout, /`comment_key` is read by no source file/);
+    assert.match(run.stdout, /5 problem\(s\)/);
+  });
+
+  it('lists identifier-only reads when asked', () => {
+    const run = runCli('clean', '--identifiers');
+    assert.equal(run.status, 0, run.stdout);
+    assert.match(run.stdout, /chat\.identifier_key/);
   });
 });
 
 describe('codeText', () => {
   it('blanks comments and regex bodies while keeping literals and identifiers', () => {
     const source = [
-      'const quoted = "probe_key"; // probe_key in a comment',
-      'const pattern = /probe_ghost/;',
+      'const quoted = "quoted_key"; // quoted_key in a comment',
+      'const pattern = /ghost_key/;',
       'export { quoted, pattern };',
     ].join('\n');
     const text = codeText(source);
-    assert.match(text, /"probe_key"/);
-    assert.doesNotMatch(text, /probe_ghost/);
+    assert.match(text, /"quoted_key"/);
+    assert.doesNotMatch(text, /ghost_key/);
     assert.equal(text.split('\n').length, source.split('\n').length);
   });
 
   it('keeps a division sign, which is not a regex', () => {
-    const text = codeText('const half = total / 2;');
-    assert.match(text, /total \/ 2/);
+    assert.match(codeText('const half = total / 2;'), /total \/ 2/);
   });
 });

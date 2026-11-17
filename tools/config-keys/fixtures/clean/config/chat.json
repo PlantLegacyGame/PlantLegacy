@@ -1,0 +1,8 @@
+{
+  "_meta": { "system": "chat", "version": "1.0.0" },
+  "values": {
+    "quoted_key": { "type": "integer", "value": 1, "range": [0, 10] },
+    "identifier_key": { "type": "integer", "value": 2, "range": [0, 10] },
+    "after_regex_key": { "type": "integer", "value": 3, "range": [0, 10] }
+  }
+}

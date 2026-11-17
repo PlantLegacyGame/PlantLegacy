@@ -18,14 +18,15 @@
  * through TypeScript field names and payload mapping (`data.max_pixel_ratio`,
  * `values.bindings_desktop`, `max_pixel_ratio?: number`), so requiring quotes
  * flagged 202 keys that are genuinely read. Reads that are *only* identifiers are
- * counted and can be listed, so that gap stays visible instead of hidden.
+ * counted, and `--identifiers` lists them, so that gap stays visible.
  *
  * Tests are excluded on purpose: a test that mentions a key usually just restates
  * the fixture and would hide the very rot this is looking for. Intentional
  * exceptions live in `allowlist.json` with a reason, and an exemption that
  * matches no key is itself an error, so the list cannot go stale quietly.
  *
- * Rules are pinned by `check.test.mjs` against fixtures in `fixtures/`.
+ * Rules are pinned by `check.test.mjs` against `fixtures/clean` and
+ * `fixtures/broken`, including the CLI's exit codes.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -33,8 +34,7 @@ import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, '../..');
-
-export const SOURCE_EXTENSIONS = /\.(ts|mts|tsx)$/;
+const SOURCE_EXTENSIONS = /\.(ts|mts|tsx)$/;
 
 /** Keywords after which a `/` opens a regex literal rather than dividing. */
 const REGEX_KEYWORDS = new Set([
@@ -86,13 +86,12 @@ const REGEX_PRECEDERS = new Set([
  * text is copied through rather than treated as a comment or regex.
  */
 export function codeText(source) {
-  let out = '';
+  const chunks = [];
   let i = 0;
   let prevChar = '';
   let prevWord = '';
 
-  /** Copied through verbatim: a quoted key is code, not a comment. */
-  const readQuoted = (start) => {
+  const skipQuoted = (start) => {
     const quote = source[start];
     let j = start + 1;
     while (j < source.length) {
@@ -130,22 +129,22 @@ export function codeText(source) {
     return j;
   };
 
+  /** Same length, same newlines: the offsets the caller reads stay valid. */
   const blank = (start, end) => {
-    for (let k = start; k < end; k += 1) out += source[k] === '\n' ? '\n' : ' ';
+    chunks.push(source.slice(start, end).replace(/[^\n]/g, ' '));
   };
 
   while (i < source.length) {
     const ch = source[i];
     const next = source[i + 1];
+    const start = i;
 
     if (ch === '/' && next === '/') {
-      const start = i;
       while (i < source.length && source[i] !== '\n') i += 1;
       blank(start, i);
       continue;
     }
     if (ch === '/' && next === '*') {
-      const start = i;
       i += 2;
       while (i < source.length && !(source[i] === '*' && source[i + 1] === '/')) i += 1;
       i = Math.min(i + 2, source.length);
@@ -153,7 +152,6 @@ export function codeText(source) {
       continue;
     }
     if (ch === '/' && (REGEX_PRECEDERS.has(prevChar) || REGEX_KEYWORDS.has(prevWord))) {
-      const start = i;
       i = skipRegex(i);
       blank(start, i);
       prevChar = '/';
@@ -161,25 +159,21 @@ export function codeText(source) {
       continue;
     }
     if (ch === "'" || ch === '"' || ch === '`') {
-      const start = i;
-      i = readQuoted(i);
-      out += source.slice(start, i);
+      i = skipQuoted(i);
+      chunks.push(source.slice(start, i));
       prevChar = ch;
       prevWord = '';
       continue;
     }
     if (/[A-Za-z0-9_$]/.test(ch)) {
-      let word = '';
-      while (i < source.length && /[A-Za-z0-9_$]/.test(source[i])) {
-        word += source[i];
-        i += 1;
-      }
-      out += word;
+      while (i < source.length && /[A-Za-z0-9_$]/.test(source[i])) i += 1;
+      const word = source.slice(start, i);
+      chunks.push(word);
       prevChar = word[word.length - 1];
       prevWord = word;
       continue;
     }
-    out += ch;
+    chunks.push(ch);
     if (!/\s/.test(ch)) {
       prevChar = ch;
       prevWord = '';
@@ -187,7 +181,7 @@ export function codeText(source) {
     i += 1;
   }
 
-  return out;
+  return chunks.join('');
 }
 
 const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -211,14 +205,13 @@ const walk = (dir, filter, out = []) => {
 };
 
 const isTestFile = (file) =>
-  /\.test\.(ts|mts|tsx)$/.test(file) || file.includes(`${path.sep}test${path.sep}`);
+  /\.test\.(mts?|tsx)$/.test(file) || file.includes(`${path.sep}test${path.sep}`);
 
 /**
  * Run the guardrail over one tree.
  *
  * `root` is the project root to check, which is what lets the fixtures be graded
- * by the same code the repository is: config/, apps/ and packages/ are resolved
- * from it.
+ * by the same code the repository is: config/, apps/ and packages/ resolve from it.
  */
 export function checkConfigKeys({ root = repoRoot } = {}) {
   const configDir = path.join(root, 'config');
@@ -234,7 +227,7 @@ export function checkConfigKeys({ root = repoRoot } = {}) {
   const allowlist = fs.existsSync(allowlistPath)
     ? JSON.parse(fs.readFileSync(allowlistPath, 'utf8'))
     : [];
-  const allowed = (system, key) =>
+  const exemptionFor = (system, key) =>
     allowlist.find((entry) => {
       const [systemPattern, keyPattern] = String(entry.key).split('.');
       if (systemPattern !== system || !keyPattern) return false;
@@ -254,20 +247,17 @@ export function checkConfigKeys({ root = repoRoot } = {}) {
     const parsed = JSON.parse(fs.readFileSync(path.join(configDir, file), 'utf8'));
     for (const key of Object.keys(parsed.values ?? {})) {
       keys += 1;
-      const word = wholeWord(key);
-      if (word.test(code)) {
+      if (wholeWord(key).test(code)) {
         (quotedLiteral(key).test(code) ? readAsLiteral : readAsIdentifierOnly).push(
           `${system}.${key}`,
         );
-        continue;
-      }
-      if (allowed(system, key)) {
+      } else if (exemptionFor(system, key)) {
         exemptions += 1;
-        continue;
+      } else {
+        errors.push(
+          `config/${file}: \`${key}\` is read by no source file — delete it, or add it to tools/config-keys/allowlist.json with the reason it is not dead`,
+        );
       }
-      errors.push(
-        `config/${file}: \`${key}\` is read by no source file — delete it, or add it to tools/config-keys/allowlist.json with the reason it is not dead`,
-      );
     }
   }
 
@@ -298,31 +288,33 @@ export function checkConfigKeys({ root = repoRoot } = {}) {
   };
 }
 
-const report = (result, { listIdentifiers }) => {
+function report(result, list) {
+  const { keys, exemptions, read, readAsLiteral, readAsIdentifierOnly, errors } = result;
   const lines = [
     '',
-    `config keys: ${result.keys} declared, ${result.exemptions} allowlisted, ${result.read} read ` +
-      `(${result.readAsLiteral.length} as literals, ${result.readAsIdentifierOnly.length} only as identifiers)`,
+    `config keys: ${keys} declared, ${exemptions} allowlisted, ${read} read ` +
+      `(${readAsLiteral.length} as literals, ${readAsIdentifierOnly.length} only as identifiers)`,
   ];
-  if (listIdentifiers) {
+  if (list) {
     lines.push('  read only as identifiers (a quoted-literal check would flag these):');
-    for (const key of result.readAsIdentifierOnly) lines.push(`    ${key}`);
-  } else if (result.readAsIdentifierOnly.length > 0) {
+    lines.push(...readAsIdentifierOnly.map((key) => `    ${key}`));
+  } else if (readAsIdentifierOnly.length > 0) {
     lines.push('  (pass --identifiers to list them)');
   }
-  for (const entry of result.errors) lines.push(`  ${entry}`);
-  if (result.errors.length > 0) {
-    lines.push(`\nconfig keys: ${result.errors.length} problem(s)\n`);
-  } else {
-    lines.push('config keys: every declared key is read or allowlisted\n');
-  }
+  lines.push(...errors.map((entry) => `  ${entry}`));
+  lines.push(
+    errors.length > 0
+      ? `\nconfig keys: ${errors.length} problem(s)\n`
+      : 'config keys: every declared key is read or allowlisted\n',
+  );
   return lines.join('\n');
-};
+}
 
 function main() {
-  const result = checkConfigKeys();
-  const listIdentifiers = process.argv.includes('--identifiers');
-  console.log(report(result, { listIdentifiers }));
+  const rootFlag = process.argv.indexOf('--root');
+  const root = rootFlag >= 0 ? path.resolve(process.argv[rootFlag + 1] ?? repoRoot) : repoRoot;
+  const result = checkConfigKeys({ root });
+  console.log(report(result, process.argv.includes('--identifiers')));
   process.exit(result.errors.length > 0 ? 1 : 0);
 }
 
