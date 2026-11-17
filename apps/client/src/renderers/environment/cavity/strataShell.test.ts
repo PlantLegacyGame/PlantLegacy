@@ -1,38 +1,40 @@
 /**
  * The dug wall is geometry, not paint: bands, hard layer edges, real relief.
  *
- * These guard the three things that make it read as layered earth - a ring table
- * with one course per band, a doubled ring at every boundary so a colour change
- * is an edge rather than a gradient, and displacement below the lip that leaves
- * the lip itself exactly on the cut.
+ * These guard the things that make it read as layered earth - a ring table with
+ * courses of earth and a doubled ring at every stratum boundary, and displacement
+ * below the lip that leaves the lip itself exactly on the cut. The colours are
+ * not this module's any more: they are chosen per fragment from the config's
+ * palette, so the shell must not grow a per-vertex colour back.
  */
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { CAVITY_PROFILE_DEPTH, CAVITY_STRATA_BANDS } from './profile.ts';
 import { buildStrataShell, clodRelief, profileRadiusAt, strataRings } from './strataShell.ts';
 
-const COLORS: [number, number, number][] = [
-  [0.4, 0.3, 0.2],
-  [0.28, 0.22, 0.16],
-  [0.16, 0.13, 0.1],
-];
-
 describe('strata shell', () => {
-  it('gives the wall one band per stratum, with a hard edge at each boundary', () => {
+  it('puts a doubled ring at every stratum boundary', () => {
     const rings = strataRings(CAVITY_STRATA_BANDS, 3);
-    const bands = new Set(rings.map((ring) => ring.band));
-    assert.equal(bands.size, CAVITY_STRATA_BANDS.length, 'a stratum is missing its wall');
+    // Courses first: a wall of six rings has no strata to speak of.
+    assert.ok(
+      rings.length > CAVITY_STRATA_BANDS.length * 3,
+      `the wall has only ${rings.length} rings`,
+    );
 
     for (const band of CAVITY_STRATA_BANDS.slice(1)) {
       const atBoundary = rings.filter(
         (ring) => Math.abs(-ring.y / CAVITY_PROFILE_DEPTH - band.from) < 0.01,
       );
       assert.ok(atBoundary.length >= 2, `stratum ${band.from} has no doubled ring`);
+      assert.ok(
+        atBoundary.filter((ring) => ring.boundary).length >= 2,
+        `stratum ${band.from} boundary is not marked as a contact`,
+      );
     }
   });
 
   it('leaves the lip exactly on the cut and displaces the wall below it', () => {
-    const shell = buildStrataShell({ bands: CAVITY_STRATA_BANDS, colors: COLORS, cols: 64 });
+    const shell = buildStrataShell({ bands: CAVITY_STRATA_BANDS, cols: 64 });
     // The lip: y = 0 and radius 1 in the shell's own units.
     for (let c = 0; c < shell.cols; c += 1) {
       const i = c * 3;
@@ -61,13 +63,15 @@ describe('strata shell', () => {
     assert.ok(Math.max(...radii) - Math.min(...radii) > 1e-4, 'the deep wall has no relief');
   });
 
-  it('colours each band differently, so the layers are visible', () => {
-    const shell = buildStrataShell({ bands: CAVITY_STRATA_BANDS, colors: COLORS, cols: 32 });
-    const perRing: number[] = [];
-    for (let r = 0; r < shell.ringCount; r += 1) {
-      perRing.push(shell.colors[(r * shell.cols + 0) * 3]);
-    }
-    assert.ok(Math.max(...perRing) - Math.min(...perRing) > 0.05, 'every band is the same brown');
+  it('carries no per-vertex colour, because the shader owns the strata', () => {
+    // The wall used to bake a colour per vertex, which the fragment shader then
+    // discarded entirely: the strata are chosen per fragment from the config's
+    // palette so the contact is a straight line at a depth instead of a ragged
+    // one that follows the clods. A colour buffer here would be dead weight in
+    // the geometry, and would drag the program back onto the vertex-colour path.
+    const shell = buildStrataShell({ bands: CAVITY_STRATA_BANDS, cols: 32 });
+    assert.equal(Object.hasOwn(shell, 'colors'), false, 'the shell bakes colours again');
+    assert.equal(shell.positions.length, shell.ringCount * shell.cols * 3);
   });
 
   it('keeps the relief inside the wall, never through it', () => {

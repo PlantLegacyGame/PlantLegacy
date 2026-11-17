@@ -6,14 +6,20 @@
  * noise. From any angle it read as a funnel, because that is what it was - a
  * single surface with no strata, no relief and no layer edges.
  *
- * This module builds the wall as a stack of *bands*. Each stratum gets its own
- * colour, the boundary between two strata gets a pair of rings so the change is a
- * hard edge instead of a gradient, and every ring below the lip is displaced
- * radially by a clod field so the wall has real silhouette and real normals for
- * the lit material to work with.
+ * This module builds the wall as a stack of *bands*: the profile's rings are
+ * subdivided into courses of earth, a doubled ring marks every stratum boundary
+ * as a crease, and every ring below the lip is displaced radially by a clod
+ * field so the wall has real silhouette and real normals for the lit material to
+ * work with.
+ *
+ * It carries no colours. The strata are chosen per fragment in `bowlMesh.ts`,
+ * from the config's own palette, because a colour baked per vertex can only
+ * change at a polygon edge - which on this clodded wall is a ragged line that
+ * follows the relief instead of a bed's contact. Every colour array this module
+ * used to produce was overridden by the shader and never reached the screen.
  *
  * Pure: no THREE, no GLSL. The ring table is the contract - `update.ts` still
- * finds the lip by its y, and the tests can count bands without a GPU.
+ * finds the lip by its y, and the tests can count courses without a GPU.
  */
 import type { StrataBand } from './profile.ts';
 
@@ -25,9 +31,7 @@ export interface ShellRing {
   y: number;
   /** Radius in bowl units, 1 at the lip. */
   r: number;
-  /** Index into the band list this ring's colour comes from. */
-  band: number;
-  /** True when this ring exists only to stop a colour gradient. */
+  /** True when this ring is one of the pair that marks a stratum boundary. */
   boundary: boolean;
 }
 
@@ -69,14 +73,6 @@ export function profileRadiusAt(y: number): number {
  */
 export function strataRings(bands: readonly StrataBand[], subdivision = 3): ShellRing[] {
   const rings: ShellRing[] = [];
-  const bandAt = (y: number): number => {
-    const depth = CAVITY_PROFILE_DEPTH <= 0 ? 0 : -y / CAVITY_PROFILE_DEPTH;
-    for (let i = 0; i < bands.length; i += 1) {
-      if (depth <= bands[i].to) return i;
-    }
-    return Math.max(0, bands.length - 1);
-  };
-
   const steps = Math.max(1, Math.round(subdivision));
   const heights: number[] = [];
   for (let i = 0; i < CAVITY_PROFILE.length - 1; i += 1) {
@@ -91,9 +87,13 @@ export function strataRings(bands: readonly StrataBand[], subdivision = 3): Shel
 
   // A doubled ring at each boundary. The subdivided courses do not land on a
   // stratum edge, so the edge is inserted: the quad between the upper and lower
-  // copy has almost no height, and the band colour changes across that sliver
-  // instead of smearing through a whole course of the wall.
+  // copy has almost no height, and it is a crease in the wall's own surface. The
+  // shader darkens the contact between the two beds; this is the geometry under
+  // that line, so the edge survives being lit from any side.
   const boundaries = bands.slice(1).map((band) => -band.from * CAVITY_PROFILE_DEPTH);
+  // Both copies belong to the contact: the quad between them is the crease, so
+  // flagging only the upper one marked half of the thing the flag is for.
+  const contacts = boundaries.flatMap((edge) => [edge, edge - 0.006]);
   for (const y of boundaries) {
     heights.push(y, y - 0.006);
   }
@@ -110,8 +110,7 @@ export function strataRings(bands: readonly StrataBand[], subdivision = 3): Shel
     rings.push({
       y,
       r: profileRadiusAt(y),
-      band: bandAt(y),
-      boundary: boundaries.some((edge) => Math.abs(edge - y) < 1e-5),
+      boundary: contacts.some((contact) => Math.abs(contact - y) < 1e-5),
     });
   }
   return rings;
@@ -119,7 +118,6 @@ export function strataRings(bands: readonly StrataBand[], subdivision = 3): Shel
 
 export interface StrataShellGeometry {
   positions: Float32Array;
-  colors: Float32Array;
   indices: Uint32Array;
   cols: number;
   ringCount: number;
@@ -128,8 +126,9 @@ export interface StrataShellGeometry {
 }
 
 /**
- * Build the wall: one vertex per (ring, column), quads between rings, band
- * colours per vertex, radial relief on everything below the lip.
+ * Build the wall: one vertex per (ring, column), quads between rings, radial
+ * relief on everything below the lip. Geometry only - see the module note for
+ * why the colours are not this module's business any more.
  *
  * The lip ring is left exactly on the cut circle - it is the ring the terrain
  * conform moves - and the relief fades in below it so the mouth never grows a
@@ -137,7 +136,6 @@ export interface StrataShellGeometry {
  */
 export function buildStrataShell(options: {
   bands: readonly StrataBand[];
-  colors: readonly [number, number, number][];
   cols?: number;
   subdivision?: number;
   relief?: number;
@@ -149,13 +147,11 @@ export function buildStrataShell(options: {
   const relief = Math.max(0, options.relief ?? 0.16);
   const rings = strataRings(options.bands, options.subdivision ?? 3);
   const positions = new Float32Array(rings.length * cols * 3);
-  const colors = new Float32Array(rings.length * cols * 3);
   const indices: number[] = [];
 
   for (let ring = 0; ring < rings.length; ring += 1) {
     const spec = rings[ring];
     const depthFraction = CAVITY_PROFILE_DEPTH <= 0 ? 0 : -spec.y / CAVITY_PROFILE_DEPTH;
-    const colour = options.colors[Math.min(options.colors.length - 1, spec.band)] ?? [0, 0, 0];
     for (let c = 0; c < cols; c += 1) {
       const angle = (c / cols) * Math.PI * 2;
       // The cut wall is a cylinder: the first quarter of the depth stays exactly
@@ -169,15 +165,6 @@ export function buildStrataShell(options: {
       positions[index] = Math.cos(angle) * radius;
       positions[index + 1] = spec.y;
       positions[index + 2] = Math.sin(angle) * radius;
-      // Grit per vertex, so even a band is not a flat fill.
-      const grit = 0.92 + 0.16 * (0.5 + 0.5 * Math.sin(angle * 37.1 + spec.y * 53.7));
-      // The lower copy of a boundary ring is the seam: a dark line of packed earth
-      // where one layer meets the next. Without it the bands are three browns
-      // that read as one brown with lighting on it.
-      const seam = spec.boundary ? 0.62 : 1;
-      colors[index] = colour[0] * grit * seam;
-      colors[index + 1] = colour[1] * grit * seam;
-      colors[index + 2] = colour[2] * grit * seam;
     }
   }
 
@@ -196,7 +183,6 @@ export function buildStrataShell(options: {
 
   return {
     positions,
-    colors,
     indices: new Uint32Array(indices),
     cols,
     ringCount: rings.length,

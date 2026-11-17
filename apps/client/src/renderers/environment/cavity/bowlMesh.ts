@@ -1,10 +1,10 @@
 /**
  * The bowl mesh and its shader.
  *
- * This module owns three things and nothing else: the ring geometry built from
- * the profile, the vertex colours that carry the strata, and the GLSL that keeps
- * the shell inside the opening's silhouette. *Where* the bowl goes and how deep
- * it is are in `placement.ts`; what the eye may see is in `clip.ts`.
+ * This module owns two things and nothing else: the ring geometry built from the
+ * profile, and the GLSL that picks the strata per fragment and keeps the shell
+ * inside the opening's silhouette. *Where* the bowl goes and how deep it is are
+ * in `placement.ts`; what the eye may see is in `clip.ts`.
  */
 import * as THREE from 'three';
 import {
@@ -60,19 +60,15 @@ export function createCavityBowl(
 ): THREE.Mesh {
   // Built as a stack of bands, not one lathe. A single smooth funnel with a
   // colour gradient is exactly what the pit looked like: a bowl with dirt
-  // painted on it. `strataShell` gives each layer its own colour, a hard edge at
-  // every boundary, and radial clod relief so the wall has real silhouette and
-  // normals for the lit material below.
+  // painted on it. `strataShell` gives the wall courses of earth, a crease at
+  // every stratum contact, and radial clod relief so the wall has real silhouette
+  // and normals for the lit material below.
   const deep = deepSoil ?? subsoil.clone().multiplyScalar(0.78);
+  // No colours: the shell is geometry, and the strata are chosen per fragment
+  // below. The bands are passed so the ring table can put a crease at each
+  // contact, which is the part of a stratum edge that survives any lighting.
   const shell = buildStrataShell({
     bands: CAVITY_STRATA_BANDS,
-    // The lip ring is built out to the width the soil is cut at, not to the
-    // mouth, so the lip and the cut share one boundary.
-    colors: [
-      [topsoil.r, topsoil.g, topsoil.b],
-      [subsoil.r, subsoil.g, subsoil.b],
-      [deep.r, deep.g, deep.b],
-    ],
     cols: widthSegments,
     subdivision: CAVITY_STRATA_SUBDIVISION,
   });
@@ -91,7 +87,6 @@ export function createCavityBowl(
   geometry.userData.cols = shell.cols;
   geometry.setIndex(new THREE.BufferAttribute(shell.indices, 1));
   geometry.setAttribute('position', new THREE.BufferAttribute(shell.positions, 3));
-  geometry.setAttribute('color', new THREE.BufferAttribute(shell.colors, 3));
   geometry.computeVertexNormals();
 
   // Lit, not painted. The old unlit material was the reason the wall had no
@@ -100,7 +95,6 @@ export function createCavityBowl(
   // relief catch the scene's light, which is what makes dug earth read as a
   // surface you could put a spade in.
   const material = new THREE.MeshStandardMaterial({
-    vertexColors: true,
     roughness: 0.96,
     metalness: 0,
     // Both skins, then the one between the eye and the cavity is cut away in the
@@ -150,10 +144,12 @@ export function createCavityBowl(
   };
   material.userData.fillUniforms = fillUniforms;
 
-  // Vertex colours alone made the cavity a flat brown funnel. Modulate them
-  // with the same kind of world-space grain the surface uses, plus a depth
-  // gradient, so the cut wall reads as undisturbed dirt rather than a painted
-  // backing shell.
+  // The wall is lit geometry, so the shader adds only what light cannot know
+  // about a hole: the strata's own colours (from config), the contact hairline
+  // where two beds meet, the grain and clods that break up a flat fill, and the
+  // lip's shadow. It paints the albedo outright rather than tinting a baked
+  // vertex colour, so a stratum edge is a straight line at a depth, not a line
+  // that follows the wall's relief.
   material.onBeforeCompile = (shader) => {
     shader.uniforms.uBowlEye = clipUniforms.uBowlEye;
     shader.uniforms.uBowlCenter = clipUniforms.uBowlCenter;
@@ -194,11 +190,19 @@ uniform float uBowlApertureRadius;
 const float BOWL_SHELL_ABOVE_MOUTH_M = 0.02;
 // 1.03, not 0.98. The lip ring is built out to the *cut* width
 // (CAVITY_CUT_OVERREACH = 1.02), so keeping only 98% of the mouth discarded the
-// outer two per cent of the lip - which is exactly the sliver that reaches the
-// soil's edge. What showed through that annulus was the sky, as a pale dotted
-// seam all the way round the pit. Keeping a little past the overreach leaves the
-// guard against the bowl's back being drawn beside the hole and stops clipping
-// the one part of the wall that has to meet the soil.
+// lip's outer two per cent - the sliver that reaches the soil's edge - and what
+// showed through that annulus was the sky, as a pale dotted seam all the way
+// round the pit. Keeping a little past the overreach stops clipping the one part
+// of the wall that has to meet the soil.
+//
+// Measured on the live bowl (2026-11-17): the shell's widest vertex is at the
+// cut radius itself, max radius / uBowlApertureRadius = 1.00000, so at 1.03 this
+// cap never fires. It is a safety net, not the thing that holds the wall in the
+// mouth - the geometry does that, and so does the column clip at the aperture.
+// That is the answer to "does 1.03 let shell show beside the hole": nothing of
+// the shell reaches past the cut, so there is nothing for it to keep. It must
+// stay above CAVITY_CUT_OVERREACH all the same: below it, this rule eats the lip
+// and the sky comes through the mouth's edge.
 const float BOWL_MOUTH_KEEP_FRACTION = 1.03;
 uniform float uBowlSurfaceY;
 uniform float uBowlClipMode;
