@@ -109,7 +109,9 @@ import { TerrainService } from './ops/terrain.ts';
 import { createTickClock, type TickClock, tickClockStart, tickClockStop } from './ops/tickClock.ts';
 import { buildWelcomePayload } from './ops/welcomePayload.ts';
 import { loadWorldConfig } from './ops/world.ts';
+import { broadcastResourceDeltas } from './tick/resourceBroadcast.ts';
 import { handleSimulationCommand, type SimulationCommandPorts } from './tick/simulationCommands.ts';
+import { broadcastPlantStates, type PlantStateSnapshot } from './tick/stateBroadcast.ts';
 
 const STARTED_AT = Date.now();
 
@@ -2105,15 +2107,7 @@ class World {
       this.applyPhotosynthesis(plant, realPlant, dt);
     }
 
-    const isKeyframe = tick % this.config.keyframeIntervalTicks === 0;
-
-    const plantStates: Array<{
-      id: string;
-      totalBiomass: number;
-      totalEnergy: number;
-      totalUpkeep: number;
-      structure?: { damageHp: number; threshold: number };
-    }> = [];
+    const plantStates: PlantStateSnapshot[] = [];
     for (const player of this.players.values()) {
       if (!player.plantId) continue;
       const plant = this.plantWorld.getPlant(player.plantId);
@@ -2127,89 +2121,76 @@ class World {
         });
       }
     }
-
-    // Per-player, by interest cell. The payload is small but it went to every
-    // connection 20 times a second, including players whose cells contain none of
-    // these plants. The owner's own plant is always included so a client never
-    // loses sight of itself.
     const plantPositions = new Map<string, { x: number; z: number }>();
     for (const state of plantStates) {
       const plant = this.plantWorld.getPlant(state.id);
       const root = plant?.rootNodeId ? plant.nodes.get(plant.rootNodeId) : undefined;
       if (root) plantPositions.set(state.id, { x: root.x, z: root.z });
     }
-    const stateType = isKeyframe ? MESSAGE_TYPE.KEYFRAME : MESSAGE_TYPE.STATE;
-    // Honour the configured wire rate. A keyframe is always sent on its own
-    // interval even when the state cadence is slower, so a late joiner and a
-    // reconnecting client still get a full snapshot.
-    const stateStep = stepCadence(
-      this.stateCadenceAccumulatorMs,
-      dt * 1000,
-      this.config.clientSendRateHz,
+
+    // Per-player, by interest cell, on the configured wire cadence: every one of
+    // those rules lives in tick/stateBroadcast.ts.
+    const stateBroadcast = broadcastPlantStates(
+      {
+        send: (playerId, message, messageType) => {
+          const player = this.players.get(playerId);
+          if (player) this.writeIfHealthy(player.ws, message, messageType);
+        },
+        isInRange: (playerId, x, z) => this.interestManager.isPositionInRange(playerId, x, z),
+      },
+      {
+        tick,
+        dt,
+        keyframeIntervalTicks: this.config.keyframeIntervalTicks,
+        clientSendRateHz: this.config.clientSendRateHz,
+        worldBounds: this.config.worldBounds,
+        tileSize: this.resourceWorld.getTileSize(),
+        accumulatorMs: this.stateCadenceAccumulatorMs,
+        players: Array.from(this.players.values(), (player) => ({
+          playerId: player.playerId,
+          plantId: player.plantId,
+        })),
+        states: plantStates,
+        positions: plantPositions,
+      },
     );
-    this.stateCadenceAccumulatorMs = stateStep.nextAccumulatorMs;
-    const sendStateNow = isKeyframe || stateStep.due;
-    const payloadFor = (playerId: string, ownPlantId: string | null) => ({
-      tick,
-      plants: plantStates.filter((state) => {
-        if (state.id === ownPlantId) return true;
-        const position = plantPositions.get(state.id);
-        return position
-          ? this.interestManager.isPositionInRange(playerId, position.x, position.z)
-          : false;
-      }),
-      worldBounds: this.config.worldBounds,
-      tileSize: this.resourceWorld.getTileSize(),
-    });
-    for (const player of this.players.values()) {
-      if (!sendStateNow) {
-        this.stateMessagesSkipped += 1;
-        continue;
-      }
-      this.stateMessagesSent += 1;
-      this.writeIfHealthy(
-        player.ws,
-        JSON.stringify({ type: stateType, payload: payloadFor(player.playerId, player.plantId) }),
-        stateType,
-      );
-    }
+    this.stateCadenceAccumulatorMs = stateBroadcast.nextAccumulatorMs;
+    this.stateMessagesSent += stateBroadcast.sent;
+    this.stateMessagesSkipped += stateBroadcast.skipped;
+    // The root readout rides the same cadence as the state it belongs to.
+    const sendStateNow = stateBroadcast.due;
 
     // Broadcast only dirty (changed) tiles - delta compression for bandwidth efficiency.
     // Count first: building the tile array for a whole-grid update allocates ~65k
     // objects and touches three maps, which at 20 Hz cost more than the broadcast.
-    const gridWidth = this.resourceWorld.getWidth();
-    const gridHeight = this.resourceWorld.getHeight();
-    const nowMs = Date.now();
-    const dirtyCount = this.resourceWorld.getDirtyTileCount();
-    const isWholeGrid = dirtyCount > COMPACT_GRID_TILE_THRESHOLD;
     // Whole-grid updates (daylight / weather re-tinting every tile) are capped at
     // one per second; skipping one is harmless because the next event dirties
     // every tile again. Small deltas are never delayed.
-    const wholeGridThrottled =
-      isWholeGrid && nowMs - this.lastCompactGridBroadcastAt < World.COMPACT_GRID_MIN_INTERVAL_MS;
-    if (dirtyCount > 0 && !wholeGridThrottled) {
-      const dirtyTiles = this.resourceWorld.getDirtyTiles();
-      if (isWholeGrid) {
-        this.lastCompactGridBroadcastAt = nowMs;
-        this.broadcast(MESSAGE_TYPE.RESOURCE_UPDATE, {
-          tick,
-          width: gridWidth,
-          height: gridHeight,
+    this.lastCompactGridBroadcastAt = broadcastResourceDeltas(
+      {
+        dirtyTileCount: () => this.resourceWorld.getDirtyTileCount(),
+        dirtyTiles: () => this.resourceWorld.getDirtyTiles(),
+        grid: () => ({
+          width: this.resourceWorld.getWidth(),
+          height: this.resourceWorld.getHeight(),
           tileSize: this.resourceWorld.getTileSize(),
-          delta: true,
-          gridBase64: encodeResourceGridBase64(gridWidth, gridHeight, dirtyTiles),
-        });
-      } else {
-        this.broadcast(MESSAGE_TYPE.RESOURCE_UPDATE, {
-          tick,
-          tiles: dirtyTiles,
-          width: gridWidth,
-          height: gridHeight,
-          tileSize: this.resourceWorld.getTileSize(),
-          delta: true,
-        });
-      }
-    }
+        }),
+        encodeWholeGrid: (tiles) =>
+          encodeResourceGridBase64(
+            this.resourceWorld.getWidth(),
+            this.resourceWorld.getHeight(),
+            tiles as Parameters<typeof encodeResourceGridBase64>[2],
+          ),
+        broadcast: (payload) => this.broadcast(MESSAGE_TYPE.RESOURCE_UPDATE, payload),
+        now: () => Date.now(),
+      },
+      {
+        tick,
+        wholeGridThreshold: COMPACT_GRID_TILE_THRESHOLD,
+        minIntervalMs: World.COMPACT_GRID_MIN_INTERVAL_MS,
+      },
+      { lastWholeGridAt: this.lastCompactGridBroadcastAt },
+    ).lastWholeGridAt;
 
     for (const player of this.players.values()) {
       if (!player.plantId) continue;

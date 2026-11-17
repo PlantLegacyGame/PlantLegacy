@@ -396,6 +396,16 @@ state machine and the socket - it moves when the context carries those.
    tested module. Each module has its own tests — the first coverage any of these
    paths has had.
 
+   The tick loop's two fanouts have owners as well: `tick/stateBroadcast.ts`
+   (`broadcastPlantStates`) holds the per-player STATE/KEYFRAME payload, the
+   interest-cell filter, the wire cadence and the "a keyframe always sends on its
+   own interval" rule; `tick/resourceBroadcast.ts` (`broadcastResourceDeltas`)
+   holds the dirty-tile delta and the whole-grid throttle, counting before it
+   builds so a re-tint does not allocate tens of thousands of objects at 20 Hz.
+   Both are functions of ports, and the live check counted real frames rather
+   than trusting the wiring: 53 STATE + 6 KEYFRAME in three seconds at a 20 Hz
+   wire with a keyframe every ten ticks, weather at 2 Hz.
+
 ## Tracking
 
 Update this file at each task boundary. Deeper evidence (tests, manual checks,
