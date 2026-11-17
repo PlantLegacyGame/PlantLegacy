@@ -352,15 +352,22 @@ state machine and the socket - it moves when the context carries those.
    take free-form actions (`resolveDevWeatherCommand`, `resolveDevTileCommand`).
    The `/config/*` routes each carried their own `await import('node:fs/promises')`
    and flatten loop; they now share one reader in `ops/configRoutes.ts`
-   (`readConfigValues`, with `readFlatConfig` flattening on top of it), which is
-   also the first thing in the request handler that a `http/` module can take
-   over without dragging the world with it.
-   The dev switch itself stays where it is: it names about forty `World` members
-   (send counters, `onTick`, `stepSimulationOnce`, persistence, the damage
-   pipeline), so moving it now would mean inventing a forty-member façade in
-   place of the world those members belong to. It moves with the `http/`+`tick/`
-   split, which is when they get real owners. Each module has its own tests —
-   the first coverage any of these paths has had.
+   (`readConfigValues`, plus `readFlatConfig` on top of it), which is also the
+   first thing in the request handler that a `http/` module can take over
+   without dragging the world with it.
+   The dev switch moves by family rather than as one block: each family is the
+   verbs it actually uses, so no case has to be handed a world. The first is
+   `tick/simulationCommands.ts` (`handleSimulationCommand`) — tick rate, pause,
+   resume, single step, the interest and tier knobs, force-save, clear
+   persistence, the three dumps, the client-only renderer acks, the stress test
+   and `dev_set_config` — behind a `SimulationCommandPorts` view built per action
+   from the calling socket. That is fifteen of the thirty-six commands, and it
+   removed the switch's only users of `stepSimulationOnce`, the send counters and
+   the persistence calls. The plant/growth/mutation/damage families stay in
+   `main.ts` for now, because they share the plant lookup and the damage
+   pipeline; they leave with the `http/`+`tick/` split, which gives those members
+   real owners. Each module has its own tests — the first coverage any of these
+   paths has had.
 
 ## Tracking
 

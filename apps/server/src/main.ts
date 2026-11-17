@@ -100,6 +100,7 @@ import { TerrainService } from './ops/terrain.ts';
 import { createTickClock, type TickClock, tickClockStart, tickClockStop } from './ops/tickClock.ts';
 import { buildWelcomePayload } from './ops/welcomePayload.ts';
 import { loadWorldConfig } from './ops/world.ts';
+import { handleSimulationCommand, type SimulationCommandPorts } from './tick/simulationCommands.ts';
 
 const STARTED_AT = Date.now();
 
@@ -2615,6 +2616,8 @@ class World {
     };
 
     try {
+      // Clock, save, log and config commands: tick/simulationCommands.ts.
+      if (handleSimulationCommand(this.simulationCommandPorts(ws), action)) return;
       switch (action.type) {
         case 'dev_set_resources': {
           // Resource simulation rates
@@ -2978,145 +2981,6 @@ class World {
           this.sendDevResponse(ws, action.type, { ok: true, newPlantId: newPlant.id });
           break;
         }
-        case 'dev_set_tick_rate': {
-          if (action.rate !== undefined) {
-            this.setTickRate(action.rate as number);
-          }
-          this.sendDevResponse(ws, action.type, { ok: true });
-          break;
-        }
-        case 'dev_pause_simulation': {
-          this.pauseSimulation();
-          this.sendDevResponse(ws, action.type, { ok: true });
-          break;
-        }
-        case 'dev_resume_simulation': {
-          this.resumeSimulation();
-          this.sendDevResponse(ws, action.type, { ok: true });
-          break;
-        }
-        case 'dev_step_simulation': {
-          this.stepSimulationOnce();
-          this.sendDevResponse(ws, action.type, { ok: true });
-          break;
-        }
-        case 'dev_set_simulation': {
-          if (action.cell_size !== undefined)
-            this.interestManager.setCellSize(action.cell_size as number);
-          if (action.interest_ring_radius !== undefined)
-            this.interestManager.setRingRadius(action.interest_ring_radius as number);
-          // These three used to call InterestManager no-ops, so the controls did
-          // nothing. The active rate changes the single simulation/wire clock,
-          // which also updates the plant tier rates; near/dormant only exist
-          // inside PlantWorld.
-          if (action.active_tick_rate_hz !== undefined) {
-            const hz = Number(action.active_tick_rate_hz);
-            if (Number.isFinite(hz) && hz > 0) {
-              this.setTickRate(hz);
-            }
-          }
-          if (action.near_tick_rate_hz !== undefined) {
-            this.plantWorld.setTierRates({ nearTickRateHz: Number(action.near_tick_rate_hz) });
-          }
-          if (action.dormant_step_interval_sec !== undefined) {
-            this.plantWorld.setTierRates({
-              dormantStepIntervalSec: Number(action.dormant_step_interval_sec),
-            });
-          }
-          this.sendDevResponse(ws, action.type, { ok: true });
-          break;
-        }
-        case 'dev_force_save': {
-          // This used to call a placeholder that saved nothing, and it ignored the
-          // returned promise. Save for real, and report what actually landed.
-          saveAllPlants(
-            this.plantWorld,
-            this.getPlantPersistence(),
-            this.log,
-            'dev_force_save',
-            this.plantEventLog,
-          )
-            .then((result) => this.sendDevResponse(ws, action.type, { ok: true, ...result }))
-            .catch((error: unknown) =>
-              this.sendDevResponse(ws, action.type, { ok: false, error: String(error) }),
-            );
-          break;
-        }
-        case 'dev_clear_persistence': {
-          this.getPlantPersistence()
-            .clearAll()
-            .then(() => this.sendDevResponse(ws, action.type, { ok: true }))
-            .catch((error: unknown) =>
-              this.sendDevResponse(ws, action.type, { ok: false, error: String(error) }),
-            );
-          break;
-        }
-        case 'dev_log_plants': {
-          this.log.info('Dev: Plant dump', {
-            plants: this.plantWorld
-              .getAllPlants()
-              .map((p) => ({ id: p.id, owner: p.ownerId, biomass: p.totalBiomass })),
-          });
-          this.sendDevResponse(ws, action.type, { ok: true });
-          break;
-        }
-        case 'dev_log_resources': {
-          this.log.info('Dev: Resource dump', { resources: this.resourceWorld.getAllTiles() });
-          this.sendDevResponse(ws, action.type, { ok: true });
-          break;
-        }
-        case 'dev_log_network': {
-          this.log.info('Dev: Network stats', {
-            players: this.players.size,
-            connections: connectionRegistryGetConnectionCount(this.connectionRegistry),
-            stateSent: this.stateMessagesSent,
-            stateSkipped: this.stateMessagesSkipped,
-            weatherSent: this.weatherMessagesSent,
-            weatherSkipped: this.weatherMessagesSkipped,
-            rootReadoutsSkipped: this.rootMessagesSkipped,
-          });
-          this.sendDevResponse(ws, action.type, {
-            ok: true,
-            stateSent: this.stateMessagesSent,
-            stateSkipped: this.stateMessagesSkipped,
-            weatherSent: this.weatherMessagesSent,
-            weatherSkipped: this.weatherMessagesSkipped,
-            rootReadoutsSkipped: this.rootMessagesSkipped,
-          });
-          break;
-        }
-        case 'dev_toggle_webgpu':
-        case 'dev_reinit_renderer':
-        case 'dev_dump_shaders': {
-          // Client-side only actions, just acknowledge
-          this.sendDevResponse(ws, action.type, { ok: true });
-          break;
-        }
-        case 'dev_stress_test': {
-          // Clamp: the count arrives from the client and an unbounded value would
-          // create plants until the server runs out of memory.
-          const requested = Number(action.count);
-          const count = Number.isFinite(requested)
-            ? Math.max(1, Math.min(500, Math.floor(requested)))
-            : 100;
-          for (let i = 0; i < count; i++) {
-            this.plantWorld.createRandomPlant();
-          }
-          this.sendDevResponse(ws, action.type, { ok: true, created: count });
-          break;
-        }
-        case 'dev_set_config': {
-          const key = action.key as string;
-          const value = action.value;
-          if (!key || value === undefined) {
-            this.sendDevResponse(ws, action.type, { ok: false, error: 'missing_key_or_value' });
-            break;
-          }
-          // Exactly one response per request. The previous version sent a
-          // success after the error branch too, so failures looked successful.
-          this.sendDevResponse(ws, action.type, this.applyDevConfig(key, value));
-          break;
-        }
         default: {
           this.log.warn('Unknown dev action', { type: action.type });
           this.sendDevResponse(ws, action.type, { ok: false, error: 'unknown_action' });
@@ -3165,6 +3029,53 @@ class World {
         payload: { action: actionType, ...payload },
       }),
     );
+  }
+
+  /**
+   * The clock/save/log dev commands' view of this world. Rebuilt per action
+   * because the answer goes back on the socket that asked.
+   */
+  private simulationCommandPorts(ws: WebSocket): SimulationCommandPorts {
+    return {
+      setTickRate: (hz) => this.setTickRate(hz),
+      pauseSimulation: () => this.pauseSimulation(),
+      resumeSimulation: () => this.resumeSimulation(),
+      stepSimulationOnce: () => this.stepSimulationOnce(),
+      setInterestCellSize: (size) => this.interestManager.setCellSize(size),
+      setInterestRingRadius: (radius) => this.interestManager.setRingRadius(radius),
+      setTierRates: (rates) => this.plantWorld.setTierRates(rates),
+      savePlants: async () => {
+        const result = await saveAllPlants(
+          this.plantWorld,
+          this.getPlantPersistence(),
+          this.log,
+          'dev_force_save',
+          this.plantEventLog,
+        );
+        return { ...result };
+      },
+      clearPersistence: () => this.getPlantPersistence().clearAll(),
+      createRandomPlants: (count) => {
+        for (let i = 0; i < count; i++) this.plantWorld.createRandomPlant();
+      },
+      applyConfig: (key, value) => this.applyDevConfig(key, value),
+      plantSummaries: () =>
+        this.plantWorld
+          .getAllPlants()
+          .map((p) => ({ id: p.id, owner: p.ownerId, biomass: p.totalBiomass })),
+      resourceTiles: () => this.resourceWorld.getAllTiles(),
+      networkStats: () => ({
+        players: this.players.size,
+        connections: connectionRegistryGetConnectionCount(this.connectionRegistry),
+        stateSent: this.stateMessagesSent,
+        stateSkipped: this.stateMessagesSkipped,
+        weatherSent: this.weatherMessagesSent,
+        weatherSkipped: this.weatherMessagesSkipped,
+        rootReadoutsSkipped: this.rootMessagesSkipped,
+      }),
+      respond: (actionType, payload) => this.sendDevResponse(ws, actionType, payload),
+      logInfo: (message, meta) => this.log.info(message, meta),
+    };
   }
 
   start(): void {
