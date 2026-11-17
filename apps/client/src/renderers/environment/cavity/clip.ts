@@ -96,7 +96,17 @@ export const CAVITY_CLIP_MODE_VALUE: Record<CavityClipMode, number> = {
 /** Decide the frame's clipping from the eye alone. */
 export function cavityClipPolicy(
   eyeY: number,
-  surfaceY: number,
+  /**
+   * Ground drawn under the eye, not the opening's mouth plane.
+   *
+   * These differ wherever the pit's mouth is not the eye's own ground: the
+   * mouth is fitted to the lowest ground under the rim, so an eye on a slope or
+   * in a hollow stands below the mouth's plane while still well above the earth
+   * it stands on. Passed the plane, that eye was called buried and the shell lost
+   * its near half and its edges, leaving water and sky visible through the pit's
+   * rim from level angles.
+   */
+  eyeGroundY: number,
   inside: boolean,
 ): CavityClipPolicy {
   // Two different clips, because the eye needs two different things.
@@ -108,5 +118,5 @@ export function cavityClipPolicy(
   // off-centre eye crosses the surface plane outside the aperture), so the column
   // test does that job instead and cannot remove any ground.
   if (inside) return { mode: 'none' };
-  return { mode: eyeY < surfaceY - 0.02 ? 'buried' : 'column' };
+  return { mode: eyeY < eyeGroundY - 0.02 ? 'buried' : 'column' };
 }

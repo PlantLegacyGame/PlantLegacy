@@ -75,7 +75,16 @@ export function updateCavityBowl(
       horizontalScale: placement.horizontalScale,
       verticalScale: placement.verticalScale,
     });
-    const policy = cavityClipPolicy(eye.y, surfaceY, inside);
+    // The eye's *own* ground answers "is the eye under the surface", not the
+    // mouth's plane. The mouth sits on the lowest ground under the rim, so on a
+    // slope or in a hollow an eye standing in the open is below that plane while
+    // still metres above the ground it stands on. Measured against the plane it
+    // was classified buried, and the buried clip drops the shell's near half and
+    // every fragment whose sightline leaves the plane outside the aperture: the
+    // pit's edges opened onto the water and the sky from level angles. Measured
+    // against its own ground the same eye is what it is - outside and above.
+    const eyeGroundY = surfaceHeight ? surfaceHeight(eye.x, eye.z) : surfaceY;
+    const policy = cavityClipPolicy(eye.y, eyeGroundY, inside);
     clip.uBowlEye.value.copy(eye);
     clip.uBowlCenter.value.copy(bowl.position);
     clip.uBowlApertureCenter.value.set(centre.x, centre.z);
@@ -91,6 +100,8 @@ export function updateCavityBowl(
       0.05,
       placement.horizontalScale * CAVITY_CUT_OVERREACH,
     );
+    // Still the mouth's plane: the sightline test asks where the ray leaves the
+    // opening, which is the plane the lip is fitted to.
     clip.uBowlSurfaceY.value = surfaceY;
     clip.uBowlClipMode.value = CAVITY_CLIP_MODE_VALUE[policy.mode];
   };

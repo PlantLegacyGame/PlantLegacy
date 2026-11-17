@@ -73,6 +73,19 @@ describe('when the bowl is drawn through the hole', () => {
     assert.equal(cavityClipPolicy(10, 0, true).mode, 'none');
   });
 
+  it('judges a level eye by its own ground, not by the mouth plane', () => {
+    // The mouth sits on the lowest ground under the rim, so an eye in the open on
+    // a slope is below that plane while still metres above the earth it stands
+    // on. Measured against the plane, this eye took the buried clip: the shell's
+    // near half and its edges were dropped and water and sky showed through the
+    // pit's rim from level angles.
+    const mouthY = 20.64;
+    const eyeY = 20.35;
+    const eyeOwnGroundY = 17.31;
+    assert.ok(eyeY < mouthY, 'the case under test is an eye below the mouth plane');
+    assert.equal(cavityClipPolicy(eyeY, eyeOwnGroundY, false).mode, 'column');
+  });
+
   it('clips a buried eye outside the pit to the opening and drops the near half', () => {
     // One mode carries both: the sightline rule at the opening and the
     // near-half cut, because they always applied together anyway.
