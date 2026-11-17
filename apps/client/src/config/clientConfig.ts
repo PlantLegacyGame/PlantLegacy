@@ -158,8 +158,13 @@ export interface RenderConfig {
   terrainAmplitudeM: number;
   /** Depth of the dirt layer under the surface, in metres. */
   soilDepthM: number;
-  /** Minimum height the eye keeps above the terrain it is over, in metres. */
-  cameraGroundClearanceM: number;
+  /**
+   * How close the eye may get to the terrain it is over, in metres.
+   *
+   * This is a contact epsilon, not a stand-off: the eye is allowed down to the
+   * dirt and never through it.
+   */
+  cameraGroundTouchM: number;
   /** Gravity for the player's vertical physics, in metres per second squared. */
   playerGravityMps2: number;
   /** How far above the ground the player spawns, in metres. */
@@ -567,8 +572,8 @@ interface RenderConfigResponse {
   terrainAmplitudeM?: number;
   soil_depth_m?: number;
   soilDepthM?: number;
-  camera_ground_clearance_m?: number;
-  cameraGroundClearanceM?: number;
+  camera_ground_touch_m?: number;
+  cameraGroundTouchM?: number;
   player_gravity_mps2?: number;
   playerGravityMps2?: number;
   player_spawn_height_m?: number;
@@ -943,10 +948,8 @@ function normalizeRenderConfig(data: RenderConfigResponse, fallback: RenderConfi
     terrainAmplitudeM:
       data.terrain_amplitude_m ?? data.terrainAmplitudeM ?? fallback.terrainAmplitudeM,
     soilDepthM: data.soil_depth_m ?? data.soilDepthM ?? fallback.soilDepthM,
-    cameraGroundClearanceM:
-      data.camera_ground_clearance_m ??
-      data.cameraGroundClearanceM ??
-      fallback.cameraGroundClearanceM,
+    cameraGroundTouchM:
+      data.camera_ground_touch_m ?? data.cameraGroundTouchM ?? fallback.cameraGroundTouchM,
     playerGravityMps2:
       data.player_gravity_mps2 ?? data.playerGravityMps2 ?? fallback.playerGravityMps2,
     playerSpawnHeightM:
@@ -1304,7 +1307,7 @@ export async function loadRenderConfig(serverOrigin: string): Promise<RenderConf
     terrainRadius: 300.0,
     terrainAmplitudeM: 2.4,
     soilDepthM: 1.6,
-    cameraGroundClearanceM: 0.3,
+    cameraGroundTouchM: 0.02,
     playerGravityMps2: 9.81,
     playerSpawnHeightM: 3.5,
     rootAuraRadius: 3.0,

@@ -629,14 +629,14 @@
       ],
       "notes": "Depth of the topsoil layer below the surface; below it is subsoil, then bedrock."
     },
-    "camera_ground_clearance_m": {
+    "camera_ground_touch_m": {
       "type": "number",
-      "value": 0.3,
+      "value": 0.02,
       "range": [
         0,
-        3
+        0.5
       ],
-      "notes": "Minimum eye height above the local ground when Root Sight is closed."
+      "notes": "How close the eye may get to the ground when Root Sight is closed. It may touch the dirt and look along it, never pass through: this is a contact epsilon, not a stand-off."
     },
     "player_gravity_mps2": {
       "type": "number",

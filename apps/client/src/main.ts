@@ -2060,28 +2060,28 @@ function settlePlayerOnGround(deltaTime: number): void {
     return;
   }
 
-  // Keep the eye above the dirt by limiting the orbit angle instead of jerking
-  // the camera up after OrbitControls has already moved it. The old post-hoc
-  // clamp fought every frame of a downward drag, which is the near-terrain
-  // up/down vibration: rotate, clamp, rotate, clamp. A ground-aware polar limit
-  // stops the rotation before it can happen, so the camera settles.
-  const clearance = renderConfig?.cameraGroundClearanceM ?? 0.25;
+  // Keep the eye out of the dirt in two halves: this polar limit stops a
+  // downward drag before it can put the eye under the soil, and
+  // `clampEyeToGround` catches whatever the prediction misses after the
+  // controls have moved. The limit alone used to be the whole story, and it is
+  // what held the camera metres up: it took the higher of the target's ground
+  // and the eye's, so standing on a rise and orbiting to the downhill side kept
+  // the eye at the hilltop's height over a valley it was already above.
+  const touch = renderConfig?.cameraGroundTouchM ?? 0.02;
   const offset = camera.position.clone().sub(controls.target);
   const distance = Math.max(1e-3, offset.length());
   offset.y = 0;
   if (offset.lengthSq() < 1e-8) offset.set(0, 0, 1);
   offset.normalize();
-  // At the horizontal end of the orbit the eye sits roughly `distance` away
-  // from the target, so sample the hill under that spot. Taking the higher of
-  // the target and eye ground keeps the camera out of a slope as well as out of
-  // the flat dirt.
-  const groundUnderEye = planetTerrainY(
+  // Sample the ground where the eye is heading - the horizontal end of the
+  // orbit - and only that ground.
+  const eyeGroundUnder = planetTerrainY(
     planetRadius,
     controls.target.x + offset.x * distance,
     controls.target.z + offset.z * distance,
     field,
   );
-  const floorY = Math.max(groundY, groundUnderEye) + clearance;
+  const floorY = eyeGroundUnder + touch;
   const cosLimit = THREE.MathUtils.clamp((floorY - controls.target.y) / distance, -1, 1);
   const groundLimit = Math.acos(cosLimit);
   const configuredLimit = renderConfig?.cameraMaxPolarAngle ?? Math.PI / 2 - 0.05;
@@ -2093,6 +2093,36 @@ function settlePlayerOnGround(deltaTime: number): void {
     controls.minPolarAngle + 0.001,
     Math.min(configuredLimit, groundLimit),
   );
+}
+
+/**
+ * Stop the eye crossing the ground when Root Sight is closed.
+ *
+ * A vertical-only clamp applied after the controls have moved the camera: x/z
+ * stay where the orbit put them, so OrbitControls re-derives its sphere from
+ * the corrected position on the next frame. Rotating the offset back instead -
+ * the old post-hoc clamp - is what made the near-terrain view vibrate.
+ *
+ * The eye may touch the dirt: `camera_ground_touch_m` is a few centimetres of
+ * contact, not a stand-off. Root Sight is exempt by design, since burrowing is
+ * how it reaches the roots; `settlePlayerOnGround` gives it the depth floor.
+ */
+function clampEyeToGround(): void {
+  if (planetViewActive) return;
+  const planetRadius = renderConfig?.planetRadiusM ?? 0;
+  if (planetRadius <= 0) return;
+  // Progress, not the on/off flag: while the cutaway opens or closes the eye is
+  // still allowed under the soil, so the ground cannot shove it up mid-fade.
+  if ((rootSightMachine?.progress ?? 0) > 0.001) return;
+  const touch = renderConfig?.cameraGroundTouchM ?? 0.02;
+  const ground = planetTerrainY(
+    planetRadius,
+    camera.position.x,
+    camera.position.z,
+    getTerrainParams(),
+  );
+  const floor = ground + touch;
+  if (camera.position.y < floor) camera.position.y = floor;
 }
 
 // T01: Plant Renderer
@@ -8739,6 +8769,7 @@ function renderFrame(deltaTime: number): void {
   }
   controls.update();
   resolveCameraCollision();
+  clampEyeToGround();
   // OrbitControls only applies minDistance while dollies are in progress, so
   // enforce the floor here too: after leaving the root layer the camera must be
   // pushed back out of the plant instead of staying inside it.
@@ -9492,6 +9523,8 @@ interface PlantLegacyDebugHandle {
   };
   readonly plantEnergy: number;
   readonly plantBiomass: number;
+  /** Terrain height under a world x/z. The camera floor's datum, in metres. */
+  readonly groundAt: (x: number, z: number) => number;
   /** AL-01 benchmark: start a run, poll it, read the last report. */
   readonly benchmark: {
     start: () => void;
@@ -9563,5 +9596,7 @@ if (import.meta.env.DEV) {
     get plantBiomass() {
       return plantBiomass;
     },
+    groundAt: (x: number, z: number) =>
+      planetTerrainY(renderConfig?.planetRadiusM ?? 0, x, z, getTerrainParams()),
   };
 }
