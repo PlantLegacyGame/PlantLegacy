@@ -406,6 +406,16 @@ state machine and the socket - it moves when the context carries those.
    than trusting the wiring: 53 STATE + 6 KEYFRAME in three seconds at a 20 Hz
    wire with a keyframe every ten ticks, weather at 2 Hz.
 
+   Verifying that move found a dead feature, not a regression: the tile grid had
+   never published a single delta. `markCellDirty` stays silent until the first
+   full grid has gone out, and the flag that lifts that guard was set only by
+   `getDirtyTiles` — which is only reached once something is already dirty. So
+   nothing was ever dirty: daylight re-tints, weather and dev tile edits changed
+   the simulation and stopped there, and the client kept drawing the grid it
+   fetched at join. The RESOURCE_QUERY full-grid answer now calls
+   `markFullGridSent()`; a live probe sends that query, edits a tile and receives
+   the delta it never used to get (15 in three seconds).
+
 ## Tracking
 
 Update this file at each task boundary. Deeper evidence (tests, manual checks,

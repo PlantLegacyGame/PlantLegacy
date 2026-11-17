@@ -471,3 +471,22 @@ describe('ResourceWorld plant tile coverage', () => {
     assert.equal(coverage.count, 1);
   });
 });
+
+describe('tile deltas before and after the first full grid', () => {
+  it('records nothing until a client has the full grid', () => {
+    const world = makeWorld();
+    world.setTileResources(1, 1, { moisture: 0.5 });
+    // The flag exists so the first tick does not push a 65k-tile burst.
+    assert.equal(world.getDirtyTileCount(), 0);
+  });
+
+  it('publishes a delta once the full grid has been sent', () => {
+    const world = makeWorld();
+    world.markFullGridSent();
+    world.setTileResources(1, 1, { moisture: 0.5 });
+    assert.ok(world.getDirtyTileCount() > 0);
+    assert.ok(world.getDirtyTiles().length > 0);
+    // Consumed by the send: the next tick has nothing to repeat.
+    assert.equal(world.getDirtyTileCount(), 0);
+  });
+});

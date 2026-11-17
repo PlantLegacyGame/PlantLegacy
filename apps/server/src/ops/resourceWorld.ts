@@ -468,6 +468,20 @@ export class ResourceWorld {
   }
 
   /**
+   * Record that a client has the full grid, so per-tick deltas may begin.
+   *
+   * `markCellDirty` stays silent until the first full grid has gone out, to avoid
+   * pushing a 65k-tile burst on the first tick. That flag used to be set only by
+   * `getDirtyTiles`, which is only reached when something is already dirty — so
+   * nothing was ever dirty and no delta ever left the server: daylight re-tints,
+   * weather and dev tile edits all reached the simulation and stopped there. The
+   * RESOURCE_QUERY full-grid answer is the event the flag was waiting for.
+   */
+  markFullGridSent(): void {
+    this.hasBroadcast = true;
+  }
+
+  /**
    * Peek at dirty tiles without mutating state (for read-only access).
    * Does not clear dirty cells or update lastBroadcast maps.
    */

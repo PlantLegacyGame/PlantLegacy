@@ -1646,6 +1646,9 @@ class World {
                   coveredTileCount: this.resourceWorld.getCoveredTileCount(plant),
                   fullGrid: true,
                 });
+                // The client now holds the whole grid, so per-tick deltas may
+                // start: without this the grid never published a change at all.
+                this.resourceWorld.markFullGridSent();
               }
             }
             break;
