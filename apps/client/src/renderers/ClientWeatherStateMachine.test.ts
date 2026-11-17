@@ -72,6 +72,17 @@ describe('client lightning', () => {
     assert.equal(sky.isTransitioning(), false, 'the fade ran to the end, not back to zero');
   });
 
+  it('carries no lightning copy in the interpolated targets', () => {
+    // The renderer used to read `targets.lightningIntensity`, a field initialised
+    // to 0 and never written: every strike was drawn as clear sky. The getter is
+    // the only source, and a target copy must not come back.
+    const storm = machine();
+    storm.triggerLightning();
+    const targets = storm.update(1000 / 60, 0.5, 1);
+    assert.equal('lightningIntensity' in targets, false);
+    assert.ok(storm.getLightningIntensity() > 0);
+  });
+
   it('does not flash when the weather changes state', () => {
     const clear = createClientWeatherStateMachine(CONFIG);
     clear.requestStateChange('thunderstorm_active');

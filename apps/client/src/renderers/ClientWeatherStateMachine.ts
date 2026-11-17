@@ -23,8 +23,9 @@ export interface WeatherVisualTargets {
   fogFar: number;
   soilMoisture: number;
   isRaining: boolean;
-  lightningIntensity: number;
-  lightningTimer: number;
+  // No lightning field: a strike is read from `getLightningIntensity()`. A copy
+  // kept here was initialised to 0 and never written, so every reader of it saw
+  // clear skies.
 }
 
 export interface ClientWeatherConfig {
@@ -89,8 +90,6 @@ export class ClientWeatherStateMachine {
     fogFar: 0,
     soilMoisture: 0,
     isRaining: false,
-    lightningIntensity: 0,
-    lightningTimer: 0,
   };
 
   // Target visual values for current state
@@ -101,8 +100,6 @@ export class ClientWeatherStateMachine {
     fogFar: 0,
     soilMoisture: 0,
     isRaining: false,
-    lightningIntensity: 0,
-    lightningTimer: 0,
   };
 
   constructor(config: ClientWeatherConfig) {
@@ -156,7 +153,14 @@ export class ClientWeatherStateMachine {
    * Update the state machine with delta time.
    * Returns current visual targets (interpolated during transitions).
    */
-  update(deltaMs: number, timeOfDay: number, _sunIntensity: number): WeatherVisualTargets {
+  /**
+   * One frame of visuals.
+   *
+   * `dtMs` is **milliseconds**: the cross-fade and the strike decay are both
+   * timed in ms (`weather_transition_ms`, `lightning_flash_duration_ms`). The
+   * render loop works in seconds, so its caller multiplies by 1000.
+   */
+  update(dtMs: number, timeOfDay: number, _sunIntensity: number): WeatherVisualTargets {
     this.timeOfDay = timeOfDay;
 
     // Calculate sun elevation and day factor
@@ -170,7 +174,7 @@ export class ClientWeatherStateMachine {
     if (this.transitionProgress < 1) {
       this.transitionProgress = Math.min(
         1,
-        this.transitionProgress + Math.max(0, deltaMs) / Math.max(1, this.transitionDuration),
+        this.transitionProgress + Math.max(0, dtMs) / Math.max(1, this.transitionDuration),
       );
 
       // Smooth interpolation using ease-in-out
@@ -182,7 +186,7 @@ export class ClientWeatherStateMachine {
     }
 
     // Update lightning
-    this.updateLightning(deltaMs);
+    this.updateLightning(dtMs);
 
     return { ...this.currentTargets };
   }
@@ -210,10 +214,10 @@ export class ClientWeatherStateMachine {
     this.lightningIntensity = Math.max(0, this.config.lightning.maxIntensity);
   }
 
-  private updateLightning(deltaMs: number): void {
+  private updateLightning(dtMs: number): void {
     if (this.lightningIntensity <= 0) return;
     const flashDuration = Math.max(0.016, this.config.lightning.flashDuration);
-    this.lightningIntensity = Math.max(0, this.lightningIntensity - deltaMs / 1000 / flashDuration);
+    this.lightningIntensity = Math.max(0, this.lightningIntensity - dtMs / 1000 / flashDuration);
   }
 
   /**

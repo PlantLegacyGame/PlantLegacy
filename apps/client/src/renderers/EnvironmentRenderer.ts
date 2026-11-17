@@ -50,6 +50,7 @@ import {
   updateGroundFill,
   updateGroundSun,
 } from './environment/ground.js';
+import { createLightningBolt, type LightningBolt } from './environment/lightningBolt.js';
 import { localSkyBrightness } from './environment/localBrightness.js';
 import { createOcean, type Ocean } from './environment/ocean.js';
 import { planetTerrainY } from './environment/planetSurface.js';
@@ -130,6 +131,7 @@ export class EnvironmentRenderer {
 
   // Sky, rain, ground
   private readonly sky: SkyDome;
+  private readonly bolt: LightningBolt;
   private readonly rain: RainSystem;
   private readonly groundMaterial: THREE.MeshStandardMaterial;
   private groundMesh: THREE.Mesh | null;
@@ -259,6 +261,8 @@ export class EnvironmentRenderer {
 
     // 1. Sky dome, centred on the camera so it reads as infinite sky.
     this.sky = createSkyDome(scene, camera, config, this.bodies.sunDir, this.bodies.moonDir);
+    // The bolt the server sends, drawn at its landing point.
+    this.bolt = createLightningBolt(scene);
 
     // 1b. Root Sight: the cavity is drawn by the soil shader itself (marching
     //     the fused node bubbles), so all this layer keeps is the dug-earth
@@ -607,9 +611,14 @@ export class EnvironmentRenderer {
 
   /**
    * One server-announced bolt. The server rolled it, damaged what stood in its
-   * radius and sent the position; the renderer only paints the flash.
+   * radius and sent the position; the renderer draws the strike there and paints
+   * the light, so the flash and the bolt are the same event.
    */
-  public flashLightning(): void {
+  public flashLightning(x: number, z: number, radiusM = 6): void {
+    if (!Number.isFinite(x) || !Number.isFinite(z)) return;
+    const y =
+      this.planetRadiusM > 0 ? planetTerrainY(this.planetRadiusM, x, z, getTerrainParams()) : 0;
+    this.bolt.strike(x, y, z, radiusM);
     this.weatherMachine.triggerLightning();
   }
 
@@ -686,11 +695,18 @@ export class EnvironmentRenderer {
       this.timeOfDay = (this.timeOfDay + (dt * this.timeScale) / this.dayLengthSeconds) % 1.0;
     }
 
-    const weatherTargets = this.weatherMachine.update(dt, this.timeOfDay, this.sunIntensity);
+    // `update` takes milliseconds (its fades and its strike decay are timed in
+    // ms), while the render loop's dt is seconds. Passing seconds made a 6 s
+    // weather cross-fade take 100 minutes and a 120 ms strike linger for two.
+    const weatherTargets = this.weatherMachine.update(dt * 1000, this.timeOfDay, this.sunIntensity);
 
     // The weather machine emits a normalised, already-fading strike. Hand it to
     // the celestial pass, which composes baseline + flash in one assignment.
-    this.lightningIntensity = Math.max(0, weatherTargets.lightningIntensity);
+    // The strike lives on the machine, not in the interpolated targets: the
+    // targets' own field was initialised to zero and never written, so the
+    // flash read as clear skies.
+    this.lightningIntensity = Math.max(0, this.weatherMachine.getLightningIntensity());
+    this.bolt.update(this.lightningIntensity);
     this.updateSunPosition(dt);
 
     // The sky dome is camera-centred, so it never warps as the camera moves.

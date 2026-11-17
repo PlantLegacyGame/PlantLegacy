@@ -54,6 +54,8 @@ pass.
 | FIX-19 ✔ | One writer for the scene lights | F17 | S | — |
 | FIX-20 ✔ | Continuous day/night ambient blend | F18 | S | — |
 | FIX-21 ✔ | Sky grade defined without a root readout | F19 | S | — |
+| FIX-22 ✔ | Delete the dead lightning field; read the machine strike | F20 | S | — |
+| FIX-23 ✔ | Milliseconds in, milliseconds out on the weather machine | F21 | S | — |
 
 Sizes: S ≈ under an hour, M ≈ half a day, L ≈ a day or more.
 

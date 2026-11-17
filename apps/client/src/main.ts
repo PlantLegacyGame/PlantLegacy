@@ -7292,11 +7292,14 @@ function handleWeatherUpdate(payload: unknown, ctx: MessageContext): void {
 }
 
 /**
- * A bolt the server rolled. The strike carries its landing point so the flash is
- * the one that hurt something; the client no longer times its own lightning.
+ * A bolt the server rolled. The strike carries its landing point and the radius
+ * it hurt, so the bolt is drawn where it fell rather than as a sky flash; the
+ * client no longer times its own lightning.
  */
-function handleWeatherStrike(): void {
-  environmentRenderer?.flashLightning();
+function handleWeatherStrike(payload: unknown): void {
+  const strike = payload as { x?: number; z?: number; radiusM?: number };
+  if (typeof strike?.x !== 'number' || typeof strike?.z !== 'number') return;
+  environmentRenderer?.flashLightning(strike.x, strike.z, strike.radiusM);
 }
 
 function handleGrowthEvent(payload: unknown): void {

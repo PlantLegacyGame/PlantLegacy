@@ -526,6 +526,8 @@ Status legend: `ENFORCED`, `PARTIAL`, `UNENFORCED`, `BROKEN`.
 | INV-LT-04 | A damage cue is at most one pulse per second. | ENFORCED (2026-11-17) | `damageCueDue` refuses while a pulse runs and until the gap elapses; upkeep loss is coalesced to 2 Hz. | Data still updates on every message; only the animation is rate-limited. |
 | INV-LT-05 | The client never invents a lightning strike. | ENFORCED (2026-11-17) | `ClientWeatherStateMachine` only fades a strike set by `triggerLightning`; the flow is `idle -> (WEATHER_STRIKE) -> flash -> idle`. | A bolt the server did not roll cannot be drawn. |
 | INV-LT-06 | The sky grade is defined before any tile data. | ENFORCED (2026-11-17) | `localSkyBrightness` uses `dayFactor` until the first root readout, then the covered tiles. | No implicit full-daylight default. |
+| INV-LT-07 | The weather machine is fed milliseconds. | ENFORCED (2026-11-17) | `update(dtMs)`; the render loop passes `dt * 1000`. Handing it seconds made every fade 1000x slow. | Keep the unit in the name. |
+| INV-LT-08 | A strike is drawn where the server landed it. | ENFORCED (2026-11-17) | `WEATHER_STRIKE.x/z/radiusM` place the bolt and its ground ring at the terrain height; seen in-game (three strikes at the plant, 18 s apart). | Do not reintroduce a client-side strike timer. |
 
 ---
 
