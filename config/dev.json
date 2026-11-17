@@ -1,169 +1,105 @@
 {
-  "_meta": {
-    "system": "dev",
-    "version": "0.1.0",
-    "schema": "extended-1",
-    "owner_task": "D01",
-    "status": "active",
-    "notes": "Dev-only settings engine. Only loaded when NODE_ENV !== 'production'."
-  },
-  "values": {
-    "persistence_enabled": {
-      "type": "boolean",
-      "value": false,
-      "notes": "When true, plants persist across disconnects within the reconnect window. When false (default), plants are session-only and removed immediately on disconnect."
+    "_meta": {
+        "system": "dev",
+        "version": "0.1.0",
+        "schema": "extended-1",
+        "owner_task": "D01",
+        "status": "active",
+        "notes": "Dev-only settings engine. Only loaded when NODE_ENV !== 'production'."
     },
-    "germination_gate": {
-      "type": "boolean",
-      "value": true,
-      "notes": "When true, germination requires moisture and light thresholds. When false, germination always succeeds."
-    },
-    "germination_failure_kills_seed": {
-      "type": "boolean",
-      "value": false,
-      "notes": "When true, failing germination destroys the seed/plant. When false, it just pauses growth."
-    },
-    "seed_size_class": {
-      "type": "enum",
-      "value": "normal",
-      "enum": [
-        "normal",
-        "large",
-        "giant"
-      ],
-      "notes": "Scales the initial plant model and camera framing. Normal = standard, Large = 2x, Giant = 4x."
-    },
-    "camera_start_distance": {
-      "type": "number",
-      "value": 26,
-      "range": [
-        5,
-        200
-      ],
-      "notes": "Initial camera distance from plant root on spawn."
-    },
-    "camera_pan_speed": {
-      "type": "number",
-      "value": 5,
-      "range": [
-        0.5,
-        50
-      ],
-      "notes": "Camera pan speed in units per second for WASD/arrow keys."
-    },
-    "webgpu_enabled": {
-      "type": "boolean",
-      "value": true,
-      "notes": "Enable WebGPU render path when available"
-    },
-    "webgpu_tier0_threshold": {
-      "type": "integer",
-      "value": 300,
-      "range": [
-        100,
-        500
-      ],
-      "notes": "Projected pixel size for tier 0 (full mesh)"
-    },
-    "webgpu_tier1_threshold": {
-      "type": "integer",
-      "value": 80,
-      "range": [
-        40,
-        150
-      ],
-      "notes": "Projected pixel size for tier 1 (mid mesh)"
-    },
-    "webgpu_tier2_threshold": {
-      "type": "integer",
-      "value": 12,
-      "range": [
-        6,
-        30
-      ],
-      "notes": "Projected pixel size for tier 2 (billboard)"
-    },
-    "webgpu_tier3_threshold": {
-      "type": "integer",
-      "value": 2,
-      "range": [
-        1,
-        8
-      ],
-      "notes": "Projected pixel size for tier 3 (billboard); below uses tier 4"
-    },
-    "benchmark_warmup_ms": {
-      "type": "integer",
-      "value": 1500,
-      "range": [
-        0,
-        20000
-      ],
-      "notes": "AL-01: frames discarded after each pose is applied, before measurement."
-    },
-    "benchmark_pose_ms": {
-      "type": "integer",
-      "value": 6000,
-      "range": [
-        1000,
-        60000
-      ],
-      "notes": "AL-01: measured window per fixed pose."
-    },
-    "benchmark_poses": {
-      "type": "schema_array",
-      "schema": {
-        "id": "string",
-        "distance_m": "number",
-        "azimuth_deg": "number",
-        "elevation_deg": "number",
-        "target_lift_m": "number"
-      },
-      "value": [
-        {
-          "id": "seedling",
-          "distance_m": 6,
-          "azimuth_deg": 35,
-          "elevation_deg": 18,
-          "target_lift_m": 0
+    "values": {
+        "persistence_enabled": {
+            "type": "boolean",
+            "value": false,
+            "notes": "When true, plants persist across disconnects within the reconnect window. When false (default), plants are session-only and removed immediately on disconnect."
         },
-        {
-          "id": "canopy-from-below",
-          "distance_m": 9,
-          "azimuth_deg": 200,
-          "elevation_deg": -22,
-          "target_lift_m": 2
+        "germination_gate": {
+            "type": "boolean",
+            "value": true,
+            "notes": "When true, germination requires moisture and light thresholds. When false, germination always succeeds."
         },
-        {
-          "id": "silhouette",
-          "distance_m": 14,
-          "azimuth_deg": 120,
-          "elevation_deg": 6,
-          "target_lift_m": 1.5
+        "germination_failure_kills_seed": {
+            "type": "boolean",
+            "value": false,
+            "notes": "When true, failing germination destroys the seed/plant. When false, it just pauses growth."
         },
-        {
-          "id": "golden-hour-wide",
-          "distance_m": 28,
-          "azimuth_deg": 300,
-          "elevation_deg": 12,
-          "target_lift_m": 0.5
+        "seed_size_class": {
+            "type": "enum",
+            "value": "normal",
+            "enum": ["normal", "large", "giant"],
+            "notes": "Scales the initial plant model and camera framing. Normal = standard, Large = 2x, Giant = 4x."
         },
-        {
-          "id": "root-layer",
-          "distance_m": 5,
-          "azimuth_deg": 80,
-          "elevation_deg": -35,
-          "target_lift_m": -1.5
+        "camera_start_distance": {
+            "type": "number",
+            "value": 26.0,
+            "range": [5.0, 200.0],
+            "notes": "Initial camera distance from plant root on spawn."
         },
-        {
-          "id": "terrain-panorama",
-          "distance_m": 90,
-          "azimuth_deg": 15,
-          "elevation_deg": 30,
-          "target_lift_m": 0
+        "camera_pan_speed": {
+            "type": "number",
+            "value": 5.0,
+            "range": [0.5, 50.0],
+            "notes": "Camera pan speed in units per second for WASD/arrow keys."
+        },
+        "webgpu_enabled": {
+            "type": "boolean",
+            "value": true,
+            "notes": "Enable WebGPU render path when available"
+        },
+        "webgpu_tier0_threshold": {
+            "type": "integer",
+            "value": 300,
+            "range": [100, 500],
+            "notes": "Projected pixel size for tier 0 (full mesh)"
+        },
+        "webgpu_tier1_threshold": {
+            "type": "integer",
+            "value": 80,
+            "range": [40, 150],
+            "notes": "Projected pixel size for tier 1 (mid mesh)"
+        },
+        "webgpu_tier2_threshold": {
+            "type": "integer",
+            "value": 12,
+            "range": [6, 30],
+            "notes": "Projected pixel size for tier 2 (billboard)"
+        },
+        "webgpu_tier3_threshold": {
+            "type": "integer",
+            "value": 2,
+            "range": [1, 8],
+            "notes": "Projected pixel size for tier 3 (billboard); below uses tier 4"
+        },
+        "benchmark_warmup_ms": {
+            "type": "integer",
+            "value": 1500,
+            "range": [0, 20000],
+            "notes": "AL-01: frames discarded after each pose is applied, before measurement."
+        },
+        "benchmark_pose_ms": {
+            "type": "integer",
+            "value": 6000,
+            "range": [1000, 60000],
+            "notes": "AL-01: measured window per fixed pose."
+        },
+        "benchmark_poses": {
+            "type": "schema_array",
+            "schema": {
+                "id": "string",
+                "distance_m": "number",
+                "azimuth_deg": "number",
+                "elevation_deg": "number",
+                "target_lift_m": "number"
+            },
+            "value": [
+                { "id": "seedling", "distance_m": 6, "azimuth_deg": 35, "elevation_deg": 18, "target_lift_m": 0 },
+                { "id": "canopy-from-below", "distance_m": 9, "azimuth_deg": 200, "elevation_deg": -22, "target_lift_m": 2 },
+                { "id": "silhouette", "distance_m": 14, "azimuth_deg": 120, "elevation_deg": 6, "target_lift_m": 1.5 },
+                { "id": "golden-hour-wide", "distance_m": 28, "azimuth_deg": 300, "elevation_deg": 12, "target_lift_m": 0.5 },
+                { "id": "root-layer", "distance_m": 5, "azimuth_deg": 80, "elevation_deg": -35, "target_lift_m": -1.5 },
+                { "id": "terrain-panorama", "distance_m": 90, "azimuth_deg": 15, "elevation_deg": 30, "target_lift_m": 0 }
+            ],
+            "notes": "AL-01: the six fixed comparison poses. Camera-relative offsets from the player plant, so they are reproducible on any world seed."
         }
-      ],
-      "notes": "AL-01: the six fixed comparison poses. Camera-relative offsets from the player plant, so they are reproducible on any world seed."
     }
-  }
 }

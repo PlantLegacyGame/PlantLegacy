@@ -17,54 +17,14 @@
         "range_px": "number"
       },
       "value": [
-        {
-          "id": "wave",
-          "label": "Wave",
-          "type": "body",
-          "range_px": 40
-        },
-        {
-          "id": "cheer",
-          "label": "Cheer",
-          "type": "body",
-          "range_px": 50
-        },
-        {
-          "id": "thumbs_up",
-          "label": "Thumbs Up",
-          "type": "body",
-          "range_px": 30
-        },
-        {
-          "id": "heart",
-          "label": "Heart",
-          "type": "particle",
-          "range_px": 60
-        },
-        {
-          "id": "think",
-          "label": "Think",
-          "type": "body",
-          "range_px": 20
-        },
-        {
-          "id": "sleep",
-          "label": "Sleep",
-          "type": "system",
-          "range_px": 15
-        },
-        {
-          "id": "dance",
-          "label": "Dance",
-          "type": "body",
-          "range_px": 70
-        },
-        {
-          "id": "sad",
-          "label": "Sad",
-          "type": "body",
-          "range_px": 25
-        }
+        { "id": "wave", "label": "Wave", "type": "body", "range_px": 40 },
+        { "id": "cheer", "label": "Cheer", "type": "body", "range_px": 50 },
+        { "id": "thumbs_up", "label": "Thumbs Up", "type": "body", "range_px": 30 },
+        { "id": "heart", "label": "Heart", "type": "particle", "range_px": 60 },
+        { "id": "think", "label": "Think", "type": "body", "range_px": 20 },
+        { "id": "sleep", "label": "Sleep", "type": "system", "range_px": 15 },
+        { "id": "dance", "label": "Dance", "type": "body", "range_px": 70 },
+        { "id": "sad", "label": "Sad", "type": "body", "range_px": 25 }
       ]
     }
   }

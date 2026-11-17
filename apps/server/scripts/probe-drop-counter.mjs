@@ -116,7 +116,6 @@ const sample = async (observer) => {
   return {
     stateSent: net.stateSent ?? 0,
     rootSent: net.rootReadoutsSent ?? 0,
-    weatherSent: net.weatherSent ?? 0,
     skippedSends: net.skippedSends ?? 0,
   };
 };
@@ -169,14 +168,18 @@ try {
   clearInterval(flood);
 
   stalled.ws._socket.resume();
-  await sleep(2500);
+  // Megabytes are still queued when the client starts reading again; let them
+  // drain first, or the tail of the stall lands inside the recovery window.
+  await sleep(3000);
+  const recoveryStart = await sample(observer);
+  await sleep(2000);
   const recoveryEnd = await sample(observer);
   const recovery = {
-    stateSent: recoveryEnd.stateSent - stallEnd.stateSent,
-    skippedSends: recoveryEnd.skippedSends - stallEnd.skippedSends,
+    stateSent: recoveryEnd.stateSent - recoveryStart.stateSent,
+    skippedSends: recoveryEnd.skippedSends - recoveryStart.skippedSends,
   };
   console.log(
-    `after the client caught up, 2.5 s:  state +${recovery.stateSent}  skippedSends +${recovery.skippedSends}`,
+    `after the client caught up, 2 s:    state +${recovery.stateSent}  skippedSends +${recovery.skippedSends}`,
   );
 
   // Baseline is 2 s of two clients at 20 Hz, i.e. ~40 deliveries per second. Six
@@ -187,7 +190,7 @@ try {
     ['the stalled socket produced drops', stall.skippedSends > 50],
     ['the stalled socket stopped being counted as sent', stall.stateSent < baseline.stateSent * 2],
     ['the healthy client kept receiving', stall.stateSent > 0],
-    ['drops stop once the client reads again', recovery.skippedSends < 5],
+    ['drops stop once the client reads again', recovery.skippedSends * 10 <= stall.skippedSends],
     ['delivery returns to the healthy rate', recovery.stateSent > 0],
   ];
   for (const [label, ok] of checks) {

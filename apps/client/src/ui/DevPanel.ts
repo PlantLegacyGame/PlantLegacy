@@ -579,9 +579,8 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
               danger: true,
             },
           ]),
-          // Root Sight has nothing to excavate until the plant has pushed roots
-          // down, which takes minutes of play; mutation granting is per id
-          // because the gallery plants everything at once.
+          // Root Sight has nothing to excavate until roots exist, and the gallery
+          // grants every mutation at once, so per-id granting needs a prompt.
           createButtonGroup('Roots & Mutations', [
             {
               label: 'Grow Roots',
@@ -968,9 +967,8 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
               danger: true,
             },
           ]),
-          // The sun is server-authoritative: a client-side clock is overwritten by
-          // the next weather broadcast, so moving it here is the only way to get
-          // daylight on demand.
+          // A client-side clock is overwritten by the next weather broadcast, so
+          // moving the sun here is the only way to get daylight on demand.
           createButtonGroup('Sun', [
             { label: 'Dawn', action: () => send(8, { type: 'dev_set_time', time_of_day: 0.25 }) },
             { label: 'Noon', action: () => send(8, { type: 'dev_set_time', time_of_day: 0.5 }) },
