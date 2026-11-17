@@ -1703,6 +1703,8 @@ let uiShell: UIShell | null = null;
 let mutationPanel: MutationPanelAPI | null = null;
 let debugOverlay: DebugOverlay | null = null;
 let qualityController: QualityController | null = null;
+// One frame after the tab becomes visible is spent without a quality sample.
+let skipQualitySample = false;
 // AL-03: real GPU frame time when the driver exposes a timer query.
 let gpuTimer: GpuTimer | null = null;
 // AL-01 / ADR-027: dev-only size class, benchmark poses and pose timing.
@@ -4229,6 +4231,10 @@ async function initC01(): Promise<void> {
           backgroundLoopTimer = null;
         }
         setDetail('Tab visible - resuming');
+        // The band controller must not grade the frame that spans the hidden
+        // stretch: its delta is the whole time the tab was away, capped at a
+        // quarter second, and one such sample drops the ratio to the floor.
+        skipQualitySample = true;
         // Request full plant sync when tab becomes visible again
         if (ws && ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify({ type: MESSAGE_TYPE.PLANT_SYNC_REQUEST, payload: {} }));
@@ -9209,7 +9215,13 @@ function renderFrame(deltaTime: number): void {
   // CPU frame time drives the same loop.
   const frameCostMs = Math.max(0.1, deltaTime * 1000);
   const gpuCostMs = gpuTimer ? gpuTimer.readMs() : null;
-  if (qualityController) {
+  // Only frames the player is actually shown may grade quality. The hidden-tab
+  // loop steps `renderFrame(0.1)` itself and Chromium throttles that timer to a
+  // couple of hertz, so each hidden frame reported ~100-500 ms of cost, the band
+  // read it as a slow GPU and the pixel ratio fell to the resolution floor. The
+  // tab then went on drawing at half resolution - soft in exactly the window a
+  // background tab lives in - until enough visible frames had climbed back.
+  if (qualityController && !document.hidden && !skipQualitySample) {
     qualityController.update(
       {
         frameMs: frameCostMs,
@@ -9234,6 +9246,7 @@ function renderFrame(deltaTime: number): void {
       plantRenderer.setAtmosphere(environmentRenderer.getAtmosphere());
     }
   }
+  skipQualitySample = false;
 
   // AL-01: the benchmark consumes the same numbers the band controller sees, so
   // its report describes the frame the player is actually getting.
@@ -9780,8 +9793,6 @@ setInterval(() => {
   }
 }, 10000);
 
-animate();
-
 interface PlantLegacyDebugHandle {
   renderer: THREE.WebGLRenderer;
   scene: THREE.Scene;
@@ -9843,6 +9854,13 @@ const cavityProbe = createCavityProbe({
   camera,
   getTarget: () => controls.target,
 });
+
+// Started only now, not at the top of this tail section: `animate()` runs
+// `renderFrame` synchronously on its first call, and that frame reads
+// `cavityProbe`. Calling it before the probe existed made the first frame throw
+// a temporal-dead-zone `ReferenceError` into the catch and log it as a render
+// failure, on every load.
+animate();
 
 // Development handle for inspecting the live scene from the browser console.
 if (import.meta.env.DEV) {
