@@ -10,6 +10,7 @@
  */
 
 import { type BenchmarkPose, DEFAULT_BENCHMARK_POSES } from '../dev/benchmark.js';
+import { CAVITY_PALETTE } from '../renderers/environment/cavity/profile.ts';
 import { type ControlsBindingsSource, normalizeBindings } from './controlsBindings.ts';
 
 /** ADR-027: one organism size class, as framing and detail multipliers. */
@@ -258,6 +259,16 @@ export interface RootSightConfig {
    * soil intact around the eye and Root Sight shows nothing from down there.
    */
   eyeWindowRadius: number;
+  /** Dug wall, top stratum (`cavity_topsoil_color`). */
+  cavityTopsoilColor: string;
+  /** Dug wall, middle stratum (`cavity_subsoil_color`). */
+  cavitySubsoilColor: string;
+  /** Dug wall, deepest stratum (`cavity_deep_color`). */
+  cavityDeepColor: string;
+  /** Fraction of the wall's albedo kept at midnight (`cavity_night_fill`). */
+  cavityNightFill: number;
+  /** The same at full daylight (`cavity_day_fill`). */
+  cavityDayFill: number;
 }
 
 export interface TerrainConfig {
@@ -694,6 +705,16 @@ interface RootSightConfigResponse {
   auto_open_on_root_growth?: boolean;
   eye_window_radius_m?: number;
   eyeWindowRadius?: number;
+  cavity_topsoil_color?: string;
+  cavityTopsoilColor?: string;
+  cavity_subsoil_color?: string;
+  cavitySubsoilColor?: string;
+  cavity_deep_color?: string;
+  cavityDeepColor?: string;
+  cavity_night_fill?: number;
+  cavityNightFill?: number;
+  cavity_day_fill?: number;
+  cavityDayFill?: number;
 }
 
 /**
@@ -1064,6 +1085,13 @@ function normalizeRootSightConfig(
     extentToRadius: data.extent_to_radius ?? data.extentToRadius ?? fallback.extentToRadius,
     autoOpenOnRootGrowth: data.auto_open_on_root_growth ?? fallback.autoOpenOnRootGrowth,
     eyeWindowRadius: data.eye_window_radius_m ?? data.eyeWindowRadius ?? fallback.eyeWindowRadius,
+    cavityTopsoilColor:
+      data.cavity_topsoil_color ?? data.cavityTopsoilColor ?? fallback.cavityTopsoilColor,
+    cavitySubsoilColor:
+      data.cavity_subsoil_color ?? data.cavitySubsoilColor ?? fallback.cavitySubsoilColor,
+    cavityDeepColor: data.cavity_deep_color ?? data.cavityDeepColor ?? fallback.cavityDeepColor,
+    cavityNightFill: data.cavity_night_fill ?? data.cavityNightFill ?? fallback.cavityNightFill,
+    cavityDayFill: data.cavity_day_fill ?? data.cavityDayFill ?? fallback.cavityDayFill,
   };
 }
 
@@ -1386,6 +1414,14 @@ export async function loadRootSightConfig(serverOrigin: string): Promise<RootSig
     extentToRadius: 1.6,
     autoOpenOnRootGrowth: true,
     eyeWindowRadius: 1.1,
+    // The dug wall's palette and its sky fill. One set of numbers, in
+    // `cavity/profile.ts`, so the config file, this fallback and the renderer's
+    // own fallback cannot disagree.
+    cavityTopsoilColor: CAVITY_PALETTE.topsoilColor,
+    cavitySubsoilColor: CAVITY_PALETTE.subsoilColor,
+    cavityDeepColor: CAVITY_PALETTE.deepColor,
+    cavityNightFill: CAVITY_PALETTE.nightFill,
+    cavityDayFill: CAVITY_PALETTE.dayFill,
   });
 }
 

@@ -182,6 +182,36 @@ export const CAVITY_STRATA_SUBDIVISION = 3;
 export const CAVITY_WALL_BASE_DEPTH = Math.max(0.05, -CAVITY_RIM_WALL_BASE);
 
 /**
+ * The dug wall's palette: three strata and the sky fill that keeps them legible.
+ *
+ * `config/root_sight.json` is the source of truth; this is the set the renderer
+ * falls back to when it is built without a palette, and the set the client's own
+ * config defaults start from. Both read it from here, so there is one copy of
+ * the numbers instead of a config file, a fallback and a shader that can drift
+ * apart.
+ */
+export interface CavityPalette {
+  /** Dark, root-woven earth at the lip. */
+  topsoilColor: string;
+  /** Warm ochre subsoil under it. */
+  subsoilColor: string;
+  /** Cold, pale earth above the floor. */
+  deepColor: string;
+  /** Fraction of the wall's own albedo that survives a moonless midnight. */
+  nightFill: number;
+  /** The same at full daylight. */
+  dayFill: number;
+}
+
+export const CAVITY_PALETTE: CavityPalette = {
+  topsoilColor: '#51402a',
+  subsoilColor: '#80633e',
+  deepColor: '#625a4d',
+  nightFill: 0.38,
+  dayFill: 0.52,
+};
+
+/**
  * The vertical space the pit must have: the dug-pit proportion of the mouth,
  * or enough to clear the deepest root, whichever is larger.
  */

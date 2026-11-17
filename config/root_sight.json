@@ -144,6 +144,33 @@
         4
       ],
       "notes": "Radius of the air bubble cut around a buried camera, metres. Root Sight is a hole seen from above, but the camera can fly down into the cavity; the eye then sits inside the soil skin and saw a wall of dirt with no roots behind it. This window keeps air around the eye and fuses with the root bubbles, so a tunnel to the cavity stays open wherever the camera is. Zero disables it and leaves the soil intact around the eye."
+    },
+    "cavity_topsoil_color": {
+      "type": "color",
+      "value": "#51402a",
+      "notes": "Dug wall, top stratum: dark root-woven humus at the lip. The pit is a cut through a body, and three earths read as three layers where three browns read as one brown."
+    },
+    "cavity_subsoil_color": {
+      "type": "color",
+      "value": "#80633e",
+      "notes": "Dug wall, middle stratum: warm ochre subsoil."
+    },
+    "cavity_deep_color": {
+      "type": "color",
+      "value": "#625a4d",
+      "notes": "Dug wall, deepest stratum: cold pale earth above the floor. Pale on purpose - a near-black grey vanished after dark and the third layer read as shadow."
+    },
+    "cavity_night_fill": {
+      "type": "number",
+      "value": 0.38,
+      "range": [0, 1],
+      "notes": "Fraction of the dug wall's own albedo that survives at midnight. A pit is lit by the sky above its mouth, and the sky does not go out; at 0.22 the strata were there and could not be seen."
+    },
+    "cavity_day_fill": {
+      "type": "number",
+      "value": 0.52,
+      "range": [0, 1],
+      "notes": "The same fraction at full daylight: a floor under the wall's lit value, so shade keeps its edges while the wall never goes black."
     }
   }
 }

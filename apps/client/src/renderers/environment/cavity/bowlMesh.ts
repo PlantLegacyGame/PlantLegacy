@@ -7,7 +7,12 @@
  * it is are in `placement.ts`; what the eye may see is in `clip.ts`.
  */
 import * as THREE from 'three';
-import { CAVITY_CUT_OVERREACH, CAVITY_STRATA_BANDS, CAVITY_STRATA_SUBDIVISION } from './profile.ts';
+import {
+  CAVITY_CUT_OVERREACH,
+  CAVITY_PALETTE,
+  CAVITY_STRATA_BANDS,
+  CAVITY_STRATA_SUBDIVISION,
+} from './profile.ts';
 import { buildStrataShell } from './strataShell.ts';
 
 /** The clip uniforms, written per frame by `updateCavityBowl`. */
@@ -32,6 +37,16 @@ export function createCavityBowl(
   _heightSegments = 24,
   /** The cold earth under the subsoil; defaults to the subsoil, darkened. */
   deepSoil?: THREE.Color,
+  /**
+   * Sky-fill fractions, night and day: how much of the wall's own albedo
+   * survives at each end of the light range. Config owns the numbers
+   * (`root_sight.cavity_night_fill` / `cavity_day_fill`); the fallback is the
+   * same palette the config file starts from.
+   */
+  fill: { night: number; day: number } = {
+    night: CAVITY_PALETTE.nightFill,
+    day: CAVITY_PALETTE.dayFill,
+  },
 ): THREE.Mesh {
   // Built as a stack of bands, not one lathe. A single smooth funnel with a
   // colour gradient is exactly what the pit looked like: a bowl with dirt
@@ -103,6 +118,18 @@ export function createCavityBowl(
   // this from the sun, ambient and sky fill each frame.
   const lightUniform = { value: 1 };
   material.userData.lightUniform = lightUniform;
+  // The floor under the wall's lit value, at each end of the light range. Clamped
+  // and ordered here rather than in the shader: a night fill above the day fill
+  // would make the pit brighter at midnight than at noon, and glsl mix does not
+  // care - it would just do it.
+  const clampFill = (value: number): number =>
+    Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : 0;
+  const nightFill = clampFill(fill.night);
+  const fillUniforms = {
+    night: { value: nightFill },
+    day: { value: Math.max(nightFill, clampFill(fill.day)) },
+  };
+  material.userData.fillUniforms = fillUniforms;
 
   // Vertex colours alone made the cavity a flat brown funnel. Modulate them
   // with the same kind of world-space grain the surface uses, plus a depth
@@ -116,6 +143,8 @@ export function createCavityBowl(
     shader.uniforms.uBowlSurfaceY = clipUniforms.uBowlSurfaceY;
     shader.uniforms.uBowlClipMode = clipUniforms.uBowlClipMode;
     shader.uniforms.uBowlLight = lightUniform;
+    shader.uniforms.uBowlFillNight = fillUniforms.night;
+    shader.uniforms.uBowlFillDay = fillUniforms.day;
     material.userData.shader = shader;
     shader.vertexShader = shader.vertexShader
       .replace(
@@ -145,6 +174,8 @@ const float BOWL_MOUTH_KEEP_FRACTION = 0.98;
 uniform float uBowlSurfaceY;
 uniform float uBowlClipMode;
 uniform float uBowlLight;
+uniform float uBowlFillNight;
+uniform float uBowlFillDay;
 float bowlHash(vec2 p) {
   p = fract(p * vec2(123.34, 456.21));
   p += dot(p, p + 45.32);
@@ -239,14 +270,15 @@ float bowlNoise(vec2 p) {
   // computed, did nothing, and the pit stayed black at night while the code
   // looked correct.
   //
-  // The night floor is 0.38 of the albedo, not 0.14: at the lower figures the
-  // deep band and the humus over it both rounded to near-black after midnight
-  // and the pit became one dark disc - the strata the cut exists to show were
-  // there and could not be seen. A dug wall is lit by the sky above the mouth,
-  // and the sky does not go out.
+  // The floor is the configured cavity_night_fill of the albedo (0.38 by
+  // default), not the 0.22 the shader used to hardcode: at the lower figure the deep band and the
+  // humus over it both rounded to near-black after midnight and the pit became
+  // one dark disc - the strata the cut exists to show were there and could not
+  // be seen. A dug wall is lit by the sky above the mouth, and the sky does not
+  // go out.
   gl_FragColor.rgb = max(
     gl_FragColor.rgb,
-    diffuseColor.rgb * mix(0.38, 0.52, clamp(uBowlLight, 0.0, 1.0))
+    diffuseColor.rgb * mix(uBowlFillNight, uBowlFillDay, clamp(uBowlLight, 0.0, 1.0))
   );
 #include <colorspace_fragment>
   // Seen from a buried eye beside the pit, the bowl may only be visible where
@@ -309,7 +341,7 @@ float bowlNoise(vec2 p) {
   }`,
       );
   };
-  material.customProgramCacheKey = () => 'root-sight-bowl-dirt-v10';
+  material.customProgramCacheKey = () => 'root-sight-bowl-dirt-v11';
 
   const mesh = new THREE.Mesh(geometry, material);
   mesh.name = 'root-sight-bowl';

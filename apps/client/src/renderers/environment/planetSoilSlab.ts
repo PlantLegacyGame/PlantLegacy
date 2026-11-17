@@ -129,6 +129,10 @@ export function createSoilSlab(options: SoilSlabOptions): THREE.Mesh {
   geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
   geometry.setIndex(indices);
   geometry.computeVertexNormals();
+  // How this body was built, on the geometry itself. A dev probe rebuilds it
+  // (with, or with no, cavity hole) at exactly these numbers instead of
+  // re-deriving radius, extent, depth and segments and drifting from the ground.
+  geometry.userData.slabOptions = { ...options, holeRadiusM: holeRadius };
 
   const mesh = new THREE.Mesh(geometry, options.material);
   mesh.name = 'planet-soil-slab';

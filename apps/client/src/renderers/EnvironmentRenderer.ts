@@ -35,6 +35,7 @@ import {
   updateCavityBowl,
   updateCavitySkirt,
 } from './environment/cavity/index.ts';
+import { CAVITY_PALETTE, type CavityPalette } from './environment/cavity/profile.ts';
 import {
   applyCelestialLighting,
   type CelestialBodies,
@@ -105,6 +106,12 @@ export interface EnvironmentTuning {
   water?: Partial<WaterFieldTuning>;
   /** Tile ranges the soil shader normalises against (config/resources.json). */
   tiles?: TileNormalization;
+  /**
+   * The dug wall's three strata and its sky fill (config/root_sight.json).
+   * Omitted only by callers that are not the game - tests - which then get the
+   * documented palette from `cavity/profile.ts`.
+   */
+  cavity?: CavityPalette;
 }
 
 export interface WeatherPayload {
@@ -195,8 +202,23 @@ export class EnvironmentRenderer {
     return this.soilMoisture;
   }
 
+  /**
+   * How thick the earth's body is, in metres.
+   *
+   * The burrow depth is clamped to it: past the underside there is no earth at
+   * all, and an eye down there saw the cavity's shell against open sky.
+   */
+  getSoilBodyDepthM(): number {
+    return this.soilBodyDepthM;
+  }
+
   // Root Sight: a camera-facing corridor cut through the soil.
   private readonly soilUniforms: RootSightUniforms;
+
+  /** The pit's dug-earth palette; config owns the numbers. */
+  private readonly cavityPalette: CavityPalette;
+  /** How thick the earth's body is, metres; 0 until the ground is built. */
+  private soilBodyDepthM = 0;
 
   private readonly undergroundColor = new THREE.Color('#241d16');
   // Dug-earth colour for the Root Sight cavity wall and rim. The cavity itself
@@ -250,6 +272,7 @@ export class EnvironmentRenderer {
     this.dayLengthSeconds = tuning.dayLengthSeconds ?? DEFAULT_DAY_LENGTH_SECONDS;
     this.waterTuning = tuning.water ?? {};
     this.undergroundColor.set(config.undergroundViewColor);
+    this.cavityPalette = tuning.cavity ?? CAVITY_PALETTE;
     this.soilUniforms = soilUniforms;
     this.sunLight = sunLight;
     this.ambientLight = ambientLight;
@@ -290,13 +313,15 @@ export class EnvironmentRenderer {
         this.planetBodyMesh = object;
         this.planetBodyDrawCount =
           object.geometry.index?.count ?? object.geometry.getAttribute('position')?.count ?? 0;
-      } else if (object.name === 'planet-terrain-far' || object.name === 'planet-soil-slab') {
-        // The slab is the earth's body, and a buried eye is inside that body:
-        // its underside and walls became a second cave around the camera, nested
-        // inside the pit Root Sight had just opened. Hidden while underground for
-        // the same reason as the coarse ring - the detail patch is then the one
-        // dirt surface enclosing the eye, and the cavity bowl the one void in it.
+      } else if (object.name === 'planet-terrain-far') {
         this.surfaceShells.push(object);
+      } else if (object.name === 'planet-soil-slab') {
+        // The earth's body stays drawn while the eye is buried: it *is* the
+        // earth the eye is standing in. It was hidden with the coarse ring, and
+        // the eye then had no earth below it at all - it saw the pit's shell
+        // from outside, with the sky behind it. Its thickness is the datum that
+        // keeps the eye inside the world (see `soilBodyDepthM`).
+        this.soilBodyDepthM = Number(object.userData.bodyDepthM ?? 0);
       }
     });
 
@@ -304,32 +329,25 @@ export class EnvironmentRenderer {
     //     shading faked in the soil shader, so the pit has parallax and looks
     //     the same from every angle. Built once at unit radius, scaled per frame.
     if (tuning.showGround ?? true) {
-      // Dug earth is the *dry* soil the surface is made of, a shade into the
-      // subsoil. This used to be the wet-soil tone (near black after rain)
-      // multiplied down again, and the unlit bowl then read as a void rather
-      // than as dirt someone had dug through.
       // Three depths, not a gradient: the wall is built in strata, and each one
-      // needs the colour the soil actually is at that depth.
-      // Wide apart on purpose: three near-identical browns read as one brown no
-      // matter how much seam is drawn between them.
-      // Different earths, not one earth at three brightnesses. Three values of
-      // the same brown read as one brown with a lighting gradient on it however
-      // wide apart they are put - a spade through a bank shows a dark humus
-      // layer, a warm ochre subsoil and cold grey deep earth, and the hue is
-      // what the eye uses to separate them.
-      const dugTopsoil = new THREE.Color(config.soilDryColor)
-        .multiplyScalar(0.72)
-        .lerp(new THREE.Color('#2f2418'), 0.3);
-      const dugSubsoil = new THREE.Color(config.soilDryColor)
-        .multiplyScalar(1.08)
-        .lerp(new THREE.Color('#9a7442'), 0.35);
-      // Pale, cold clay, not another dark brown. At 0.5 and a near-black grey
-      // the third band was the one layer that vanished after dark: two bands
-      // read and the floor looked like a shadow instead of a stratum.
-      const dugDeep = new THREE.Color(config.soilDryColor)
-        .multiplyScalar(0.62)
-        .lerp(new THREE.Color('#6d6b62'), 0.5);
-      this.cavityBowl = createCavityBowl(dugTopsoil, dugSubsoil, 96, 24, dugDeep);
+      // needs the colour the earth actually is at that depth. Different earths,
+      // not one earth at three brightnesses - a spade through a bank shows dark
+      // humus, warm ochre subsoil and cold pale deep earth, and the hue is what
+      // the eye uses to separate them.
+      //
+      // The three colours and the sky-fill fractions are config
+      // (`root_sight.cavity_*`), not values derived here: they were computed
+      // from the surface's dry-soil tone plus a multiplier and a lerp, which put
+      // the pit's appearance out of reach of the config file that is supposed to
+      // own it and made every tuning pass a code change.
+      const palette = this.cavityPalette;
+      const dugTopsoil = new THREE.Color(palette.topsoilColor);
+      const dugSubsoil = new THREE.Color(palette.subsoilColor);
+      const dugDeep = new THREE.Color(palette.deepColor);
+      this.cavityBowl = createCavityBowl(dugTopsoil, dugSubsoil, 96, 24, dugDeep, {
+        night: palette.nightFill,
+        day: palette.dayFill,
+      });
       scene.add(this.cavityBowl);
       // Its own mesh, not extra rings in the bowl: ring counts drive the floor
       // depth, the rim indices and the vertex layout, and a hidden sixth ring in

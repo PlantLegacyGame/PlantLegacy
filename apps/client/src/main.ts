@@ -62,6 +62,7 @@ import { loadMutationVisualsConfig } from './config/mutationVisuals.js';
 import { loadPlantRendererConfig } from './config/plantRendererConfig.js';
 import { loadWaterTuning } from './config/waterConfig.js';
 import { type BenchmarkPose, type BenchmarkReport, BenchmarkRunner } from './dev/benchmark.js';
+import { type CavityProbe, createCavityProbe } from './dev/cavityProbe.ts';
 import {
   createDispatchTable,
   type MessageContext,
@@ -69,6 +70,7 @@ import {
 } from './net/dispatch.js';
 import { playerWorldY, spawnPlayer, stepPlayerVertical } from './physics/playerPhysics.js';
 import { plantPhysicsSync, rapierWorld } from './physics/RapierPhysicsManager.js';
+import { clampToCavity } from './player/burrowClamp.ts';
 import { ownBodyNodes, resolveOwnAnchor } from './player/ownPlantAnchor.js';
 import { decideAutoOpenRootSight } from './player/rootSightAutoOpen.js';
 import { isBelowSoil } from './player/underground.js';
@@ -2143,7 +2145,29 @@ function settlePlayerOnGround(deltaTime: number): void {
   // the middle of the transition.
   const rootSightEngaged = rootSightHoldsACavity();
   if (rootSightEngaged && (rootSightConfig?.cameraBurrowEnabled ?? false)) {
-    const floor = eyeGroundY - Math.max(0, rootSightConfig?.maxBurrowDepthM ?? 12);
+    // Never below the earth's body. There is no earth under its underside, and
+    // an eye down there watched the pit's own shell from outside against open
+    // sky - the "cave walls" the underground view showed. The configured depth
+    // is a ceiling on how far down the eye may go, not a right to leave the
+    // world: whichever is shallower wins.
+    // ... and never below the pit's own floor. The configured 12 m is a third
+    // of the way through the world, far under a cavity that is two to four
+    // metres deep: there the eye is in solid earth, and the air bubble the soil
+    // shader cuts around it is a cave with the pit's outside wall as one side.
+    // The cavity is the only underground space that exists, so it is the only
+    // one the eye may stand in.
+    const bodyDepthM = environmentRenderer?.getSoilBodyDepthM() ?? 0;
+    const configuredDepthM = Math.max(0, rootSightConfig?.maxBurrowDepthM ?? 12);
+    const cavityDepthMNow = cavityDepthM(soilCutawayUniforms.uRootSightApertureRadius.value);
+    const allowedDepthM = Math.max(
+      0.2,
+      Math.min(
+        configuredDepthM,
+        bodyDepthM > 0 ? Math.max(0.2, bodyDepthM - 0.3) : configuredDepthM,
+        Math.max(0.2, cavityDepthMNow - 0.15),
+      ),
+    );
+    const floor = eyeGroundY - allowedDepthM;
     if (camera.position.y < floor) camera.position.y = floor;
     controls.maxPolarAngle = Math.PI - 0.05;
     return;
@@ -2205,6 +2229,43 @@ function settlePlayerOnGround(deltaTime: number): void {
  * contact, not a stand-off. Root Sight is exempt by design, since burrowing is
  * how it reaches the roots; `settlePlayerOnGround` gives it the depth floor.
  */
+/**
+ * Keep a buried eye inside the cavity it opened.
+ *
+ * The pit is one size - the aperture the soil shader cuts - and outside it the
+ * eye is standing in solid earth. The soil shader then cuts an air bubble
+ * around the eye, so the view is a private cave with the *outside* of the pit's
+ * shell as its wall: the "underground terrain cave walls". The camera keeps its
+ * azimuth and slides in along it, so the picture moves inwards instead of
+ * jumping, and OrbitControls re-derives its sphere from the corrected position
+ * on the next frame (the same rule as the ground clamp).
+ */
+function clampEyeToCavity(): void {
+  if (!rootSightHoldsACavity()) return;
+  if (!(rootSightConfig?.cameraBurrowEnabled ?? false)) return;
+  const radius = soilCutawayUniforms.uRootSightApertureRadius.value;
+  if (!(radius > 0.05)) return;
+  const planetRadius = renderConfig?.planetRadiusM ?? 0;
+  const groundY = planetTerrainY(
+    planetRadius,
+    camera.position.x,
+    camera.position.z,
+    getTerrainParams(),
+  );
+  // Only while buried: above the surface the orbit is free, and the aperture is
+  // a hole in the ground the player may circle at any distance they like.
+  if (camera.position.y >= groundY - 0.02) return;
+  const centre = soilCutawayUniforms.uRootSightApertureCenter.value;
+  const clamped = clampToCavity(
+    { x: camera.position.x, z: camera.position.z },
+    { x: centre.x, z: centre.z, radius },
+    rootSightConfig?.cavityClearanceM ?? 0.2,
+  );
+  if (!clamped) return;
+  camera.position.x = clamped.x;
+  camera.position.z = clamped.z;
+}
+
 function clampEyeToGround(): void {
   if (planetViewActive) return;
   const planetRadius = renderConfig?.planetRadiusM ?? 0;
@@ -3211,6 +3272,16 @@ async function initC01(): Promise<void> {
       dayLengthSeconds: dayNightConfig.cycleLengthS,
       tiles: tileConfig,
       water: waterTuning,
+      // The dug wall's three strata and its sky fill, from
+      // config/root_sight.json. Passed here because this renderer builds the
+      // cavity shell, and the palette is presentation, not a Root Sight uniform.
+      cavity: {
+        topsoilColor: rootSightConfig.cavityTopsoilColor,
+        subsoilColor: rootSightConfig.cavitySubsoilColor,
+        deepColor: rootSightConfig.cavityDeepColor,
+        nightFill: rootSightConfig.cavityNightFill,
+        dayFill: rootSightConfig.cavityDayFill,
+      },
     },
   );
 
@@ -8995,6 +9066,10 @@ function renderFrame(deltaTime: number): void {
   // inside a hill still has to move in, and the spring arm may legitimately end
   // up closer than the orbit floor.
   clampEyeToGround();
+  clampEyeToCavity();
+  // ... and a held dev pose after that, because the point of holding one is to
+  // look from places the rig exists to prevent, such as inside the earth.
+  cavityProbe.applyHold();
 
   // Update selection marker orientation to face camera (billboard)
   // T02: Update Root Sight transition and cutaway state
@@ -9737,6 +9812,12 @@ interface PlantLegacyDebugHandle {
   };
   readonly plantEnergy: number;
   readonly plantBiomass: number;
+  /**
+   * Dev probes for the Root Sight cavity: hold an eye the rig cannot move, tint
+   * the soil body against the cavity shell, and rebuild the earth with and
+   * without its cavity hole.
+   */
+  readonly devCavity: CavityProbe;
   /** Terrain height under a world x/z. The camera floor's datum, in metres. */
   readonly groundAt: (x: number, z: number) => number;
   /** AL-01 benchmark: start a run, poll it, read the last report. */
@@ -9750,6 +9831,18 @@ interface PlantLegacyDebugHandle {
     applyPose: (id: string) => boolean;
   };
 }
+
+/**
+ * Dev probes, built once the scene, camera and controls exist.
+ *
+ * Declared above the handle rather than inside it: `renderFrame` stamps a held
+ * pose every frame, and it needs the same instance the console calls.
+ */
+const cavityProbe = createCavityProbe({
+  scene,
+  camera,
+  getTarget: () => controls.target,
+});
 
 // Development handle for inspecting the live scene from the browser console.
 if (import.meta.env.DEV) {
@@ -9810,6 +9903,7 @@ if (import.meta.env.DEV) {
     get plantBiomass() {
       return plantBiomass;
     },
+    devCavity: cavityProbe,
     groundAt: (x: number, z: number) =>
       planetTerrainY(renderConfig?.planetRadiusM ?? 0, x, z, getTerrainParams()),
   };
