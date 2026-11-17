@@ -308,6 +308,13 @@ vec3 soilBumpNormal(vec3 normal, vec2 uv, float strength) {
   // "colour changing bands" running over the land. Fading the fine octaves out
   // with distance leaves flat soil far away and texture under the player's feet.
   float detailFade = 1.0 - smoothstep(8.0, 34.0, distance(cameraPosition, vSoilWorldPos));
+  // Distance is only one axis of the same problem. At grazing incidence a pixel
+  // a few metres away still covers metres of surface, and the fine octaves then
+  // band into stripes running across the slope - the striping a player sees when
+  // the eye drops to the ground. The pixel footprint says how much surface one
+  // pixel spans, so detail finer than that fades out whatever the distance.
+  float footprint = max(fwidth(soilDetail.x), fwidth(soilDetail.y));
+  detailFade *= 1.0 - smoothstep(0.03, 0.35, footprint);
   float clods = soilFbm(soilDetail * 1.6);
   float patches = soilFbm(soilDetail * 0.22 + 11.7);
   float grit = soilNoise(soilDetail * 12.0);

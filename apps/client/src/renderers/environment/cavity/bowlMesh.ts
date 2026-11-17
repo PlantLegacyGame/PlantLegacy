@@ -268,6 +268,18 @@ float bowlNoise(vec2 p) {
   // far outside the mouth and must stay.
   else if (uBowlClipMode > 0.5) {
     if (gl_FrontFacing && distance(vBowlWorldPosition.xz, uBowlApertureCenter) > uBowlApertureRadius) discard;
+  }
+  // Whatever the eye is doing, no part of the shell may stand above the mouth
+  // plane outside the mouth. That is the bowl's own back, standing in the open
+  // beside the hole: seen from an eye at the rim it is the dark band across the
+  // far lip, and from a low angle it is wedges of shell lying on the soil. An eye
+  // at the rim is classified as inside the cavity, so the modes above never
+  // tested it.
+  if (
+    vBowlWorldPosition.y > uBowlSurfaceY + 0.02 &&
+    distance(vBowlWorldPosition.xz, uBowlApertureCenter) > uBowlApertureRadius * 0.98
+  ) {
+    discard;
   }`,
       );
   };
