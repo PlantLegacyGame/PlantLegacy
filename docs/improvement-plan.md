@@ -94,11 +94,13 @@ tests excluded: a key explained in prose but read nowhere is exactly how eleven
 of them survived, and a test that restates the fixture would hide the same rot.
 Exceptions must be listed in `tools/config-keys/allowlist.json` with a reason, and
 an exemption that matches no key is itself an error, so the list cannot go stale
-quietly. Today: 641 keys declared, 51 allowlisted, 590 read. Its first run found
-two advertised tunables the Root Sight renderer still hardcodes
-(`root_sight_cutaway_radius`, `root_sight_soil_opacity`); they are allowlisted
-against item 3-A, and deleting those two entries is what turns the check red until
-that lands. The pruning it enabled removed eleven keys (an emote range nothing
+quietly. Today: 639 keys declared, 49 allowlisted, 590 read. Its first run found two
+tunables that had been superseded without being removed:
+`plant_renderer.root_sight_cutaway_radius` and `.root_sight_soil_opacity` were
+copies of `config/root_sight.json`'s `cutaway_radius` / `soil_opacity`, left
+behind when FIX-07 moved the uniforms onto the Root Sight file. Tuning the
+renderer copies had no effect at all; both are deleted, and the checker's own
+stale-exemption rule is what caught the allowlist entries they briefly had. The pruning it enabled removed eleven keys (an emote range nothing
 enforced, a dev panel switch that was really `import.meta.env.DEV`, a move speed
 for a server with no movement, five renderer toggles with no reader) and renamed
 three mutation uniforms to the names `/config/plant_renderer` actually reads,

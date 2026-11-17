@@ -10,13 +10,5 @@
   {
     "key": "controls.bindings_touch",
     "reason": "Specification for the deferred mobile/touch layout; kept so the binding set is designed once rather than re-invented."
-  },
-  {
-    "key": "plant_renderer.root_sight_cutaway_radius",
-    "reason": "Advertised but the Root Sight renderer still hardcodes the radius; plan item A8 wires it. Remove this exemption when it does."
-  },
-  {
-    "key": "plant_renderer.root_sight_soil_opacity",
-    "reason": "Advertised but the Root Sight renderer still hardcodes the soil opacity; plan item A8 wires it. Remove this exemption when it does."
   }
 ]
