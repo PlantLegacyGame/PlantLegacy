@@ -54,6 +54,16 @@ test('the cut is bounded by the aperture volume, not an unbounded XZ disc', () =
   assert.match(fragment, /vSoilWorldPos\.y >= uRootSightApertureBottomY/);
 });
 
+test('the cut stops short of the bowl lip so no hairline of sky opens at the rim', () => {
+  // The bowl's rim is a polygon built at exactly the aperture radius: its chords
+  // dip inside the exact circle, and on a slope the surface between two rim
+  // vertices can stand above the chord. A cut that reaches the lip therefore
+  // leaves a see-through line along the rim, so the cut is inset and the lip
+  // sits under intact soil instead.
+  assert.match(fragment, /ROOT_SIGHT_CUT_INSET = 0\.99/);
+  assert.match(fragment, /uRootSightApertureRadius\) \* ROOT_SIGHT_CUT_INSET/);
+});
+
 test('the vertex stage hands the fragment stage the surface-cut flag', () => {
   assert.match(vertex, /attribute float aSurfaceCut;/);
   assert.match(vertex, /vSurfaceCut = aSurfaceCut;/);

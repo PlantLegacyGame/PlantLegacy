@@ -206,7 +206,15 @@ vec3 soilBumpNormal(vec3 normal, vec2 uv, float strength) {
     // used the full cutaway radius: a 1.8 m hole over a 4.9 m mouth left the
     // bowl's buried rim crossing the sightline through the opening, which is
     // what painted dirt across the hole from some angles.
-    float apertureRadius = max(0.05, uRootSightApertureRadius);
+    // The bowl's lip is built at exactly this radius, and it is a polygon: its
+    // chords dip a hair inside the exact circle, and on a slope the terrain
+    // between two rim vertices can rise above the chord. Either way a cut that
+    // reaches the lip opens a hairline of sky along the rim. Stopping the cut a
+    // percent short of the lip tucks the seam under intact soil instead; a lip
+    // that is covered cannot show, and a ring of overhang in the other direction
+    // is what used to draw a second contour around the hole.
+    const float ROOT_SIGHT_CUT_INSET = 0.99;
+    float apertureRadius = max(0.05, uRootSightApertureRadius) * ROOT_SIGHT_CUT_INSET;
     // Open with the transition. The bowl is scaled by the same progress; a
     // full-size aperture over a half-size bowl leaves a void ring around the
     // opening for the first frames.

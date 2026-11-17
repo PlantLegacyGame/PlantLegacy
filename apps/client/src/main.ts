@@ -1713,6 +1713,59 @@ let renderConfig: RenderConfig | null = null;
  * is the surface at the pole, so a node at horizontal distance r has to drop by
  * the sphere's sag at r or it floats above the curved ground.
  */
+/**
+ * World height a seed's base belongs at.
+ *
+ * A seed is drawn as an ovoid standing on the soil: its stored height is the
+ * contact point and the renderers lift the body by its half-height. On a slope
+ * the ground under the uphill edge of the seed's own footprint stands above that
+ * point, so the downhill rim of the body sinks into the hill - which is what a
+ * seed on a hillside looked half-buried. Stand it on the highest ground under
+ * its footprint instead, sampled all the way round because the slope can come
+ * from any direction. Every path that turns a server node into drawn data uses
+ * this, so the welcome snapshot and a growth event cannot disagree.
+ */
+function seedFootingY(x: number, z: number, y: number, radius: number): number {
+  const planetRadiusM = renderConfig?.planetRadiusM ?? 0;
+  const field = getTerrainParams();
+  const aboveSurface = Math.max(0, y);
+  // The drawn body is a little wider than the node radius (1.05 x), and the
+  // terrain between samples can rise above the sample points, so probe a ring
+  // rather than four points on it.
+  const footprint = Math.max(0.02, radius) * 1.1;
+  let footing = planetTerrainY(planetRadiusM, x, z, field) + aboveSurface;
+  for (let i = 0; i < 8; i += 1) {
+    const angle = (i / 8) * Math.PI * 2;
+    const ground = planetTerrainY(
+      planetRadiusM,
+      x + Math.cos(angle) * footprint,
+      z + Math.sin(angle) * footprint,
+      field,
+    );
+    if (ground + aboveSurface > footing) footing = ground + aboveSurface;
+  }
+  return footing;
+}
+
+/**
+ * Draw position for a server node, with a seed standing on its highest footing.
+ *
+ * The STRUCTURE resync is authoritative: it replaces every node it carries, so a
+ * footing applied only where a node is first seen is overwritten a second later
+ * and the seed sinks back into the hillside. Everything that maps a server node
+ * into draw space goes through here instead.
+ */
+function seedNodePosition(
+  node: { x: number; z: number; y: number; isSeed?: boolean; type?: string },
+  radius: number,
+): THREE.Vector3 {
+  const position = surfacePosition(node.x, node.z, node.y);
+  if (node.isSeed ?? node.type === 'seed') {
+    position.y = seedFootingY(node.x, node.z, node.y, radius);
+  }
+  return position;
+}
+
 function surfacePosition(x: number, z: number, y: number): THREE.Vector3 {
   const radius = renderConfig?.planetRadiusM ?? 0;
   return new THREE.Vector3(x, y + planetTerrainY(radius, x, z, getTerrainParams()), z);
@@ -2481,6 +2534,13 @@ function updateRootSight(deltaTime: number): void {
     // volume's top landed ~18 m above the plant, its floor landed on the water
     // table, and the water clip then left the sheet standing inside the pit.
     const crownSurfaceY = clientSurfaceY(rootSightTarget.x, rootSightTarget.z, 0);
+    // A seed stands on the highest ground under its own footprint, which on a
+    // slope is a couple of centimetres above the ground at its centre. The
+    // mouth used to be the centre ground, so the pit opened just below the seed
+    // and the coat appeared to hover over its own hollow. Hang the mouth from
+    // the seed's base instead, so the pit starts exactly at its feet.
+    const crownNode = ownRootNodeId ? plantNodes.get(ownRootNodeId) : undefined;
+    const seedMouthY = crownNode?.isSeed ? crownNode.position.y : crownSurfaceY;
     // A seedling's roots are thinner than its seed. Without the drawn crown
     // radius the mouth is smaller than the coat and the pit is invisible.
     let crownRadiusM = 0;
@@ -2531,7 +2591,7 @@ function updateRootSight(deltaTime: number): void {
       bubbles: cavityBubbles,
       crownX: rootSightTarget.x,
       crownZ: rootSightTarget.z,
-      surfaceY: crownSurfaceY,
+      surfaceY: seedMouthY,
       configuredApertureM: effectiveApertureM,
       apertureMinM: Math.min(rootSightConfig.apertureMinM, apertureCapM),
       crownRadiusM,
@@ -6615,9 +6675,16 @@ async function handleWelcome(payload: unknown): Promise<void> {
           });
         }
 
+        // Same footing rule as a growth event: the welcome snapshot is the first
+        // time most players see their seed, and it must not be the one path that
+        // draws it sunk into a hillside.
+        const welcomePosition = surfacePosition(node.x, node.z, node.y);
+        if (node.isSeed ?? node.type === 'seed') {
+          welcomePosition.y = seedFootingY(node.x, node.z, node.y, radius);
+        }
         const nodeData: PlantNodeData = {
           id: node.id,
-          position: surfacePosition(node.x, node.z, node.y),
+          position: welcomePosition,
           type: nodeTypeNum,
           radius,
           parentId: node.parentId,
@@ -6653,9 +6720,23 @@ async function handleWelcome(payload: unknown): Promise<void> {
     }
   } else if (welcome.rootNode) {
     // Fallback for older server without nodes in WELCOME
+    const fallbackRadius = nodeRadius(welcome.rootNode.biomass, 0, welcome.rootNode.y);
+    const fallbackPosition = surfacePosition(
+      welcome.rootNode.x,
+      welcome.rootNode.z,
+      welcome.rootNode.y,
+    );
+    if (welcome.rootNode.type === 'seed') {
+      fallbackPosition.y = seedFootingY(
+        welcome.rootNode.x,
+        welcome.rootNode.z,
+        welcome.rootNode.y,
+        fallbackRadius,
+      );
+    }
     const fallbackRoot: PlantNodeData = {
       id: welcome.rootNode.id,
-      position: surfacePosition(welcome.rootNode.x, welcome.rootNode.z, welcome.rootNode.y),
+      position: fallbackPosition,
       type: 0, // root
       radius: nodeRadius(welcome.rootNode.biomass, 0, welcome.rootNode.y),
       parentId: null,
@@ -7459,23 +7540,9 @@ function handleGrowthEvent(payload: unknown): void {
     // the ground beside it. Stand the seed on the highest ground under its own
     // radius instead, so an uphill contact can never swallow the downhill rim.
     const seedNode = node.isSeed ?? node.type === 'seed';
-    let nodePosition = surfacePosition(node.x, node.z, node.y);
+    const nodePosition = surfacePosition(node.x, node.z, node.y);
     if (seedNode) {
-      const planetRadiusM = renderConfig?.planetRadiusM ?? 0;
-      const field = getTerrainParams();
-      const baseAboveSurface = Math.max(0, node.y);
-      const footprint = Math.max(0.02, node.radius ?? 0.05);
-      let footing = nodePosition.y;
-      for (const [dx, dz] of [
-        [footprint, 0],
-        [-footprint, 0],
-        [0, footprint],
-        [0, -footprint],
-      ]) {
-        const ground = planetTerrainY(planetRadiusM, node.x + dx, node.z + dz, field);
-        if (ground + baseAboveSurface > footing) footing = ground + baseAboveSurface;
-      }
-      nodePosition = new THREE.Vector3(nodePosition.x, footing, nodePosition.z);
+      nodePosition.y = seedFootingY(node.x, node.z, node.y, node.radius ?? 0.05);
     }
 
     return {
@@ -7984,7 +8051,7 @@ function handlePlantSync(payload: unknown): void {
 
       target.set(node.id, {
         id: node.id,
-        position: surfacePosition(node.x, node.z, node.y),
+        position: seedNodePosition(node, radius),
         type: nodeTypeNum,
         radius,
         parentId: node.parentId,
