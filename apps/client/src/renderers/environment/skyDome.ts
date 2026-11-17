@@ -40,6 +40,10 @@ const SKY_FRAGMENT_SHADER = /* glsl */ `
   // floor under the ground instead of the inside of the earth.
   uniform float uEyeUnderGround;
   uniform vec3 uEarthColor;
+  // Distant ground below the horizon. Mixing the earth tone with the sky's pale
+  // horizon made a grey-green band; soil hazed toward the horizon reads as land
+  // running away from the viewer instead.
+  uniform vec3 uSoilColor;
 
   float hash21(vec2 p) {
     p = fract(p * vec2(123.34, 456.21));
@@ -82,7 +86,9 @@ const SKY_FRAGMENT_SHADER = /* glsl */ `
     // band was this dome's lower half, proven by tagging its shader magenta and
     // watching exactly that region change.
     if (dir.y < 0.0) {
-      gl_FragColor = vec4(uEarthColor, 1.0);
+      // Distant ground, hazed: soil running to the horizon, so the two meet
+      // without a seam and neither of them is black.
+      gl_FragColor = vec4(mix(uSoilColor, uHorizonColor, 0.35), 1.0);
       #include <colorspace_fragment>
       return;
     }
@@ -190,7 +196,11 @@ export function createSkyDome(
       uMoonDir: { value: moonDir },
       uMoonColor: { value: new THREE.Color(config.sunColorNight) },
       uEyeUnderGround: { value: 0 },
-      uEarthColor: { value: new THREE.Color(config.undergroundViewColor).multiplyScalar(0.25) },
+      // The earth tone as configured, not quartered. At a quarter it was #0e0a07
+      // - black to any eye - and every patch of "ground" painted with it read as
+      // a hole in the world.
+      uEarthColor: { value: new THREE.Color(config.undergroundViewColor) },
+      uSoilColor: { value: new THREE.Color(config.soilDryColor) },
     },
     vertexShader: SKY_VERTEX_SHADER,
     fragmentShader: SKY_FRAGMENT_SHADER,
