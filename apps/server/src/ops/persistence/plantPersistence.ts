@@ -640,6 +640,8 @@ export class PlantPersistence {
   private pool: Pool;
   private worldId: string;
   private onLoadError: ((error: unknown) => void) | undefined;
+  /** Pending save per plant id, so two writers cannot race on one row. */
+  private saveChains = new Map<string, Promise<void>>();
 
   constructor(pool: Pool, worldId: string, onLoadError?: (error: unknown) => void) {
     this.pool = pool;
@@ -647,7 +649,27 @@ export class PlantPersistence {
     this.onLoadError = onLoadError;
   }
 
+  /**
+   * Persist one plant, after any save already queued for it.
+   *
+   * Three callers can ask at the same moment - the periodic flush, a
+   * disconnect and the shutdown save - and each used to open its own
+   * transaction, so the older snapshot could commit last and win. Saves for one
+   * plant are chained instead: the next waits for the previous to commit.
+   * Different plants still write in parallel. The map holds one settled promise
+   * per plant, which is as bounded as the world's plant count.
+   */
   async savePlant(plant: Plant, eventLog: PlantEvent[] = []): Promise<void> {
+    const key = plant.id;
+    const previous = this.saveChains.get(key) ?? Promise.resolve();
+    // A failed save must not cancel the next attempt, so the chain swallows the
+    // rejection while the caller still receives it from its own promise.
+    const next = previous.catch(() => {}).then(() => this.writePlant(plant, eventLog));
+    this.saveChains.set(key, next);
+    return next;
+  }
+
+  private async writePlant(plant: Plant, eventLog: PlantEvent[]): Promise<void> {
     const snapshot = serializePlant(plant);
     const eventLogJson = JSON.stringify(eventLog);
 

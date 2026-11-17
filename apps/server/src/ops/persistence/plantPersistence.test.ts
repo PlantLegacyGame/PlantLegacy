@@ -459,3 +459,79 @@ describe('event log persistence (INV-PR-07)', () => {
     ]);
   });
 });
+
+describe('PlantPersistence save ordering', () => {
+  it('serialises saves for one plant so the older snapshot cannot commit last', async () => {
+    const events: string[] = [];
+    let releaseFirst: () => void = () => {};
+    const firstInsert = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let inserts = 0;
+
+    const client = {
+      query: async (sql: string) => {
+        if (sql === 'BEGIN' || sql === 'COMMIT' || sql === 'ROLLBACK') events.push(sql);
+        else if (sql.includes('INSERT INTO world_plants')) {
+          inserts += 1;
+          events.push(`INSERT#${inserts}`);
+          if (inserts === 1) await firstInsert;
+        }
+        return { rows: [] };
+      },
+      release: () => events.push('release'),
+    };
+    const pool = {
+      connect: async () => client,
+      query: async () => ({ rows: [] }),
+    } as unknown as Pool;
+
+    const persistence = new PlantPersistence(pool, 'w1');
+    const plantA = makePlant(3, 'a_');
+    plantA.id = 'p_same';
+
+    const first = persistence.savePlant(plantA);
+    const second = persistence.savePlant(plantA);
+    // Give the second save every chance to start its own transaction.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.deepEqual(events, ['BEGIN', 'INSERT#1'], 'second save waited for the first');
+
+    releaseFirst();
+    await Promise.all([first, second]);
+
+    assert.deepEqual(events, [
+      'BEGIN',
+      'INSERT#1',
+      'COMMIT',
+      'release',
+      'BEGIN',
+      'INSERT#2',
+      'COMMIT',
+      'release',
+    ]);
+  });
+
+  it('keeps saving after a failed one', async () => {
+    let calls = 0;
+    const client = {
+      query: async (sql: string) => {
+        if (sql.includes('INSERT INTO world_plants')) {
+          calls += 1;
+          if (calls === 1) throw new Error('boom');
+        }
+        return { rows: [] };
+      },
+      release: () => {},
+    };
+    const pool = {
+      connect: async () => client,
+      query: async () => ({ rows: [] }),
+    } as unknown as Pool;
+    const persistence = new PlantPersistence(pool, 'w1');
+    const plant = makePlant(3, 'b_');
+
+    await assert.rejects(() => persistence.savePlant(plant));
+    await persistence.savePlant(plant);
+    assert.equal(calls, 2);
+  });
+});
