@@ -2144,23 +2144,32 @@ function settlePlayerOnGround(deltaTime: number): void {
   // what held the camera metres up: it took the higher of the target's ground
   // and the eye's, so standing on a rise and orbiting to the downhill side kept
   // the eye at the hilltop's height over a valley it was already above.
-  const touch = renderConfig?.cameraGroundTouchM ?? 0.02;
   const offset = camera.position.clone().sub(controls.target);
-  const distance = Math.max(1e-3, offset.length());
   offset.y = 0;
   if (offset.lengthSq() < 1e-8) offset.set(0, 0, 1);
   offset.normalize();
-  // Sample the ground where the eye is heading - the horizontal end of the
-  // orbit - and only that ground.
-  const eyeGroundUnder = planetTerrainY(
-    planetRadius,
-    controls.target.x + offset.x * distance,
-    controls.target.z + offset.z * distance,
-    field,
-  );
-  const floorY = eyeGroundUnder + touch;
-  const cosLimit = THREE.MathUtils.clamp((floorY - controls.target.y) / distance, -1, 1);
-  const groundLimit = Math.acos(cosLimit);
+  // The limit is the horizon of the ground *plane* under the player, not a
+  // sample of the ground under the eye. Sampling the eye's own ground made the
+  // limit depend on where the eye already was: lifting the eye brought its
+  // horizontal sample closer to the player, which changed the limit, which moved
+  // the eye again. That limit cycle is the up-and-down the camera did when
+  // zoomed in over terrain - the closer the orbit, the larger each step, because
+  // the eye's horizontal was a larger share of the distance. A plane has one
+  // horizon per orbit direction and it does not depend on distance or on how
+  // high the eye already is, so there is nothing left to feed back.
+  const gradientStep = 0.5;
+  const gradientX =
+    (planetTerrainY(planetRadius, controls.target.x + gradientStep, controls.target.z, field) -
+      planetTerrainY(planetRadius, controls.target.x - gradientStep, controls.target.z, field)) /
+    (2 * gradientStep);
+  const gradientZ =
+    (planetTerrainY(planetRadius, controls.target.x, controls.target.z + gradientStep, field) -
+      planetTerrainY(planetRadius, controls.target.x, controls.target.z - gradientStep, field)) /
+    (2 * gradientStep);
+  // How fast the ground rises per horizontal metre in the direction the eye is
+  // orbiting towards. Downhill is simply no limit; the configured one applies.
+  const uphill = Math.max(0, gradientX * offset.x + gradientZ * offset.z);
+  const groundLimit = uphill > 1e-6 ? Math.PI / 2 - Math.atan(uphill) : Math.PI / 2;
   const configuredLimit = renderConfig?.cameraMaxPolarAngle ?? Math.PI / 2 - 0.05;
   // Keep the limit above the pole floor. The old post-hoc position clamp fought
   // OrbitControls every frame at the terrain edge: it moved the eye without
@@ -2193,14 +2202,34 @@ function clampEyeToGround(): void {
   // but only when there is a cavity for it to be in.
   if (rootSightHoldsACavity()) return;
   const touch = renderConfig?.cameraGroundTouchM ?? 0.02;
-  const ground = planetTerrainY(
-    planetRadius,
-    camera.position.x,
-    camera.position.z,
-    getTerrainParams(),
-  );
-  const floor = ground + touch;
-  if (camera.position.y < floor) camera.position.y = floor;
+  const field = getTerrainParams();
+  const dir = camera.position.clone().sub(controls.target);
+  const reach = dir.length();
+  if (reach < 1e-4) return;
+  dir.divideScalar(reach);
+  // Slide the eye in along its own orbit ray until it clears the ground, instead
+  // of lifting it straight up to the floor. A lift kept the visibility but broke
+  // the orbit sphere: the eye's horizontal moved towards the player, which moved
+  // the ground it was standing over, which changed the height it needed. The
+  // closer the zoom, the bigger that step, so zooming in over terrain pumped the
+  // camera up and down every frame. Shortening the ray is a spring arm: the
+  // answer is a point on the ray the player is looking along, so the next frame
+  // starts from the same ray and reaches the same point. Nothing accumulates and
+  // nothing oscillates - the view simply stops at the dirt and moves in.
+  let travel = reach;
+  for (let step = 0; step < 12; step++) {
+    const ground = planetTerrainY(
+      planetRadius,
+      controls.target.x + dir.x * travel,
+      controls.target.z + dir.z * travel,
+      field,
+    );
+    if (controls.target.y + dir.y * travel >= ground + touch) break;
+    travel *= 0.7;
+  }
+  if (travel < reach) {
+    camera.position.copy(controls.target).addScaledVector(dir, travel);
+  }
 }
 
 // T01: Plant Renderer
@@ -8922,7 +8951,6 @@ function renderFrame(deltaTime: number): void {
   }
   controls.update();
   resolveCameraCollision();
-  clampEyeToGround();
   // OrbitControls only applies minDistance while dollies are in progress, so
   // enforce the floor here too: after leaving the root layer the camera must be
   // pushed back out of the plant instead of staying inside it.
@@ -8934,6 +8962,10 @@ function renderFrame(deltaTime: number): void {
       camera.position.copy(controls.target).addScaledVector(tempVector, orbitMinDistance);
     }
   }
+  // Last, so the ground has the final say: a pose that clears the plant but is
+  // inside a hill still has to move in, and the spring arm may legitimately end
+  // up closer than the orbit floor.
+  clampEyeToGround();
 
   // Update selection marker orientation to face camera (billboard)
   // T02: Update Root Sight transition and cutaway state
