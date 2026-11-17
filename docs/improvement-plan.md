@@ -356,18 +356,29 @@ state machine and the socket - it moves when the context carries those.
    first thing in the request handler that a `http/` module can take over
    without dragging the world with it.
    The dev switch moves by family rather than as one block: each family is the
-   verbs it actually uses, so no case has to be handed a world. The first is
-   `tick/simulationCommands.ts` (`handleSimulationCommand`) — tick rate, pause,
+   verbs it actually uses, so no case has to be handed a world. Three are out.
+   `tick/simulationCommands.ts` (`handleSimulationCommand`) owns tick rate, pause,
    resume, single step, the interest and tier knobs, force-save, clear
    persistence, the three dumps, the client-only renderer acks, the stress test
-   and `dev_set_config` — behind a `SimulationCommandPorts` view built per action
-   from the calling socket. That is fifteen of the thirty-six commands, and it
+   and `dev_set_config` — fifteen of the thirty-six commands — behind a
+   `SimulationCommandPorts` view built per action from the calling socket; it
    removed the switch's only users of `stepSimulationOnce`, the send counters and
-   the persistence calls. The plant/growth/mutation/damage families stay in
-   `main.ts` for now, because they share the plant lookup and the damage
-   pipeline; they leave with the `http/`+`tick/` split, which gives those members
-   real owners. Each module has its own tests — the first coverage any of these
-   paths has had.
+   the persistence calls. `dev/worldCommands.ts` (`handleWorldCommand`) owns the
+   resource rates, their reset, a tile write and the world clock, which is also
+   where a non-numeric rate stops being cast onto the simulation and a
+   `time_of_day` it cannot read stops moving the sun to NaN.
+   `dev/damageCommands.ts` (`handleDamageCommand`) owns kill, tool damage, the two
+   forced uproots, reroot steering, the swarm and the collapse, each keeping its
+   exact settle sequence (events, deaths, events) behind one resolved
+   `PlantTarget`. Six of the plant cases now share one `no_plant` answer instead
+   of practising their own.
+
+   What is left in `main.ts` is the plant family — growth, mutations, energy,
+   biomass, stored water and minerals, items, regenerate and season end — because
+   those read and write the plant handle itself (`plant.growthCooldownUntil`,
+   `plant.totalEnergy`) as well as describing an action on it; they move when the
+   handle gets an owner. Each module has its own tests — the first coverage any
+   of these paths has had.
 
 ## Tracking
 

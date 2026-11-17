@@ -8,6 +8,12 @@ import { loadDayNightConfig, loadWeatherConfig, WeatherSystem } from '@plant-leg
 import { WebSocket, WebSocketServer } from 'ws';
 import { loadRuntimeConfig } from './core/config.ts';
 import { SERVICE_VERSION } from './core/version.ts';
+import {
+  type DamageCommandPorts,
+  handleDamageCommand,
+  type PlantTarget,
+} from './dev/damageCommands.ts';
+import { handleWorldCommand, type WorldCommandPorts } from './dev/worldCommands.ts';
 import { loadAccountsConfig } from './ops/accounts/config.ts';
 import { createAccountsHandlers, createAuthMiddleware } from './ops/accounts/http.ts';
 import { AccountsService } from './ops/accounts/service.ts';
@@ -35,7 +41,7 @@ import { loadDamageConfig, loadTumblingConfig, loadUprootConfig } from './ops/da
 import { DamagePipeline } from './ops/damage/damagePipeline.ts';
 import { DatabaseProbe } from './ops/db.ts';
 import { devToolsAllowed, handleGetDevConfig, handlePostDevConfig } from './ops/dev.ts';
-import { resolveDevTileCommand, resolveDevWeatherCommand } from './ops/devCommands.ts';
+import { resolveDevWeatherCommand } from './ops/devCommands.ts';
 import { loadGrowthConfig } from './ops/growth.ts';
 import {
   createGrowthIntentStateMachine,
@@ -2618,44 +2624,22 @@ class World {
     try {
       // Clock, save, log and config commands: tick/simulationCommands.ts.
       if (handleSimulationCommand(this.simulationCommandPorts(ws), action)) return;
+      // World and clock state, then injuries: dev/worldCommands.ts and
+      // dev/damageCommands.ts.
+      if (handleWorldCommand(this.worldCommandPorts(ws), action)) return;
+      const crown = plant?.rootNodeId ? plant.nodes.get(plant.rootNodeId) : undefined;
+      const damageTarget: PlantTarget | undefined =
+        plant && player?.plantId && this.damagePipeline
+          ? {
+              plantId: player.plantId,
+              playerId: player.playerId,
+              root: crown ? { x: crown.x, z: crown.z } : null,
+            }
+          : undefined;
+      if (handleDamageCommand(this.damageCommandPorts(ws, damageTarget), action, damageTarget)) {
+        return;
+      }
       switch (action.type) {
-        case 'dev_set_resources': {
-          // Resource simulation rates
-          if (action.photosynthesis_rate !== undefined) {
-            this.resourceWorld.setPhotosynthesisRate(action.photosynthesis_rate as number);
-          }
-          if (action.diffusion_rate !== undefined) {
-            this.resourceWorld.setDiffusionRate(action.diffusion_rate as number);
-          }
-          if (action.max_absorption_per_tick !== undefined) {
-            this.resourceWorld.setMaxAbsorptionPerTick(action.max_absorption_per_tick as number);
-          }
-          if (action.rain_gain_per_s !== undefined) {
-            this.resourceWorld.setRainGainPerS(action.rain_gain_per_s as number);
-          }
-          if (action.evaporation_per_s !== undefined) {
-            this.resourceWorld.setEvaporationPerS(action.evaporation_per_s as number);
-          }
-          if (action.canopy_shade_reduction !== undefined) {
-            this.resourceWorld.setCanopyShadeReduction(action.canopy_shade_reduction as number);
-          }
-          // Light/moisture/mineral curves would need config reload
-          this.sendDevResponse(ws, action.type, { ok: true });
-          break;
-        }
-        case 'dev_reset_resources': {
-          this.resourceWorld.resetToDefaults();
-          this.sendDevResponse(ws, action.type, { ok: true });
-          break;
-        }
-        case 'dev_set_tile': {
-          const tile = resolveDevTileCommand(action, (worldX, worldZ) =>
-            this.resourceWorld.getTileCoordinates(worldX, worldZ),
-          );
-          if (tile) this.resourceWorld.setTileResources(tile.tileX, tile.tileZ, tile.resources);
-          this.sendDevResponse(ws, action.type, { ok: true });
-          break;
-        }
         case 'dev_set_growth': {
           if (!plant) {
             noPlant();
@@ -2735,27 +2719,6 @@ class World {
           }
           const filled = this.plantWorld.fillPlantTissue(plant.id);
           this.sendDevResponse(ws, action.type, { ok: true, totalBiomass: filled });
-          break;
-        }
-        case 'dev_set_time': {
-          // The sun is server-authoritative: a client-side setTimeOfDay is
-          // overwritten by the very next weather broadcast, which is why the
-          // world sat at 04:00 while the renderer was told it was afternoon.
-          // Moving the world clock here is the only way to get daylight on
-          // demand for a screenshot.
-          const fraction = Number(action.time_of_day);
-          if (!Number.isFinite(fraction)) {
-            this.sendDevResponse(ws, action.type, { ok: false, reason: 'bad_time' });
-            break;
-          }
-          this.weatherSystem.setTimeOfDay(fraction);
-          const moved = this.weatherSystem.getBroadcast();
-          this.sendDevResponse(ws, action.type, {
-            ok: true,
-            timeOfDay: moved.timeOfDay,
-            isDay: moved.isDay,
-            sunIntensity: moved.sunIntensity,
-          });
           break;
         }
         case 'dev_grow_roots': {
@@ -2863,89 +2826,6 @@ class World {
           const added = addItem(player.inventory, itemId, count, this.itemsConfig.itemDefinitions);
           sendInventorySync(this.inventoryPorts(), player);
           this.sendDevResponse(ws, action.type, { ok: added > 0, itemId, added });
-          break;
-        }
-        case 'dev_kill_plant': {
-          if (!plant || !player?.plantId) {
-            noPlant();
-            break;
-          }
-          this.plantWorld.killPlant(player.plantId, 'damage');
-          // Settle the death now: the broadcast normally waits for the next tick,
-          // so with the simulation paused the client never heard about it.
-          this.processPlantDeaths();
-          this.processDamageEvents();
-          this.sendDevResponse(ws, action.type, { ok: true });
-          break;
-        }
-        case 'dev_damage_plant': {
-          if (!plant || !player?.plantId || !this.damagePipeline) {
-            noPlant();
-            break;
-          }
-          const amount =
-            typeof action.amount === 'number'
-              ? action.amount
-              : this.damagePipeline.getConfig().damage.toolDamagePerHit;
-          this.damagePipeline.applyDamage(player.plantId, amount, 'tool', this.getTick(), {
-            playerId: player.playerId,
-          });
-          this.processDamageEvents();
-          this.processPlantDeaths();
-          this.processDamageEvents();
-          this.sendDevResponse(ws, action.type, { ok: true, amount });
-          break;
-        }
-        case 'dev_uproot_plant': {
-          if (!plant || !player?.plantId || !this.damagePipeline) {
-            noPlant();
-            break;
-          }
-          const cause =
-            action.cause === 'saturation' ||
-            action.cause === 'gust' ||
-            action.cause === 'collapse' ||
-            action.cause === 'structural_damage'
-              ? action.cause
-              : 'gust';
-          const uprooted = this.damagePipeline.forceUproot(player.plantId, cause, this.getTick());
-          this.processDamageEvents();
-          this.sendDevResponse(ws, action.type, { ok: uprooted, cause });
-          break;
-        }
-        case 'dev_reroot': {
-          if (!plant || !player?.plantId || !this.damagePipeline) {
-            noPlant();
-            break;
-          }
-          const dirX = typeof action.dirX === 'number' ? action.dirX : 1;
-          const dirZ = typeof action.dirZ === 'number' ? action.dirZ : 0;
-          const steered = this.damagePipeline.requestReroot(player.plantId, dirX, dirZ);
-          this.sendDevResponse(ws, action.type, { ok: steered, dirX, dirZ });
-          break;
-        }
-        case 'dev_herbivore_swarm': {
-          if (!plant || !this.damagePipeline) {
-            noPlant();
-            break;
-          }
-          const root = plant.rootNodeId ? plant.nodes.get(plant.rootNodeId) : undefined;
-          this.damagePipeline.forceSwarm(root?.x ?? 0, root?.z ?? 0, this.getTick());
-          this.processDamageEvents();
-          this.sendDevResponse(ws, action.type, { ok: true });
-          break;
-        }
-        case 'dev_terrain_collapse': {
-          if (!plant || !this.damagePipeline) {
-            noPlant();
-            break;
-          }
-          const root = plant.rootNodeId ? plant.nodes.get(plant.rootNodeId) : undefined;
-          this.damagePipeline.forceCollapse(root?.x ?? 0, root?.z ?? 0, this.getTick());
-          this.processDamageEvents();
-          this.processPlantDeaths();
-          this.processDamageEvents();
-          this.sendDevResponse(ws, action.type, { ok: true });
           break;
         }
         case 'dev_end_season': {
@@ -3075,6 +2955,67 @@ class World {
       }),
       respond: (actionType, payload) => this.sendDevResponse(ws, actionType, payload),
       logInfo: (message, meta) => this.log.info(message, meta),
+    };
+  }
+
+  /** The resource, tile and clock dev commands' view of this world. */
+  private worldCommandPorts(ws: WebSocket): WorldCommandPorts {
+    return {
+      applyResourceRates: (patch) => {
+        const world = this.resourceWorld;
+        if (patch.photosynthesisRate !== undefined) {
+          world.setPhotosynthesisRate(patch.photosynthesisRate);
+        }
+        if (patch.diffusionRate !== undefined) world.setDiffusionRate(patch.diffusionRate);
+        if (patch.maxAbsorptionPerTick !== undefined) {
+          world.setMaxAbsorptionPerTick(patch.maxAbsorptionPerTick);
+        }
+        if (patch.rainGainPerS !== undefined) world.setRainGainPerS(patch.rainGainPerS);
+        if (patch.evaporationPerS !== undefined) world.setEvaporationPerS(patch.evaporationPerS);
+        if (patch.canopyShadeReduction !== undefined) {
+          world.setCanopyShadeReduction(patch.canopyShadeReduction);
+        }
+      },
+      resetResourceRates: () => this.resourceWorld.resetToDefaults(),
+      tileCoordinates: (worldX, worldZ) => this.resourceWorld.getTileCoordinates(worldX, worldZ),
+      setTileResources: (tileX, tileZ, resources) =>
+        this.resourceWorld.setTileResources(tileX, tileZ, resources),
+      setTimeOfDay: (fraction) => this.weatherSystem.setTimeOfDay(fraction),
+      weatherBroadcast: () => {
+        const forced = this.weatherSystem.getBroadcast();
+        return {
+          timeOfDay: forced.timeOfDay,
+          isDay: forced.isDay,
+          sunIntensity: forced.sunIntensity,
+        };
+      },
+      respond: (actionType, payload) => this.sendDevResponse(ws, actionType, payload),
+    };
+  }
+
+  /** The injury dev commands, closed over the plant and pipeline they act on. */
+  private damageCommandPorts(ws: WebSocket, target: PlantTarget | undefined): DamageCommandPorts {
+    const pipeline = this.damagePipeline;
+    return {
+      defaultToolDamage: () => pipeline?.getConfig().damage.toolDamagePerHit ?? 0,
+      applyToolDamage: (amount) => {
+        if (!pipeline || !target) return;
+        pipeline.applyDamage(target.plantId, amount, 'tool', this.getTick(), {
+          playerId: target.playerId,
+        });
+      },
+      killPlant: () => {
+        if (target) this.plantWorld.killPlant(target.plantId, 'damage');
+      },
+      forceUproot: (cause) =>
+        pipeline && target ? pipeline.forceUproot(target.plantId, cause, this.getTick()) : false,
+      requestReroot: (dirX, dirZ) =>
+        pipeline && target ? pipeline.requestReroot(target.plantId, dirX, dirZ) : false,
+      forceSwarm: (x, z) => pipeline?.forceSwarm(x, z, this.getTick()),
+      forceCollapse: (x, z) => pipeline?.forceCollapse(x, z, this.getTick()),
+      processDamageEvents: () => this.processDamageEvents(),
+      processPlantDeaths: () => this.processPlantDeaths(),
+      respond: (actionType, payload) => this.sendDevResponse(ws, actionType, payload),
     };
   }
 

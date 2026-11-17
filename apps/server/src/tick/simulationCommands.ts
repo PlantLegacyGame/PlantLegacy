@@ -8,10 +8,9 @@
  * and honest about what a dev command is allowed to touch; the rest of the switch
  * is splitting into families the same way.
  */
-export interface DevAction {
-  type: string;
-  [key: string]: unknown;
-}
+import type { DevAction } from '../dev/devAction.ts';
+
+export type { DevAction };
 
 export interface SimulationCommandPorts {
   setTickRate(hz: number): void;
