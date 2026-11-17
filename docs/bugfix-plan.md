@@ -441,8 +441,8 @@ Tick these; each is one commit at most.
 - [ ] FIX-15 shared panel primitive
 
 **Docs**
-- [ ] Inventory rows F5, A6, E4 corrected (see §6)
-- [ ] `CONTEXT.md:382`, `docs/protocol.md:350`, `docs/tasks/T03P.md:20,53` say 3
+- [x] Inventory rows F5, A6, E4 corrected (see §6) — already done on 2026-11-16 and the ledger row was stale: `docs/bug-inventory.md` carries all three as `[x]` with the correction (A6 at line 46, E4 at 144, F5 at 196), each naming the code or doc that resolves it.
+- [x] Protocol version agrees everywhere: `PROTOCOL_VERSION = 3` in `@plant-legacy/shared/protocol`, `net_proto.protocol_version` is 3, and `docs/protocol.md` (config table) and `docs/tasks/T03P.md:20,53` all say 3; `CONTEXT.md` §5.6 states that the key must equal the constant or the server refuses to boot. The line numbers in this row had drifted, which is why it read as an open mismatch.
 - [x] README `pnpm verify` claim matches reality (verify includes `docs:check`; `verify:ci` adds the build)
 
 ## 8. Open decisions
