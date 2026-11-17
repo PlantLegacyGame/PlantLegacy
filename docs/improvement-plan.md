@@ -288,6 +288,21 @@ layout and bind group entries) and `webgpu/plantVertexLayout.ts`, and a check in
 the bindings the JS declares, in the organ order the shader samples. The
 renderer lost about 280 lines and no binding number moved.
 
+Impostor atlas, next seam and two bugs: the baker keyed its atlas tiles by a
+plant's *index* in the frame's plant array, so when a plant died or left
+interest every plant after it shifted down and inherited its neighbour's tile
+(drawing another plant's silhouette until re-baked), while the dead plant's tile
+was never released and the atlas slowly filled with ghosts. Tiles are now
+`webgpu/impostorAtlasSlots.ts`, keyed by plant id, with an LRU and a `retain`
+pass per bake; the index-to-tile table is re-uploaded whole, so a removal is
+self-healing. The same pass stopped rebuilding the 16 view matrices (they depend
+on the plant's radius alone) for every plant, and stopped allocating and
+destroying a 16-layer texture per plant: one scratch texture now serves every
+bake. Second bug, in the shader: "no impostor" was tested as tile (0, 0), which
+is also a real tile, so plant index 0 never showed its impostor and any other
+plant that drew tile 0 lost it too; the sentinel is now an explicit
+`0xffffffff`.
+
 **Staged plan for the god-modules (next sessions, one at a time):**
 
 1. ~~`main.ts` step 1: an explicit app context.~~ **Done** —

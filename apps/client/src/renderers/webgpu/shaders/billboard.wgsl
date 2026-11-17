@@ -113,8 +113,11 @@ fn vs_main(
 fn calculateImpostorUV(plantIndex: u32, cameraRight: vec3f, cameraUp: vec3f, cameraForward: vec3f) -> vec2f {
   // Get the plant's atlas slot
   let slot = impostorSlots[plantIndex];
-  if (slot.x == 0u && slot.y == 0u && plantIndex > 0u) {
-    // No impostor baked for this plant, return invalid UV
+  // 0xffffffffu is "no impostor baked yet". Testing the tile against (0, 0)
+  // instead meant tile 0 *was* the sentinel: plant index 0 was never trusted
+  // even once it had a bake, and any other plant that drew tile 0 silently
+  // never showed its impostor.
+  if (slot.x == 0xffffffffu) {
     return vec2f(-1.0, -1.0);
   }
 

@@ -76,6 +76,13 @@ export interface PlantMeshBuildOptions {
 }
 
 export interface PlantRenderPlant {
+  /**
+   * Stable identity of the plant, not its position in this array.
+   *
+   * The impostor atlas keys its tiles by this: the array loses plants as they
+   * die or leave interest, and every index after the hole shifts down.
+   */
+  id: string;
   center: THREE.Vector3;
   radius: number;
   color: [number, number, number];
@@ -1605,6 +1612,7 @@ export function buildPlantMesh(
     const radius = Math.max(0.15, size.length() * 0.5);
 
     plantData.push({
+      id: root.plantId ?? root.id,
       center,
       radius,
       color,

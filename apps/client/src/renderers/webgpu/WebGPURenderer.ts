@@ -2,6 +2,7 @@ import { mulberry32 } from '@plant-legacy/shared/math';
 import * as THREE from 'three';
 import { type MutationLookStack, NEUTRAL_STACK } from '../plant/mutations.ts';
 import type { PlantNodeData } from '../plant/plantNodeData.js';
+import { ImpostorAtlasSlots } from './impostorAtlasSlots.js';
 import { jointMatrixFor } from './jointMatrix.js';
 import { buildPlantMesh, type PlantRenderPlant } from './PlantMeshBuilder.js';
 import {
@@ -47,6 +48,34 @@ const IMPOSTOR_VIEWS_HORIZONTAL = 8; // 8 horizontal angles (0-360)
 const IMPOSTOR_VIEWS_VERTICAL = 2; // 2 vertical angles (top, side)
 const IMPOSTOR_VIEWS = IMPOSTOR_VIEWS_HORIZONTAL * IMPOSTOR_VIEWS_VERTICAL; // 16 views per plant
 const IMPOSTOR_TILE_SIZE = IMPOSTOR_ATLAS_SIZE / IMPOSTOR_VIEWS_HORIZONTAL; // 128x128 per view
+
+/**
+ * Scratch for the impostor view matrices.
+ *
+ * They depend only on a plant's radius, but a bake used to rebuild them with
+ * fresh vectors, matrices and a 1KB Float32Array for every plant it touched.
+ */
+const IMPOSTOR_EYE = new THREE.Vector3();
+const IMPOSTOR_TARGET = new THREE.Vector3(0, 0, 0);
+const IMPOSTOR_UP = new THREE.Vector3(0, 1, 0);
+const IMPOSTOR_VIEW_MATRIX = new THREE.Matrix4();
+const IMPOSTOR_PROJECTION_MATRIX = new THREE.Matrix4();
+const IMPOSTOR_VIEW_PROJECTION = new THREE.Matrix4();
+
+/** `Matrix4.makePerspective` exists at runtime but not in three's types. */
+function makePerspectiveMatrix(
+  matrix: THREE.Matrix4,
+  fov: number,
+  aspect: number,
+  near: number,
+  far: number,
+): THREE.Matrix4 {
+  return (
+    matrix as unknown as {
+      makePerspective: (fov: number, aspect: number, near: number, far: number) => THREE.Matrix4;
+    }
+  ).makePerspective(fov, aspect, near, far);
+}
 
 /**
  * One plant look record: five organ families (foliage, woody, seed, bloom,
@@ -345,9 +374,17 @@ export class WebGPURenderer {
    * submitted an extra command buffer.
    */
   private impostorBakeInFlight = false;
-  // Track which plant occupies which atlas slot (for LRU eviction)
-  private impostorPlantSlots = new Map<number, { x: number; y: number; lastUsed: number }>();
-  private nextImpostorSlot = 0;
+  /** Atlas tiles, keyed by plant id; see `impostorAtlasSlots.ts` for why. */
+  private readonly impostorSlots = new ImpostorAtlasSlots(
+    Math.floor(IMPOSTOR_ATLAS_SIZE / IMPOSTOR_TILE_SIZE),
+    Math.floor(IMPOSTOR_ATLAS_SIZE / IMPOSTOR_TILE_SIZE),
+  );
+  /** One 16-layer bake target, reused; a bake used to allocate and destroy one. */
+  private impostorViewTexture: GPUTexture | null = null;
+  private readonly impostorViewMatrices = new Float32Array(IMPOSTOR_VIEWS * 16);
+  /** The radius the matrices above were built for; they depend on nothing else. */
+  private impostorViewDistance = Number.NaN;
+  private impostorSlotData: Uint32Array<ArrayBuffer> | null = null;
 
   // C02b: VRAM pool for budgeting
   private vramPool: VRAMPool | null = null;
@@ -1518,7 +1555,13 @@ export class WebGPURenderer {
 
     // Bake up to max plants per frame
     const plantsToBake = Math.min(4, billboardPlants.length);
-    let _baked = 0;
+    let baked = 0;
+
+    // Hand back the tiles of plants that are gone before taking new ones: a tile
+    // held by a dead plant was never released, so the atlas filled with ghosts
+    // and then evicted plants that were still on screen.
+    this.impostorSlots.retain(this.plantIdsInFrame());
+    const bakeNow = performance.now();
 
     // Create/reuse depth texture for impostor rendering
     if (!this.impostorDepthTexture) {
@@ -1547,119 +1590,21 @@ export class WebGPURenderer {
       if (!this.isSphereInFrustum(plantRenderInfo.center, plantRenderInfo.radius, frustumPlanes)) {
         continue;
       }
-      let slot = this.impostorPlantSlots.get(plantIdx);
-      if (!slot) {
-        // Assign new slot (simple grid packing)
-        const cols = Math.floor(IMPOSTOR_ATLAS_SIZE / IMPOSTOR_TILE_SIZE);
-        const rows = Math.floor(IMPOSTOR_ATLAS_SIZE / IMPOSTOR_TILE_SIZE);
-        const totalSlots = cols * rows;
+      // Atlas tiles are keyed by plant id, so a plant that shifted down the list
+      // (another plant died or left interest) cannot inherit its neighbour's
+      // impostor, and a tile is never leaked to a plant that is gone.
+      const grant = this.impostorSlots.acquire(plantRenderInfo.id, bakeNow);
+      if (!grant) continue;
 
-        let slotX: number;
-        let slotY: number;
-
-        if (this.nextImpostorSlot < totalSlots) {
-          // Free slot available
-          slotX = this.nextImpostorSlot % cols;
-          slotY = Math.floor(this.nextImpostorSlot / cols);
-          this.nextImpostorSlot++;
-        } else {
-          // Atlas full: LRU eviction
-          let lruPlantIdx: number | null = null;
-          let lruTime = Infinity;
-          for (const [idx, s] of this.impostorPlantSlots) {
-            if (s.lastUsed < lruTime) {
-              lruTime = s.lastUsed;
-              lruPlantIdx = idx;
-            }
-          }
-          if (lruPlantIdx !== null) {
-            const lruSlot = this.impostorPlantSlots.get(lruPlantIdx);
-            if (lruSlot) {
-              slotX = lruSlot.x;
-              slotY = lruSlot.y;
-              this.impostorPlantSlots.delete(lruPlantIdx);
-
-              // Clear the evicted plant's slot in GPU buffer
-              if (this.impostorSlotsBuffer) {
-                const emptySlot = new Uint32Array([0xffffffff, 0xffffffff]);
-                device.queue.writeBuffer(this.impostorSlotsBuffer, lruPlantIdx * 8, emptySlot);
-              }
-            } else {
-              continue;
-            }
-          } else {
-            // Should not happen, but fallback
-            continue;
-          }
-        }
-        slot = { x: slotX, y: slotY, lastUsed: now };
-        this.impostorPlantSlots.set(plantIdx, slot);
-
-        // Write slot to GPU buffer for billboard shader lookup
-        if (this.impostorSlotsBuffer) {
-          const slotData = new Uint32Array([slot.x, slot.y]);
-          device.queue.writeBuffer(this.impostorSlotsBuffer, plantIdx * 8, slotData);
-        }
-      }
-      slot.lastUsed = now;
-
-      // Pre-compute all 16 view-projection matrices
-      const viewProjs = new Float32Array(16 * 16); // 16 views * 16 floats (mat4)
-      for (let viewIdx = 0; viewIdx < IMPOSTOR_VIEWS; viewIdx++) {
-        const h = viewIdx % IMPOSTOR_VIEWS_HORIZONTAL;
-        const v = Math.floor(viewIdx / IMPOSTOR_VIEWS_HORIZONTAL);
-
-        const angle = (h / IMPOSTOR_VIEWS_HORIZONTAL) * Math.PI * 2;
-        const elevation = v === 0 ? Math.PI / 4 : Math.PI / 6; // 45 deg top, 30 deg side
-        const distance = Math.max(5, plantRenderInfo.radius * 2);
-
-        const eye = new THREE.Vector3(
-          Math.cos(angle) * Math.cos(elevation) * distance,
-          Math.sin(elevation) * distance,
-          Math.sin(angle) * Math.cos(elevation) * distance,
-        );
-        const target = new THREE.Vector3(0, 0, 0);
-        const up = new THREE.Vector3(0, 1, 0);
-
-        const viewMatrix = new THREE.Matrix4().lookAt(eye, target, up);
-        const projMatrix = new THREE.Matrix4();
-        (
-          projMatrix as unknown as {
-            makePerspective: (
-              fov: number,
-              aspect: number,
-              near: number,
-              far: number,
-            ) => THREE.Matrix4;
-          }
-        ).makePerspective(
-          Math.PI / 4, // 90 deg FOV
-          1, // aspect
-          0.1,
-          100,
-        );
-        const viewProj = new THREE.Matrix4().multiplyMatrices(projMatrix, viewMatrix);
-        viewProjs.set(viewProj.elements, viewIdx * 16);
-      }
-
-      // Write all view matrices to uniform buffer at once
-      device.queue.writeBuffer(this.impostorViewsUniformBuffer, 0, viewProjs);
+      // The view matrices depend on the plant's radius alone (the shader applies
+      // its position), so they are rebuilt only when the radius changes.
+      this.writeImpostorViews(device, plantRenderInfo.radius);
 
       // Write target plant index
       const targetData = new Uint32Array([plantIdx, 0, 0, 0]);
       device.queue.writeBuffer(this.impostorTargetBuffer, 0, targetData);
 
-      // Render all 16 views to a texture array (16 layers)
-      const impostorViewTexture = device.createTexture({
-        label: `Impostor views for plant ${plantIdx}`,
-        size: {
-          width: IMPOSTOR_TILE_SIZE,
-          height: IMPOSTOR_TILE_SIZE,
-          depthOrArrayLayers: IMPOSTOR_VIEWS,
-        },
-        format: 'rgba8unorm',
-        usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
-      });
+      const impostorViewTexture = this.ensureImpostorViewTexture(device);
 
       // Single render pass with 16 instances (one per view/layer)
       const renderPass = encoder.beginRenderPass({
@@ -1700,8 +1645,8 @@ export class WebGPURenderer {
       for (let viewIdx = 0; viewIdx < IMPOSTOR_VIEWS; viewIdx++) {
         const h = viewIdx % IMPOSTOR_VIEWS_HORIZONTAL;
         const v = Math.floor(viewIdx / IMPOSTOR_VIEWS_HORIZONTAL);
-        const atlasX = slot.x * IMPOSTOR_TILE_SIZE + h * IMPOSTOR_TILE_SIZE;
-        const atlasY = slot.y * IMPOSTOR_TILE_SIZE + v * IMPOSTOR_TILE_SIZE;
+        const atlasX = grant.column * IMPOSTOR_TILE_SIZE + h * IMPOSTOR_TILE_SIZE;
+        const atlasY = grant.row * IMPOSTOR_TILE_SIZE + v * IMPOSTOR_TILE_SIZE;
 
         encoder.copyTextureToTexture(
           { texture: impostorViewTexture, origin: { x: 0, y: 0, z: viewIdx } },
@@ -1710,12 +1655,95 @@ export class WebGPURenderer {
         );
       }
 
-      impostorViewTexture.destroy();
-
-      _baked++;
+      baked += 1;
     }
 
-    this.lastImpostorBakeTime = now;
+    // Rewriting the whole index -> tile table once per bake is what makes a
+    // removal self-healing: an index that now belongs to another plant cannot
+    // keep pointing at a tile from a previous frame.
+    if (baked > 0) {
+      this.writeImpostorSlotBuffer(device);
+      this.lastImpostorBakeTime = performance.now();
+    }
+  }
+
+  /** One 16-layer bake target for every bake, created on first use. */
+  private ensureImpostorViewTexture(device: GPUDevice): GPUTexture {
+    if (!this.impostorViewTexture) {
+      this.impostorViewTexture = device.createTexture({
+        label: 'Impostor bake views',
+        size: {
+          width: IMPOSTOR_TILE_SIZE,
+          height: IMPOSTOR_TILE_SIZE,
+          depthOrArrayLayers: IMPOSTOR_VIEWS,
+        },
+        format: 'rgba8unorm',
+        usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
+      });
+    }
+    return this.impostorViewTexture;
+  }
+
+  /** Uploads the 16 view-projection matrices a plant of `radius` is baked from. */
+  private writeImpostorViews(device: GPUDevice, radius: number): void {
+    if (!this.impostorViewsUniformBuffer) return;
+    const distance = Math.max(5, radius * 2);
+    if (!(Math.abs(distance - this.impostorViewDistance) <= 1e-4)) {
+      for (let viewIdx = 0; viewIdx < IMPOSTOR_VIEWS; viewIdx += 1) {
+        const h = viewIdx % IMPOSTOR_VIEWS_HORIZONTAL;
+        const v = Math.floor(viewIdx / IMPOSTOR_VIEWS_HORIZONTAL);
+        const angle = (h / IMPOSTOR_VIEWS_HORIZONTAL) * Math.PI * 2;
+        const elevation = v === 0 ? Math.PI / 4 : Math.PI / 6; // 45 deg top, 30 deg side
+
+        IMPOSTOR_EYE.set(
+          Math.cos(angle) * Math.cos(elevation) * distance,
+          Math.sin(elevation) * distance,
+          Math.sin(angle) * Math.cos(elevation) * distance,
+        );
+        IMPOSTOR_VIEW_MATRIX.lookAt(IMPOSTOR_EYE, IMPOSTOR_TARGET, IMPOSTOR_UP);
+        makePerspectiveMatrix(
+          IMPOSTOR_PROJECTION_MATRIX,
+          Math.PI / 4, // 90 deg FOV
+          1, // aspect
+          0.1,
+          100,
+        );
+        IMPOSTOR_VIEW_PROJECTION.multiplyMatrices(IMPOSTOR_PROJECTION_MATRIX, IMPOSTOR_VIEW_MATRIX);
+        this.impostorViewMatrices.set(IMPOSTOR_VIEW_PROJECTION.elements, viewIdx * 16);
+      }
+      this.impostorViewDistance = distance;
+    }
+    device.queue.writeBuffer(this.impostorViewsUniformBuffer, 0, this.impostorViewMatrices);
+  }
+
+  /** Uploads the whole plant index -> atlas tile table for the billboard shader. */
+  private writeImpostorSlotBuffer(device: GPUDevice): void {
+    if (!this.impostorSlotsBuffer) return;
+    const needed = this.plantCount * 2;
+    if (!this.impostorSlotData || this.impostorSlotData.length < needed) {
+      this.impostorSlotData = new Uint32Array(this.config.maxPlants * 2);
+    }
+    const data = this.impostorSlotData;
+    // 0xffffffff means "no impostor": the billboard pass falls back to the mesh
+    // for that plant rather than sampling a tile someone else owns.
+    data.fill(0xffffffff, 0, needed);
+    for (let index = 0; index < this.plantCount; index += 1) {
+      const slot = this.impostorSlots.slotOf(this.plantRenderData[index].id);
+      if (!slot) continue;
+      data[index * 2] = slot.column;
+      data[index * 2 + 1] = slot.row;
+    }
+    device.queue.writeBuffer(this.impostorSlotsBuffer, 0, data, 0, needed);
+  }
+
+  /** Ids of the plants this frame can bake, for releasing their tiles. */
+  private plantIdsInFrame(): ReadonlySet<string> {
+    const ids = new Set<string>();
+    const count = Math.min(this.plantCount, this.plantRenderData.length);
+    for (let index = 0; index < count; index += 1) {
+      ids.add(this.plantRenderData[index].id);
+    }
+    return ids;
   }
 
   render(): void {
@@ -2290,6 +2318,7 @@ export class WebGPURenderer {
     this.jointBuffer?.destroy();
     this.depthTexture?.destroy();
     this.impostorDepthTexture?.destroy();
+    this.impostorViewTexture?.destroy();
 
     // C02b: Destroy texture arrays
     if (this.textureArrays) {
@@ -2311,6 +2340,8 @@ export class WebGPURenderer {
     this.depthTexture = null;
     this.impostorAtlasTexture = null;
     this.impostorAtlasSampler = null;
+    this.impostorViewTexture = null;
+    this.impostorSlots.clear();
     this.textureArrays = null;
     this.textureArraySampler = null;
     this.rainVertexBuffer = null;
