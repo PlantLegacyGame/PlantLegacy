@@ -13,7 +13,9 @@
  *
  * Sources are application code only: tests are excluded on purpose, because a
  * test that mentions a key usually just restates the fixture and would hide the
- * very rot this is looking for.
+ * very rot this is looking for. Comments are blanked before the search, because a
+ * key named only in prose is still unread — several tunables survived for a while
+ * precisely because a comment explained what they were meant to do.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -41,10 +43,65 @@ const walk = (dir, filter, out = []) => {
 const isTestFile = (file) =>
   /\.test\.(ts|mts|tsx)$/.test(file) || file.includes(`${path.sep}test${path.sep}`);
 
+/**
+ * Blank out comments while leaving strings and template literals intact, so a key
+ * quoted in code counts and a key named in a comment does not. Both comment forms
+ * are replaced by spaces rather than removed, which keeps offsets (and therefore
+ * reported line numbers) untouched.
+ */
+function stripComments(source) {
+  let out = '';
+  let i = 0;
+  while (i < source.length) {
+    const ch = source[i];
+    const next = source[i + 1];
+    if (ch === '/' && next === '/') {
+      while (i < source.length && source[i] !== '\n') {
+        out += ' ';
+        i += 1;
+      }
+      continue;
+    }
+    if (ch === '/' && next === '*') {
+      i += 2;
+      out += '  ';
+      while (i < source.length && !(source[i] === '*' && source[i + 1] === '/')) {
+        out += source[i] === '\n' ? '\n' : ' ';
+        i += 1;
+      }
+      if (i < source.length) {
+        out += '  ';
+        i += 2;
+      }
+      continue;
+    }
+    if (ch === "'" || ch === '"' || ch === '`') {
+      const quote = ch;
+      out += ch;
+      i += 1;
+      while (i < source.length) {
+        const c = source[i];
+        out += c;
+        if (c === '\\') {
+          out += source[i + 1] ?? '';
+          i += 2;
+          continue;
+        }
+        i += 1;
+        if (c === quote) break;
+      }
+      continue;
+    }
+    out += ch;
+    i += 1;
+  }
+  return out;
+}
+
 const sources = sourceDirs.flatMap((dir) =>
   walk(path.join(root, dir), (file) => sourceExtensions.test(file) && !isTestFile(file)),
 );
-const haystack = sources.map((file) => fs.readFileSync(file, 'utf8')).join('\n');
+const haystack = sources.map((file) => stripComments(fs.readFileSync(file, 'utf8'))).join('\n');
 
 const allowlist = fs.existsSync(allowlistPath)
   ? JSON.parse(fs.readFileSync(allowlistPath, 'utf8'))

@@ -86,6 +86,24 @@ this plan is linked from the README.
 **Acceptance:** CI runs the same chain as `pnpm verify` plus docs and build.
 **Verification:** read the workflow; run both locally.
 
+**Dead tunables (2026-11-17).** `pnpm config:keys` now runs inside
+`pnpm verify`, between `config:validate` and `docs:check`.
+`tools/config-keys/check.mjs` requires every key in `config/*.json` to be named
+somewhere in `apps/*/src` or `packages/*/src`, with comments blanked first and
+tests excluded: a key explained in prose but read nowhere is exactly how eleven
+of them survived, and a test that restates the fixture would hide the same rot.
+Exceptions must be listed in `tools/config-keys/allowlist.json` with a reason, and
+an exemption that matches no key is itself an error, so the list cannot go stale
+quietly. Today: 641 keys declared, 51 allowlisted, 590 read. Its first run found
+two advertised tunables the Root Sight renderer still hardcodes
+(`root_sight_cutaway_radius`, `root_sight_soil_opacity`); they are allowlisted
+against item 3-A, and deleting those two entries is what turns the check red until
+that lands. The pruning it enabled removed eleven keys (an emote range nothing
+enforced, a dev panel switch that was really `import.meta.env.DEV`, a move speed
+for a server with no movement, five renderer toggles with no reader) and renamed
+three mutation uniforms to the names `/config/plant_renderer` actually reads,
+which it had been falling back past.
+
 ### 1-E Review follow-ups (2026-11-16) `[~]`
 
 The second review pass separated confirmed defects from hypotheses. Two were
