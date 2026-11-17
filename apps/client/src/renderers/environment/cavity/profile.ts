@@ -142,6 +142,30 @@ export const CAVITY_SEAM_DEPTH_M = 0.06;
 /** How far the floor must stay below the lowest lip, in profile units. */
 export const CAVITY_FLOOR_MARGIN = 0.02;
 
+/**
+ * One stratum of the dug wall, as a span of the shell's depth.
+ *
+ * Depths are fractions of `CAVITY_PROFILE_DEPTH`, 0 at the lip and 1 at the
+ * floor. These are the layers a spade sees: the dark, root-woven topsoil; the
+ * paler, compacted subsoil; and the cold deep earth under both. The wall is built
+ * with a hard edge at each `from`, which is what makes a pit read as a cut
+ * through a body rather than as a painted funnel.
+ */
+export interface StrataBand {
+  from: number;
+  to: number;
+}
+
+/** The layers of the dug wall, topsoil to deep earth. */
+export const CAVITY_STRATA_BANDS: readonly StrataBand[] = [
+  { from: 0, to: 0.24 },
+  { from: 0.24, to: 0.58 },
+  { from: 0.58, to: 1 },
+];
+
+/** Vertical courses per profile segment: enough rings for the wall to be relief. */
+export const CAVITY_STRATA_SUBDIVISION = 3;
+
 /** How far the rim may drop down the wall, in profile units. */
 export const CAVITY_WALL_BASE_DEPTH = Math.max(0.05, -CAVITY_RIM_WALL_BASE);
 

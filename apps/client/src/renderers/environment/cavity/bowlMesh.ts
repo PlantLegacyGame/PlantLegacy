@@ -7,7 +7,8 @@
  * it is are in `placement.ts`; what the eye may see is in `clip.ts`.
  */
 import * as THREE from 'three';
-import { CAVITY_CUT_OVERREACH, CAVITY_PROFILE, CAVITY_PROFILE_DEPTH } from './profile.ts';
+import { CAVITY_CUT_OVERREACH, CAVITY_STRATA_BANDS, CAVITY_STRATA_SUBDIVISION } from './profile.ts';
+import { buildStrataShell } from './strataShell.ts';
 
 /** The clip uniforms, written per frame by `updateCavityBowl`. */
 export interface CavityClipUniforms {
@@ -20,11 +21,6 @@ export interface CavityClipUniforms {
   uBowlClipMode: { value: number };
 }
 
-function hash(angle: number, ring: number): number {
-  const s = Math.sin(angle * 12.9898 + ring * 78.233) * 43758.5453;
-  return s - Math.floor(s);
-}
-
 /**
  * Build the bowl. Unit radius, opening upward: the eye is always inside the pit
  * looking at its wall.
@@ -34,63 +30,54 @@ export function createCavityBowl(
   subsoil: THREE.Color,
   widthSegments = 96,
   _heightSegments = 24,
+  /** The cold earth under the subsoil; defaults to the subsoil, darkened. */
+  deepSoil?: THREE.Color,
 ): THREE.Mesh {
-  // Built from a ring profile rather than a sphere. A sphere's rim is a slope,
-  // so pulling one vertex down to the terrain also pulled it inwards: the lower
-  // lip could not follow a hillside and looked hard-capped. These rings are a
-  // vertical wall under a rim that is the topmost ring.
+  // Built as a stack of bands, not one lathe. A single smooth funnel with a
+  // colour gradient is exactly what the pit looked like: a bowl with dirt
+  // painted on it. `strataShell` gives each layer its own colour, a hard edge at
+  // every boundary, and radial clod relief so the wall has real silhouette and
+  // normals for the lit material below.
+  const deep = deepSoil ?? subsoil.clone().multiplyScalar(0.78);
+  const shell = buildStrataShell({
+    bands: CAVITY_STRATA_BANDS,
+    // The lip ring is built out to the width the soil is cut at, not to the
+    // mouth, so the lip and the cut share one boundary.
+    colors: [
+      [topsoil.r, topsoil.g, topsoil.b],
+      [subsoil.r, subsoil.g, subsoil.b],
+      [deep.r, deep.g, deep.b],
+    ],
+    cols: widthSegments,
+    subdivision: CAVITY_STRATA_SUBDIVISION,
+  });
+  // Stretch only the lip ring to the cut width; the relief below it is already
+  // in the shell's own numbers.
+  for (let c = 0; c < shell.cols; c += 1) {
+    const i = c * 3;
+    shell.positions[i] *= CAVITY_CUT_OVERREACH;
+    shell.positions[i + 2] *= CAVITY_CUT_OVERREACH;
+  }
   const geometry = new THREE.BufferGeometry();
-  const positions: number[] = [];
-  const colors: number[] = [];
-  const indices: number[] = [];
-  const color = new THREE.Color();
-  const rings = CAVITY_PROFILE.length;
-  // The rim ring is built out to the width the soil is cut at, not to the mouth:
-  // the lip and the cut then share one boundary. Built at the mouth instead, the
-  // ring sat wholly inside the opening and the gap between it and the soil's
-  // edge was an uncovered annulus with nothing behind it. The ring's own chords
-  // still dip inside the cut circle, which is what keeps the soil's edge lapping
-  // over the lip rather than opening a slot beside it.
-  const cols = Math.max(8, widthSegments);
-  const rimRadiusFactor = CAVITY_CUT_OVERREACH;
-  for (let ring = 0; ring < rings; ring += 1) {
-    const { y, r } = CAVITY_PROFILE[ring];
-    const ringRadius = ring === 0 ? r * rimRadiusFactor : r;
-    for (let c = 0; c < cols; c += 1) {
-      const angle = (c / cols) * Math.PI * 2;
-      positions.push(Math.cos(angle) * ringRadius, y, Math.sin(angle) * ringRadius);
-      // 0 at the rim, 1 at the deepest point of the bowl.
-      const depth = THREE.MathUtils.clamp(-y / CAVITY_PROFILE_DEPTH, 0, 1);
-      const grit = hash(angle, ring);
-      color.copy(topsoil).lerp(subsoil, depth);
-      // Dug earth, not a void. The vertex layer carries the strata and only a
-      // gentle depth falloff: the shader below adds grain and a near-wall shadow
-      // on top, and stacking two dark multipliers here was what turned the pit
-      // almost black in the first place.
-      const shade = (1.0 - 0.1 * depth) * (0.96 + 0.08 * grit);
-      colors.push(color.r * shade, color.g * shade, color.b * shade);
-    }
-  }
-  for (let ring = 0; ring < rings - 1; ring += 1) {
-    for (let c = 0; c < cols; c += 1) {
-      const a = ring * cols + c;
-      const b = ring * cols + ((c + 1) % cols);
-      const next = a + cols;
-      const nextNext = b + cols;
-      // Wound so the inner surface is the front face of a BackSide material.
-      indices.push(a, next, b, b, next, nextNext);
-    }
-  }
-  geometry.setIndex(indices);
-  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-  geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+  // The column count is a property of the shell, not something to re-derive from
+  // the vertex count: a consumer dividing by the profile's ring count got 320
+  // columns instead of 96 once the wall had strata courses, and built its index
+  // buffer out of vertices that were not its own.
+  geometry.userData.cols = shell.cols;
+  geometry.setIndex(new THREE.BufferAttribute(shell.indices, 1));
+  geometry.setAttribute('position', new THREE.BufferAttribute(shell.positions, 3));
+  geometry.setAttribute('color', new THREE.BufferAttribute(shell.colors, 3));
   geometry.computeVertexNormals();
 
-  // Unlit: the bowl is a pit, not a surface that catches the sky. Lighting the
-  // inside made the same geometry a flat disc at one time of day and a black
-  // hole at another; the vertex colours already carry the strata and depth.
-  const material = new THREE.MeshBasicMaterial({
+  // Lit, not painted. The old unlit material was the reason the wall had no
+  // shading of its own: every shape cue had to be faked in the fragment shader,
+  // and a funnel with fake shading is still a funnel. Real normals on real
+  // relief catch the scene's light, which is what makes dug earth read as a
+  // surface you could put a spade in.
+  const material = new THREE.MeshStandardMaterial({
     vertexColors: true,
+    roughness: 0.96,
+    metalness: 0,
     // Both skins, then the one between the eye and the cavity is cut away in the
     // shader. A single-sided shell was culled from exactly the angle that needed
     // it.
@@ -218,26 +205,22 @@ float bowlNoise(vec2 p) {
     1.0,
     1.0 - abs(bowlNoise(vec2(bowlArc * 4.0, vBowlWorldPosition.y * 5.5) + 3.1) * 2.0 - 1.0)
   );
-  // Real relief: the wall's own surface normal, lit from above. Without this
-  // the cavity is one flat brown cone. The bowl is a bowl, so its normal is its
-  // local position - no derivatives needed (dFdx/dFdy are not available in the
-  // shader version three emits here, and asking for them made the program
-  // invalid).
-  vec3 bowlWallNormal = -normalize(vBowlLocal);
-  float bowlLit = 0.82 + 0.12 * clamp(dot(bowlWallNormal, vec3(0.32, 0.9, 0.3)), 0.0, 1.0);
-  // Every term is a shade around 1.0, never a second darkening pass: the wall
-  // lands near 0.72 of the dug-soil colour and the floor a little darker. Dark
-  // enough to read as a pit with the lip shading it, light enough that it is
-  // earth rather than a hole punched in the hillside.
+  // These are occlusion terms, not lighting: real normals on the clod relief now
+  // catch the scene's light, so the wall no longer needs a normal dot-product
+  // faked in the fragment shader. What is left is what light does not know about
+  // a hole - the lip's shadow, the near wall between the eye and the cavity, and
+  // the way grain and clods break up a flat fill. Every factor stays near 1.0 so
+  // the strata colours survive them.
   diffuseColor.rgb *=
-    (0.84 + 0.32 * bowlGrain) *
-    (0.88 + 0.24 * bowlClods) *
-    (1.0 - 0.14 * bowlSeams) *
-    bowlLit *
-    (1.0 - 0.35 * bowlDepth) *
-    (0.9 + 0.1 * bowlRimShadow) *
+    (0.88 + 0.24 * bowlGrain) *
+    (0.9 + 0.2 * bowlClods) *
+    (1.0 - 0.12 * bowlSeams) *
+    (1.0 - 0.28 * bowlDepth) *
+    (0.92 + 0.08 * bowlRimShadow) *
     bowlNearShade *
-    uBowlLight;`,
+    // Daylight, but never to zero: a lit wall at night is lit by the sky it is
+    // dug into, and going black would hide the strata the pit exists to show.
+    mix(0.5, 1.0, uBowlLight);`,
       )
       .replace(
         '#include <colorspace_fragment>',
@@ -290,7 +273,7 @@ float bowlNoise(vec2 p) {
   }`,
       );
   };
-  material.customProgramCacheKey = () => 'root-sight-bowl-dirt-v4';
+  material.customProgramCacheKey = () => 'root-sight-bowl-dirt-v5';
 
   const mesh = new THREE.Mesh(geometry, material);
   mesh.name = 'root-sight-bowl';
@@ -309,7 +292,7 @@ float bowlNoise(vec2 p) {
  * the sun, ambient and sky fill.
  */
 export function setCavityBowlLight(bowl: THREE.Mesh, level: number): void {
-  const uniform = (bowl.material as THREE.MeshBasicMaterial).userData.lightUniform as
+  const uniform = (bowl.material as THREE.Material).userData.lightUniform as
     | { value: number }
     | undefined;
   if (uniform) uniform.value = Math.max(0, level);

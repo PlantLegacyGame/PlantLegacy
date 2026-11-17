@@ -302,9 +302,14 @@ export class EnvironmentRenderer {
       // subsoil. This used to be the wet-soil tone (near black after rain)
       // multiplied down again, and the unlit bowl then read as a void rather
       // than as dirt someone had dug through.
-      const dugTopsoil = new THREE.Color(config.soilDryColor).multiplyScalar(0.86);
-      const dugSubsoil = new THREE.Color(config.soilDryColor).multiplyScalar(0.62);
-      this.cavityBowl = createCavityBowl(dugTopsoil, dugSubsoil);
+      // Three depths, not a gradient: the wall is built in strata, and each one
+      // needs the colour the soil actually is at that depth.
+      // Wide apart on purpose: three near-identical browns read as one brown no
+      // matter how much seam is drawn between them.
+      const dugTopsoil = new THREE.Color(config.soilDryColor).multiplyScalar(0.95);
+      const dugSubsoil = new THREE.Color(config.soilDryColor).multiplyScalar(0.58);
+      const dugDeep = new THREE.Color(config.soilDryColor).multiplyScalar(0.34);
+      this.cavityBowl = createCavityBowl(dugTopsoil, dugSubsoil, 96, 24, dugDeep);
       scene.add(this.cavityBowl);
       // Its own mesh, not extra rings in the bowl: ring counts drive the floor
       // depth, the rim indices and the vertex layout, and a hidden sixth ring in

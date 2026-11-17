@@ -23,7 +23,15 @@ interface SkirtState {
 /** Build the skirt for a bowl. Add it as the bowl's child. */
 export function createCavitySkirt(bowl: THREE.Mesh): THREE.Mesh {
   const position = bowl.geometry.getAttribute('position');
-  const cols = Math.max(8, Math.round(position.count / CAVITY_PROFILE.length));
+  // The bowl publishes its column count. Dividing the vertex count by the
+  // profile's ring count was only ever right while the wall was one ring per
+  // profile point; with strata courses it built a skirt out of the wrong
+  // vertices, and the wreckage was black triangles over the whole pit.
+  const published = bowl.geometry.userData.cols;
+  const cols = Math.max(
+    8,
+    Math.round(typeof published === 'number' ? published : position.count / CAVITY_PROFILE.length),
+  );
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(cols * 2 * 3), 3));
   geometry.setAttribute('color', new THREE.BufferAttribute(new Float32Array(cols * 2 * 3), 3));
@@ -36,6 +44,9 @@ export function createCavitySkirt(bowl: THREE.Mesh): THREE.Mesh {
     indices.push(top, nextTop, bottom, bottom, nextTop, nextBottom);
   }
   geometry.setIndex(indices);
+  // Normals matter now that the wall is lit: a skirt without them was a black
+  // shell hanging in the pit.
+  geometry.computeVertexNormals();
   const mesh = new THREE.Mesh(geometry, bowl.material);
   mesh.name = 'root-sight-skirt';
   // A child in the bowl's local space: the bowl's transform places it, and the
@@ -74,4 +85,7 @@ export function updateCavitySkirt(skirt: THREE.Mesh, bowl: THREE.Mesh): void {
   }
   dst.needsUpdate = true;
   dstColour.needsUpdate = true;
+  // The rim moved, so the wall's normals did too. Two rings by 96 columns: this
+  // is cheap, and a stale normal on a lit wall is a black stripe.
+  skirt.geometry.computeVertexNormals();
 }

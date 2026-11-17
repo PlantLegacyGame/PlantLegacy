@@ -61,7 +61,7 @@ export function updateCavityBowl(
   bowl.position.set(centre.x, surfaceY, centre.z);
   bowl.position.y += placement.rimOffsetY;
 
-  const clip = (bowl.material as THREE.MeshBasicMaterial).userData.clipUniforms as
+  const clip = (bowl.material as THREE.Material).userData.clipUniforms as
     | CavityClipUniforms
     | undefined;
 

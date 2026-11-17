@@ -13,6 +13,7 @@ import type { RenderConfig } from '../../config/clientConfig.js';
 import { getTerrainParams } from '../terrain/terrainState.js';
 import { type AtmosphereParams, DEFAULT_ATMOSPHERE, GLSL_ATMOSPHERE } from './atmosphere.js';
 import { applySoilFragmentShader, applySoilVertexShader } from './ground/shaderOverrides.ts';
+import { createSoilSlab } from './planetSoilSlab.ts';
 import { createPlanetBody, createTerrainPatches } from './planetSurface.js';
 import type { RootSightUniforms } from './rootSightUniforms.js';
 
@@ -384,6 +385,27 @@ export function createGround(
         // the aperture pays only for that test.
         setSurfaceCut(patches.outer, true);
         terrainMeshes.push(patches.inner, patches.outer);
+        // The soil has thickness. The patch is a sheet: without walls and an
+        // underside, opening the ground revealed the back of that sheet and the
+        // empty space behind it. The slab lines the patch with the depth the
+        // config already claimed the soil had, and takes the same aperture cut,
+        // so the cut faces are earth and not a place the sky shows through.
+        const slab = createSoilSlab({
+          radius: planetRadius,
+          field: getTerrainParams(),
+          material,
+          segments: Math.max(16, Math.round(config.terrainMeshSubdivisions * 0.75)),
+          extentM: Math.min(180, Math.max(20, getTerrainParams().patchRadiusM) * 2),
+          skinM: 0.02,
+          depthM: Math.max(0.2, config.soilDepthM),
+        });
+        mesh.add(slab);
+        setSurfaceCut(slab, true);
+        // Deliberately NOT in `terrainMeshes`: that list becomes the physics
+        // trimesh. The slab is the earth's own body - walls and an underside -
+        // and colliding it would seal the ground into a closed box, so everything
+        // under the surface would be inside a solid and "is this root in soil"
+        // would stop meaning anything. Physics keeps the surface patches.
       }
     } else {
       mesh = new THREE.Mesh(geometry as THREE.BufferGeometry, material);

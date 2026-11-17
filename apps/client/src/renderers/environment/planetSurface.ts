@@ -98,6 +98,26 @@ export function planetTerrainY(
 }
 
 /**
+ * Height of a ground patch's own surface at a position: the sphere under it, the
+ * relief on it and the skin it is raised by.
+ *
+ * Exported so the soil slab can hang its walls off exactly this number: the walls
+ * and the patch they line share an edge, and a slab built from a different
+ * height would leave a step along that edge.
+ */
+export function patchSurfaceY(
+  radius: number,
+  x: number,
+  z: number,
+  field: TerrainFieldParams,
+  skinM: number,
+): number {
+  const horizontal = Math.min(Math.hypot(x, z), radius * 0.99);
+  const sphereY = Math.sqrt(Math.max(radius * radius - horizontal * horizontal, 0));
+  return sphereY + terrainRelief(x, z, field) + skinM;
+}
+
+/**
  * The planet's surface, and therefore the whole traversable ground. Its pole is
  * at y = 0, which is where the play area's tangent plane is. One sphere means
  * one surface: there is no cap to end, no seam where two grounds meet, and no
