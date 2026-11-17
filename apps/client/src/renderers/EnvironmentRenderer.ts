@@ -290,7 +290,12 @@ export class EnvironmentRenderer {
         this.planetBodyMesh = object;
         this.planetBodyDrawCount =
           object.geometry.index?.count ?? object.geometry.getAttribute('position')?.count ?? 0;
-      } else if (object.name === 'planet-terrain-far') {
+      } else if (object.name === 'planet-terrain-far' || object.name === 'planet-soil-slab') {
+        // The slab is the earth's body, and a buried eye is inside that body:
+        // its underside and walls became a second cave around the camera, nested
+        // inside the pit Root Sight had just opened. Hidden while underground for
+        // the same reason as the coarse ring - the detail patch is then the one
+        // dirt surface enclosing the eye, and the cavity bowl the one void in it.
         this.surfaceShells.push(object);
       }
     });
@@ -318,9 +323,12 @@ export class EnvironmentRenderer {
       const dugSubsoil = new THREE.Color(config.soilDryColor)
         .multiplyScalar(1.08)
         .lerp(new THREE.Color('#9a7442'), 0.35);
+      // Pale, cold clay, not another dark brown. At 0.5 and a near-black grey
+      // the third band was the one layer that vanished after dark: two bands
+      // read and the floor looked like a shadow instead of a stratum.
       const dugDeep = new THREE.Color(config.soilDryColor)
-        .multiplyScalar(0.5)
-        .lerp(new THREE.Color('#565349'), 0.45);
+        .multiplyScalar(0.62)
+        .lerp(new THREE.Color('#6d6b62'), 0.5);
       this.cavityBowl = createCavityBowl(dugTopsoil, dugSubsoil, 96, 24, dugDeep);
       scene.add(this.cavityBowl);
       // Its own mesh, not extra rings in the bowl: ring counts drive the floor

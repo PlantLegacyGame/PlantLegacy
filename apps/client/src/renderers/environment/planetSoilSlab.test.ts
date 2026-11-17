@@ -18,7 +18,7 @@ const FIELD = {
   seed: 1,
 } as never;
 
-function slab(depthM = 1.6) {
+function slab(depthM = 1.6, holeRadiusM = 0) {
   return createSoilSlab({
     radius: 400,
     field: FIELD as never,
@@ -27,6 +27,7 @@ function slab(depthM = 1.6) {
     extentM: 40,
     skinM: 0.02,
     depthM,
+    holeRadiusM,
   });
 }
 
@@ -65,6 +66,28 @@ describe('soil slab', () => {
       );
     }
     assert.ok((mesh.geometry.getIndex()?.count ?? 0) > 0, 'the slab has no faces');
+  });
+
+  it('leaves the Root Sight cavity out of its underside', () => {
+    // The earth's bottom is a sheet and the cavity is a void in the body. A
+    // sheet that spans the cavity crosses the pit: a second floor inside it and
+    // a flat ceiling across the hole from underneath.
+    const mesh = slab(1.6, 6);
+    const position = mesh.geometry.getAttribute('position');
+    const index = mesh.geometry.getIndex();
+    assert.ok(index, 'the slab has no index buffer');
+    let underFaces = 0;
+    for (let i = 0; i < index.count; i += 1) {
+      const v = index.getX(i);
+      const x = position.getX(v);
+      const z = position.getZ(v);
+      assert.ok(
+        Math.hypot(x, z) >= 6,
+        `an underside vertex sits ${Math.hypot(x, z).toFixed(2)} m from the cavity axis, inside the 6 m void`,
+      );
+      if (position.getY(v) < patchSurfaceY(400, x, z, FIELD as never, 0.02) - 0.1) underFaces += 1;
+    }
+    assert.ok(underFaces > 0, 'the hole took the whole underside with it');
   });
 
   it('takes its thickness from the config, not from a constant', () => {

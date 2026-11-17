@@ -226,17 +226,29 @@ float bowlNoise(vec2 p) {
       )
       .replace(
         '#include <colorspace_fragment>',
-        `#include <colorspace_fragment>
-  // Sky from the mouth. A dug wall is lit by the open sky above it, not only by
+        `  // Sky from the mouth. A dug wall is lit by the open sky above it, not only by
   // the sun: with no sky term the inside of the pit was one dark brown mass at
   // every hour and at every angle the sun did not face, and the strata it is
   // built from vanished in the shade. The floor is a fraction of the wall's own
   // albedo, so the bands keep their hard edges and their relative values while
   // the wall stays readable after dark.
+  //
+  // **Before** the colour-space conversion, not after it. Injected after the
+  // colorspace include this max compared a linear albedo against encoded
+  // pixels, where the encoded value is always the larger number: the fill was
+  // computed, did nothing, and the pit stayed black at night while the code
+  // looked correct.
+  //
+  // The night floor is 0.38 of the albedo, not 0.14: at the lower figures the
+  // deep band and the humus over it both rounded to near-black after midnight
+  // and the pit became one dark disc - the strata the cut exists to show were
+  // there and could not be seen. A dug wall is lit by the sky above the mouth,
+  // and the sky does not go out.
   gl_FragColor.rgb = max(
     gl_FragColor.rgb,
-    diffuseColor.rgb * mix(0.22, 0.5, clamp(uBowlLight, 0.0, 1.0))
+    diffuseColor.rgb * mix(0.38, 0.52, clamp(uBowlLight, 0.0, 1.0))
   );
+#include <colorspace_fragment>
   // Seen from a buried eye beside the pit, the bowl may only be visible where
   // the line of sight actually leaves through the opening. Follow the ray from
   // the eye to this fragment; where it crosses the surface plane it must land
@@ -297,7 +309,7 @@ float bowlNoise(vec2 p) {
   }`,
       );
   };
-  material.customProgramCacheKey = () => 'root-sight-bowl-dirt-v8';
+  material.customProgramCacheKey = () => 'root-sight-bowl-dirt-v10';
 
   const mesh = new THREE.Mesh(geometry, material);
   mesh.name = 'root-sight-bowl';

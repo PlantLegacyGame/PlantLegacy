@@ -390,6 +390,14 @@ export function createGround(
         // empty space behind it. The slab lines the patch with the depth the
         // config already claimed the soil had, and takes the same aperture cut,
         // so the cut faces are earth and not a place the sky shows through.
+        // The cavity is a void in this body, so its underside stops at the
+        // widest hole Root Sight can cut. The configured radius is already in
+        // the shared uniforms by the time the ground is built, so this reads
+        // the same number the shader cuts with instead of inventing one.
+        const cavityMouthM = Math.max(
+          soilUniforms.uRootSightRadius.value,
+          soilUniforms.uRootSightApertureRadius.value,
+        );
         const slab = createSoilSlab({
           radius: planetRadius,
           field: getTerrainParams(),
@@ -398,6 +406,7 @@ export function createGround(
           extentM: Math.min(180, Math.max(20, getTerrainParams().patchRadiusM) * 2),
           skinM: 0.02,
           depthM: Math.max(0.2, config.soilDepthM),
+          holeRadiusM: cavityMouthM > 0 ? cavityMouthM + 1 : 0,
         });
         mesh.add(slab);
         setSurfaceCut(slab, true);

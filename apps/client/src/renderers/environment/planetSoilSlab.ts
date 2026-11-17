@@ -29,6 +29,16 @@ export interface SoilSlabOptions {
   skinM: number;
   /** How thick the earth is, in metres. */
   depthM: number;
+  /**
+   * Radius of a hole in the underside, in metres.
+   *
+   * The earth's bottom is a sheet, and Root Sight cuts a bowl out of the earth
+   * above it. A sheet that spans the cavity crosses it: from inside the pit the
+   * underside is a second floor, and from under it a flat ceiling across the
+   * hole. The cavity is a void in the body, so the body's underside is absent
+   * where the void is.
+   */
+  holeRadiusM?: number;
 }
 
 /**
@@ -77,6 +87,7 @@ export function createSoilSlab(options: SoilSlabOptions): THREE.Mesh {
 
   // Underside: a coarser grid, because it is only ever seen from inside the
   // earth where there is no detail to lose.
+  const holeRadius = Math.max(0, options.holeRadiusM ?? 0);
   const underSteps = Math.max(4, Math.round(steps / 4));
   const base = positions.length / 3;
   for (let iz = 0; iz <= underSteps; iz += 1) {
@@ -93,6 +104,21 @@ export function createSoilSlab(options: SoilSlabOptions): THREE.Mesh {
       const b = a + 1;
       const c = a + row;
       const d = c + 1;
+      // Leave the cavity out of the earth's bottom. Any corner inside the void
+      // is enough to drop the quad: a quad that merely straddles the bowl's
+      // mouth would still be a strip of ceiling across the hole.
+      if (holeRadius > 0) {
+        let inHole = false;
+        for (const index of [a, b, c, d]) {
+          const vx = positions[index * 3] ?? 0;
+          const vz = positions[index * 3 + 2] ?? 0;
+          if (Math.hypot(vx, vz) < holeRadius) {
+            inHole = true;
+            break;
+          }
+        }
+        if (inHole) continue;
+      }
       // Wound to face down: seen from inside the earth, the slab's underside is
       // the ceiling of the space the roots live in.
       indices.push(a, b, c, b, d, c);
