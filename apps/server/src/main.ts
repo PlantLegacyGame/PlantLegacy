@@ -13,6 +13,7 @@ import {
 import { WebSocket, WebSocketServer } from 'ws';
 import { loadRuntimeConfig } from './core/config.ts';
 import { SERVICE_VERSION } from './core/version.ts';
+import { buildWelcomePayload } from './net/welcomeBuilder.ts';
 import { loadAccountsConfig } from './ops/accounts/config.ts';
 import { createAccountsHandlers, createAuthMiddleware } from './ops/accounts/http.ts';
 import { AccountsService } from './ops/accounts/service.ts';
@@ -23,6 +24,7 @@ import {
   loadReportConfig,
   type ReportConfig,
 } from './ops/chat.ts';
+import { consumeChatBudget, resolveChatIntent } from './ops/chatService.ts';
 import { readFlatConfig } from './ops/configRoutes.ts';
 import {
   type ConnectionRegistry,
@@ -984,30 +986,13 @@ class World {
     playerId: string,
     plant: import('@plant-legacy/shared/growth').Plant,
   ): WelcomePayload {
-    const plantId = plant.id;
-    const rootNodeId = plant.rootNodeId;
-    const rootNode = rootNodeId != null ? plant.nodes.get(rootNodeId) : undefined;
-    return {
+    return buildWelcomePayload({
       playerId,
-      plantId,
-      reconnectToken: this.issueReconnectToken(plantId),
+      plant,
+      reconnectToken: this.issueReconnectToken(plant.id),
       tick: this.getTick(),
-      rootNode: rootNode
-        ? {
-            id: rootNode.id,
-            x: rootNode.x,
-            y: rootNode.y,
-            z: rootNode.z,
-            type: 'root',
-            biomass: rootNode.biomass,
-          }
-        : { id: rootNodeId ?? '', x: 0, y: 0, z: 0, type: 'root', biomass: 0 },
-      totalBiomass: plant.totalBiomass,
-      totalEnergy: plant.totalEnergy,
-      nodes: Array.from(plant.nodes.values()).map((n) =>
-        nodeWireFields(n, this.plantWorld.getNodeHealth(plant.id, n.id)),
-      ),
-    };
+      nodeHealth: (nodeId) => this.plantWorld.getNodeHealth(plant.id, nodeId),
+    });
   }
 
   /**
@@ -1262,30 +1247,7 @@ class World {
     };
     this.players.set(newPlayerId, player);
 
-    const rootNodeId = plant.rootNodeId;
-    const rootNode = rootNodeId != null ? plant.nodes.get(rootNodeId) : undefined;
-
-    const welcome: WelcomePayload = {
-      playerId: newPlayerId,
-      plantId: plant.id,
-      reconnectToken: this.issueReconnectToken(plant.id),
-      tick: this.getTick(),
-      rootNode: rootNode
-        ? {
-            id: rootNode.id,
-            x: rootNode.x,
-            y: rootNode.y,
-            z: rootNode.z,
-            type: 'root',
-            biomass: rootNode.biomass,
-          }
-        : { id: rootNodeId ?? '', x: 0, y: 0, z: 0, type: 'root', biomass: 0 },
-      totalBiomass: plant.totalBiomass,
-      totalEnergy: plant.totalEnergy,
-      nodes: Array.from(plant.nodes.values()).map((n) =>
-        nodeWireFields(n, this.plantWorld.getNodeHealth(plant.id, n.id)),
-      ),
-    };
+    const welcome = this.buildWelcome(newPlayerId, plant);
 
     this.attachAwaySummary(welcome, plant);
     this.log.info('player reconnected, plant reclaimed', {
@@ -1434,30 +1396,7 @@ class World {
     };
     this.players.set(newPlayerId, player);
 
-    const rootNodeId = plant.rootNodeId;
-    const rootNode = rootNodeId != null ? plant.nodes.get(rootNodeId) : undefined;
-
-    const welcome: WelcomePayload = {
-      playerId: newPlayerId,
-      plantId: plant.id,
-      reconnectToken: this.issueReconnectToken(plant.id),
-      tick: this.getTick(),
-      rootNode: rootNode
-        ? {
-            id: rootNode.id,
-            x: rootNode.x,
-            y: rootNode.y,
-            z: rootNode.z,
-            type: 'root',
-            biomass: rootNode.biomass,
-          }
-        : { id: rootNodeId ?? '', x: 0, y: 0, z: 0, type: 'root', biomass: 0 },
-      totalBiomass: plant.totalBiomass,
-      totalEnergy: plant.totalEnergy,
-      nodes: Array.from(plant.nodes.values()).map((n) =>
-        nodeWireFields(n, this.plantWorld.getNodeHealth(plant.id, n.id)),
-      ),
-    };
+    const welcome = this.buildWelcome(newPlayerId, plant);
 
     this.attachAwaySummary(welcome, plant);
     this.log.info('anonymous player reconnected, plant reclaimed', {
@@ -1975,10 +1914,16 @@ class World {
           const player = this.players.get(playerId);
           if (!player || !chatPayload?.message) break;
 
-          const message = chatPayload.message.trim().slice(0, this.chatConfig.messageMaxChars);
-          if (message.length === 0) break;
+          const intent = resolveChatIntent(chatPayload, this.chatConfig);
+          if (!intent) break;
 
-          if (!this.consumeChatBudget(player)) {
+          const budget = consumeChatBudget(
+            player.chatTimestamps,
+            Date.now(),
+            this.chatConfig.worldRateMsgPerMin,
+          );
+          player.chatTimestamps = budget.timestamps;
+          if (!budget.allowed) {
             this.send(player.ws, MESSAGE_TYPE.ERROR, {
               code: 'chat_rate_limit',
               message: 'Chat rate limit reached. Slow down.',
@@ -1986,30 +1931,20 @@ class World {
             break;
           }
 
-          const mode: 'world' | 'proximity' =
-            chatPayload.mode === 'proximity' ? 'proximity' : 'world';
-
-          const emoteMatch = message.match(/^\/emote\s+(\w+)$/i);
-          if (emoteMatch) {
-            const emoteId = emoteMatch[1].toLowerCase();
-            if (this.chatConfig.emoteIds.includes(emoteId)) {
-              this.deliverChat(playerId, mode, {
-                playerId,
-                playerName: player.displayName ?? 'Player',
-                emoteId,
-                timestamp: Date.now(),
-                type: 'emote',
-              });
-              break;
-            }
-          }
-
-          this.deliverChat(playerId, mode, {
+          const from = {
             playerId,
             playerName: player.displayName ?? 'Player',
-            message,
             timestamp: Date.now(),
-          });
+          };
+          if (intent.emoteId) {
+            this.deliverChat(playerId, intent.mode, {
+              ...from,
+              emoteId: intent.emoteId,
+              type: 'emote',
+            });
+            break;
+          }
+          this.deliverChat(playerId, intent.mode, { ...from, message: intent.text });
           break;
         }
         case MESSAGE_TYPE.BLOCK: {
@@ -2519,16 +2454,6 @@ class World {
     const plant = this.plantWorld.getPlant(player.plantId);
     const root = plant?.rootNodeId ? plant.nodes.get(plant.rootNodeId) : undefined;
     return root ? { x: root.x, z: root.z } : null;
-  }
-
-  /** Per-minute chat budget from config/chat.json. */
-  private consumeChatBudget(player: ConnectedPlayer): boolean {
-    const now = Date.now();
-    const windowStart = now - 60_000;
-    player.chatTimestamps = player.chatTimestamps.filter((t) => t > windowStart);
-    if (player.chatTimestamps.length >= this.chatConfig.worldRateMsgPerMin) return false;
-    player.chatTimestamps.push(now);
-    return true;
   }
 
   /**

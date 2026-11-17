@@ -313,7 +313,14 @@ state machine and the socket - it moves when the context carries those.
    `connectionRegistry*` calls in the same order, so they now call one
    `World.attachConnection(ws, playerId, plantId, accountId, timeoutMessage)`;
    a fourth site, the dev `Regenerate` action, only changes the plant id and
-   keeps its bare `connectionRegistrySetPlant`.
+   keeps its bare `connectionRegistrySetPlant`. The WELCOME body is
+   `net/welcomeBuilder.ts` (`buildWelcomePayload`), a pure plant-to-wire
+   mapping: three attach paths had their own copy of that object, and a copy
+   that missed the node set looked to the client like a plant with no nodes.
+   Chat shaping and its per-minute budget are `ops/chatService.ts`
+   (`resolveChatIntent`, `consumeChatBudget`); the socket fanout stays in
+   `main.ts`, where the players and the interest manager live. Both modules have
+   their own tests — the first coverage either path has had.
 
 ## Tracking
 
