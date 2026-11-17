@@ -96,6 +96,19 @@ export const CAVITY_MOUTH_FRACTION = 0.7;
 export const CAVITY_MOUTH_OVERHANG = 1.0;
 
 /**
+ * How far past the bowl's lip the soil is cut, as a multiple of the mouth.
+ *
+ * The lip is a polygon: its chords dip inside the true circle, and a sloped
+ * surface between two rim vertices stands above the chord. A cut exactly at the
+ * lip therefore leaves the lip poking through intact soil, and a cut short of it
+ * leaves the lip ring uncovered with nothing behind it. The soil is cut a hair
+ * wider than the lip and the lip ring itself is built out to that width, so the
+ * soil edge meets the bowl's own geometry and no third surface has to bridge the
+ * two.
+ */
+export const CAVITY_CUT_OVERREACH = 1.02;
+
+/**
  * Extra sink of the rim below the soil cut, in metres. Zero on purpose.
  *
  * It used to be 12 mm, to keep the rim off the soil's plane. But the soil is a

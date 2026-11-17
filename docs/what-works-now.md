@@ -211,7 +211,7 @@ Run in Chromium against the dev stack, screenshots in
   is sampled in cylindrical coordinates (angle x mouth radius, world height) and
   no longer smears down the wall. The rim is flush with the cut and its ring is a
   circumscribed 96-gon, so the sawtooth of sky that used to run round the mouth
-  at grazing angles is gone (`70`), and the seam collar is painted darker than
+  at grazing angles is gone (`70`), and the bowl's lip is the same material as its wall, not a separate band,
   the wall so it reads as the lip's shadow rather than a pale line.
 - **Growth gizmo.** The ring sits on the part, the arrow points along the aim and
   the ground marker follows the drawn soil; seen from the spawn camera it reads

@@ -7,7 +7,7 @@
  * it is are in `placement.ts`; what the eye may see is in `clip.ts`.
  */
 import * as THREE from 'three';
-import { CAVITY_PROFILE, CAVITY_PROFILE_DEPTH } from './profile.ts';
+import { CAVITY_CUT_OVERREACH, CAVITY_PROFILE, CAVITY_PROFILE_DEPTH } from './profile.ts';
 
 /** The clip uniforms, written per frame by `updateCavityBowl`. */
 export interface CavityClipUniforms {
@@ -45,17 +45,17 @@ export function createCavityBowl(
   const indices: number[] = [];
   const color = new THREE.Color();
   const rings = CAVITY_PROFILE.length;
-  // 48 segments left the rim 4 mm inside the cut at the chord midpoints, which
-  // is a one-pixel line of sky/water around the mouth. 96 halves that, and the
-  // rim ring is *circumscribed* on top of it: its vertices sit a hair outside the
-  // cut circle (1/cos(pi/n) wider, 0.05% at 96) so every chord stays outside the
-  // hole instead of dipping inside it. The overshoot is under the soil - the rim
-  // is buried by CAVITY_RIM_SINK_M - so nothing of it shows.
+  // The rim ring is built out to the width the soil is cut at, not to the mouth:
+  // the lip and the cut then share one boundary. Built at the mouth instead, the
+  // ring sat wholly inside the opening and the gap between it and the soil's
+  // edge was an uncovered annulus with nothing behind it. The ring's own chords
+  // still dip inside the cut circle, which is what keeps the soil's edge lapping
+  // over the lip rather than opening a slot beside it.
   const cols = Math.max(8, widthSegments);
-  const rimOvershoot = 1 / Math.cos(Math.PI / cols);
+  const rimRadiusFactor = CAVITY_CUT_OVERREACH;
   for (let ring = 0; ring < rings; ring += 1) {
     const { y, r } = CAVITY_PROFILE[ring];
-    const ringRadius = ring === 0 ? r * rimOvershoot : r;
+    const ringRadius = ring === 0 ? r * rimRadiusFactor : r;
     for (let c = 0; c < cols; c += 1) {
       const angle = (c / cols) * Math.PI * 2;
       positions.push(Math.cos(angle) * ringRadius, y, Math.sin(angle) * ringRadius);

@@ -8,6 +8,8 @@
  * edits buried between uniform assignments. These two functions take the stock
  * Three.js shader and return the soil shader; nothing else lives here.
  */
+import { CAVITY_CUT_OVERREACH } from '../cavity/profile.ts';
+
 export interface SoilShaderSources {
   /** Replaces `#include <fog_pars_fragment>`. */
   prelude: string;
@@ -200,14 +202,10 @@ vec3 soilBumpNormal(vec3 normal, vec2 uv, float strength) {
     // used the full cutaway radius: a 1.8 m hole over a 4.9 m mouth left the
     // bowl's buried rim crossing the sightline through the opening, which is
     // what painted dirt across the hole from some angles.
-    // The bowl's lip is a polygon at this radius: its chords dip a hair inside
-    // the exact circle, and on a slope the surface between two rim vertices
-    // stands above the chord. A cut that stops at the lip therefore leaves the
-    // lip poking through intact soil as a dotted ring, and one that stops short
-    // of it opens a hairline of sky instead. Cutting a hair *wider* than the lip
-    // puts the whole ring inside the opening, where the seam collar behind the
-    // soil's edge covers it.
-    const float ROOT_SIGHT_CUT_OVERREACH = 1.02;
+    // The bowl's rim ring is built out to exactly this width, so the soil's edge
+    // and the lip share one boundary: the cut cannot leave a ring of lip poking
+    // through intact soil, and cannot leave an uncovered annulus beside it.
+    const float ROOT_SIGHT_CUT_OVERREACH = ${CAVITY_CUT_OVERREACH};
     float apertureRadius = max(0.05, uRootSightApertureRadius) * ROOT_SIGHT_CUT_OVERREACH;
     // Open with the transition. The bowl is scaled by the same progress; a
     // full-size aperture over a half-size bowl leaves a void ring around the

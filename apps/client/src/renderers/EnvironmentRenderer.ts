@@ -29,10 +29,8 @@ const CAVITY_DAYLIGHT_REFERENCE = 1.08;
 
 import {
   createCavityBowl,
-  createCavitySeam,
   setCavityBowlLight,
   updateCavityBowl,
-  updateCavitySeam,
 } from './environment/cavity/index.ts';
 import {
   applyCelestialLighting,
@@ -149,7 +147,6 @@ export class EnvironmentRenderer {
   private planetBodyDrawCount = 0;
   // The cavity as real geometry: a dug bowl of earth under the opening.
   private cavityBowl: THREE.Mesh | null = null;
-  private cavitySeam: THREE.Mesh | null = null;
   // The soil's cut face at the aperture boundary, so the skin's edge is not a
   // see-through line with nothing behind it.
   /** Surface puddles and groundwater pools (config/water.json). */
@@ -306,13 +303,6 @@ export class EnvironmentRenderer {
       const dugSubsoil = new THREE.Color(config.soilDryColor).multiplyScalar(0.62);
       this.cavityBowl = createCavityBowl(dugTopsoil, dugSubsoil);
       scene.add(this.cavityBowl);
-      // The seam collar: hangs off the bowl's own rim ring, at the ground, in the
-      // bowl's own tone. Sharing that ring vertex for vertex is what leaves no
-      // slot for sky to leak through at any angle. It is deliberately darker than
-      // the wall: at the lip it should read as the shadow under the overhang, not
-      // as the pale line it used to draw under the ground.
-      this.cavitySeam = createCavitySeam(this.cavityBowl, dugTopsoil.clone().multiplyScalar(0.74));
-      scene.add(this.cavitySeam);
       // Water is scenery, not a Root Sight effect: rain lands on the ground and
       // runs into hollows, and the soil holds pools in pockets of its own all
       // over the place. Both are built here from the tuned hydrology.
@@ -771,13 +761,6 @@ export class EnvironmentRenderer {
         this.soilUniforms.uRootSightApertureRadius.value,
         deepestRootY,
       );
-      if (this.cavitySeam) {
-        // After the bowl, from the bowl: the collar hangs off the rim ring the
-        // bowl just conformed, so the two cannot disagree about the mouth.
-        updateCavitySeam(this.cavitySeam, this.cavityBowl, (x, z) =>
-          planetTerrainY(this.planetRadiusM, x, z, terrain),
-        );
-      }
       // Water inside the opening would cover the roots with a dark disc, and
       // the water table stands above the cavity floor. Root Sight is a
       // cut-away, so water is clipped out of the same volume the soil shader

@@ -8,6 +8,7 @@ import type { CavityClipUniforms } from './bowlMesh.ts';
 import { CAVITY_CLIP_MODE_VALUE, cavityClipPolicy, isEyeInsideCavity } from './clip.ts';
 import { cavityBowlPlacement, fitRimToGround } from './placement.ts';
 import {
+  CAVITY_CUT_OVERREACH,
   CAVITY_MOUTH_FRACTION,
   CAVITY_PROFILE,
   CAVITY_RIM_RING,
@@ -84,7 +85,15 @@ export function updateCavityBowl(
     // The bowl's own mouth, not the shader's cut: clipping to the cut discarded
     // the wall's rim ring and left a thin crescent of sky between the lip and
     // the far wall.
-    clip.uBowlApertureRadius.value = Math.max(0.05, placement.horizontalScale);
+    // The opening's plan radius as the *soil* cuts it. The bowl's rim ring is
+    // built out to the same width, so this is also the widest part of the shell:
+    // at the mouth radius instead, the clip culled the outer sliver of the lip -
+    // the sliver that reaches the soil's edge - and left a ring of sky between
+    // the bowl and the hole it was supposed to line.
+    clip.uBowlApertureRadius.value = Math.max(
+      0.05,
+      placement.horizontalScale * CAVITY_CUT_OVERREACH,
+    );
     clip.uBowlSurfaceY.value = surfaceY;
     clip.uBowlClipMode.value = CAVITY_CLIP_MODE_VALUE[policy.mode];
   };
