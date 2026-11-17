@@ -138,9 +138,18 @@ describe('broadcastRootReadouts', () => {
         return false;
       },
     });
-    broadcastRootReadouts(ports, input());
+    const result = broadcastRootReadouts(ports, input());
     assert.equal(attempts, 1);
     assert.equal(remembered.size, 0);
+    // The refused write is not a delivery either, which is what the network
+    // readout reports.
+    assert.equal(result.sent, 0);
+  });
+
+  it('counts a written readout as sent', () => {
+    const { ports } = createPorts();
+    const result = broadcastRootReadouts(ports, input());
+    assert.equal(result.sent, 1);
   });
 
   it('handles several players independently', () => {

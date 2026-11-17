@@ -258,6 +258,7 @@ class World {
   private stateMessagesSkipped = 0;
   private weatherMessagesSent = 0;
   private weatherMessagesSkipped = 0;
+  private rootMessagesSent = 0;
   private rootMessagesSkipped = 0;
   /** Messages dropped because their socket was over the backlog limit. */
   private skippedSends = 0;
@@ -366,11 +367,17 @@ class World {
     return this.interestManager;
   }
 
-  broadcast(type: number, payload: unknown): void {
+  /**
+   * Every connection, and how many of them took the message: a refused write is
+   * counted in `skippedSends`, so a fanout can report what actually landed.
+   */
+  broadcast(type: number, payload: unknown): number {
     const message = JSON.stringify({ type, payload });
+    let delivered = 0;
     for (const player of this.players.values()) {
-      this.writeIfHealthy(player.ws, message, type);
+      if (this.writeIfHealthy(player.ws, message, type)) delivered += 1;
     }
+    return delivered;
   }
 
   /**
@@ -2161,6 +2168,7 @@ class World {
         plantId: player.plantId,
       })),
     });
+    this.rootMessagesSent += rootReadout.sent;
     this.rootMessagesSkipped += rootReadout.skipped;
 
     const weatherStep = broadcastWeather(
@@ -2185,7 +2193,7 @@ class World {
     return {
       send: (playerId, message, messageType) => {
         const player = this.players.get(playerId);
-        if (player) this.writeIfHealthy(player.ws, message, messageType);
+        return player ? this.writeIfHealthy(player.ws, message, messageType) : false;
       },
       isInRange: (playerId, x, z) => this.interestManager.isPositionInRange(playerId, x, z),
     };
@@ -2704,7 +2712,12 @@ class World {
         stateSkipped: this.stateMessagesSkipped,
         weatherSent: this.weatherMessagesSent,
         weatherSkipped: this.weatherMessagesSkipped,
+        rootReadoutsSent: this.rootMessagesSent,
         rootReadoutsSkipped: this.rootMessagesSkipped,
+        // Messages a socket refused at the write gate: closed, or over
+        // `maxBufferedBytes`. Every `*Sent` above excludes these, so a backlog
+        // shows up here instead of hiding inside a delivery count.
+        skippedSends: this.skippedSends,
       }),
       respond: (actionType, payload) => this.sendDevResponse(ws, actionType, payload),
       logInfo: (message, meta) => this.log.info(message, meta),

@@ -72,6 +72,8 @@ export interface RootReadoutInput {
 /** How many players were skipped because the state cadence was not due. */
 export interface RootReadoutResult {
   skipped: number;
+  /** Readouts written to a socket; a refused write is not counted as sent. */
+  sent: number;
 }
 
 /**
@@ -87,7 +89,7 @@ export function broadcastRootReadouts(
   ports: RootReadoutPorts,
   input: RootReadoutInput,
 ): RootReadoutResult {
-  const result: RootReadoutResult = { skipped: 0 };
+  const result: RootReadoutResult = { skipped: 0, sent: 0 };
   for (const player of input.players) {
     if (!player.plantId) continue;
     if (!input.sendNow) {
@@ -149,7 +151,10 @@ export function broadcastRootReadouts(
         },
       }),
     );
-    if (sent) ports.remember(player.playerId, snapshot);
+    if (sent) {
+      ports.remember(player.playerId, snapshot);
+      result.sent += 1;
+    }
   }
   return result;
 }

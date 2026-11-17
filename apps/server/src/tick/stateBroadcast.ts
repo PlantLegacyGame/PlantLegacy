@@ -11,8 +11,11 @@ export interface PlantStateSnapshot {
 }
 
 export interface StateBroadcastPorts {
-  /** `messageType` is STATE or KEYFRAME, so the writer records the right one. */
-  send(playerId: string, message: string, messageType: number): void;
+  /**
+   * `messageType` is STATE or KEYFRAME, so the writer records the right one.
+   * False when the socket refused it (closed, or over the backlog limit).
+   */
+  send(playerId: string, message: string, messageType: number): boolean;
   isInRange(playerId: string, x: number, z: number): boolean;
 }
 
@@ -35,6 +38,7 @@ export interface StateBroadcastResult {
   nextAccumulatorMs: number;
   due: boolean;
   keyframe: boolean;
+  /** Writes that landed; a refused socket is not counted as delivered. */
   sent: number;
   skipped: number;
 }
@@ -75,7 +79,7 @@ export function broadcastPlantStates(
       const position = input.positions.get(state.id);
       return position ? ports.isInRange(player.playerId, position.x, position.z) : false;
     });
-    ports.send(
+    const wrote = ports.send(
       player.playerId,
       JSON.stringify({
         type: stateType,
@@ -88,7 +92,9 @@ export function broadcastPlantStates(
       }),
       stateType,
     );
-    result.sent += 1;
+    // `dev_log_network` reports `sent`, so a backlogged socket that refused the
+    // message must not appear there as a delivery.
+    if (wrote) result.sent += 1;
   }
   return result;
 }

@@ -42,8 +42,10 @@ function createPorts(inRange: (x: number, z: number) => boolean = (x) => x < 10)
   return {
     sent,
     ports: {
-      send: (playerId: string, message: string) =>
-        sent.push({ playerId, body: JSON.parse(message) }),
+      send: (playerId: string, message: string) => {
+        sent.push({ playerId, body: JSON.parse(message) });
+        return true;
+      },
       isInRange: (_playerId: string, x: number, z: number) => inRange(x, z),
     },
   };
@@ -87,6 +89,14 @@ describe('broadcastPlantStates', () => {
     assert.equal(result.skipped, 1);
     assert.deepEqual(sent, []);
     assert.equal(result.nextAccumulatorMs, 10);
+  });
+
+  it('does not count a refused write as sent', () => {
+    const { ports, sent } = createPorts();
+    const result = broadcastPlantStates({ ...ports, send: () => false }, input());
+    assert.equal(result.due, true);
+    assert.equal(result.sent, 0);
+    assert.deepEqual(sent, []);
   });
 
   it('banks the remainder so a faster tick still sends at the configured rate', () => {
