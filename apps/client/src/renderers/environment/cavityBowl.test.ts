@@ -54,17 +54,20 @@ describe('cavityBowlPlacement', () => {
     );
   });
 
-  it('holds the rim flush with the surface at every opening stage', () => {
-    // Flush, not sunk. A rim below the cut leaves a slot between the heightfield's
-    // hole and the wall, and from just above the surface that slot is a sawtooth
-    // of sky round the whole mouth. The material's polygon offset keeps the flush
-    // rim in front of the soil, so nothing z-fights either.
+  it('holds the rim just under the surface, never above it', () => {
+    // A rim above the cut reads as a lip standing over its own hole. A few
+    // millimetres under instead, with the skirt backing the cut edge, and the lip
+    // is soil from every angle - including grazing ones, where a flush rim
+    // showed as a raised ridge against the hillside.
     for (const progress of [0.05, 0.5, 1]) {
       const { rimOffsetY } = cavityBowlPlacement(2.06, progress);
       assert.ok(rimOffsetY <= 0, `rim ${rimOffsetY.toFixed(3)} m is above the centre`);
-      // `-0` is the negated constant; it is the same height.
-      assert.ok(rimOffsetY === 0, `rim offset is ${rimOffsetY}, not flush`);
+      assert.equal(rimOffsetY, -CAVITY_RIM_SINK_M);
     }
+    assert.ok(
+      CAVITY_RIM_SINK_M > 0 && CAVITY_RIM_SINK_M <= 0.03,
+      'the sink stays a lip, not a slot',
+    );
   });
 
   it('opens from nothing: the bowl is hidden at zero progress', () => {
@@ -218,6 +221,28 @@ describe('silhouetteKeepsFragment', () => {
         1,
       ),
       false,
+    );
+  });
+});
+
+describe('the shell never stands above the mouth', () => {
+  it('drops fragments above the mouth plane outside the mouth, in every mode', () => {
+    // An eye at the rim counts as inside the cavity, so the mode-based clips above
+    // never ran and the shell painted its own back in the open beside the hole.
+    // From the rim that is the dark band across the far lip. The rule is stated
+    // with named constants so neither number can drift back into a literal.
+    const source = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), 'cavity', 'bowlMesh.ts'),
+      'utf8',
+    );
+    assert.ok(source.includes('BOWL_SHELL_ABOVE_MOUTH_M = 0.02'), 'the slack is named');
+    assert.ok(source.includes('BOWL_MOUTH_KEEP_FRACTION = 0.98'), 'the keep radius is named');
+    const rule = /vBowlWorldPosition\.y > uBowlSurfaceY \+ BOWL_SHELL_ABOVE_MOUTH_M/;
+    assert.match(source, rule, 'the shell is no longer capped at the mouth plane');
+    assert.match(
+      source,
+      /distance\(vBowlWorldPosition\.xz, uBowlApertureCenter\) >\s*uBowlApertureRadius \* BOWL_MOUTH_KEEP_FRACTION/,
+      'the cap no longer spares the opening',
     );
   });
 });

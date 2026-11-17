@@ -119,7 +119,17 @@ export const CAVITY_CUT_OVERREACH = 1.02;
  * rim (a hair outside the cut, and biased towards the camera by the material's
  * polygon offset) covers the sheet's edge instead of sitting under it.
  */
-export const CAVITY_RIM_SINK_M = 0;
+export const CAVITY_RIM_SINK_M = 0.02;
+
+/**
+ * How far the bowl's skirt hangs below the rim, in profile units.
+ *
+ * The ground is a sheet with no thickness, so from under the cut its edge is a
+ * slab with the sky behind it. The skirt is a wall under the rim at exactly the
+ * cut radius: whatever the eye is doing, the edge of the hole is backed by dug
+ * earth instead of by open background.
+ */
+export const CAVITY_SKIRT_DEPTH = CAVITY_PROFILE_DEPTH;
 
 /**
  * Seam collar: how deep it hangs below the rim.
