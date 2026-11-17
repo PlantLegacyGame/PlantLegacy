@@ -17,4 +17,5 @@ export * from './clip.ts';
 export * from './placement.ts';
 export * from './profile.ts';
 export * from './shape.ts';
+export * from './skirtMesh.ts';
 export * from './update.ts';

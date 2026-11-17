@@ -17,8 +17,15 @@ const source = readFileSync(
   'utf8',
 );
 
-test('water directly under the opening is dropped', () => {
-  assert.match(source, /dot\(cavity, cavity\) < uCavityRadius \* uCavityRadius\) discard;/);
+test('water under the opening is dropped, and its edge dissolves rather than cutting', () => {
+  // The clip is still the plan column, but it ends in alpha: a hard discard left
+  // the water's own edge as a one-pixel blue line against the pit's rim.
+  assert.match(
+    source,
+    /cavityAlpha = smoothstep\(uCavityRadius \* 0\.9, uCavityRadius, cavityDist\);/,
+  );
+  assert.match(source, /if \(cavityAlpha <= 0\.002\) discard;/);
+  assert.match(source, /alpha \*= cavityAlpha;/);
 });
 
 test('the clip has no height bound, upper or lower', () => {
@@ -67,7 +74,12 @@ test('water outside the opening volume is kept, wherever the eye is', () => {
   assert.doesNotMatch(source, /closestY/);
 });
 
-test('the clip is the aperture plan column', () => {
+test('the clip is the aperture plan column, edged with alpha', () => {
   assert.match(source, /uniform float uCavityRadius;/);
-  assert.match(source, /dot\(cavity, cavity\) < uCavityRadius \* uCavityRadius\) discard;/);
+  assert.match(
+    source,
+    /cavityAlpha = smoothstep\(uCavityRadius \* 0\.9, uCavityRadius, cavityDist\);/,
+  );
+  assert.match(source, /float cavityDist = length\(cavity\);/);
+  assert.doesNotMatch(source, /cavity\) < uCavityRadius \* uCavityRadius\) discard;/);
 });

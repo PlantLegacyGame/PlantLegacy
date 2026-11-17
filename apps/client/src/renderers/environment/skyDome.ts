@@ -76,6 +76,16 @@ const SKY_FRAGMENT_SHADER = /* glsl */ `
       #include <colorspace_fragment>
       return;
     }
+    // Nothing below the horizon is sky. Either the ground covers it or the eye is
+    // under it, and painting space down there is what put a black band across the
+    // world whenever the eye sat below the surface or looked through a cut: the
+    // band was this dome's lower half, proven by tagging its shader magenta and
+    // watching exactly that region change.
+    if (dir.y < 0.0) {
+      gl_FragColor = vec4(uEarthColor, 1.0);
+      #include <colorspace_fragment>
+      return;
+    }
     float h = clamp(dir.y, 0.0, 1.0);
     float grad = pow(1.0 - h, 2.2);
     vec3 sky = mix(uZenithColor, uHorizonColor, grad);

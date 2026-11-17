@@ -7,12 +7,7 @@
  * it is are in `placement.ts`; what the eye may see is in `clip.ts`.
  */
 import * as THREE from 'three';
-import {
-  CAVITY_CUT_OVERREACH,
-  CAVITY_PROFILE,
-  CAVITY_PROFILE_DEPTH,
-  CAVITY_SKIRT_DEPTH,
-} from './profile.ts';
+import { CAVITY_CUT_OVERREACH, CAVITY_PROFILE, CAVITY_PROFILE_DEPTH } from './profile.ts';
 
 /** The clip uniforms, written per frame by `updateCavityBowl`. */
 export interface CavityClipUniforms {
@@ -75,31 +70,6 @@ export function createCavityBowl(
       const shade = (1.0 - 0.1 * depth) * (0.96 + 0.08 * grit);
       colors.push(color.r * shade, color.g * shade, color.b * shade);
     }
-  }
-  // The skirt: a wall under the rim at exactly the cut radius, hanging well past
-  // the bowl's own wall. The ground is a sheet with no thickness, so at a low
-  // eye its cut edge is a slab with background behind it; this backs that edge
-  // with earth. It shares the rim ring (ring 0) so it can never disagree with
-  // the lip about where the hole is.
-  const skirtStart = positions.length / 3;
-  for (let c = 0; c < cols; c += 1) {
-    const angle = (c / cols) * Math.PI * 2;
-    positions.push(
-      Math.cos(angle) * rimRadiusFactor,
-      -CAVITY_SKIRT_DEPTH,
-      Math.sin(angle) * rimRadiusFactor,
-    );
-    const grit = hash(angle, rings);
-    color.copy(topsoil).lerp(subsoil, 1);
-    const shade = 0.92 * (0.96 + 0.08 * grit);
-    colors.push(color.r * shade, color.g * shade, color.b * shade);
-  }
-  for (let c = 0; c < cols; c += 1) {
-    const a = c;
-    const b = (c + 1) % cols;
-    const next = skirtStart + c;
-    const nextNext = skirtStart + ((c + 1) % cols);
-    indices.push(a, next, b, b, next, nextNext);
   }
   for (let ring = 0; ring < rings - 1; ring += 1) {
     for (let c = 0; c < cols; c += 1) {

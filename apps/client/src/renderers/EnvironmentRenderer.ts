@@ -29,8 +29,10 @@ const CAVITY_DAYLIGHT_REFERENCE = 1.08;
 
 import {
   createCavityBowl,
+  createCavitySkirt,
   setCavityBowlLight,
   updateCavityBowl,
+  updateCavitySkirt,
 } from './environment/cavity/index.ts';
 import {
   applyCelestialLighting,
@@ -147,6 +149,7 @@ export class EnvironmentRenderer {
   private planetBodyDrawCount = 0;
   // The cavity as real geometry: a dug bowl of earth under the opening.
   private cavityBowl: THREE.Mesh | null = null;
+  private cavitySkirt: THREE.Mesh | null = null;
   // The soil's cut face at the aperture boundary, so the skin's edge is not a
   // see-through line with nothing behind it.
   /** Surface puddles and groundwater pools (config/water.json). */
@@ -303,6 +306,12 @@ export class EnvironmentRenderer {
       const dugSubsoil = new THREE.Color(config.soilDryColor).multiplyScalar(0.62);
       this.cavityBowl = createCavityBowl(dugTopsoil, dugSubsoil);
       scene.add(this.cavityBowl);
+      // Its own mesh, not extra rings in the bowl: ring counts drive the floor
+      // depth, the rim indices and the vertex layout, and a hidden sixth ring in
+      // that buffer quietly changed all three. As a child it still shares the
+      // bowl's transform and material.
+      this.cavitySkirt = createCavitySkirt(this.cavityBowl);
+      this.cavityBowl.add(this.cavitySkirt);
       // Water is scenery, not a Root Sight effect: rain lands on the ground and
       // runs into hollows, and the soil holds pools in pockets of its own all
       // over the place. Both are built here from the tuned hydrology.
@@ -761,6 +770,11 @@ export class EnvironmentRenderer {
         this.soilUniforms.uRootSightApertureRadius.value,
         deepestRootY,
       );
+      if (this.cavitySkirt) {
+        // After the bowl, from the bowl: the skirt's top edge is the rim the bowl
+        // just conformed, so the two cannot disagree about where the hole is.
+        updateCavitySkirt(this.cavitySkirt, this.cavityBowl);
+      }
       // Water inside the opening would cover the roots with a dark disc, and
       // the water table stands above the cavity floor. Root Sight is a
       // cut-away, so water is clipped out of the same volume the soil shader

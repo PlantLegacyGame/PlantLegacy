@@ -211,6 +211,7 @@ const WATER_FRAGMENT_SHADER = /* glsl */ `
       }
       if (groundTested && vWaterWorld.y > groundY + uWaterSubmergeM) discard;
     }
+    float cavityAlpha = 1.0;
     if (uCavityRadius > 0.0) {
       vec2 cavity = vWaterWorld.xz - uCavityCenter;
       // The column is the opening, at every height: the ground inside it is cut
@@ -218,7 +219,12 @@ const WATER_FRAGMENT_SHADER = /* glsl */ `
       // heuristics this replaces reached across the map - the closest-point test
       // is a strip through the cavity centre, so a lower river seen past an
       // open pit lost a seam of water.
-      if (dot(cavity, cavity) < uCavityRadius * uCavityRadius) discard;
+      // A hard cut left the water's own edge as a one-pixel blue line lying
+      // against the pit's rim. Water is transparent, so the alpha fades over the
+      // last tenth of the radius and the surface dissolves into the soil instead.
+      float cavityDist = length(cavity);
+      cavityAlpha = smoothstep(uCavityRadius * 0.9, uCavityRadius, cavityDist);
+      if (cavityAlpha <= 0.002) discard;
     }
     // Water right at the camera clips through the near plane and smears a sheet
     // across the view; dropping those fragments keeps the waterline stable.
@@ -340,6 +346,7 @@ const WATER_FRAGMENT_SHADER = /* glsl */ `
       alpha = max(alpha, foam * 0.5);
     }
 
+    alpha *= cavityAlpha;
     if (alpha < 0.01) discard;
     gl_FragColor = vec4(color, alpha);
   }

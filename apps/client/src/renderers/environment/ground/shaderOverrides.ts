@@ -295,7 +295,12 @@ vec3 soilBumpNormal(vec3 normal, vec2 uv, float strength) {
   // Tile moisture is a hint, not the colour. Taken at face value it repainted
   // whole tiles dry or wet, so the ground read as tiles rather than soil; the
   // global moisture keeps the shading smooth and the tile data only nudges it.
-  float blendedMoisture = mix(clamp(uSoilMoisture, 0.0, 1.0), clamp(tileMoisture, 0.0, 1.0), 0.3);
+  // Colour comes from the global moisture alone. The per-tile grid arrives with
+  // every resource sync - a couple of seconds - and tinting the soil with it made
+  // the ground shift in stripes at that cadence: fine noise re-quantised by a
+  // slowly changing texture reads as banding that appears and vanishes all over
+  // the surface. The grid is gameplay data and no longer touches soil colour.
+  float blendedMoisture = clamp(uSoilMoisture, 0.0, 1.0);
   dynamicSoil = mix(uSoilDryColor, uSoilWetColor, blendedMoisture);
 
   // Detail is sampled in world metres, not in arc-length coordinates: the arc
@@ -405,8 +410,6 @@ vec3 soilBumpNormal(vec3 normal, vec2 uv, float strength) {
   float slopeLight = mix(0.88, 1.06, pow(clamp(macroNormal.y, 0.0, 1.0), 3.0));
   vec3 lightColor = (uSunColor * uSunIntensity * NdotL + skyFill) * slopeLight;
 
-  // Modulate light intensity by tile light level
-  lightColor *= mix(0.9, 1.0, clamp(tileLight, 0.0, 1.0));
 
   // Output in the renderer's color space. The soil/sun uniforms are linear
   // (Three.js converts colors on upload), so convert back to sRGB here instead
