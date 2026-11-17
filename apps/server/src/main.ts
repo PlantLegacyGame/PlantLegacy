@@ -1010,6 +1010,33 @@ class World {
     };
   }
 
+  /**
+   * Wires a socket to `playerId` and `plantId` as an active, post-HELLO player.
+   *
+   * All three attach paths (join, account reclaim, anonymous reclaim) must do
+   * the same four registry calls in the same order: register arms the HELLO
+   * timer, so the plant has to be recorded and the timer cleared before the
+   * message handler is installed. Getting the order wrong leaves the socket
+   * closing at the timeout or silent after WELCOME.
+   */
+  private attachConnection(
+    ws: WebSocket,
+    playerId: string,
+    plantId: string,
+    accountId: string | undefined,
+    timeoutMessage: string,
+  ): void {
+    connectionRegistryRegister(this.connectionRegistry, ws, playerId, accountId, (pid) => {
+      this.log.warn(timeoutMessage, { playerId: pid });
+      ws.close(4008, 'HELLO timeout');
+    });
+    connectionRegistrySetPlant(this.connectionRegistry, playerId, plantId);
+    connectionRegistryClearHelloTimer(this.connectionRegistry, playerId);
+    connectionRegistryInstallHandler(this.connectionRegistry, playerId, (data: Buffer) => {
+      this.handlePostHelloMessage(playerId, data);
+    });
+  }
+
   addPlayer(
     ws: WebSocket,
     playerId: string,
@@ -1031,15 +1058,7 @@ class World {
 
     this.registerClientAtPlant(playerId, plant);
 
-    connectionRegistryRegister(this.connectionRegistry, ws, playerId, accountId, (pid) => {
-      this.log.warn('HELLO timeout, closing connection', { playerId: pid });
-      ws.close(4008, 'HELLO timeout');
-    });
-    connectionRegistrySetPlant(this.connectionRegistry, playerId, plantId);
-    connectionRegistryClearHelloTimer(this.connectionRegistry, playerId);
-    connectionRegistryInstallHandler(this.connectionRegistry, playerId, (data: Buffer) => {
-      this.handlePostHelloMessage(playerId, data);
-    });
+    this.attachConnection(ws, playerId, plantId, accountId, 'HELLO timeout, closing connection');
 
     const player: ConnectedPlayer = {
       ws,
@@ -1216,15 +1235,13 @@ class World {
       });
     }
 
-    connectionRegistryRegister(this.connectionRegistry, ws, newPlayerId, accountId, (pid) => {
-      this.log.warn('HELLO timeout on reclaimed connection', { playerId: pid });
-      ws.close(4008, 'HELLO timeout');
-    });
-    connectionRegistrySetPlant(this.connectionRegistry, newPlayerId, reclaimed.plantId);
-    connectionRegistryClearHelloTimer(this.connectionRegistry, newPlayerId);
-    connectionRegistryInstallHandler(this.connectionRegistry, newPlayerId, (data: Buffer) => {
-      this.handlePostHelloMessage(newPlayerId, data);
-    });
+    this.attachConnection(
+      ws,
+      newPlayerId,
+      reclaimed.plantId,
+      accountId,
+      'HELLO timeout on reclaimed connection',
+    );
 
     const plant = this.plantWorld.getPlant(reclaimed.plantId);
     if (!plant) return null;
@@ -1390,15 +1407,13 @@ class World {
       this.plantWorld.reassignOwner(plantId, newPlayerId);
     }
 
-    connectionRegistryRegister(this.connectionRegistry, ws, newPlayerId, undefined, (pid) => {
-      this.log.warn('HELLO timeout on reclaimed connection', { playerId: pid });
-      ws.close(4008, 'HELLO timeout');
-    });
-    connectionRegistrySetPlant(this.connectionRegistry, newPlayerId, plantId);
-    connectionRegistryClearHelloTimer(this.connectionRegistry, newPlayerId);
-    connectionRegistryInstallHandler(this.connectionRegistry, newPlayerId, (data: Buffer) => {
-      this.handlePostHelloMessage(newPlayerId, data);
-    });
+    this.attachConnection(
+      ws,
+      newPlayerId,
+      plantId,
+      undefined,
+      'HELLO timeout on reclaimed connection',
+    );
 
     const plant = this.plantWorld.getPlant(plantId);
     if (!plant) return null;

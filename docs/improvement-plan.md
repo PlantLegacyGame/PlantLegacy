@@ -308,7 +308,12 @@ state machine and the socket - it moves when the context carries those.
 4. `main.ts` step 4: extract camera/framing (`focusCameraOnNode` ...
    `applyCameraPan`) as `render/cameraController.ts`.
 5. Server: split `main.ts` into `http/`, `net/` and `tick/` modules; then split
-   `plantWorld.ts` tiers from persistence.
+   `plantWorld.ts` tiers from persistence. **Started** — the three attach paths
+   (join, account reclaim, anonymous reclaim) each repeated the same four
+   `connectionRegistry*` calls in the same order, so they now call one
+   `World.attachConnection(ws, playerId, plantId, accountId, timeoutMessage)`;
+   a fourth site, the dev `Regenerate` action, only changes the plant id and
+   keeps its bare `connectionRegistrySetPlant`.
 
 ## Tracking
 
