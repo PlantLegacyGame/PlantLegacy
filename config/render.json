@@ -11,73 +11,109 @@
     "target_fps": {
       "type": "integer",
       "value": 60,
-      "range": [30, 120],
+      "range": [
+        30,
+        120
+      ],
       "notes": "Render-loop target frames per second on the current tier."
     },
     "fps_warning_threshold": {
       "type": "number",
       "value": 0.7,
-      "range": [0.5, 0.95],
+      "range": [
+        0.5,
+        0.95
+      ],
       "notes": "Fraction of target_fps at which the client downgrades resolution."
     },
     "resolution_floor": {
       "type": "number",
       "value": 0.5,
-      "range": [0.1, 1.0],
+      "range": [
+        0.1,
+        1
+      ],
       "notes": "Minimum renderer pixel ratio relative to devicePixelRatio."
     },
     "max_pixel_ratio": {
       "type": "number",
-      "value": 2.0,
-      "range": [1.0, 4.0],
+      "value": 2,
+      "range": [
+        1,
+        4
+      ],
       "notes": "Maximum renderer pixel ratio."
     },
     "camera_smoothing": {
       "type": "number",
       "value": 0.05,
-      "range": [0.0, 0.5],
+      "range": [
+        0,
+        0.5
+      ],
       "notes": "OrbitControls dampingFactor."
     },
     "camera_min_distance": {
       "type": "number",
-      "value": 1.0,
-      "range": [0.1, 100.0],
+      "value": 1,
+      "range": [
+        0.1,
+        100
+      ],
       "notes": "Minimum orbit distance."
     },
     "camera_min_distance_root": {
       "type": "number",
       "value": 0.15,
-      "range": [0.02, 1.0],
+      "range": [
+        0.02,
+        1
+      ],
       "notes": "Minimum orbit distance while inspecting the root layer (Root Sight on, or the camera/target below the surface), so root tips stay readable without letting the camera enter the seed above ground."
     },
     "camera_max_distance": {
       "type": "number",
-      "value": 2000.0,
-      "range": [50.0, 20000.0],
+      "value": 2000,
+      "range": [
+        50,
+        20000
+      ],
       "notes": "Maximum orbit distance."
     },
     "camera_max_polar_angle": {
       "type": "number",
       "value": 3.1,
-      "range": [0.0, 3.14],
+      "range": [
+        0,
+        3.14
+      ],
       "notes": "Max polar angle in radians (~177 degrees, allows looking straight down)."
     },
     "camera_start_distance": {
       "type": "number",
-      "value": 6.0,
-      "range": [1.0, 100.0],
+      "value": 6,
+      "range": [
+        1,
+        100
+      ],
       "notes": "Initial and recenter orbit distance from the player plant. Close enough to read a seedling."
     },
     "camera_pan_speed": {
       "type": "number",
-      "value": 8.0,
-      "range": [0.5, 100.0],
+      "value": 8,
+      "range": [
+        0.5,
+        100
+      ],
       "notes": "WASD/arrow camera pan speed in world units per second."
     },
     "camera_zoom_speed": {
       "type": "number",
-      "value": 4.0,
-      "range": [0.5, 10.0],
+      "value": 4,
+      "range": [
+        0.5,
+        10
+      ],
       "notes": "Dolly speed for the - and + keys in metres per second: the camera travels towards or away from its orbit target, the field of view never changes."
     },
     "camera_collision_enabled": {
@@ -88,61 +124,91 @@
     "camera_collision_margin": {
       "type": "number",
       "value": 0.3,
-      "range": [0.05, 2.0],
+      "range": [
+        0.05,
+        2
+      ],
       "notes": "Gap kept between the camera and whatever solid object it is pushed away from."
     },
     "idle_drop_timeout_ms": {
       "type": "integer",
       "value": 30000,
-      "range": [0, 120000],
+      "range": [
+        0,
+        120000
+      ],
       "notes": "Ms of no input before the render loop throttles to 10 fps."
     },
     "shadow_map_size": {
       "type": "integer",
       "value": 1024,
-      "range": [512, 4096],
+      "range": [
+        512,
+        4096
+      ],
       "notes": "Directional light shadow map dimension."
     },
     "shadow_bias": {
       "type": "number",
       "value": -0.0005,
-      "range": [-0.01, 0.01],
+      "range": [
+        -0.01,
+        0.01
+      ],
       "notes": "Depth offset for the sun's shadow map. Without it the soil plane shadows itself at low sun angles and the near ground goes grey."
     },
     "shadow_normal_bias": {
       "type": "number",
       "value": 0.5,
-      "range": [0, 2],
+      "range": [
+        0,
+        2
+      ],
       "notes": "Normal-aligned shadow offset in metres; the soil plane needs it because a shadow texel covers a large patch of ground."
     },
     "planet_radius_m": {
       "type": "number",
       "value": 100000,
-      "range": [50, 1000000],
+      "range": [
+        50,
+        1000000
+      ],
       "notes": "Radius of the planet the world is the surface of. The play area is a cap at its pole; 0 keeps a flat plane."
     },
     "planet_view_distance_multiplier": {
       "type": "number",
-      "value": 3.0,
-      "range": [1.5, 10.0],
+      "value": 3,
+      "range": [
+        1.5,
+        10
+      ],
       "notes": "Orbit-view camera distance from the planet centre, as a multiple of planet_radius_m."
     },
     "planet_view_far_multiplier": {
       "type": "number",
-      "value": 12.0,
-      "range": [4.0, 40.0],
+      "value": 12,
+      "range": [
+        4,
+        40
+      ],
       "notes": "Orbit-view far plane, as a multiple of planet_radius_m."
     },
     "planet_view_min_distance_multiplier": {
       "type": "number",
       "value": 1.4,
-      "range": [1.05, 4.0],
+      "range": [
+        1.05,
+        4
+      ],
       "notes": "Orbit-view minimum distance from the planet centre, as a multiple of planet_radius_m; keeps the camera outside the body."
     },
     "planet_view_near_multiplier": {
       "type": "number",
       "value": 0.01,
-      "range": [0.001, 0.1],
+      "range": [
+        0.001,
+        0.1
+      ],
       "notes": "Orbit-view near plane, as a multiple of planet_radius_m. Keeps depth precision usable at planetary distances."
     },
     "quality_tiers": {
@@ -155,9 +221,27 @@
         "antialiasing": "boolean"
       },
       "value": [
-        { "name": "low", "pixel_ratio": 0.85, "shadow_map_size": 1024, "max_triangles": 50000, "antialiasing": false },
-        { "name": "medium", "pixel_ratio": 1.0, "shadow_map_size": 1024, "max_triangles": 200000, "antialiasing": true },
-        { "name": "high", "pixel_ratio": 1.25, "shadow_map_size": 2048, "max_triangles": 500000, "antialiasing": true }
+        {
+          "name": "low",
+          "pixel_ratio": 0.85,
+          "shadow_map_size": 1024,
+          "max_triangles": 50000,
+          "antialiasing": false
+        },
+        {
+          "name": "medium",
+          "pixel_ratio": 1,
+          "shadow_map_size": 1024,
+          "max_triangles": 200000,
+          "antialiasing": true
+        },
+        {
+          "name": "high",
+          "pixel_ratio": 1.25,
+          "shadow_map_size": 2048,
+          "max_triangles": 500000,
+          "antialiasing": true
+        }
       ]
     },
     "debug_overlay_enabled": {
@@ -254,163 +338,226 @@
     "sun_intensity_day": {
       "type": "number",
       "value": 1.4,
-      "range": [0.1, 3.0],
+      "range": [
+        0.1,
+        3
+      ],
       "notes": "Direct solar light intensity at peak noon."
     },
     "sun_intensity_night": {
       "type": "number",
       "value": 0.15,
-      "range": [0.01, 0.8],
+      "range": [
+        0.01,
+        0.8
+      ],
       "notes": "Direct celestial light intensity at midnight."
     },
     "ambient_intensity_day": {
       "type": "number",
       "value": 0.6,
-      "range": [0.05, 1.5],
+      "range": [
+        0.05,
+        1.5
+      ],
       "notes": "Ambient light intensity during day."
     },
     "ambient_intensity_night": {
       "type": "number",
       "value": 0.15,
-      "range": [0.01, 0.8],
+      "range": [
+        0.01,
+        0.8
+      ],
       "notes": "Ambient light intensity during night."
     },
     "ambient_fade_tau_s": {
       "type": "number",
       "value": 0.35,
-      "range": [0.01, 5.0],
+      "range": [
+        0.01,
+        5
+      ],
       "notes": "Time constant in seconds for the ambient day/night fade. The frame step is exp(-dt/tau), so dusk takes the same wall-clock time at 30, 60 or 144 fps; the old fixed 0.3-per-frame step ran three times faster at 144 fps."
     },
     "fog_near_clear": {
       "type": "number",
-      "value": 70.0,
-      "range": [10.0, 200.0],
+      "value": 70,
+      "range": [
+        10,
+        200
+      ],
       "notes": "Fog near distance during clear weather."
     },
     "fog_far_clear": {
       "type": "number",
-      "value": 320.0,
-      "range": [100.0, 800.0],
+      "value": 320,
+      "range": [
+        100,
+        800
+      ],
       "notes": "Fog far distance during clear weather."
     },
     "fog_near_rain": {
       "type": "number",
-      "value": 25.0,
-      "range": [5.0, 100.0],
+      "value": 25,
+      "range": [
+        5,
+        100
+      ],
       "notes": "Fog near distance during rain."
     },
     "fog_far_rain": {
       "type": "number",
-      "value": 160.0,
-      "range": [50.0, 400.0],
+      "value": 160,
+      "range": [
+        50,
+        400
+      ],
       "notes": "Fog far distance during rain."
     },
     "fog_near_storm": {
       "type": "number",
-      "value": 15.0,
-      "range": [2.0, 50.0],
+      "value": 15,
+      "range": [
+        2,
+        50
+      ],
       "notes": "Fog near distance during active storm."
     },
     "fog_far_storm": {
       "type": "number",
-      "value": 100.0,
-      "range": [30.0, 300.0],
+      "value": 100,
+      "range": [
+        30,
+        300
+      ],
       "notes": "Fog far distance during active storm."
     },
     "rain_particle_count": {
       "type": "integer",
       "value": 4000,
-      "range": [0, 5000],
+      "range": [
+        0,
+        5000
+      ],
       "notes": "Number of precipitation particles simulated in camera volume."
     },
     "rain_particle_speed": {
       "type": "number",
-      "value": 28.0,
-      "range": [5.0, 60.0],
+      "value": 28,
+      "range": [
+        5,
+        60
+      ],
       "notes": "Vertical descent speed of rain particles in m/s."
     },
     "rain_box_width": {
       "type": "number",
-      "value": 60.0,
-      "range": [20.0, 200.0],
+      "value": 60,
+      "range": [
+        20,
+        200
+      ],
       "notes": "Horizontal dimensions of rain bounding volume centered on camera."
     },
     "rain_box_height": {
       "type": "number",
-      "value": 35.0,
-      "range": [10.0, 100.0],
+      "value": 35,
+      "range": [
+        10,
+        100
+      ],
       "notes": "Vertical dimension of rain bounding volume."
     },
     "rain_particle_size": {
       "type": "number",
       "value": 0.25,
-      "range": [0.05, 1.5],
+      "range": [
+        0.05,
+        1.5
+      ],
       "notes": "Rendered size of rain streaks."
     },
     "rain_streak_length": {
       "type": "number",
       "value": 1.1,
-      "range": [0.2, 4.0],
+      "range": [
+        0.2,
+        4
+      ],
       "notes": "Length of rain streaks in world units."
     },
     "rain_streak_width": {
       "type": "number",
       "value": 0.012,
-      "range": [0.002, 0.05],
+      "range": [
+        0.002,
+        0.05
+      ],
       "notes": "Width of rain streaks in world units."
     },
     "rain_max_velocity": {
       "type": "number",
-      "value": 35.0,
-      "range": [10.0, 100.0],
+      "value": 35,
+      "range": [
+        10,
+        100
+      ],
       "notes": "Maximum rain particle velocity for streak scaling."
     },
     "lightning_flash_duration_ms": {
       "type": "integer",
       "value": 120,
-      "range": [20, 500],
+      "range": [
+        20,
+        500
+      ],
       "notes": "Duration of an atmospheric lightning flash in milliseconds."
     },
     "lightning_intensity_boost": {
       "type": "number",
-      "value": 4.0,
-      "range": [1.0, 10.0],
+      "value": 4,
+      "range": [
+        1,
+        10
+      ],
       "notes": "Peak light intensity multiplier during lightning flash."
-    },
-    "lightning_min_interval_s": {
-      "type": "number",
-      "value": 3.5,
-      "range": [1.0, 30.0],
-      "notes": "Minimum delay in seconds between lightning strikes during thunderstorm."
-    },
-    "lightning_max_interval_s": {
-      "type": "number",
-      "value": 9.0,
-      "range": [3.0, 60.0],
-      "notes": "Maximum delay in seconds between lightning strikes during thunderstorm."
     },
     "rain_slant": {
       "type": "number",
       "value": 0.12,
-      "range": [0.0, 1.0],
+      "range": [
+        0,
+        1
+      ],
       "notes": "Horizontal drift of rain streaks per unit fallen; the fall angle."
     },
     "sun_orbital_distance": {
       "type": "number",
-      "value": 120.0,
-      "range": [20.0, 1000.0],
+      "value": 120,
+      "range": [
+        20,
+        1000
+      ],
       "notes": "Orbit radius that places the directional light on the visual sun."
     },
     "weather_transition_ms": {
       "type": "integer",
       "value": 6000,
-      "range": [0, 30000],
+      "range": [
+        0,
+        30000
+      ],
       "notes": "Cross-fade between weather sky/fog presets; short values snap, long values smear."
     },
     "lightning_max_intensity": {
       "type": "number",
-      "value": 1.0,
-      "range": [0.05, 5.0],
+      "value": 1,
+      "range": [
+        0.05,
+        5
+      ],
       "notes": "Peak flash intensity the storm weather state emits."
     },
     "soil_dry_color": {
@@ -431,61 +578,91 @@
     "soil_grain_strength": {
       "type": "number",
       "value": 0.02,
-      "range": [0, 0.2],
+      "range": [
+        0,
+        0.2
+      ],
       "notes": "Per-pixel mineral hash on the ground. The old 0.08 speckled the dirt; the Root Sight dome colour is the smoother target."
     },
     "soil_mineral_strength": {
       "type": "number",
       "value": 0.05,
-      "range": [0, 0.5],
+      "range": [
+        0,
+        0.5
+      ],
       "notes": "How much the per-tile mineral channel tints the ground."
     },
     "terrain_mesh_subdivisions": {
       "type": "integer",
       "value": 256,
-      "range": [8, 256],
+      "range": [
+        8,
+        256
+      ],
       "notes": "Subdivision segments of the detailed inner terrain patch. At 180 m width, 256 gives ~0.70 m cells, enough to resolve the terrain field instead of flattening its divots and burying the seed."
     },
     "terrain_radius": {
       "type": "number",
-      "value": 620.0,
-      "range": [50.0, 800.0],
+      "value": 620,
+      "range": [
+        50,
+        800
+      ],
       "notes": "World radius of the ground terrain mesh."
     },
     "terrain_amplitude_m": {
       "type": "number",
-      "value": 6.0,
-      "range": [0, 40],
+      "value": 6,
+      "range": [
+        0,
+        40
+      ],
       "notes": "Peak procedural relief above the base surface, in metres. The shared terrain field reads the same value server-side."
     },
     "soil_depth_m": {
       "type": "number",
       "value": 1.6,
-      "range": [0.1, 8],
+      "range": [
+        0.1,
+        8
+      ],
       "notes": "Depth of the topsoil layer below the surface; below it is subsoil, then bedrock."
     },
     "camera_ground_clearance_m": {
       "type": "number",
       "value": 0.3,
-      "range": [0, 3],
+      "range": [
+        0,
+        3
+      ],
       "notes": "Minimum eye height above the local ground when Root Sight is closed."
     },
     "player_gravity_mps2": {
       "type": "number",
       "value": 9.81,
-      "range": [0, 30],
+      "range": [
+        0,
+        30
+      ],
       "notes": "Downward acceleration of the observer rig onto the terrain."
     },
     "player_spawn_height_m": {
       "type": "number",
       "value": 3.5,
-      "range": [0, 20],
+      "range": [
+        0,
+        20
+      ],
       "notes": "Height the observer rig is dropped from when it spawns."
     },
     "root_aura_radius": {
       "type": "number",
-      "value": 6.0,
-      "range": [0.5, 20.0],
+      "value": 6,
+      "range": [
+        0.5,
+        20
+      ],
       "notes": "3D proximity aura radius around root nodes for subterranean sight cutaway."
     },
     "webgpu_enabled": {
@@ -496,227 +673,321 @@
     "webgpu_max_plants": {
       "type": "integer",
       "value": 20000,
-      "range": [1000, 65536],
+      "range": [
+        1000,
+        65536
+      ],
       "notes": "Maximum plants supported by WebGPU compute-driven renderer."
     },
     "webgpu_tier0_threshold": {
       "type": "integer",
       "value": 300,
-      "range": [100, 500],
+      "range": [
+        100,
+        500
+      ],
       "notes": "Projected pixel size threshold for Tier 0 (full mesh)."
     },
     "webgpu_tier1_threshold": {
       "type": "integer",
       "value": 80,
-      "range": [40, 150],
+      "range": [
+        40,
+        150
+      ],
       "notes": "Projected pixel size threshold for Tier 1 (mid mesh)."
     },
     "webgpu_tier2_threshold": {
       "type": "integer",
       "value": 50,
-      "range": [6, 100],
+      "range": [
+        6,
+        100
+      ],
       "notes": "Projected pixel size threshold for Tier 2 (multi-view impostor)."
     },
     "webgpu_tier3_threshold": {
       "type": "integer",
       "value": 2,
-      "range": [1, 8],
+      "range": [
+        1,
+        8
+      ],
       "notes": "Projected pixel size threshold for Tier 3 (single-view billboard)."
     },
     "webgpu_hysteresis_promote": {
       "type": "number",
       "value": 1.15,
-      "range": [1.0, 1.5],
+      "range": [
+        1,
+        1.5
+      ],
       "notes": "Hysteresis multiplier for tier promotion."
     },
     "webgpu_hysteresis_demote": {
       "type": "number",
       "value": 0.85,
-      "range": [0.5, 1.0],
+      "range": [
+        0.5,
+        1
+      ],
       "notes": "Hysteresis multiplier for tier demotion."
     },
     "webgpu_min_dwell_time": {
       "type": "number",
       "value": 0.5,
-      "range": [0.1, 2.0],
+      "range": [
+        0.1,
+        2
+      ],
       "notes": "Minimum dwell time in seconds before tier change."
     },
     "node_pick_radius": {
       "type": "number",
       "value": 0.35,
-      "range": [0.1, 2.0],
+      "range": [
+        0.1,
+        2
+      ],
       "notes": "Minimum world-space pick radius for node selection during growth."
     },
-
     "underground_view_color": {
       "type": "color",
       "value": "#241D16",
       "notes": "Backdrop and fog colour while the camera is below the surface with Root Sight open."
     },
-
     "growth_aim_ring_scale": {
       "type": "number",
       "value": 1.6,
-      "range": [0.5, 4],
+      "range": [
+        0.5,
+        4
+      ],
       "notes": "Aim ring radius as a multiple of the emerging segment's own thickness, capped at the node's radius."
     },
-
     "growth_aim_ring_min": {
       "type": "number",
       "value": 0.02,
-      "range": [0.008, 0.5],
+      "range": [
+        0.008,
+        0.5
+      ],
       "notes": "Minimum aim ring radius in metres, so thin roots still show a usable ring."
     },
     "growth_aim_ring_thickness": {
       "type": "number",
       "value": 0.004,
-      "range": [0.001, 0.02],
+      "range": [
+        0.001,
+        0.02
+      ],
       "notes": "Tube thickness of the aim ring in metres; kept in world units so small rings stay visible."
     },
     "growth_aim_grab_px": {
       "type": "number",
       "value": 34,
-      "range": [12, 120],
+      "range": [
+        12,
+        120
+      ],
       "notes": "Screen radius around the part where a drag turns the aim arrow; elsewhere a drag orbits the camera."
     },
-
-
     "growth_aim_reach_min": {
       "type": "number",
       "value": 0.22,
-      "range": [0.05, 1],
+      "range": [
+        0.05,
+        1
+      ],
       "notes": "Minimum aim arrow length in metres."
     },
-
     "growth_aim_tube_radius": {
       "type": "number",
       "value": 0.009,
-      "range": [0.002, 0.05],
+      "range": [
+        0.002,
+        0.05
+      ],
       "notes": "Radius of the curved aim arrow shaft in metres."
     },
-
     "growth_aim_head_radius": {
       "type": "number",
       "value": 0.032,
-      "range": [0.01, 0.15],
+      "range": [
+        0.01,
+        0.15
+      ],
       "notes": "Radius of the aim arrow head cone in metres."
     },
-
     "growth_aim_head_length": {
       "type": "number",
       "value": 0.095,
-      "range": [0.02, 0.4],
+      "range": [
+        0.02,
+        0.4
+      ],
       "notes": "Length of the aim arrow head cone in metres."
     },
     "growth_aim_tip_radius": {
       "type": "number",
       "value": 0.014,
-      "range": [0.004, 0.06],
+      "range": [
+        0.004,
+        0.06
+      ],
       "notes": "Radius of the bud dot at the aim arrow point, in metres."
     },
-
     "growth_aim_curve_bend": {
       "type": "number",
       "value": 0,
-      "range": [0, 1],
+      "range": [
+        0,
+        1
+      ],
       "notes": "Sideways bend of the aim arrow, as a fraction of its length. 0 keeps the preview straight like the real segment."
     },
-
     "growth_aim_curve_wobble": {
       "type": "number",
       "value": 0,
-      "range": [0, 0.5],
+      "range": [
+        0,
+        0.5
+      ],
       "notes": "Secondary wave of the aim arrow, as a fraction of its length. 0 keeps the preview straight like the real segment."
     },
     "soil_crack_strength": {
       "type": "number",
       "value": 0.18,
-      "range": [0.0, 1.0],
+      "range": [
+        0,
+        1
+      ],
       "notes": "AL-04 dirt: how strongly dried fissures darken the soil. Ridged world-space noise, so the ground breaks into plates instead of reading as a painted sheet."
     },
     "soil_pebble_strength": {
       "type": "number",
       "value": 0.18,
-      "range": [0.0, 1.0],
+      "range": [
+        0,
+        1
+      ],
       "notes": "AL-04 dirt: small rounded stones mixed into the topsoil, in colour and in the bump normal, so the ground catches light like loose dirt."
     },
-
     "atmosphere_extinction_r": {
       "type": "number",
       "value": 0.00075,
-      "range": [0.0, 0.02],
+      "range": [
+        0,
+        0.02
+      ],
       "notes": "AL-04: red extinction per metre at sea level. Art-directed for a hazy day, not Earth air."
     },
     "atmosphere_extinction_g": {
       "type": "number",
       "value": 0.0009,
-      "range": [0.0, 0.02],
+      "range": [
+        0,
+        0.02
+      ],
       "notes": "AL-04: green extinction per metre at sea level."
     },
     "atmosphere_extinction_b": {
       "type": "number",
       "value": 0.0013,
-      "range": [0.0, 0.02],
+      "range": [
+        0,
+        0.02
+      ],
       "notes": "AL-04: blue extinction per metre at sea level. Higher than red so distance cools."
     },
     "atmosphere_scale_height_m": {
       "type": "number",
       "value": 700,
-      "range": [100, 20000],
+      "range": [
+        100,
+        20000
+      ],
       "notes": "AL-04: height over which air density falls by 1/e, in metres."
     },
     "atmosphere_sun_phase_g": {
       "type": "number",
       "value": 0.72,
-      "range": [0.0, 0.95],
+      "range": [
+        0,
+        0.95
+      ],
       "notes": "AL-04: Henyey-Greenstein anisotropy. Forward scattering picks out the sun and backlights silhouettes."
     },
     "atmosphere_in_scatter": {
       "type": "number",
       "value": 0.6,
-      "range": [0.0, 4.0],
+      "range": [
+        0,
+        4
+      ],
       "notes": "AL-04: strength of sun in-scatter mixed into fogged surfaces and the sky."
     },
     "atmosphere_horizon_boost": {
       "type": "number",
       "value": 0.4,
-      "range": [0.0, 2.0],
+      "range": [
+        0,
+        2
+      ],
       "notes": "AL-04: extra density at grazing view angles, so the horizon reads heavier than the zenith."
     },
     "gpu_band_min_ms": {
       "type": "number",
-      "value": 10.0,
-      "range": [1, 33],
+      "value": 10,
+      "range": [
+        1,
+        33
+      ],
       "notes": "AL-03: frame cost below this restores detail. 10 ms at 60 Hz leaves rendering headroom."
     },
     "gpu_band_max_ms": {
       "type": "number",
       "value": 13.6,
-      "range": [4, 50],
+      "range": [
+        4,
+        50
+      ],
       "notes": "AL-03: frame cost above this spends detail, resolution first, then draw distance, then tier."
     },
     "quality_hold_ms": {
       "type": "integer",
       "value": 600,
-      "range": [100, 5000],
+      "range": [
+        100,
+        5000
+      ],
       "notes": "AL-03: minimum time between quality decisions, so the controller cannot oscillate."
     },
     "quality_warmup_ms": {
       "type": "integer",
       "value": 4000,
-      "range": [0, 30000],
+      "range": [
+        0,
+        30000
+      ],
       "notes": "AL-03: cost is ignored for this long after the first sample, so shader compiles and uploads during load do not spend detail."
     },
     "quality_smoothing": {
       "type": "number",
       "value": 0.12,
-      "range": [0.01, 1.0],
+      "range": [
+        0.01,
+        1
+      ],
       "notes": "AL-03: EMA weight for a new frame-cost sample. Lower is steadier, so one hitch cannot move a lever."
     },
     "draw_distance_floor": {
       "type": "number",
       "value": 0.5,
-      "range": [0.1, 1],
+      "range": [
+        0.1,
+        1
+      ],
       "notes": "AL-03: lowest draw-distance scale. Detail is only removed down to this before the tier is lowered."
     },
     "size_classes": {
@@ -728,9 +999,24 @@
         "lod_size_bias": "number"
       },
       "value": [
-        { "id": "normal", "camera_max_distance_multiplier": 1, "detailed_plant_budget_multiplier": 1, "lod_size_bias": 1.0 },
-        { "id": "large", "camera_max_distance_multiplier": 2, "detailed_plant_budget_multiplier": 2, "lod_size_bias": 1.5 },
-        { "id": "giant", "camera_max_distance_multiplier": 4, "detailed_plant_budget_multiplier": 2.5, "lod_size_bias": 2.0 }
+        {
+          "id": "normal",
+          "camera_max_distance_multiplier": 1,
+          "detailed_plant_budget_multiplier": 1,
+          "lod_size_bias": 1
+        },
+        {
+          "id": "large",
+          "camera_max_distance_multiplier": 2,
+          "detailed_plant_budget_multiplier": 2,
+          "lod_size_bias": 1.5
+        },
+        {
+          "id": "giant",
+          "camera_max_distance_multiplier": 4,
+          "detailed_plant_budget_multiplier": 2.5,
+          "lod_size_bias": 2
+        }
       ],
       "notes": "ADR-027: organism size class is presentation. A giant is framed from further away and may hold more detailed plants, because LOD assigns tiers by projected pixel size."
     }

@@ -53,8 +53,6 @@ export function createEnvironmentWeatherMachine(config: RenderConfig): ClientWea
     // render.json (weather_transition_ms) rather than compiled in.
     transitionDuration: config.weatherTransitionMs,
     lightning: {
-      minDelay: config.lightningMinIntervalS,
-      maxDelay: config.lightningMaxIntervalS,
       flashDuration: config.lightningFlashDurationMs / 1000,
       maxIntensity: config.lightningMaxIntensity,
     },

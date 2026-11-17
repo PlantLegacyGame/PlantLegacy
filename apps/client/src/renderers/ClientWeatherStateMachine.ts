@@ -65,8 +65,7 @@ export interface ClientWeatherConfig {
   };
   transitionDuration: number; // ms for visual transitions
   lightning: {
-    minDelay: number; // seconds
-    maxDelay: number; // seconds
+    /** How long a strike takes to fade; the server schedules the strikes. */
     flashDuration: number; // seconds
     maxIntensity: number;
   };
@@ -76,10 +75,7 @@ export class ClientWeatherStateMachine {
   private config: ClientWeatherConfig;
   private state: ClientWeatherState = 'clear';
   private transitionProgress = 0; // 0 to 1
-  private transitionStartTime = 0;
   private transitionDuration = 0;
-  private lightningTimer = 0;
-  private nextLightningDelay = 5.0;
   private lightningIntensity = 0;
   private timeOfDay = 0;
   private sunElev = 0;
@@ -150,15 +146,8 @@ export class ClientWeatherStateMachine {
 
     this.state = newState;
     this.transitionProgress = 0;
-    this.transitionStartTime = performance.now();
-
     // Set new targets
     this.setTargetsForState(newState);
-
-    // Handle lightning for thunderstorm
-    if (newState === 'thunderstorm_active') {
-      this.scheduleNextLightning();
-    }
 
     return true;
   }
@@ -175,10 +164,14 @@ export class ClientWeatherStateMachine {
     this.sunElev = Math.sin(sunAngle);
     this.dayFactor = THREE.MathUtils.smoothstep(this.sunElev, -0.05, 0.35);
 
-    // Handle transition interpolation
+    // Handle transition interpolation. Progress is advanced by the frame's own
+    // delta, not read off the wall clock: a paused or slowed game clock must not
+    // keep fading the sky, and the fade has to be reproducible in a test.
     if (this.transitionProgress < 1) {
-      const elapsed = performance.now() - this.transitionStartTime;
-      this.transitionProgress = Math.min(1, elapsed / this.transitionDuration);
+      this.transitionProgress = Math.min(
+        1,
+        this.transitionProgress + Math.max(0, deltaMs) / Math.max(1, this.transitionDuration),
+      );
 
       // Smooth interpolation using ease-in-out
       const t = THREE.MathUtils.smoothstep(this.transitionProgress, 0, 1);
@@ -207,32 +200,20 @@ export class ClientWeatherStateMachine {
     current.isRaining = t > 0.5 ? target.isRaining : current.isRaining;
   }
 
-  private scheduleNextLightning(): void {
-    const { minDelay, maxDelay } = this.config.lightning;
-    this.nextLightningDelay = THREE.MathUtils.randFloat(minDelay, maxDelay);
-    this.lightningTimer = 0;
+  /**
+   * Draw one strike. The server owns the bolt: it damages plants and sends the
+   * position, and this only paints the light. The client used to roll its own
+   * strikes on a 3.5-9 s timer while the server rolled damage on its own, so a
+   * flash and a hit were two unrelated events.
+   */
+  triggerLightning(): void {
+    this.lightningIntensity = Math.max(0, this.config.lightning.maxIntensity);
   }
 
   private updateLightning(deltaMs: number): void {
-    if (this.state !== 'thunderstorm_active') {
-      this.lightningIntensity *= 0.95; // Decay when not in thunderstorm
-      if (this.lightningIntensity < 0.01) this.lightningIntensity = 0;
-      return;
-    }
-
-    this.lightningTimer += deltaMs / 1000; // Convert to seconds
-
-    if (this.lightningTimer >= this.nextLightningDelay) {
-      // Trigger lightning flash
-      this.lightningIntensity = this.config.lightning.maxIntensity;
-      this.lightningTimer = 0;
-      this.scheduleNextLightning();
-    }
-
-    // Decay lightning intensity
-    const flashDuration = this.config.lightning.flashDuration;
-    const decayRate = 1 / flashDuration;
-    this.lightningIntensity = Math.max(0, this.lightningIntensity - decayRate * (deltaMs / 1000));
+    if (this.lightningIntensity <= 0) return;
+    const flashDuration = Math.max(0.016, this.config.lightning.flashDuration);
+    this.lightningIntensity = Math.max(0, this.lightningIntensity - deltaMs / 1000 / flashDuration);
   }
 
   /**

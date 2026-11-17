@@ -50,6 +50,7 @@ import {
   updateGroundFill,
   updateGroundSun,
 } from './environment/ground.js';
+import { localSkyBrightness } from './environment/localBrightness.js';
 import { createOcean, type Ocean } from './environment/ocean.js';
 import { planetTerrainY } from './environment/planetSurface.js';
 import { createRainSystem, type RainSystem } from './environment/rainSystem.js';
@@ -108,6 +109,8 @@ export interface WeatherPayload {
   timeOfDay: number;
   isDay: boolean;
   sunIntensity: number;
+  /** `weather.<state>_light_multiplier` as the server applied it. */
+  lightMultiplier?: number;
   weatherState: string;
   conditionToken: string;
   stateTimeRemainingS: number;
@@ -215,10 +218,14 @@ export class EnvironmentRenderer {
   // Time of day and sun intensity (client-side interpolation)
   private timeOfDay = 0.3;
   private sunIntensity = 1.0;
+  /** The weather's light multiplier, from the broadcast. */
+  private lightMultiplier = 1;
 
   // Local tile light drives the sky grade. tile_light_base in
-  // config/resources.json is 80, so 80 = full daylight and 0 = full shade.
-  private localTileLight = 80;
+  // config/resources.json is 80, so 80 = full daylight and 0 = full shade. Null
+  // until the first root readout: a seed has no covered tiles, and assuming
+  // full daylight made its first packet move the sky in one visible step.
+  private localTileLight: number | null = null;
   private readonly localZenithTarget: THREE.Color = new THREE.Color();
   private readonly localHorizonTarget: THREE.Color = new THREE.Color();
 
@@ -598,6 +605,14 @@ export class EnvironmentRenderer {
     this.localTileLight = Math.max(0, light);
   }
 
+  /**
+   * One server-announced bolt. The server rolled it, damaged what stood in its
+   * radius and sent the position; the renderer only paints the flash.
+   */
+  public flashLightning(): void {
+    this.weatherMachine.triggerLightning();
+  }
+
   /** Apply a server weather update. */
   public handleWeatherUpdate(payload: WeatherPayload): void {
     // A held clock must not be dragged back to the server's time on every
@@ -605,6 +620,9 @@ export class EnvironmentRenderer {
     // the next weather update (about once a second) reverted it immediately.
     if (!this.timeFrozen) this.timeOfDay = payload.timeOfDay;
     this.sunIntensity = payload.sunIntensity;
+    this.lightMultiplier = Number.isFinite(payload.lightMultiplier)
+      ? Math.min(1, Math.max(0, payload.lightMultiplier as number))
+      : 1;
 
     this.weatherMachine.requestStateChange(payload.weatherState as ClientWeatherState);
   }
@@ -794,13 +812,11 @@ export class EnvironmentRenderer {
     // 1. Interpolate sky colours from the weather targets, graded by the light
     //    actually reaching the plant's local tiles.
     //    0 light = deep shade/night, 80 (tile_light_base) = full daylight.
-    const localLight01 = THREE.MathUtils.clamp(
-      this.localTileLight / this.tiles.tileLightBase,
-      0,
-      1.5,
-    );
-    const localBrightness =
-      0.55 + 0.45 * Math.min(1, localLight01) + Math.max(0, localLight01 - 1) * 0.25;
+    const localBrightness = localSkyBrightness({
+      localTileLight: this.localTileLight,
+      tileLightBase: this.tiles.tileLightBase,
+      dayFactor: this.weatherMachine.getDayFactor(),
+    });
     this.localZenithTarget.copy(weatherTargets.zenithColor).multiplyScalar(localBrightness);
     this.localHorizonTarget.copy(weatherTargets.horizonColor).multiplyScalar(localBrightness);
     this.sky.zenithColor.lerp(this.localZenithTarget, lerpRate);
@@ -809,6 +825,10 @@ export class EnvironmentRenderer {
     // so they follow the lerp without a second per-frame copy.
     this.hemisphereLight.color.copy(this.sky.zenithColor);
     this.hemisphereLight.groundColor.copy(this.sky.horizonColor);
+    // The fill light shares the ambient's budget. It kept Three's default
+    // intensity through night and storm - only its colour followed the sky - so
+    // the ground stayed lit while every other light dimmed.
+    this.hemisphereLight.intensity = THREE.MathUtils.clamp(this.ambientLight.intensity, 0, 1);
 
     // 2. Atmospheric fog follows the horizon, pulled in when the camera is in
     //    the water: light scatters out within a couple of metres, so the far
@@ -940,6 +960,7 @@ export class EnvironmentRenderer {
       bodies: this.bodies,
       elevation,
       ambientIntensity: ambient.intensity,
+      lightMultiplier: this.lightMultiplier,
       sunOrbitalDistance: this.config.sunOrbitalDistance,
     });
   }

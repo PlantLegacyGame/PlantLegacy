@@ -73,7 +73,12 @@ export type DamagePipelineEvent =
   | { kind: 'fauna'; phase: 'start' | 'end'; x: number; z: number; radiusM: number }
   | { kind: 'drop'; drop: WorldDrop }
   | { kind: 'drop_expired'; id: string }
-  | { kind: 'kill_credit'; plantId: string; credit: KillCredit };
+  | { kind: 'kill_credit'; plantId: string; credit: KillCredit }
+  /**
+   * A bolt that has been rolled, with its landing point. Sent whether or not it
+   * found tissue, so the flash the client draws is the strike that happened.
+   */
+  | { kind: 'strike'; x: number; z: number; radiusM: number };
 
 export interface DamagePipelineOptions {
   plantWorld: PlantWorld;
@@ -919,6 +924,15 @@ export class DamagePipeline {
     const target = plants[Math.min(plants.length - 1, Math.floor(this.random() * plants.length))];
     const root = target.rootNodeId ? target.nodes.get(target.rootNodeId) : undefined;
     if (!root) return;
+    // Announce the bolt at its landing point. The client used to roll its own
+    // flashes on a 3.5-9 s timer while this rolled damage on another, so the
+    // flash and the hit were unrelated; now the flash is the strike.
+    this.events.push({
+      kind: 'strike',
+      x: root.x,
+      z: root.z,
+      radiusM: this.options.lightningRadiusM,
+    });
     for (const plant of plants) {
       const plantRoot = plant.rootNodeId ? plant.nodes.get(plant.rootNodeId) : undefined;
       if (!plantRoot) continue;

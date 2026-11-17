@@ -482,6 +482,9 @@ export const MESSAGE_SCHEMAS: Record<number, Record<string, FieldRule>> = {
     timeOfDay: { type: 'number', required: true },
     isDay: { type: 'boolean', required: true },
     sunIntensity: { type: 'number', required: true },
+    // Grade for the parts of the sky `sunIntensity` does not reach: the direct
+    // beam and its disk. A storm used to dim only the ambient.
+    lightMultiplier: { type: 'number', required: true },
     weatherState: { type: 'string', required: true },
     conditionToken: { type: 'string', required: true },
     stateTimeRemainingS: { type: 'number', required: true },
@@ -493,6 +496,14 @@ export const MESSAGE_SCHEMAS: Record<number, Record<string, FieldRule>> = {
         timeUntilNextStateS: { type: 'number', required: true },
       },
     },
+  },
+  44: {
+    // WEATHER_STRIKE: the bolt the client draws. The server owns the timing,
+    // because the same strike is what damages the plants in range.
+    tick: { type: 'number', required: true },
+    x: { type: 'number', required: true },
+    z: { type: 'number', required: true },
+    radiusM: { type: 'number', required: true },
   },
   22: {
     // GROWTH_OPTIONS_RESULT

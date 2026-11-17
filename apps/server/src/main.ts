@@ -114,6 +114,12 @@ import {
   type RootReadoutPorts,
   type RootResourceSnapshot,
 } from './tick/rootReadout.ts';
+import {
+  accumulateShedDamage,
+  drainQueuedShedDamage,
+  type ShedDamage,
+  shedFlushIntervalTicks,
+} from './tick/shedDamage.ts';
 import { handleSimulationCommand, type SimulationCommandPorts } from './tick/simulationCommands.ts';
 import {
   broadcastPlantStates,
@@ -673,6 +679,10 @@ class World {
     }));
   }
 
+  /** Upkeep tissue loss waiting for the next broadcast slot. */
+  private readonly queuedShedDamage = new Map<string, ShedDamage>();
+  private lastShedFlushTick = 0;
+
   /** T06: broadcast what the damage pipeline did this tick. */
   private processDamageEvents(): void {
     const events = this.damagePipeline?.drainEvents() ?? [];
@@ -765,6 +775,14 @@ class World {
               credit: event.credit,
             });
             break;
+          case 'strike':
+            this.broadcast(MESSAGE_TYPE.WEATHER_STRIKE, {
+              tick,
+              x: event.x,
+              z: event.z,
+              radiusM: event.radiusM,
+            });
+            break;
         }
       } catch (error) {
         this.log.error('damage event broadcast failed', {
@@ -776,17 +794,25 @@ class World {
 
     // Upkeep, thirst and hunger losses are damage too. They used to reach the
     // wire not at all: only the damage pipeline broadcast PLANT_DAMAGE, so a
-    // wilting plant shrank in silence. One message per plant per tick, because
-    // the losses themselves are already batched in PlantWorld.
+    // wilting plant shrank in silence. The losses are already batched per plant
+    // in PlantWorld, but they arrive every tick; queue them and flush on the
+    // damage pipeline's own cadence, so a wilting plant cannot pulse the
+    // client's damage cue every tick.
     for (const shed of this.plantWorld.drainShedDamage()) {
-      this.broadcast(MESSAGE_TYPE.PLANT_DAMAGE, {
-        plantId: shed.plantId,
-        nodeId: null,
-        destroyedNodeIds: [],
-        source: 'starvation',
-        amount: Number(shed.amount.toFixed(3)),
-        totalBiomass: Number(shed.totalBiomass.toFixed(3)),
-      });
+      accumulateShedDamage(this.queuedShedDamage, shed);
+    }
+    if (tick - this.lastShedFlushTick >= shedFlushIntervalTicks(this.config.tickRateHz)) {
+      this.lastShedFlushTick = tick;
+      for (const shed of drainQueuedShedDamage(this.queuedShedDamage)) {
+        this.broadcast(MESSAGE_TYPE.PLANT_DAMAGE, {
+          plantId: shed.plantId,
+          nodeId: null,
+          destroyedNodeIds: [],
+          source: 'starvation',
+          amount: shed.amount,
+          totalBiomass: shed.totalBiomass,
+        });
+      }
     }
   }
 

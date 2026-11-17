@@ -61,6 +61,12 @@ export interface CelestialLightingTargets {
    * the next frame smooths from.
    */
   ambientIntensity: number;
+  /**
+   * The weather's light multiplier (`clear_light_multiplier` and friends). The
+   * broadcast's `sunIntensity` already carries it, so this is what grades the
+   * parts that number does not reach: the direct beam and its sky disk.
+   */
+  lightMultiplier: number;
 }
 
 /** The ambient fields `stepAmbientLighting` needs from `render.json`. */
@@ -98,10 +104,16 @@ export function stepAmbientLighting(params: {
   /** How much of the distance to the day/night target to close this frame. */
   alpha: number;
 }): AmbientLightingStep {
-  const target =
-    params.elevation.dayFactor > 0.1
-      ? params.config.ambientIntensityDay * params.sunIntensity
-      : params.config.ambientIntensityNight;
+  // Blend, do not switch. The target used to flip at `dayFactor > 0.1` from the
+  // night value to `ambient_intensity_day x sunIntensity`, which at first light
+  // is about 0.02 - darker than the night value it replaced, so dawn began with
+  // a dip. Blending by `dayFactor` is continuous and reaches both ends exactly.
+  const dayTarget = params.config.ambientIntensityDay * params.sunIntensity;
+  const target = THREE.MathUtils.lerp(
+    params.config.ambientIntensityNight,
+    dayTarget,
+    THREE.MathUtils.clamp(params.elevation.dayFactor, 0, 1),
+  );
   const alpha = Math.min(1, Math.max(0, params.alpha));
   const baseline = THREE.MathUtils.lerp(params.currentBaseline, Math.max(0.1, target), alpha);
   // `lightning_intensity_boost` is a peak multiplier on the ambient level, so
@@ -122,6 +134,10 @@ export function applyCelestialLighting(targets: CelestialLightingTargets): void 
   const orbit = targets.sunOrbitalDistance;
   const { sunDir, moonDir } = bodies;
   const { sunElev } = elevation;
+  // A storm dims the ambient, the fog and the sky colours; without this it left
+  // the direct beam and its disk at clear-sky brightness, so the world was
+  // grey-blue around a full-strength sun.
+  const weatherLight = Math.min(1, Math.max(0, targets.lightMultiplier));
 
   if (sunElev >= -0.1) {
     // A DirectionalLight shines from its position toward its target (the
@@ -130,7 +146,10 @@ export function applyCelestialLighting(targets: CelestialLightingTargets): void 
     const duskFactor = (1.0 - Math.abs(sunElev * 3.0)) * 0.5;
     const sunBaseColor = scratchSunColor.set(duskFactor > 0.2 ? cfg.sunColorDusk : cfg.sunColorDay);
     sunLight.color.copy(sunBaseColor);
-    sunLight.intensity = Math.max(0.05, cfg.sunIntensityDay * Math.max(0.2, sunElev));
+    sunLight.intensity = Math.max(
+      0.05,
+      cfg.sunIntensityDay * Math.max(0.2, sunElev) * weatherLight,
+    );
     skyMaterial.uniforms.uSunDir.value.copy(sunDir);
     skyMaterial.uniforms.uSunColor.value.copy(sunBaseColor);
     skyMaterial.uniforms.uSunIntensity.value = sunLight.intensity;
@@ -138,7 +157,7 @@ export function applyCelestialLighting(targets: CelestialLightingTargets): void 
   } else {
     sunLight.position.set(moonDir.x * orbit, Math.max(12, moonDir.y * orbit), moonDir.z * orbit);
     sunLight.color.set(cfg.sunColorNight);
-    sunLight.intensity = cfg.sunIntensityNight;
+    sunLight.intensity = Math.max(0.02, cfg.sunIntensityNight * weatherLight);
     skyMaterial.uniforms.uSunDir.value.set(0, -1, 0);
     skyMaterial.uniforms.uMoonDir.value.copy(moonDir);
     skyMaterial.uniforms.uSunColor.value.set(cfg.sunColorNight);

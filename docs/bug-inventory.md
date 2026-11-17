@@ -22,6 +22,12 @@ tests, and A14 was found and fixed in an in-game pass on a slope.
 
 | ID | Bug | Fix | Evidence |
 |---|---|---|---|
+| F14 | **The damage vignette strobed.** `PLANT_DAMAGE` is flushed at `tickRateHz/2` per plant and once per tick for upkeep loss, and the HUD began a fresh 420 ms fade on every message: a running animation restarted 10-20 times a second never left its first tenth, so a wilting plant or a storm read as a dark/bright blink rather than a hit. | `damageCueDue` allows one pulse, then a gap at least as long as the fade (floor 1 s), and upkeep losses are queued and flushed on the damage pipeline cadence (2 Hz at 20 Hz) instead of every tick. | `ui/damageCue.test.ts` 6, `tick/shedDamage.test.ts` 9 |
+| F15 | **A storm dimmed the ambient but not the sun.** The broadcast `sunIntensity` already carried `weather_light_multiplier`, but `applyCelestialLighting` set the beam from `render.json` and the sky disk followed it, so a storm left a full-strength sun in a dim world; `hemisphereLight.intensity` was never graded at all, only its colour. | `WEATHER_UPDATE` carries `lightMultiplier`, and that one number grades the beam, its disk, the moonlight and the hemisphere fill. | `renderers/environment/celestial.test.ts` |
+| F16 | **The client rolled its own lightning.** A flash came from a 3.5-9 s timer in `ClientWeatherStateMachine` while damage strikes came from a separate server schedule, so a bolt that hurt the plant usually flashed nothing and a flash usually hit nothing; no position crossed the wire. | The server publishes `WEATHER_STRIKE` (44) where the bolt landed and the radius it damages; the client paints that strike and has no timer. | `ClientWeatherStateMachine.test.ts` (a storm never flashes on its own), `docs/protocol.md` |
+| F17 | **Two owners of the same lights.** `handleWeatherUpdate` wrote `sunLight` and `ambientLight` from its own 1.4/0.7 formula whenever the renderer was null, re-applying the weather multiplier to a value that already had it and ignoring the day/night config, so the handover to the renderer was a brightness step. | The fallback is gone: `applyCelestialLighting` is the only writer, and nothing is drawn before the renderer exists. | read: `main.ts` `handleWeatherUpdate`; `celestial.test.ts` pins the values |
+| F18 | **First light was darker than night.** The ambient target switched at `dayFactor > 0.1` to `ambient_intensity_day x sunIntensity`, which at sunrise is about 0.02 - below the 0.15 night value it replaced. | The target is `lerp(night, day, dayFactor)`, continuous at both ends. | `celestial.test.ts` (blend, and dawn only brightens) |
+| F19 | **The sky grade had no meaning before the first root readout.** `localTileLight` started at full daylight for a seed that owns no tiles, so its first packet moved the sky in one step. | `localSkyBrightness` follows the day curve until a packet arrives, then the tiles. | `environment/localBrightness.test.ts` |
 | E1 | **Growing a root damaged the plant that grew it.** A root tunnel is a `TerrainEdit`; dry soil collapses it two seconds later; the collapse was billed to every plant within `terrain_collapse_radius_m`, including the digger. The 0.54-biomass radicle was destroyed and the growth menu offered a new one, so a new player looped. | The void and its collapse edit carry `actorPlantId`; `applyCollapse` skips that plant. Roots are not a damage source (ADR-051). | `apps/server/src/ops/damage/damagePipeline.test.ts` (own tunnel ignored, rival tunnel still hurts); `tools/sim-bots` first run before/after |
 | D2 | **Chat's Send button and X did nothing.** `createChatUI` appended the panel straight to the `hud` layer, whose CSS is `pointer-events: none`, and never set `pointer-events: auto`. Every click passed through to the canvas underneath. Enter still worked, which is why it read as "the button is dead". | `#chat-container` opts in; input row fixed so the button cannot be clipped (`flex: 0 0 auto`, `min-width: 0`, `box-sizing`). | `apps/client/src/main.ts` `createChatUI` |
 | F4 | `MESSAGE_TYPE` existed twice (server `ops/net.ts` and a literal in client `main.ts`), so the two could drift — `REPORT` once shared `WELCOME`'s number 10. | One table in `@plant-legacy/shared/protocol`; the server re-exports it. | `packages/shared/src/protocol/index.ts` |
@@ -208,3 +214,28 @@ with it; R4 and R5 below replace them with one volume.
    end to end.
 2. It gets an ID, a status and the file that owns it.
 3. When it is fixed, the row moves to **Fixed** with the test that proves it.
+
+---
+
+## Audit 2026-11-17 — subsystem sweep
+
+Each row states what should happen and what must not, what was actually checked
+in this pass, and the verdict. `read` means the module was read; a test named in
+the check column is what pins the rule. A row marked *not audited* still needs
+its pass and is listed so this sweep cannot be mistaken for complete.
+
+| Subsystem | Should happen | Must not happen | Checked | Verdict |
+|---|---|---|---|---|
+| Celestial light and sky grade | One writer; the weather multiplier grades beam, disk, fill and ambient; the ambient follows the day curve continuously; the sky grade is defined before any tile data | A second formula for the same lights, a threshold switch at dawn, a full-daylight default for a seed | read `renderers/environment/celestial.ts`, `EnvironmentRenderer.update`/`updateSunPosition`; `celestial.test.ts`, `localBrightness.test.ts` | F15, F17, F18, F19 fixed and pinned |
+| Client weather visuals | One source of lightning; a transition that always runs to its end | Autonomous bolts; a fade restarted by every broadcast | read `renderers/ClientWeatherStateMachine.ts`; `ClientWeatherStateMachine.test.ts` | F16 fixed; the repeat-request restart is now pinned too |
+| Weather broadcast | A fixed wire cadence independent of the tick rate | One message per tick, or a burst after a rate change | read `tick/weatherBroadcast.ts`, `ops/broadcastCadence.ts`; `weatherBroadcast.test.ts` | correct: elapsed milliseconds are banked |
+| Damage on the wire | Coalesced per plant, never faster than the pipeline flush; upkeep loss summed, not sampled | One message per tick per wilting plant | read `ops/damage/damagePipeline.ts` `applyDamage`, `apps/server/src/main.ts` `processDamageEvents`; `shedDamage.test.ts` | F14 fixed |
+| Damage cue | At most one pulse per second, never two at once | Animation rate tied to the message rate | read `ui/PlantStatusHud.ts` `pulseDamage`; `damageCue.test.ts` | F14 fixed |
+| STATE / KEYFRAME fanout | Owner always included, by interest cell, at `client_send_rate_hz`; keyframes on their own interval | A player losing sight of their own plant; per-tick fanout to everyone | read `tick/stateBroadcast.ts`, `ops/broadcastCadence.ts`; existing `stateBroadcast.test.ts` | no defect found in this pass (read + tests); not exercised under load |
+| Resource tile broadcast | Deltas immediate, whole-grid re-tints throttled | Allocating the whole grid on every tick | read `tick/resourceBroadcast.ts` | no defect found (read) |
+| Root readout | Dedupe only after a successful write; water table rebuilt on revision change | Remembering a payload the socket refused | read `tick/rootReadout.ts`; 9 tests | no defect found (read + tests) |
+| Growth economy | Costs and yields from `config/growth.json`; growth cannot emit damage | Growth billed as tissue loss | *not audited this pass* | needs its own read + tests |
+| Persistence and accounts | Atomic saves, validated loads, session limits | A corrupt snapshot loaded, a revoked token accepted | *not audited this pass* | inventory rows INV-PR/INV-AU already list the open items |
+| Input, camera and dev tools | A camera the server does not own; dev edits that name their effect | Client-invented simulation state | *not audited this pass* | needs a browser pass |
+| Water and hydrology | One surface per place; the stream in its channel | Overlapping translucent sheets, water above the ground it stands in | *not audited this pass* | last inspected when AL-04 landed; needs a visual pass |
+

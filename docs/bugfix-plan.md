@@ -48,6 +48,12 @@ pass.
 | FIX-13 | Delete or document the dead protocol surface | F7 | S | decision D3 |
 | FIX-14 | One helper for the planet-body draw range | F6 | S | — |
 | FIX-15 | Shared panel primitive | D4 | L | FIX-09, FIX-10 |
+| FIX-16 ✔ | One damage cue per second, and upkeep loss on the pipeline cadence | F14 | S | — |
+| FIX-17 ✔ | Grade the beam, its disk and the fill light with the weather multiplier | F15 | S | — |
+| FIX-18 ✔ | Server-owned lightning: `WEATHER_STRIKE` and no client timer | F16 | M | — |
+| FIX-19 ✔ | One writer for the scene lights | F17 | S | — |
+| FIX-20 ✔ | Continuous day/night ambient blend | F18 | S | — |
+| FIX-21 ✔ | Sky grade defined without a root readout | F19 | S | — |
 
 Sizes: S ≈ under an hour, M ≈ half a day, L ≈ a day or more.
 

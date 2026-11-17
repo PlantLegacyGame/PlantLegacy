@@ -516,6 +516,19 @@ Status legend: `ENFORCED`, `PARTIAL`, `UNENFORCED`, `BROKEN`.
 
 ---
 
+## I. Light, weather feedback and damage cues (`INV-LT`)
+
+| ID | Invariant | Status | Evidence / failure | Fix |
+|---|---|---|---|---|
+| INV-LT-01 | The scene lights have exactly one writer. | ENFORCED (2026-11-17) | `applyCelestialLighting` sets the sun, ambient and sky uniforms; `handleWeatherUpdate` no longer has a formula of its own. | Keep it that way: a second writer is a brightness step at the handover. |
+| INV-LT-02 | Weather grades every light, not only the ambient. | ENFORCED (2026-11-17) | `WEATHER_UPDATE.lightMultiplier` grades the beam, the sky disk, the moonlight and the hemisphere fill (`celestial.test.ts`). | Any new light must take the same multiplier. |
+| INV-LT-03 | Ambient follows the day curve continuously. | ENFORCED (2026-11-17) | `stepAmbientLighting` blends by `dayFactor`; dawn never dips below the night value. | No threshold switching. |
+| INV-LT-04 | A damage cue is at most one pulse per second. | ENFORCED (2026-11-17) | `damageCueDue` refuses while a pulse runs and until the gap elapses; upkeep loss is coalesced to 2 Hz. | Data still updates on every message; only the animation is rate-limited. |
+| INV-LT-05 | The client never invents a lightning strike. | ENFORCED (2026-11-17) | `ClientWeatherStateMachine` only fades a strike set by `triggerLightning`; the flow is `idle -> (WEATHER_STRIKE) -> flash -> idle`. | A bolt the server did not roll cannot be drawn. |
+| INV-LT-06 | The sky grade is defined before any tile data. | ENFORCED (2026-11-17) | `localSkyBrightness` uses `dayFactor` until the first root readout, then the covered tiles. | No implicit full-daylight default. |
+
+---
+
 # Part 3 — Confirmed defects (priority order)
 
 `DEF-nn` are verified contradictions, not hypotheses. Fix these before adding

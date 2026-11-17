@@ -84,6 +84,7 @@ Server rejects with `ERROR { code: "VERSION_MISMATCH", ... }` if mismatch.
 | 41 | `DROP_EXPIRED` | `{ id: string }` | A drop decayed and should be removed (T06) |
 | 42 | `FAUNA_EVENT` | `FaunaEventPayload` | A scripted herbivore swarm started browsing or moved on. Swarms are events, not pathfinding agents (T06) |
 | 43 | `KILL_CREDIT` | `KillCreditPayload` | Who is credited for a plant's death: the player or plant with the most damage inside `kill_credit_window_s` (T06) |
+| 44 | `WEATHER_STRIKE` | `{ tick: number, x: number, z: number, radiusM: number }` | One lightning bolt: where it landed and the radius it damages. The server owns the timing, so the sky flash and the damage are the same strike |
 | 99 | `DEV_RESPONSE` | `{ ... }` | Dev-panel response (dev builds only) |
 
 Type `10` is `WELCOME`: `REPORT` was moved to `29` after it collided with the

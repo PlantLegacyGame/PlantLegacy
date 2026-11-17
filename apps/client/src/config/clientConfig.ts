@@ -128,8 +128,6 @@ export interface RenderConfig {
   lightningMaxIntensity: number;
   lightningFlashDurationMs: number;
   lightningIntensityBoost: number;
-  lightningMinIntervalS: number;
-  lightningMaxIntervalS: number;
   soilDryColor: string;
   soilWetColor: string;
   soilMineralTint: string;
@@ -514,10 +512,6 @@ interface RenderConfigResponse {
   lightningFlashDurationMs?: number;
   lightning_intensity_boost?: number;
   lightningIntensityBoost?: number;
-  lightning_min_interval_s?: number;
-  lightningMinIntervalS?: number;
-  lightning_max_interval_s?: number;
-  lightningMaxIntervalS?: number;
   rain_slant?: number;
   rainSlant?: number;
   sun_orbital_distance?: number;
@@ -890,10 +884,6 @@ function normalizeRenderConfig(data: RenderConfigResponse, fallback: RenderConfi
       data.lightning_intensity_boost ??
       data.lightningIntensityBoost ??
       fallback.lightningIntensityBoost,
-    lightningMinIntervalS:
-      data.lightning_min_interval_s ?? data.lightningMinIntervalS ?? fallback.lightningMinIntervalS,
-    lightningMaxIntervalS:
-      data.lightning_max_interval_s ?? data.lightningMaxIntervalS ?? fallback.lightningMaxIntervalS,
     rainSlant: data.rain_slant ?? data.rainSlant ?? fallback.rainSlant,
     sunOrbitalDistance:
       data.sun_orbital_distance ?? data.sunOrbitalDistance ?? fallback.sunOrbitalDistance,
@@ -1290,8 +1280,6 @@ export async function loadRenderConfig(serverOrigin: string): Promise<RenderConf
     lightningMaxIntensity: 1.0,
     lightningFlashDurationMs: 120,
     lightningIntensityBoost: 4.0,
-    lightningMinIntervalS: 3.5,
-    lightningMaxIntervalS: 9.0,
     soilDryColor: '#6B5539',
     soilWetColor: '#2E2418',
     soilMineralTint: '#5A8FA8',

@@ -53,6 +53,12 @@ export interface WeatherBroadcast {
   timeOfDay: number;
   isDay: boolean;
   sunIntensity: number;
+  /**
+   * The weather's own light multiplier. `sunIntensity` already carries it; this
+   * is what lets the client grade the direct beam and its disk, which the
+   * ambient number never reaches.
+   */
+  lightMultiplier: number;
   weatherState: WeatherStateName;
   conditionToken: string;
   stateTimeRemainingS: number;
@@ -283,6 +289,7 @@ export function weatherStateMachineGetBroadcast(machine: WeatherStateMachine): {
   timeOfDay: number;
   isDay: boolean;
   sunIntensity: number;
+  lightMultiplier: number;
   weatherState: WeatherStateName;
   conditionToken: string;
   stateTimeRemainingS: number;
@@ -310,6 +317,7 @@ export function weatherStateMachineGetBroadcast(machine: WeatherStateMachine): {
     timeOfDay: machine.timeOfDay,
     isDay: isDayTime,
     sunIntensity,
+    lightMultiplier: weatherStateMachineGetLightMultiplier(machine),
     weatherState: machine.currentState,
     conditionToken: condition,
     stateTimeRemainingS: Math.round(remainingS),

@@ -7262,6 +7262,7 @@ function handleWeatherUpdate(payload: unknown, ctx: MessageContext): void {
     timeOfDay: number;
     isDay: boolean;
     sunIntensity: number;
+    lightMultiplier?: number;
     weatherState: string;
     conditionToken: string;
     stateTimeRemainingS: number;
@@ -7274,13 +7275,12 @@ function handleWeatherUpdate(payload: unknown, ctx: MessageContext): void {
   // Suppress verbose weather logs - only log state changes
   // console.log('[PlantLegacy] WEATHER_UPDATE received:', { weatherState: weather.weatherState, timeOfDay: weather.timeOfDay, isDay: weather.isDay });
 
-  // C03: EnvironmentRenderer dynamically drives sky dome, sun/moon arcs, lights, fog, and rain
-  if (environmentRenderer) {
-    environmentRenderer.handleWeatherUpdate(weather);
-  } else {
-    sunLight.intensity = Math.max(0.05, 1.4 * weather.sunIntensity);
-    ambientLight.intensity = Math.max(0.12, 0.7 * weather.sunIntensity + 0.1);
-  }
+  // C03: EnvironmentRenderer dynamically drives sky dome, sun/moon arcs, lights, fog, and rain.
+  // There is deliberately no fallback that writes the lights: `applyCelestialLighting` is
+  // their only owner. Before the renderer exists nothing is drawn yet, and the old
+  // fallback re-applied 1.4/0.7 to an already weather-multiplied `sunIntensity`, so the
+  // handover from it to the renderer was a visible brightness step.
+  environmentRenderer?.handleWeatherUpdate(weather);
   weatherDayNumber = weather.dayNumber ?? weatherDayNumber;
   weatherClock = formatClock(weather.timeOfDay);
   plantStatusHud?.setWeather(weather);
@@ -7289,6 +7289,14 @@ function handleWeatherUpdate(payload: unknown, ctx: MessageContext): void {
   if (debugOverlay) {
     debugOverlay.recordBytes(0, ctx.byteLength);
   }
+}
+
+/**
+ * A bolt the server rolled. The strike carries its landing point so the flash is
+ * the one that hurt something; the client no longer times its own lightning.
+ */
+function handleWeatherStrike(): void {
+  environmentRenderer?.flashLightning();
 }
 
 function handleGrowthEvent(payload: unknown): void {
@@ -8169,6 +8177,7 @@ const messageHandlers = createDispatchTable([
   [MESSAGE_TYPE.KILL_CREDIT, ignoreDropMessage],
   [MESSAGE_TYPE.FAUNA_EVENT, handleFaunaEvent],
   [MESSAGE_TYPE.WEATHER_UPDATE, handleWeatherUpdate],
+  [MESSAGE_TYPE.WEATHER_STRIKE, handleWeatherStrike],
   [MESSAGE_TYPE.GROWTH_EVENT, handleGrowthEvent],
   [MESSAGE_TYPE.GROWTH_OPTIONS_RESULT, handleGrowthOptionsResult],
   [MESSAGE_TYPE.REJECT, handleReject],
