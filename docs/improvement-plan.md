@@ -352,9 +352,15 @@ state machine and the socket - it moves when the context carries those.
    take free-form actions (`resolveDevWeatherCommand`, `resolveDevTileCommand`).
    The `/config/*` routes each carried their own `await import('node:fs/promises')`
    and flatten loop; they now share one reader in `ops/configRoutes.ts`
-   (`readConfigValues`, plus `readFlatConfig` on top of it), which is also the
-   first thing in the request handler that a `http/` module can take over
-   without dragging the world with it.
+   (`readConfigValues`, plus `readFlatConfig` on top of it). Those routes have
+   since left the request handler entirely: `http/configRoutes.ts`
+   (`handleConfigRequest(url, configDir)`) is the first `http/` module, 599 lines
+   that needed nothing but a config directory — no world, no socket, no accounts
+   — and answers `{ status, body }` or `null` so the caller can 404. The request
+   handler calls it for any `/config/` path. Every body is unchanged byte for
+   byte, which is how the move was checked: thirteen routes, same sizes as before
+   the split, unknown names still 404, `/dev/config` (which edits the config map
+   and pushes switches into the live world) still in `main.ts`, where it belongs.
    The dev switch moves by family rather than as one block: each family is the
    verbs it actually uses, so no case has to be handed a world. Three are out.
    `tick/simulationCommands.ts` (`handleSimulationCommand`) owns tick rate, pause,
