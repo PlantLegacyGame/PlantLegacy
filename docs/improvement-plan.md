@@ -251,7 +251,7 @@ files carry whole subsystems as module-scope state.
 |---|---|---|
 | `apps/client/src/main.ts` | 9478 | 53 imports and **256 module-scope `let`/`const` bindings**. Every subsystem (socket, UI, camera, growth, root sight, physics, benchmark) reaches into the same mutable namespace, so nothing can be imported without the whole app and no function's dependencies are visible in its signature |
 | `apps/server/src/main.ts` | 4972 | Same shape: HTTP + WS + tick loop + persistence + weather + accounts in one module |
-| `apps/client/src/renderers/webgpu/WebGPURenderer.ts` | 2618 | Renderer plus tier policy, culling, impostors and Root Sight highlighting |
+| `apps/client/src/renderers/webgpu/WebGPURenderer.ts` | 2369 | Renderer plus tier policy, culling, impostors and Root Sight highlighting |
 | `apps/client/src/config/clientConfig.ts` | 1723 | Every system's client config type and loader in one file |
 | `apps/client/src/ui/DevPanel.ts` | 1499 | ~40 dev actions in one file, each an ad-hoc fetch |
 | `apps/server/src/ops/plantWorld.ts` | 2800 | World, tiers, interest management and save/load |
@@ -277,6 +277,16 @@ WebGPU) were one-line shims over `resolveDrawnRadius`, so they are gone and ever
 call site uses the shared rule; `PlantNodeData` imports point at
 `renderers/plant/plantNodeData.ts` instead of going through `PlantRenderer.ts`,
 which only re-exported it. Neither changed a drawn pixel.
+
+GPU binding tables, same kind of seam: the five plant texture arrays were spelled
+out in five places (the mesh and billboard layouts, and the mesh, impostor and
+billboard bind groups), each with its own binding numbers and its own 1x1
+stand-in texture, and the plant vertex layout was written twice. They are now
+`webgpu/plantTextureBindings.ts` (`PLANT_TEXTURE_ARRAY_ORDER`, one generator for
+layout and bind group entries) and `webgpu/plantVertexLayout.ts`, and a check in
+`shaderSmoke.test.ts` reads the WGSL sources to confirm the arrays still sit at
+the bindings the JS declares, in the organ order the shader samples. The
+renderer lost about 280 lines and no binding number moved.
 
 **Staged plan for the god-modules (next sessions, one at a time):**
 

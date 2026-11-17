@@ -5,6 +5,14 @@ import type { PlantNodeData } from '../plant/plantNodeData.js';
 import { jointMatrixFor } from './jointMatrix.js';
 import { buildPlantMesh, type PlantRenderPlant } from './PlantMeshBuilder.js';
 import {
+  PLANT_TEXTURE_ARRAY_ORDER,
+  PLANT_TEXTURE_TYPE_NAMES,
+  PlantTextureType,
+  plantTextureArrayBindGroupEntries,
+  plantTextureArrayLayoutEntries,
+} from './plantTextureBindings.js';
+import { PLANT_VERTEX_BUFFER_LAYOUT, PLANT_VERTEX_STRIDE } from './plantVertexLayout.js';
+import {
   billboardShader,
   cullShader,
   impostorShader,
@@ -29,8 +37,6 @@ const PLANT_FLOATS = 12;
 const PLANT_STRIDE = PLANT_FLOATS * 4;
 const RENDER_STRIDE = 16;
 const WORKGROUP_SIZE = 64;
-// C02b: GPU skinning - vertex now includes joint indices (4) and weights (4) = 19 floats = 76 bytes
-const VERTEX_STRIDE = 76; // 19 floats = 76 bytes (position3 + normal3 + uv2 + packed1 + emergence2 + jointIndices4 + jointWeights4)
 const MAX_JOINTS_PER_PLANT = 64;
 const JOINT_MATRIX_STRIDE = 64; // 16 floats = 64 bytes per mat4x4
 const JOINT_BUFFER_STRIDE = MAX_JOINTS_PER_PLANT * JOINT_MATRIX_STRIDE; // 64 * 64 = 4096 bytes per plant
@@ -203,16 +209,6 @@ export const DEFAULT_WEBGPU_RENDERER_CONFIG: WebGPURendererConfig = {
 /** Texture array configuration for plant variation */
 const TEXTURE_ARRAY_LAYERS = 16; // Variations per plant part type (must match getVariationIndex range 0-15)
 const TEXTURE_ARRAY_SIZE = 256; // 256x256 per layer
-
-/** Plant part types that use texture arrays */
-enum PlantTextureType {
-  Bark = 0, // Stems, branches, vines, roots
-  Leaf = 1, // Leaves, cotyledons
-  Flower = 2, // Flowers
-  SporeSac = 3, // Spore sacs
-  Seed = 4, // Seeds
-  Count = 5,
-}
 
 /** C02b: Simple VRAM pool allocator for buffer management */
 class VRAMPool {
@@ -669,32 +665,8 @@ export class WebGPURenderer {
               visibility: GPUShaderStage.VERTEX,
               buffer: { type: 'read-only-storage' },
             },
-            // C02b: Texture arrays for plant variation (bindings 3-7)
-            {
-              binding: 3,
-              visibility: GPUShaderStage.FRAGMENT,
-              texture: { sampleType: 'float', viewDimension: '2d-array' },
-            },
-            {
-              binding: 4,
-              visibility: GPUShaderStage.FRAGMENT,
-              texture: { sampleType: 'float', viewDimension: '2d-array' },
-            },
-            {
-              binding: 5,
-              visibility: GPUShaderStage.FRAGMENT,
-              texture: { sampleType: 'float', viewDimension: '2d-array' },
-            },
-            {
-              binding: 6,
-              visibility: GPUShaderStage.FRAGMENT,
-              texture: { sampleType: 'float', viewDimension: '2d-array' },
-            },
-            {
-              binding: 7,
-              visibility: GPUShaderStage.FRAGMENT,
-              texture: { sampleType: 'float', viewDimension: '2d-array' },
-            },
+            // C02b: texture arrays for plant variation (bindings 3-7).
+            ...plantTextureArrayLayoutEntries(3),
             { binding: 8, visibility: GPUShaderStage.FRAGMENT, sampler: { type: 'filtering' } },
             // T04 appearance: composed looks, one record per plant.
             {
@@ -713,22 +685,7 @@ export class WebGPURenderer {
       vertex: {
         module: meshModule,
         entryPoint: 'vs_main',
-        buffers: [
-          {
-            arrayStride: VERTEX_STRIDE,
-            attributes: [
-              { shaderLocation: 0, offset: 0, format: 'float32x3' }, // position
-              { shaderLocation: 1, offset: 12, format: 'float32x3' }, // normal
-              { shaderLocation: 2, offset: 24, format: 'float32x2' }, // uv
-              { shaderLocation: 3, offset: 32, format: 'uint32' }, // packed
-              { shaderLocation: 4, offset: 36, format: 'float32' }, // spawnTime
-              { shaderLocation: 5, offset: 40, format: 'float32' }, // growthProgress
-              // C02b: GPU skinning - joint indices and weights
-              { shaderLocation: 6, offset: 44, format: 'uint32x4' }, // jointIndices
-              { shaderLocation: 7, offset: 60, format: 'float32x4' }, // jointWeights
-            ],
-          },
-        ],
+        buffers: [PLANT_VERTEX_BUFFER_LAYOUT],
       },
       fragment: {
         module: meshModule,
@@ -774,31 +731,7 @@ export class WebGPURenderer {
           visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
           buffer: { type: 'read-only-storage' },
         },
-        {
-          binding: 3,
-          visibility: GPUShaderStage.FRAGMENT,
-          texture: { sampleType: 'float', viewDimension: '2d-array' },
-        },
-        {
-          binding: 4,
-          visibility: GPUShaderStage.FRAGMENT,
-          texture: { sampleType: 'float', viewDimension: '2d-array' },
-        },
-        {
-          binding: 5,
-          visibility: GPUShaderStage.FRAGMENT,
-          texture: { sampleType: 'float', viewDimension: '2d-array' },
-        },
-        {
-          binding: 6,
-          visibility: GPUShaderStage.FRAGMENT,
-          texture: { sampleType: 'float', viewDimension: '2d-array' },
-        },
-        {
-          binding: 7,
-          visibility: GPUShaderStage.FRAGMENT,
-          texture: { sampleType: 'float', viewDimension: '2d-array' },
-        },
+        ...plantTextureArrayLayoutEntries(3),
         { binding: 8, visibility: GPUShaderStage.FRAGMENT, sampler: { type: 'filtering' } },
         { binding: 9, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
         { binding: 10, visibility: GPUShaderStage.FRAGMENT, sampler: { type: 'filtering' } },
@@ -860,21 +793,7 @@ export class WebGPURenderer {
       vertex: {
         module: impostorModule,
         entryPoint: 'vs_main',
-        buffers: [
-          {
-            arrayStride: VERTEX_STRIDE,
-            attributes: [
-              { shaderLocation: 0, offset: 0, format: 'float32x3' },
-              { shaderLocation: 1, offset: 12, format: 'float32x3' },
-              { shaderLocation: 2, offset: 24, format: 'float32x2' },
-              { shaderLocation: 3, offset: 32, format: 'uint32' },
-              { shaderLocation: 4, offset: 36, format: 'float32' },
-              { shaderLocation: 5, offset: 40, format: 'float32' },
-              { shaderLocation: 6, offset: 44, format: 'uint32x4' },
-              { shaderLocation: 7, offset: 60, format: 'float32x4' },
-            ],
-          },
-        ],
+        buffers: [PLANT_VERTEX_BUFFER_LAYOUT],
       },
       fragment: {
         module: impostorModule,
@@ -973,71 +892,8 @@ export class WebGPURenderer {
             ? { buffer: this.jointBuffer }
             : { buffer: device.createBuffer({ size: 64, usage: GPUBufferUsage.STORAGE }) },
         },
-        // C02b: Texture arrays for plant variation (bindings 3-7)
-        {
-          binding: 3,
-          resource:
-            this.textureArrays?.get(PlantTextureType.Bark)?.createView({ dimension: '2d-array' }) ??
-            device
-              .createTexture({
-                size: [1, 1],
-                format: 'rgba8unorm',
-                usage: GPUTextureUsage.TEXTURE_BINDING,
-              })
-              .createView({ dimension: '2d-array' }),
-        },
-        {
-          binding: 4,
-          resource:
-            this.textureArrays?.get(PlantTextureType.Leaf)?.createView({ dimension: '2d-array' }) ??
-            device
-              .createTexture({
-                size: [1, 1],
-                format: 'rgba8unorm',
-                usage: GPUTextureUsage.TEXTURE_BINDING,
-              })
-              .createView({ dimension: '2d-array' }),
-        },
-        {
-          binding: 5,
-          resource:
-            this.textureArrays
-              ?.get(PlantTextureType.Flower)
-              ?.createView({ dimension: '2d-array' }) ??
-            device
-              .createTexture({
-                size: [1, 1],
-                format: 'rgba8unorm',
-                usage: GPUTextureUsage.TEXTURE_BINDING,
-              })
-              .createView({ dimension: '2d-array' }),
-        },
-        {
-          binding: 6,
-          resource:
-            this.textureArrays
-              ?.get(PlantTextureType.SporeSac)
-              ?.createView({ dimension: '2d-array' }) ??
-            device
-              .createTexture({
-                size: [1, 1],
-                format: 'rgba8unorm',
-                usage: GPUTextureUsage.TEXTURE_BINDING,
-              })
-              .createView({ dimension: '2d-array' }),
-        },
-        {
-          binding: 7,
-          resource:
-            this.textureArrays?.get(PlantTextureType.Seed)?.createView({ dimension: '2d-array' }) ??
-            device
-              .createTexture({
-                size: [1, 1],
-                format: 'rgba8unorm',
-                usage: GPUTextureUsage.TEXTURE_BINDING,
-              })
-              .createView({ dimension: '2d-array' }),
-        },
+        // C02b: texture arrays for plant variation (bindings 3-7).
+        ...plantTextureArrayBindGroupEntries(device, this.textureArrays, 3),
         { binding: 8, resource: this.textureArraySampler ?? device.createSampler() },
         {
           binding: 9,
@@ -1079,71 +935,8 @@ export class WebGPURenderer {
         { binding: 1, resource: { buffer: this.renderBuffer } },
         { binding: 2, resource: { buffer: this.impostorTargetBuffer } },
         { binding: 3, resource: { buffer: this.impostorViewsUniformBuffer } },
-        // C02b: Texture arrays for plant variation (bindings 4-8)
-        {
-          binding: 4,
-          resource:
-            this.textureArrays?.get(PlantTextureType.Bark)?.createView({ dimension: '2d-array' }) ??
-            device
-              .createTexture({
-                size: [1, 1],
-                format: 'rgba8unorm',
-                usage: GPUTextureUsage.TEXTURE_BINDING,
-              })
-              .createView({ dimension: '2d-array' }),
-        },
-        {
-          binding: 5,
-          resource:
-            this.textureArrays?.get(PlantTextureType.Leaf)?.createView({ dimension: '2d-array' }) ??
-            device
-              .createTexture({
-                size: [1, 1],
-                format: 'rgba8unorm',
-                usage: GPUTextureUsage.TEXTURE_BINDING,
-              })
-              .createView({ dimension: '2d-array' }),
-        },
-        {
-          binding: 6,
-          resource:
-            this.textureArrays
-              ?.get(PlantTextureType.Flower)
-              ?.createView({ dimension: '2d-array' }) ??
-            device
-              .createTexture({
-                size: [1, 1],
-                format: 'rgba8unorm',
-                usage: GPUTextureUsage.TEXTURE_BINDING,
-              })
-              .createView({ dimension: '2d-array' }),
-        },
-        {
-          binding: 7,
-          resource:
-            this.textureArrays
-              ?.get(PlantTextureType.SporeSac)
-              ?.createView({ dimension: '2d-array' }) ??
-            device
-              .createTexture({
-                size: [1, 1],
-                format: 'rgba8unorm',
-                usage: GPUTextureUsage.TEXTURE_BINDING,
-              })
-              .createView({ dimension: '2d-array' }),
-        },
-        {
-          binding: 8,
-          resource:
-            this.textureArrays?.get(PlantTextureType.Seed)?.createView({ dimension: '2d-array' }) ??
-            device
-              .createTexture({
-                size: [1, 1],
-                format: 'rgba8unorm',
-                usage: GPUTextureUsage.TEXTURE_BINDING,
-              })
-              .createView({ dimension: '2d-array' }),
-        },
+        // C02b: texture arrays for plant variation (bindings 4-8).
+        ...plantTextureArrayBindGroupEntries(device, this.textureArrays, 4),
         { binding: 9, resource: this.textureArraySampler ?? device.createSampler() },
         {
           binding: 10,
@@ -1164,71 +957,8 @@ export class WebGPURenderer {
         { binding: 0, resource: frameBinding },
         { binding: 1, resource: renderBinding },
         { binding: 2, resource: plantBinding },
-        // C02b: Texture arrays for plant variation (bindings 3-7)
-        {
-          binding: 3,
-          resource:
-            this.textureArrays?.get(PlantTextureType.Bark)?.createView({ dimension: '2d-array' }) ??
-            device
-              .createTexture({
-                size: [1, 1],
-                format: 'rgba8unorm',
-                usage: GPUTextureUsage.TEXTURE_BINDING,
-              })
-              .createView({ dimension: '2d-array' }),
-        },
-        {
-          binding: 4,
-          resource:
-            this.textureArrays?.get(PlantTextureType.Leaf)?.createView({ dimension: '2d-array' }) ??
-            device
-              .createTexture({
-                size: [1, 1],
-                format: 'rgba8unorm',
-                usage: GPUTextureUsage.TEXTURE_BINDING,
-              })
-              .createView({ dimension: '2d-array' }),
-        },
-        {
-          binding: 5,
-          resource:
-            this.textureArrays
-              ?.get(PlantTextureType.Flower)
-              ?.createView({ dimension: '2d-array' }) ??
-            device
-              .createTexture({
-                size: [1, 1],
-                format: 'rgba8unorm',
-                usage: GPUTextureUsage.TEXTURE_BINDING,
-              })
-              .createView({ dimension: '2d-array' }),
-        },
-        {
-          binding: 6,
-          resource:
-            this.textureArrays
-              ?.get(PlantTextureType.SporeSac)
-              ?.createView({ dimension: '2d-array' }) ??
-            device
-              .createTexture({
-                size: [1, 1],
-                format: 'rgba8unorm',
-                usage: GPUTextureUsage.TEXTURE_BINDING,
-              })
-              .createView({ dimension: '2d-array' }),
-        },
-        {
-          binding: 7,
-          resource:
-            this.textureArrays?.get(PlantTextureType.Seed)?.createView({ dimension: '2d-array' }) ??
-            device
-              .createTexture({
-                size: [1, 1],
-                format: 'rgba8unorm',
-                usage: GPUTextureUsage.TEXTURE_BINDING,
-              })
-              .createView({ dimension: '2d-array' }),
-        },
+        // C02b: texture arrays for plant variation (bindings 3-7).
+        ...plantTextureArrayBindGroupEntries(device, this.textureArrays, 3),
         { binding: 8, resource: this.textureArraySampler ?? device.createSampler() },
         {
           binding: 9,
@@ -1422,7 +1152,7 @@ export class WebGPURenderer {
     this.uploadIndices(device, built.indices);
     this.uploadPlantData(device, built.plantData);
 
-    this.vertexCount = built.vertices.byteLength / VERTEX_STRIDE;
+    this.vertexCount = built.vertices.byteLength / PLANT_VERTEX_STRIDE;
     this.indexCount = built.indices.length;
     this.plantCount = Math.min(built.plantData.length, this.config.maxPlants);
     this.plantRenderData = built.plantData;
@@ -1439,7 +1169,7 @@ export class WebGPURenderer {
 
     if (!this.vertexBuffer || this.vertexCapacityBytes < data.byteLength) {
       this.vertexBuffer?.destroy();
-      const size = Math.max(data.byteLength, VERTEX_STRIDE * 4096);
+      const size = Math.max(data.byteLength, PLANT_VERTEX_STRIDE * 4096);
       this.vertexBuffer = device.createBuffer({
         label: 'WebGPU plant vertices',
         size,
@@ -1485,17 +1215,9 @@ export class WebGPURenderer {
 
   /** C02b: Create procedural texture arrays for plant variation */
   private createTextureArrays(device: GPUDevice): void {
-    // Iterate over enum keys to avoid string/number issues
-    const textureTypes: PlantTextureType[] = [
-      PlantTextureType.Bark,
-      PlantTextureType.Leaf,
-      PlantTextureType.Flower,
-      PlantTextureType.SporeSac,
-      PlantTextureType.Seed,
-    ];
-    for (const texType of textureTypes) {
+    for (const texType of PLANT_TEXTURE_ARRAY_ORDER) {
       const texture = device.createTexture({
-        label: `Texture array: ${PlantTextureType[texType]}`,
+        label: `Texture array: ${PLANT_TEXTURE_TYPE_NAMES[texType]}`,
         size: {
           width: TEXTURE_ARRAY_SIZE,
           height: TEXTURE_ARRAY_SIZE,

@@ -13,6 +13,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { plantTextureArrayBindings } from '../plantTextureBindings.ts';
 
 const DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -167,6 +168,39 @@ for (const [name, source] of Object.entries(MODULES)) {
     }
   });
 }
+
+/** Texture-array declarations a shader module makes, in source order. */
+function declaredTextureArrays(source: string): Array<{ binding: number; name: string }> {
+  return [
+    ...source.matchAll(
+      /@group\(0\)\s*@binding\((\d+)\)\s*var\s+([A-Za-z_][A-Za-z0-9_]*)\s*:\s*texture_2d_array/g,
+    ),
+  ].map((match) => ({ binding: Number(match[1]), name: match[2] }));
+}
+
+test('the texture arrays sit at the bindings the JS layouts declare', () => {
+  // The mesh and billboard passes put the five arrays at 3-7; the impostor baker
+  // spends binding 3 on its view uniforms and starts at 4. Both sides are
+  // generated from one order now, but the shader is the authority.
+  const layouts: Array<[string, number]> = [
+    ['mesh', 3],
+    ['billboard', 3],
+    ['impostor', 4],
+  ];
+  for (const [name, firstBinding] of layouts) {
+    const declared = declaredTextureArrays(MODULES[name]);
+    assert.deepEqual(
+      declared.map((entry) => entry.binding),
+      plantTextureArrayBindings(firstBinding),
+      `${name} declares its texture arrays at other bindings`,
+    );
+    assert.deepEqual(
+      declared.map((entry) => entry.name.toLowerCase().replace('texturearray', '')),
+      ['bark', 'leaf', 'flower', 'sporesac', 'seed'],
+      `${name} reads the arrays in another order`,
+    );
+  }
+});
 
 test('the look record on the wire matches the WGSL struct', () => {
   // PlantMeshBuilder/WebGPURenderer write five organ records of four vec4f.
