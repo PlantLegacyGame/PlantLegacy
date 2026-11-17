@@ -29,6 +29,7 @@ const CAVITY_DAYLIGHT_REFERENCE = 1.08;
 
 import {
   CAVITY_CUT_OVERREACH,
+  CAVITY_WATER_DRAIN_APERTURES,
   createCavityBowl,
   createCavitySkirt,
   setCavityBowlLight,
@@ -477,6 +478,60 @@ export class EnvironmentRenderer {
    *  re-seats the water on the ground that is actually drawn. */
   private waterTerrainKey = '';
 
+  /** Pose the water cut around the opening was last sampled for, and its radius. */
+  private waterCutKey = '';
+  private waterCutRadiusM = 0;
+
+  /**
+   * How wide the water is cut around Root Sight's opening, in metres.
+   *
+   * The column cut clears the water inside the opening and nothing else. A sheet
+   * standing just outside it is drawn above the mouth's plane wherever the
+   * ground falls away, so on a slope the water between the eye and the pit is
+   * higher than the pit's own mouth and hides its near wall: the floor reads as
+   * water seen through the ground from level angles, while a view from above is
+   * clean. The opening drains the hollow it sits in, so the cut follows that
+   * hollow out to where its ground rises back to the mouth, up to
+   * CAVITY_WATER_DRAIN_APERTURES apertures.
+   */
+  private cavityWaterCutRadius(
+    centreX: number,
+    centreZ: number,
+    apertureM: number,
+    terrain: ReturnType<typeof getTerrainParams>,
+  ): number {
+    const base = apertureM * CAVITY_CUT_OVERREACH;
+    const limit = apertureM * CAVITY_WATER_DRAIN_APERTURES;
+    if (!(apertureM > 0) || limit <= base) return Math.max(0, base);
+    const key = `${centreX.toFixed(2)}|${centreZ.toFixed(2)}|${apertureM.toFixed(3)}`;
+    if (key === this.waterCutKey) return this.waterCutRadiusM;
+    const groundAt = (x: number, z: number) => planetTerrainY(this.planetRadiusM, x, z, terrain);
+    // The mouth's plane sits on the highest ground beneath the lip: that is what
+    // the bowl's rim is fitted to.
+    let mouthY = groundAt(centreX, centreZ);
+    for (let i = 0; i < 24; i += 1) {
+      const angle = (i / 24) * Math.PI * 2;
+      mouthY = Math.max(
+        mouthY,
+        groundAt(centreX + Math.cos(angle) * apertureM, centreZ + Math.sin(angle) * apertureM),
+      );
+    }
+    const step = Math.max(0.15, apertureM * 0.2);
+    let reach = base;
+    for (let i = 0; i < 24; i += 1) {
+      const angle = (i / 24) * Math.PI * 2;
+      const dx = Math.cos(angle);
+      const dz = Math.sin(angle);
+      for (let r = base; r <= limit; r += step) {
+        if (groundAt(centreX + dx * r, centreZ + dz * r) >= mouthY - 0.02) break;
+        reach = Math.min(limit, Math.max(reach, r + step));
+      }
+    }
+    this.waterCutKey = key;
+    this.waterCutRadiusM = reach;
+    return reach;
+  }
+
   /** Dev: flood the surface sheet so the water rendering can be inspected. */
   public debugFillSurface(depthM: number): void {
     this.waterField?.fillSurface(depthM);
@@ -841,11 +896,22 @@ export class EnvironmentRenderer {
         // the lip (CAVITY_CUT_OVERREACH), and the water has to be removed at
         // that same radius. Clipped at the aperture instead, a ring of sheet two
         // percent wider than the hole survived and lapped over the pit's lip - a
-        // teal collar around the opening from every angle.
+        // teal collar around the opening from every angle. Past that, the cut
+        // follows the hollow the opening drains, so no sheet is left standing
+        // above the mouth between the eye and the dug earth.
+        const cavityX = this.soilUniforms.uRootSightCenter.value.x;
+        const cavityZ = this.soilUniforms.uRootSightCenter.value.z;
         this.waterField.setCavityClip(
-          this.soilUniforms.uRootSightCenter.value.x,
-          this.soilUniforms.uRootSightCenter.value.z,
-          cavityOpen ? this.soilUniforms.uRootSightApertureRadius.value * CAVITY_CUT_OVERREACH : 0,
+          cavityX,
+          cavityZ,
+          cavityOpen
+            ? this.cavityWaterCutRadius(
+                cavityX,
+                cavityZ,
+                this.soilUniforms.uRootSightApertureRadius.value,
+                terrain,
+              )
+            : 0,
         );
       }
       // Water is environment, not a Root Sight ornament: the surface sheet and

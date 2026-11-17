@@ -109,6 +109,24 @@ export const CAVITY_MOUTH_OVERHANG = 1.0;
 export const CAVITY_CUT_OVERREACH = 1.02;
 
 /**
+ * How far past the opening the water is cleared, in apertures, while Root Sight
+ * is open.
+ *
+ * Cutting the water at the opening's own column is what the soil does, and it is
+ * right for water inside the opening. It is not enough for a sheet standing just
+ * outside it: the mouth's plane is the highest ground under the lip, so on a
+ * slope or in a hollow the sheet outside the column is drawn *above* that plane,
+ * between the eye and the dug earth. From an eye near the mouth's height that
+ * sheet hides the pit's near wall and its floor reads as water - the ground
+ * looked see-through from level angles while a view from above was clean.
+ *
+ * The opening drains the hollow it sits in, so the cut reaches out to where the
+ * ground rises back to the mouth plane, and no further than this far. Level
+ * ground has the mouth everywhere and keeps the cut at the aperture alone.
+ */
+export const CAVITY_WATER_DRAIN_APERTURES = 2;
+
+/**
  * Extra sink of the rim below the soil cut, in metres. Zero, and it has to stay
  * zero.
  *
