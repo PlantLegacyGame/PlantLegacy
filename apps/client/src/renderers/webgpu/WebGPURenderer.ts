@@ -338,6 +338,17 @@ export class WebGPURenderer {
   private impostorTargetBuffer: GPUBuffer | null = null;
   private impostorSlotsBuffer: GPUBuffer | null = null;
   private lastImpostorBakeTime = Number.NEGATIVE_INFINITY;
+  /**
+   * A bake is running from its readback to its submit.
+   *
+   * `lastImpostorBakeTime` is only stamped at the *end* of a bake, so the
+   * interval check alone let every frame during the readback start another bake
+   * of the same plants: each one allocated its own staging buffer, baked the
+   * same plant into a second atlas slot (the first slot is then permanently
+   * unreachable, because `nextImpostorSlot` already moved past it), and
+   * submitted an extra command buffer.
+   */
+  private impostorBakeInFlight = false;
   // Track which plant occupies which atlas slot (for LRU eviction)
   private impostorPlantSlots = new Map<number, { x: number; y: number; lastUsed: number }>();
   private nextImpostorSlot = 0;
@@ -2133,15 +2144,24 @@ export class WebGPURenderer {
   }
 
   private scheduleImpostorBake(device: GPUDevice): void {
+    // One bake at a time: the bake awaits a GPU readback, and the frame loop
+    // still calls this every frame while it is pending.
+    if (this.impostorBakeInFlight) return;
+    this.impostorBakeInFlight = true;
     // Use setTimeout instead of queueMicrotask to avoid potential race with device loss
     // and to yield to the event loop for better responsiveness
     setTimeout(() => {
       if (!this.initialized) {
+        this.impostorBakeInFlight = false;
         return;
       }
-      this.bakeImpostorsAsync(device).catch((err) => {
-        console.warn('[WebGPURenderer] Impostor bake failed:', err);
-      });
+      this.bakeImpostorsAsync(device)
+        .catch((err) => {
+          console.warn('[WebGPURenderer] Impostor bake failed:', err);
+        })
+        .finally(() => {
+          this.impostorBakeInFlight = false;
+        });
     }, 0);
   }
 
