@@ -3,6 +3,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { createServer } from 'node:http';
 import process from 'node:process';
 import { readNumber } from '@plant-legacy/shared/config';
+import type { Plant } from '@plant-legacy/shared/growth';
 import { validateMessage } from '@plant-legacy/shared/protocol/messageSchemas';
 import { loadDayNightConfig, loadWeatherConfig, WeatherSystem } from '@plant-legacy/weather';
 import { WebSocket, WebSocketServer } from 'ws';
@@ -13,6 +14,7 @@ import {
   handleDamageCommand,
   type PlantTarget,
 } from './dev/damageCommands.ts';
+import { handlePlantCommand, type PlantCommandPorts } from './dev/plantCommands.ts';
 import { handleWorldCommand, type WorldCommandPorts } from './dev/worldCommands.ts';
 import { loadAccountsConfig } from './ops/accounts/config.ts';
 import { createAccountsHandlers, createAuthMiddleware } from './ops/accounts/http.ts';
@@ -2617,10 +2619,6 @@ class World {
     // the panel looked broken exactly when it was needed most.
     const plant = player?.plantId ? this.plantWorld.getPlant(player.plantId) : undefined;
 
-    const noPlant = (): void => {
-      this.sendDevResponse(ws, action.type, { ok: false, error: 'no_plant' });
-    };
-
     try {
       // Clock, save, log and config commands: tick/simulationCommands.ts.
       if (handleSimulationCommand(this.simulationCommandPorts(ws), action)) return;
@@ -2639,233 +2637,18 @@ class World {
       if (handleDamageCommand(this.damageCommandPorts(ws, damageTarget), action, damageTarget)) {
         return;
       }
-      switch (action.type) {
-        case 'dev_set_growth': {
-          if (!plant) {
-            noPlant();
-            break;
-          }
-          if (action.growth_cooldown !== undefined) {
-            // Ticks, not milliseconds: tryGrow compares this field against the
-            // tick counter, so a Date.now() value locked the plant out for good.
-            plant.growthCooldownUntil =
-              this.getTick() +
-              Math.ceil((action.growth_cooldown as number) * this.plantWorld.getTickRateHz());
-          }
-          if (action.germination_min_moisture !== undefined) {
-            this.plantWorld.getConfig().germinationMinMoisture =
-              action.germination_min_moisture as number;
-          }
-          if (action.germination_min_light !== undefined) {
-            this.plantWorld.getConfig().germinationMinLight =
-              action.germination_min_light as number;
-          }
-          this.sendDevResponse(ws, action.type, { ok: true });
-          break;
-        }
-        case 'dev_mutation_gallery': {
-          if (!plant) {
-            noPlant();
-            break;
-          }
-          // Put the row in front of the player who asked for it, far enough
-          // back that a mature body does not stand on their own plant.
-          const crown = plant.rootNodeId ? plant.nodes.get(plant.rootNodeId) : undefined;
-          const gallery = this.plantWorld.buildMutationGallery(plant.worldId, 8, 10, {
-            x: crown?.x ?? 0,
-            z: (crown?.z ?? 0) - 16,
-          });
-          this.sendDevResponse(ws, action.type, { ok: true, ...gallery });
-          break;
-        }
-        case 'dev_grant_mutation': {
-          if (!plant || !player?.plantId) {
-            noPlant();
-            break;
-          }
-          const mutationId = typeof action.mutationId === 'string' ? action.mutationId : '';
-          const granted = this.plantWorld.grantMutation(player.plantId, mutationId, this.getTick());
-          if (granted.ok) this.sendMutationState(player);
-          this.sendDevResponse(ws, action.type, {
-            ok: granted.ok,
-            reason: granted.reason,
-            mutationId,
-          });
-          break;
-        }
-        case 'dev_clear_mutations': {
-          if (!plant || !player?.plantId) {
-            noPlant();
-            break;
-          }
-          const cleared = this.plantWorld.clearMutations(player.plantId, this.getTick());
-          this.sendMutationState(player);
-          this.sendDevResponse(ws, action.type, { ok: true, cleared });
-          break;
-        }
-        case 'dev_fill_energy': {
-          if (!plant) {
-            noPlant();
-            break;
-          }
-          plant.totalEnergy = computePlantCapacity(plant, this.plantWorld.getConfig()).energy;
-          this.sendDevResponse(ws, action.type, { ok: true });
-          break;
-        }
-        case 'dev_fill_biomass': {
-          if (!plant) {
-            noPlant();
-            break;
-          }
-          const filled = this.plantWorld.fillPlantTissue(plant.id);
-          this.sendDevResponse(ws, action.type, { ok: true, totalBiomass: filled });
-          break;
-        }
-        case 'dev_grow_roots': {
-          // Root Sight only has something to excavate once the plant has pushed
-          // roots down, and growing them by hand takes minutes of play. This
-          // grows a chain of real root nodes through the same `tryGrow` the
-          // player's growth menu uses, so the skeleton, tunnels and cavity the
-          // screenshots show are the real thing.
-          if (!plant || !player?.plantId) {
-            noPlant();
-            break;
-          }
-          const steps = Math.max(1, Math.min(24, Number(action.count) || 6));
-          const grown: string[] = [];
-          const rejected: string[] = [];
-          for (let step = 0; step < steps; step += 1) {
-            const live = this.plantWorld.getPlant(player.plantId);
-            if (!live) {
-              rejected.push('plant_gone');
-              break;
-            }
-            live.growthCooldownUntil = this.getTick();
-            live.totalEnergy = Math.max(live.totalEnergy, 400);
-            live.storedWater = Math.max(live.storedWater, 40);
-            live.storedMinerals = Math.max(live.storedMinerals, 40);
-            const roots = Array.from(live.nodes.values()).filter(
-              (node) => node.type === 'root' || node.type === 'radicle',
-            );
-            const crown = live.rootNodeId ? live.nodes.get(live.rootNodeId) : undefined;
-            const parent = roots.length > 0 ? roots.sort((a, b) => a.y - b.y)[0] : crown;
-            if (!parent) {
-              rejected.push('no_parent');
-              break;
-            }
-            const angle = step * 2.399;
-            const result = this.plantWorld.tryGrow(
-              {
-                plantId: live.id,
-                nodeId: parent.id,
-                direction: { x: Math.cos(angle) * 0.5, y: -0.8, z: Math.sin(angle) * 0.5 },
-                // A radicle is the only thing a seed may grow downwards, and
-                // after it the root layer offers lateral roots (not `root`).
-                nodeType: roots.length > 0 ? 'lateral_root' : 'radicle',
-                tick: this.getTick(),
-                attachFraction: 1,
-              },
-              this.getTick(),
-            );
-            if (!result.success) {
-              rejected.push(result.reason ?? 'growth_failed');
-              break;
-            }
-            if (result.newNode) grown.push(result.newNode.id);
-            const after = this.plantWorld.getPlant(live.id);
-            this.broadcastNear(
-              MESSAGE_TYPE.GROWTH_EVENT,
-              {
-                plantId: live.id,
-                newNode: result.newNode,
-                newNodes: result.newNodes,
-                updatedParentNode: result.updatedParentNode,
-                totalBiomass: after?.totalBiomass ?? 0,
-                totalEnergy: after?.totalEnergy ?? 0,
-                growthSeq: after?.growthSeq ?? 0,
-              },
-              result.newNode?.x ?? live.nodes.get(live.rootNodeId ?? '')?.x ?? 0,
-              result.newNode?.z ?? live.nodes.get(live.rootNodeId ?? '')?.z ?? 0,
-            );
-          }
-          this.sendDevResponse(ws, action.type, { ok: true, grown, rejected });
-          break;
-        }
-        case 'dev_fill_resources': {
-          // Energy and biomass alone cannot buy growth: `canGrow` also gates on
-          // the plant's own captured water and minerals, which only accumulate
-          // by absorption over time. Without this action a dev-driven growth
-          // chain stalls at the first post-establishment node and looks broken.
-          if (!plant) {
-            noPlant();
-            break;
-          }
-          const capacity = computePlantCapacity(plant, this.plantWorld.getConfig());
-          plant.storedWater = capacity.water;
-          plant.storedMinerals = capacity.minerals;
-          this.sendDevResponse(ws, action.type, {
-            ok: true,
-            water: capacity.water,
-            minerals: capacity.minerals,
-          });
-          break;
-        }
-        case 'dev_grant_item': {
-          // Every item in config/items.json should be readable in the panel, but
-          // only three are in a starting pouch and there is no other grant path.
-          // Without this action half the definitions could not be seen at all.
-          if (!player) {
-            noPlant();
-            break;
-          }
-          const itemId = typeof action.itemId === 'string' ? action.itemId : '';
-          const count =
-            typeof action.count === 'number' && Number.isFinite(action.count)
-              ? Math.floor(action.count)
-              : 1;
-          const added = addItem(player.inventory, itemId, count, this.itemsConfig.itemDefinitions);
-          sendInventorySync(this.inventoryPorts(), player);
-          this.sendDevResponse(ws, action.type, { ok: added > 0, itemId, added });
-          break;
-        }
-        case 'dev_end_season': {
-          const clock = this.forceSeasonEnd(this.getTick());
-          this.sendDevResponse(ws, action.type, { ok: true, season: clock.season });
-          break;
-        }
-        case 'dev_regenerate_plant': {
-          if (!plant || !player?.plantId) {
-            noPlant();
-            break;
-          }
-          // Keep the old plant's world id: a literal here would put the new plant
-          // in a different world from every other plant and from persistence.
-          const worldId = plant.worldId;
-          this.plantWorld.removePlant(player.plantId);
-          // Same owner identity and world as addPlayer, otherwise the plant is
-          // invisible to reclaim/persistence and every anonymous player shares
-          // the literal owner id 'anon'.
-          const newPlant = this.plantWorld.createPlant(player.accountId ?? playerId, worldId, 0, 0);
-          player.plantId = newPlant.id;
-          connectionRegistrySetPlant(this.connectionRegistry, playerId, newPlant.id);
-          this.registerClientAtPlant(playerId, newPlant);
-          // WELCOME first: PLANT_REMOVED for the old plant must arrive after the
-          // client has adopted the new one, or it reads as its own death.
-          ws.send(
-            JSON.stringify({
-              type: MESSAGE_TYPE.WELCOME,
-              payload: this.buildWelcome(playerId, newPlant),
-            }),
-          );
-          this.processPlantDeaths();
-          this.sendDevResponse(ws, action.type, { ok: true, newPlantId: newPlant.id });
-          break;
-        }
-        default: {
-          this.log.warn('Unknown dev action', { type: action.type });
-          this.sendDevResponse(ws, action.type, { ok: false, error: 'unknown_action' });
-        }
+      // The plant's own fields, items, season and regeneration.
+      if (
+        handlePlantCommand(this.plantCommandPorts(ws, playerId, player, plant), action, {
+          hasPlant: Boolean(plant),
+          hasPlayer: Boolean(player),
+        })
+      ) {
+        return;
       }
+      // Every family has passed, so the action is one nobody implements.
+      this.log.warn('Unknown dev action', { type: action.type });
+      this.sendDevResponse(ws, action.type, { ok: false, error: 'unknown_action' });
     } catch (error) {
       this.log.error('Dev action failed', { type: action.type, error: String(error) });
       this.sendDevResponse(ws, action.type, { ok: false, error: 'internal_error' });
@@ -3015,6 +2798,143 @@ class World {
       forceCollapse: (x, z) => pipeline?.forceCollapse(x, z, this.getTick()),
       processDamageEvents: () => this.processDamageEvents(),
       processPlantDeaths: () => this.processPlantDeaths(),
+      respond: (actionType, payload) => this.sendDevResponse(ws, actionType, payload),
+    };
+  }
+
+  /** The plant-field dev commands, closed over the plant they write to. */
+  private plantCommandPorts(
+    ws: WebSocket,
+    playerId: string,
+    player: ConnectedPlayer | undefined,
+    plant: Plant | undefined,
+  ): PlantCommandPorts {
+    // The plant can be replaced mid-action (regenerate), so every root step
+    // looks it up again instead of reusing the handle resolved for the request.
+    let regenerated: Plant | undefined;
+    const live = () => (player?.plantId ? this.plantWorld.getPlant(player.plantId) : undefined);
+    return {
+      setGrowthCooldown: (seconds) => {
+        if (!plant) return;
+        plant.growthCooldownUntil =
+          this.getTick() + Math.ceil(seconds * this.plantWorld.getTickRateHz());
+      },
+      setGerminationMins: (patch) => {
+        const config = this.plantWorld.getConfig();
+        if (patch.moisture !== undefined) config.germinationMinMoisture = patch.moisture;
+        if (patch.light !== undefined) config.germinationMinLight = patch.light;
+      },
+      crownPosition: () => {
+        const crown = plant?.rootNodeId ? plant.nodes.get(plant.rootNodeId) : undefined;
+        return crown ? { x: crown.x, z: crown.z } : null;
+      },
+      mutationGallery: (center) =>
+        this.plantWorld.buildMutationGallery(plant?.worldId ?? '', 8, 10, center),
+      grantMutation: (mutationId) =>
+        this.plantWorld.grantMutation(player?.plantId ?? '', mutationId, this.getTick()),
+      clearMutations: () => this.plantWorld.clearMutations(player?.plantId ?? '', this.getTick()),
+      syncMutationState: () => {
+        if (player) this.sendMutationState(player);
+      },
+      fillEnergy: () => {
+        if (!plant) return;
+        plant.totalEnergy = computePlantCapacity(plant, this.plantWorld.getConfig()).energy;
+      },
+      fillTissue: () => (plant ? this.plantWorld.fillPlantTissue(plant.id) : 0),
+      fillStoredResources: () => {
+        if (!plant) return { water: 0, minerals: 0 };
+        const capacity = computePlantCapacity(plant, this.plantWorld.getConfig());
+        plant.storedWater = capacity.water;
+        plant.storedMinerals = capacity.minerals;
+        return { water: capacity.water, minerals: capacity.minerals };
+      },
+      grantItem: (itemId, count) =>
+        player ? addItem(player.inventory, itemId, count, this.itemsConfig.itemDefinitions) : 0,
+      syncInventory: () => {
+        if (player) sendInventorySync(this.inventoryPorts(), player);
+      },
+      endSeason: () => ({ season: this.forceSeasonEnd(this.getTick()).season }),
+      prepareRootGrowth: () => {
+        const current = live();
+        if (!current) return false;
+        current.growthCooldownUntil = this.getTick();
+        current.totalEnergy = Math.max(current.totalEnergy, 400);
+        current.storedWater = Math.max(current.storedWater, 40);
+        current.storedMinerals = Math.max(current.storedMinerals, 40);
+        return true;
+      },
+      rootParent: () => {
+        const current = live();
+        if (!current) return null;
+        const roots = Array.from(current.nodes.values()).filter(
+          (node) => node.type === 'root' || node.type === 'radicle',
+        );
+        const crown = current.rootNodeId ? current.nodes.get(current.rootNodeId) : undefined;
+        const parent = roots.length > 0 ? roots.sort((a, b) => a.y - b.y)[0] : crown;
+        return parent ? { id: parent.id, hasRoots: roots.length > 0 } : null;
+      },
+      growRoot: (parentId, angle, nodeType) => {
+        const current = live();
+        if (!current) return { ok: false, reason: 'plant_gone' };
+        const result = this.plantWorld.tryGrow(
+          {
+            plantId: current.id,
+            nodeId: parentId,
+            direction: { x: Math.cos(angle) * 0.5, y: -0.8, z: Math.sin(angle) * 0.5 },
+            nodeType,
+            tick: this.getTick(),
+            attachFraction: 1,
+          },
+          this.getTick(),
+        );
+        if (!result.success) return { ok: false, reason: result.reason ?? 'growth_failed' };
+        const after = this.plantWorld.getPlant(current.id);
+        const anchor = current.nodes.get(current.rootNodeId ?? '');
+        return {
+          ok: true,
+          growth: {
+            payload: {
+              plantId: current.id,
+              newNode: result.newNode,
+              newNodes: result.newNodes,
+              updatedParentNode: result.updatedParentNode,
+              totalBiomass: after?.totalBiomass ?? 0,
+              totalEnergy: after?.totalEnergy ?? 0,
+              growthSeq: after?.growthSeq ?? 0,
+            },
+            x: result.newNode?.x ?? anchor?.x ?? 0,
+            z: result.newNode?.z ?? anchor?.z ?? 0,
+            newNodeId: result.newNode?.id,
+          },
+        };
+      },
+      broadcastGrowth: (growth) =>
+        this.broadcastNear(MESSAGE_TYPE.GROWTH_EVENT, growth.payload, growth.x, growth.z),
+      regenerate: () => {
+        if (!plant || !player?.plantId) return null;
+        // Keep the old plant's world id: a literal here would put the new plant in
+        // a different world from every other plant and from persistence.
+        const worldId = plant.worldId;
+        this.plantWorld.removePlant(player.plantId);
+        // Same owner identity and world as addPlayer, otherwise the plant is
+        // invisible to reclaim/persistence and every anonymous player shares the
+        // literal owner id 'anon'.
+        regenerated = this.plantWorld.createPlant(player.accountId ?? playerId, worldId, 0, 0);
+        player.plantId = regenerated.id;
+        connectionRegistrySetPlant(this.connectionRegistry, playerId, regenerated.id);
+        this.registerClientAtPlant(playerId, regenerated);
+        return regenerated.id;
+      },
+      sendWelcome: () => {
+        if (!regenerated) return;
+        ws.send(
+          JSON.stringify({
+            type: MESSAGE_TYPE.WELCOME,
+            payload: this.buildWelcome(playerId, regenerated),
+          }),
+        );
+      },
+      settleDeaths: () => this.processPlantDeaths(),
       respond: (actionType, payload) => this.sendDevResponse(ws, actionType, payload),
     };
   }

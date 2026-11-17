@@ -373,12 +373,22 @@ state machine and the socket - it moves when the context carries those.
    `PlantTarget`. Six of the plant cases now share one `no_plant` answer instead
    of practising their own.
 
-   What is left in `main.ts` is the plant family — growth, mutations, energy,
-   biomass, stored water and minerals, items, regenerate and season end — because
-   those read and write the plant handle itself (`plant.growthCooldownUntil`,
-   `plant.totalEnergy`) as well as describing an action on it; they move when the
-   handle gets an owner. Each module has its own tests — the first coverage any
-   of these paths has had.
+   The fourth family, `dev/plantCommands.ts` (`handlePlantCommand`), owns growth,
+   the mutation gallery and grants, energy, biomass, stored water and minerals,
+   the root chain, items, season end and regeneration. It took the longest
+   because these commands write the plant handle itself
+   (`plant.growthCooldownUntil`, `plant.totalEnergy`); the port names the fields a
+   dev command may touch instead of handing the module a world, and the world
+   keeps the arithmetic that turns config into a capacity. Two lockouts went with
+   it: a `growth_cooldown` that is not a number used to produce `NaN` and block
+   growth permanently, and a regenerate whose plant had already been retired by
+   season end now answers `no_plant` instead of creating a phantom one.
+
+   `handleDevAction` is now dispatch: weather, then four family calls, then the
+   unknown-action answer — 540 lines at the start of this pass, 111 now, with no
+   `switch` over dev actions left in `main.ts` and all thirty-six commands in a
+   tested module. Each module has its own tests — the first coverage any of these
+   paths has had.
 
 ## Tracking
 
