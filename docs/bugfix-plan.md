@@ -56,6 +56,11 @@ pass.
 | FIX-21 ✔ | Sky grade defined without a root readout | F19 | S | — |
 | FIX-22 ✔ | Delete the dead lightning field; read the machine strike | F20 | S | — |
 | FIX-23 ✔ | Milliseconds in, milliseconds out on the weather machine | F21 | S | — |
+| FIX-24 ✔ | Charge the nutrient share the menu quotes | F22 | S | — |
+| FIX-25 ✔ | Gate the mineral store once, against the summed thresholds | F23 | S | — |
+| FIX-26 ✔ | Serialise saves per plant | F24 | S | — |
+| FIX-27 ✔ | Numeric migration order and checksums | F25 | S | — |
+| FIX-28 ✔ | Let the eye touch the ground, and clamp it there | F26 | S | — |
 
 Sizes: S ≈ under an hour, M ≈ half a day, L ≈ a day or more.
 

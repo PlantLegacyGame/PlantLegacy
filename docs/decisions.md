@@ -1354,4 +1354,22 @@ planet and every root was therefore "behind the earth".
 
 **Consequences.** A camera can follow a root down and still see it, and the
 cavity is a space rather than a picture. The eye window is bounded by
-`max_burrow_depth_m`, and it is one more bubble in a 64-slot uniform array.
+`max_burrow_depth_m`, and it is one more bubble in a 64-slot uniform array.true## ADR-065 — Inland water stops being geometry
+
+**Status:** proposed 2026-11-17 (W6), not built.
+
+**Context.** Four translucent surfaces draw water (rain sheet, water table, river
+ribbon, ocean), and each new defect has been repaired by adding a rule that keeps
+them from fighting: a depth bias, a near discard, a route clip mask, a lift, a
+hysteresis threshold, and a client-side clamp of the server's own heights.
+
+**Decision.** Reduce rather than reconcile. Delete the water table mesh; draw
+inland water in the terrain shader from the streamed height (depth compare,
+Beer-Lambert, flow streak, Fresnel sheen); keep puddles as wetness; keep the
+ocean dome. Abyssal Garden's single-volume look is the reference for the shading,
+not for the surface count.
+
+**Consequences.** No translucent surface inland means no z-fighting, no clip
+masks and no depth bias — and no specular reflection worth the name unless a
+screen-space pass is added later. Groundwater stays as simulation data; only its
+drawing goes away.

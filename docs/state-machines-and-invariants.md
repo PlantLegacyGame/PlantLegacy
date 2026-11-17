@@ -454,6 +454,7 @@ Status legend: `ENFORCED`, `PARTIAL`, `UNENFORCED`, `BROKEN`.
 | INV-RS-13 | Canopy shading has a single source of truth. | ENFORCED (2026-11-14) | `getCanopyShadingAt` was removed with root attack; `ResourceWorld.updateLight` is the only shade path and reads `resources.canopy_shade_reduction`. | Keep the radius and strength in config. |
 | INV-RS-14 | A root is visible exactly where the ground is open. | ENFORCED (2026-11-16) | The plant passes hide a fragment when the planet stands between the eye and it (`soilOccludes`). Above ground that test is a cylinder the size of the aperture, because the soil is cut in plan view — a sphere around the crown both hid deep roots that sat in the hole and exposed shallow ones outside it. Tests: `shaderSmoke`, `groundCutaway`. | Keep the aperture radius as the one source: `uRootSightApertureRadius` feeds the soil cut, the bowl mouth and the plant pass. |
 | INV-RS-15 | A buried eye sees the cavity it opened. | ENFORCED (2026-11-16) | Two rules. The eye is told to the plant pass (`setCameraUnderSoil`) and the surface test is skipped, because dirt between a buried eye and a root is the medium the eye stands in. And a bubble of air (`root_sight.eye_window_radius_m`) is fused into the same envelope as the roots, so the soil skin is cut around the eye. Without both, a camera flown down into the pit saw a brown wall and no roots. | The window is added only when the cavity is already open, so a buried camera cannot excavate a hole the plant never dug. |
+| INV-CAM-01 | With Root Sight closed the eye may touch the ground and never cross it. | ENFORCED (2026-11-17) | The polar limit uses the ground under the eye (not the target's) plus `camera_ground_touch_m`; `clampEyeToGround` lifts the eye after the controls move, vertically only, so the orbit is not rotated back. Root Sight is exempt while its cutaway is open. | A stand-off is not a floor: anything above a few centimetres re-creates the "stuck above the ground" report. |
 
 ## E. Protocol and client mirror (`INV-NET`)
 
@@ -484,10 +485,10 @@ Status legend: `ENFORCED`, `PARTIAL`, `UNENFORCED`, `BROKEN`.
 | INV-PR-02 | Serialized buffer is large enough. | FIXED (2026-11-09) | Fixed-size estimate ignores variable strings/children (`:81`). | Measure first, then write. |
 | INV-PR-03 | Persisted tier reflects state. | ENFORCED | Fixed 2026-11-08: `savePlant` writes `plant.tier ?? 'dormant'`. | Keep the fallback for legacy rows. |
 | INV-PR-04 | `last_tick` reflects simulation time. | ENFORCED | Fixed 2026-11-08: `savePlant` writes `plant.lastTick ?? plant.lastGrowthTick`. | Validate on load. |
-| INV-PR-05 | Saves are atomic under concurrency. | PARTIAL | Periodic + shutdown save race; no row lock/version. | Serialize saves or use a version column. |
+| INV-PR-05 | Saves are atomic under concurrency. | FIXED (2026-11-17) | `savePlant` chains per plant id, so a flush, a disconnect and the shutdown save cannot interleave on one row; a failed save does not cancel the next. | Keep new callers going through `savePlant`. |
 | INV-PR-06 | Load accepts only valid plants. | FIXED (2026-11-15) | `loadPlant` reconciles structural mass/upkeep, repairs segment drift, then runs `validatePlantGraph`; a corrupt snapshot throws and is skipped with a log (`plantWorld.test.ts`). | — |
 | INV-PR-07 | Event log is append-only and complete. | FIXED (2026-11-15) | `PlantEventLog` records growth, damage, uproot, reroot and tier changes; written with every save, bounded by `event_log_compaction_threshold`, and seeded from `event_log` on boot. Deaths are appended to `world_events` before the plant row is deleted. | `plantEventLog.test.ts`, persistence tests. |
-| INV-PR-08 | Migrations are ordered and unique. | PARTIAL | Version parsed as text split on `_`; no checksum. | Numeric version + applied table. |
+| INV-PR-08 | Migrations are ordered and unique. | FIXED (2026-11-17) | Numeric version sort, sha256 checksum per file, the checksum compared on every boot, rows from before checksums backfilled. An edited migration throws instead of being skipped. | `migrate.test.ts`. |
 
 ## G. Accounts and security (`INV-AU`)
 

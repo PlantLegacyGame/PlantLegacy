@@ -35,6 +35,7 @@ commit that introduced this file.
 | 2026-11-08 | Weather durations, upkeep double-subtraction, diffusion, persistence tier/lastTick, session limit, tile clamping, HELLO timeout, max-node check, seed growth gate, `RESOURCE_QUERY` shape fixed. | DEF-01…DEF-16 |
 | 2026-11-09 | P0 blockers closed: plant sync and germination payloads, anonymous reclaim keying, delayed `PLANT_REMOVED`, two-step gene-gated growth, energy vs biomass, dt-scaled root damage, real tile moisture; cube avatar removed. | ADR-018, 019, 021, 022, 024, 025 |
 | 2026-11-09 | Save format versioned (magic, version, length, CRC32, mode), seeded deterministic RNG for rendering, auth hardening: rotation order, atomic rate-limit upsert, prod JWT requirement, lockout extension. | `history` of T03/T08C |
+| 2026-11-17 | Water proposal: inland water drawn in the ground pass, the table mesh deleted, four surfaces to one (ADR-065, `tasks/W6-water.md`). | `decisions.md`, `tasks/W6-water.md` |
 | 2026-11-10 | Phase-1 formalization wired: reconnect and growth-intent state machines, `ConnectionRegistry`, `TickClock`; spawn collision, tier-limited root damage, single-sourced persistence. | 119 → 181 server tests |
 | 2026-11-12 | Tick clock kept wall time (was running ~8.7 of 20 ticks/s); soil moisture raised; growth panel moved off the chat box. | 20.0 ticks/s, 3 597 s cycle |
 | 2026-11-12 | Documentation audit: protocol through type 30, counts recomputed, Argon2id vs bcrypt corrected, T03P movement claim corrected. | `history` only |
