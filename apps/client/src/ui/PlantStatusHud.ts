@@ -8,6 +8,7 @@
  * biomass values and counts the window down between packets.
  */
 
+import { damageCueDue } from './damageCue.ts';
 import {
   DEFAULT_HEALTH_THRESHOLDS,
   type HealthThresholds,
@@ -324,6 +325,11 @@ export function createPlantStatusHud(options: PlantStatusHudOptions = {}): Plant
   let lastRenderAtMs = 0;
   const updateIntervalMs = Math.max(50, options.updateIntervalMs ?? 100);
   const vignetteDurationMs = Math.max(100, options.vignetteDurationMs ?? 420);
+  // One cue at a time. PLANT_DAMAGE can arrive at 10 Hz (and once per tick for
+  // upkeep loss), and restarting a 420 ms fade that often left the edge overlay
+  // permanently at its first tenth - a blink, not a hit.
+  let vignetteAnimation: Animation | null = null;
+  let lastDamagePulseAtMs = Number.NEGATIVE_INFINITY;
   const healthThresholds = options.healthThresholds ?? DEFAULT_HEALTH_THRESHOLDS;
 
   const render = (): void => {
@@ -407,7 +413,20 @@ export function createPlantStatusHud(options: PlantStatusHudOptions = {}): Plant
       ) {
         return;
       }
-      vignette.animate([{ opacity: '0' }, { opacity: '1' }, { opacity: '0' }], {
+      const now = performance.now();
+      if (
+        !damageCueDue({
+          nowMs: now,
+          lastPulseAtMs: lastDamagePulseAtMs,
+          pulseMs: vignetteDurationMs,
+          running: vignetteAnimation?.playState === 'running',
+        })
+      ) {
+        return;
+      }
+      lastDamagePulseAtMs = now;
+      vignetteAnimation?.cancel();
+      vignetteAnimation = vignette.animate([{ opacity: '0' }, { opacity: '1' }, { opacity: '0' }], {
         duration: vignetteDurationMs,
         easing: 'ease-out',
       });
@@ -418,6 +437,8 @@ export function createPlantStatusHud(options: PlantStatusHudOptions = {}): Plant
     dispose: () => {
       if (interval !== null) clearInterval(interval);
       interval = null;
+      vignetteAnimation?.cancel();
+      vignetteAnimation = null;
       panel.remove();
       vignette.remove();
     },
