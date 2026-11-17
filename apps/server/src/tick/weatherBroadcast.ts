@@ -1,7 +1,7 @@
 import { stepCadence } from '../ops/broadcastCadence.ts';
 
 export interface WeatherBroadcastPorts {
-  /** Sockets the message was written to; a refused socket is not a delivery. */
+  /** Sockets the message was written to. */
   broadcast(payload: Record<string, unknown>): number;
 }
 

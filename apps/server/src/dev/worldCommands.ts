@@ -15,7 +15,6 @@ export interface WorldCommandPorts {
   applyResourceRates(patch: ResourceRatePatch): void;
   resetResourceRates(): void;
   tileCoordinates(worldX: number, worldZ: number): { tileX: number; tileZ: number };
-  /** False when the tile is outside the grid, so the reply can say so. */
   setTileResources(tileX: number, tileZ: number, resources: Record<string, number>): boolean;
   setTimeOfDay(fraction: number): void;
   weatherBroadcast(): { timeOfDay: number; isDay: boolean; sunIntensity: number };
@@ -58,15 +57,13 @@ export function handleWorldCommand(ports: WorldCommandPorts, action: DevAction):
       const tile = resolveDevTileCommand(action, (worldX, worldZ) =>
         ports.tileCoordinates(worldX, worldZ),
       );
+      // The panel toasts "Dev command applied" from `ok` alone, so a write the
+      // world dropped has to come back as a refusal that says why.
       if (!tile) {
-        // A command with no usable coordinates used to answer ok too; the panel
-        // toasts "Dev command applied" from `ok` alone, so say why instead.
         ports.respond(action.type, { ok: false, reason: 'bad_tile' });
         return true;
       }
       const wrote = ports.setTileResources(tile.tileX, tile.tileZ, tile.resources);
-      // Out-of-bounds tiles are dropped by the world, and reporting that as a
-      // success made a tester think a tile had been flooded when nothing moved.
       ports.respond(action.type, wrote ? { ok: true } : { ok: false, reason: 'out_of_bounds' });
       return true;
     }

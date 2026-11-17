@@ -491,7 +491,7 @@ describe('tile deltas before and after the first full grid', () => {
   });
 });
 
-describe('setTileResources outside the grid', () => {
+describe('setTileResources', () => {
   it('reports whether the write landed', () => {
     const world = makeWorld();
     assert.equal(world.setTileResources(1, 1, { moisture: 0.5 }), true);

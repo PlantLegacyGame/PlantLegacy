@@ -69,8 +69,8 @@ export interface RootReadoutInput {
   players: Array<{ playerId: string; plantId: string | null }>;
 }
 
-/** How many players were skipped because the state cadence was not due. */
 export interface RootReadoutResult {
+  /** Players skipped because the state cadence was not due. */
   skipped: number;
   /** Readouts written to a socket; a refused write is not counted as sent. */
   sent: number;

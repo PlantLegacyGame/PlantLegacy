@@ -367,10 +367,7 @@ class World {
     return this.interestManager;
   }
 
-  /**
-   * Every connection, and how many of them took the message: a refused write is
-   * counted in `skippedSends`, so a fanout can report what actually landed.
-   */
+  /** Every connection, and how many took it: a refusal lands in `skippedSends`. */
   broadcast(type: number, payload: unknown): number {
     const message = JSON.stringify({ type, payload });
     let delivered = 0;

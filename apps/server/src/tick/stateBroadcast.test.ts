@@ -92,11 +92,10 @@ describe('broadcastPlantStates', () => {
   });
 
   it('does not count a refused write as sent', () => {
-    const { ports, sent } = createPorts();
+    const { ports } = createPorts();
     const result = broadcastPlantStates({ ...ports, send: () => false }, input());
     assert.equal(result.due, true);
     assert.equal(result.sent, 0);
-    assert.deepEqual(sent, []);
   });
 
   it('banks the remainder so a faster tick still sends at the configured rate', () => {

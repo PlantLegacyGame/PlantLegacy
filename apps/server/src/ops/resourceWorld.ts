@@ -584,11 +584,7 @@ export class ResourceWorld {
     return tile ? { ...tile } : null;
   }
 
-  /**
-   * Write one tile's resources. Returns false when the coordinates are outside
-   * the grid or the cell has no tile, so a caller can tell a write from a no-op
-   * instead of reporting success either way.
-   */
+  /** False when the coordinates are off the grid, so a caller can tell a no-op from a write. */
   setTileResources(
     tileX: number,
     tileZ: number,
