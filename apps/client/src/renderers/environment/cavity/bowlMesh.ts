@@ -10,10 +10,20 @@ import * as THREE from 'three';
 import {
   CAVITY_CUT_OVERREACH,
   CAVITY_PALETTE,
+  CAVITY_PROFILE_DEPTH,
   CAVITY_STRATA_BANDS,
   CAVITY_STRATA_SUBDIVISION,
 } from './profile.ts';
 import { buildStrataShell } from './strataShell.ts';
+
+/**
+ * Where the strata change, as a fraction of the wall's depth.
+ *
+ * Read from the same band table the geometry is built from, so a band edge in
+ * the shader and a band edge in the ring table cannot disagree.
+ */
+const BAND_SUBSOIL_FROM = CAVITY_STRATA_BANDS[1]?.from ?? 0.24;
+const BAND_DEEP_FROM = CAVITY_STRATA_BANDS[2]?.from ?? 0.58;
 
 /** The clip uniforms, written per frame by `updateCavityBowl`. */
 export interface CavityClipUniforms {
@@ -124,6 +134,15 @@ export function createCavityBowl(
   // care - it would just do it.
   const clampFill = (value: number): number =>
     Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : 0;
+  // The wall's three colours, bound straight from the config's `THREE.Color`s.
+  // Per-fragment strata need the colours as uniforms, not as baked vertex
+  // colours: a vertex colour can only change at a polygon edge.
+  const stratumUniforms = {
+    topsoil: { value: topsoil },
+    subsoil: { value: subsoil },
+    deep: { value: deep },
+  };
+  material.userData.stratumUniforms = stratumUniforms;
   const nightFill = clampFill(fill.night);
   const fillUniforms = {
     night: { value: nightFill },
@@ -145,6 +164,9 @@ export function createCavityBowl(
     shader.uniforms.uBowlLight = lightUniform;
     shader.uniforms.uBowlFillNight = fillUniforms.night;
     shader.uniforms.uBowlFillDay = fillUniforms.day;
+    shader.uniforms.uBowlTopsoilColor = stratumUniforms.topsoil;
+    shader.uniforms.uBowlSubsoilColor = stratumUniforms.subsoil;
+    shader.uniforms.uBowlDeepColor = stratumUniforms.deep;
     material.userData.shader = shader;
     shader.vertexShader = shader.vertexShader
       .replace(
@@ -170,12 +192,26 @@ uniform float uBowlApertureRadius;
 // both numbers are decisions, not tolerances: they are what stops the bowl's back
 // being drawn in the open beside the hole.
 const float BOWL_SHELL_ABOVE_MOUTH_M = 0.02;
-const float BOWL_MOUTH_KEEP_FRACTION = 0.98;
+// 1.03, not 0.98. The lip ring is built out to the *cut* width
+// (CAVITY_CUT_OVERREACH = 1.02), so keeping only 98% of the mouth discarded the
+// outer two per cent of the lip - which is exactly the sliver that reaches the
+// soil's edge. What showed through that annulus was the sky, as a pale dotted
+// seam all the way round the pit. Keeping a little past the overreach leaves the
+// guard against the bowl's back being drawn beside the hole and stops clipping
+// the one part of the wall that has to meet the soil.
+const float BOWL_MOUTH_KEEP_FRACTION = 1.03;
 uniform float uBowlSurfaceY;
 uniform float uBowlClipMode;
 uniform float uBowlLight;
 uniform float uBowlFillNight;
 uniform float uBowlFillDay;
+uniform vec3 uBowlTopsoilColor;
+uniform vec3 uBowlSubsoilColor;
+uniform vec3 uBowlDeepColor;
+// Stratum edges, as a fraction of the wall's depth from the lip to the floor.
+const float BOWL_BAND_SUBSOIL = ${BAND_SUBSOIL_FROM.toFixed(4)};
+const float BOWL_BAND_DEEP = ${BAND_DEEP_FROM.toFixed(4)};
+const float BOWL_PROFILE_DEPTH = ${CAVITY_PROFILE_DEPTH.toFixed(4)};
 float bowlHash(vec2 p) {
   p = fract(p * vec2(123.34, 456.21));
   p += dot(p, p + 45.32);
@@ -215,6 +251,25 @@ float bowlNoise(vec2 p) {
   // rings read as contour lines on a plate, which is what the cavity looked
   // like from above.
   float bowlDepth = clamp(-vBowlLocal.y, 0.0, 1.0);
+  // Strata, chosen per fragment from the fragment's own depth. They were chosen
+  // per vertex, so the edge between two layers could only change at a polygon
+  // edge and therefore followed the wall's clod relief: on a displaced wall the
+  // boundary read as a ragged, hand-painted line instead of a bed's contact.
+  // The colours come from config, not from the vertex buffer.
+  float bowlStratum = bowlDepth / BOWL_PROFILE_DEPTH;
+  vec3 stratum = uBowlTopsoilColor;
+  if (bowlStratum >= BOWL_BAND_DEEP) {
+    stratum = uBowlDeepColor;
+  } else if (bowlStratum >= BOWL_BAND_SUBSOIL) {
+    stratum = uBowlSubsoilColor;
+  }
+  // Packed earth at a contact: a hairline darker than either layer, so the
+  // boundary is a contact between two beds and not a colour change in one.
+  float bowlContact = max(
+    1.0 - smoothstep(0.0, 0.006, abs(bowlStratum - BOWL_BAND_SUBSOIL)),
+    1.0 - smoothstep(0.0, 0.006, abs(bowlStratum - BOWL_BAND_DEEP))
+  );
+  diffuseColor.rgb = stratum * (1.0 - 0.28 * bowlContact);
   // Rim shade: a little darker just under the lip, where the overhang cuts the
   // sky away, lighter on the floor that still catches it.
   float bowlRimShadow = smoothstep(0.0, 0.30, bowlDepth);
@@ -341,7 +396,7 @@ float bowlNoise(vec2 p) {
   }`,
       );
   };
-  material.customProgramCacheKey = () => 'root-sight-bowl-dirt-v11';
+  material.customProgramCacheKey = () => 'root-sight-bowl-dirt-v13';
 
   const mesh = new THREE.Mesh(geometry, material);
   mesh.name = 'root-sight-bowl';

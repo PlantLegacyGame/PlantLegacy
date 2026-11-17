@@ -53,20 +53,20 @@ describe('cavityBowlPlacement', () => {
     );
   });
 
-  it('holds the rim just under the surface, never above it', () => {
-    // A rim above the cut reads as a lip standing over its own hole. A few
-    // millimetres under instead, with the skirt backing the cut edge, and the lip
-    // is soil from every angle - including grazing ones, where a flush rim
-    // showed as a raised ridge against the hillside.
+  it('holds the rim flush with the surface, never under it', () => {
+    // Never above the cut: a rim above the hole is a lip standing over its own
+    // work. And never *under* it either - that was 2 cm, and the 2 cm was the
+    // pale dotted seam along the pit's edge: the soil is a sheet with no
+    // thickness, so a sunk lip left a slot between the sheet's cut edge and the
+    // wall, and from any low angle the sky behind the mouth showed through it.
+    // Flush, the bowl's rim (a hair outside the cut, biased towards the camera
+    // by the material's polygon offset) covers the sheet's edge instead.
     for (const progress of [0.05, 0.5, 1]) {
       const { rimOffsetY } = cavityBowlPlacement(2.06, progress);
       assert.ok(rimOffsetY <= 0, `rim ${rimOffsetY.toFixed(3)} m is above the centre`);
       assert.equal(rimOffsetY, -CAVITY_RIM_SINK_M);
     }
-    assert.ok(
-      CAVITY_RIM_SINK_M > 0 && CAVITY_RIM_SINK_M <= 0.03,
-      'the sink stays a lip, not a slot',
-    );
+    assert.equal(CAVITY_RIM_SINK_M, 0, 'a sunk rim opens a slot of sky at the mouth');
   });
 
   it('opens from nothing: the bowl is hidden at zero progress', () => {
@@ -237,7 +237,10 @@ describe('the shell never stands above the mouth', () => {
       'utf8',
     );
     assert.ok(source.includes('BOWL_SHELL_ABOVE_MOUTH_M = 0.02'), 'the slack is named');
-    assert.ok(source.includes('BOWL_MOUTH_KEEP_FRACTION = 0.98'), 'the keep radius is named');
+    // Past the cut's overreach, not short of it. At 0.98 the cap discarded the
+    // lip's outer two per cent - the sliver that reaches the soil's edge - and
+    // the sky behind it showed as a pale dotted seam around the pit.
+    assert.ok(source.includes('BOWL_MOUTH_KEEP_FRACTION = 1.03'), 'the keep radius is named');
     const rule = /vBowlWorldPosition\.y > uBowlSurfaceY \+ BOWL_SHELL_ABOVE_MOUTH_M/;
     assert.match(source, rule, 'the shell is no longer capped at the mouth plane');
     assert.match(

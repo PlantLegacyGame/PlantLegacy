@@ -119,7 +119,13 @@ export const CAVITY_CUT_OVERREACH = 1.02;
  * rim (a hair outside the cut, and biased towards the camera by the material's
  * polygon offset) covers the sheet's edge instead of sitting under it.
  */
-export const CAVITY_RIM_SINK_M = 0.02;
+// 0, as the note above argues for and as the value was not. It had drifted to
+// 2 cm, so the lip ring sat two centimetres *below* the soil surface all the way
+// round the mouth and that slot showed the sky behind it: a pale, dotted seam
+// along the pit's edge, visible from any low angle and in every close-up.
+// Measured 2026-11-17 by hiding the water and re-shooting the rim: the line was
+// still there, which ruled out the water sheet's own cut edge.
+export const CAVITY_RIM_SINK_M = 0;
 
 /**
  * How far the bowl's skirt hangs below the rim, in metres.
