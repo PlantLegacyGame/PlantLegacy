@@ -350,6 +350,10 @@ state machine and the socket - it moves when the context carries those.
    `setSlot`/`swapSlots` rather than the hand-rolled slot bookkeeping `main.ts`
    had grown. `ops/devCommands.ts` owns the parsing for the dev commands that
    take free-form actions (`resolveDevWeatherCommand`, `resolveDevTileCommand`).
+   The `/config/*` routes each carried their own `await import('node:fs/promises')`
+   and flatten loop; they now share `readConfigEntries`/`readFlatConfig` from
+   `ops/configRoutes.ts`, which is also the first thing in the request handler
+   that a `http/` module can take over without dragging the world with it.
    The dev switch itself stays where it is: it names about forty `World` members
    (send counters, `onTick`, `stepSimulationOnce`, persistence, the damage
    pipeline), so moving it now would mean inventing a forty-member façade in

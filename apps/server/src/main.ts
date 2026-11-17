@@ -19,7 +19,7 @@ import {
   type ReportConfig,
 } from './ops/chat.ts';
 import { consumeChatBudget, resolveChatIntent } from './ops/chatService.ts';
-import { readFlatConfig } from './ops/configRoutes.ts';
+import { readConfigEntries, readFlatConfig } from './ops/configRoutes.ts';
 import {
   type ConnectionRegistry,
   connectionRegistryClearHelloTimer,
@@ -3825,17 +3825,10 @@ async function main(): Promise<void> {
 
     if (url.pathname === '/config/onboarding') {
       // T00A: Serve onboarding config
-      const fs = await import('node:fs/promises');
-      const path = await import('node:path');
-
       try {
-        const configDir = runtime.configDir;
-        const onboardingPath = path.resolve(configDir, 'onboarding.json');
-        const raw = await fs.readFile(onboardingPath, 'utf8');
-        const config = JSON.parse(raw);
-
         // Extract values from extended-1 format
-        const values = config.values || {};
+        const values = await readConfigEntries(runtime.configDir, 'onboarding');
+        if (!values) throw new Error('onboarding.json unreadable');
         const hintCardLines = values.hint_card_lines?.value || [
           'WASD / Arrows: Pan camera  |  Left-drag: Orbit  |  Middle-drag: Pan  |  Scroll: Zoom',
           'Click node: Focus  |  G: Toggle Grow Mode  |  R: Root Sight  |  E: Emotes  |  I: Inventory',
@@ -3875,17 +3868,10 @@ async function main(): Promise<void> {
 
     if (url.pathname === '/config/plant_renderer') {
       // T01: Serve plant renderer config
-      const fs = await import('node:fs/promises');
-      const path = await import('node:path');
-
       try {
-        const configDir = runtime.configDir;
-        const plantRendererPath = path.resolve(configDir, 'plant_renderer.json');
-        const raw = await fs.readFile(plantRendererPath, 'utf8');
-        const config = JSON.parse(raw);
-
         // Extract values from extended-1 format
-        const values = config.values || {};
+        const values = await readConfigEntries(runtime.configDir, 'plant_renderer');
+        if (!values) throw new Error('plant_renderer.json unreadable');
         const plantRendererConfig = {
           max_nodes_per_plant: values.max_nodes_per_plant?.value ?? 1000,
           root_max_depth: values.root_max_depth?.value ?? 50.0,
@@ -3983,11 +3969,9 @@ async function main(): Promise<void> {
     if (url.pathname === '/config/growth') {
       // Growth step distances, so the aim arrow can preview exactly one real
       // segment instead of an invented length.
-      const fs = await import('node:fs/promises');
-      const path = await import('node:path');
       try {
-        const raw = await fs.readFile(path.resolve(runtime.configDir, 'growth.json'), 'utf8');
-        const parsed = JSON.parse(raw) as { values?: Record<string, { value?: unknown }> };
+        const parsed = { values: await readConfigEntries(runtime.configDir, 'growth') };
+        if (!parsed.values) throw new Error('growth.json unreadable');
         const values = (parsed.values ?? {}) as Record<
           string,
           {
@@ -4048,16 +4032,9 @@ async function main(): Promise<void> {
 
     if (url.pathname === '/config/render') {
       // C01: Serve render config
-      const fs = await import('node:fs/promises');
-      const path = await import('node:path');
-
       try {
-        const configDir = runtime.configDir;
-        const renderPath = path.resolve(configDir, 'render.json');
-        const raw = await fs.readFile(renderPath, 'utf8');
-        const config = JSON.parse(raw);
-
-        const values = config.values || {};
+        const values = await readConfigEntries(runtime.configDir, 'render');
+        if (!values) throw new Error('render.json unreadable');
         const renderConfig: Record<string, unknown> = {};
         for (const [key, entry] of Object.entries(values)) {
           renderConfig[key] =
@@ -4122,17 +4099,10 @@ async function main(): Promise<void> {
 
     if (url.pathname === '/config/controls') {
       // C01: Serve controls config
-      const fs = await import('node:fs/promises');
-      const path = await import('node:path');
-
       try {
-        const configDir = runtime.configDir;
-        const controlsPath = path.resolve(configDir, 'controls.json');
-        const raw = await fs.readFile(controlsPath, 'utf8');
-        const config = JSON.parse(raw);
-
-        const values = config.values || {};
-        const bindingsArray = values.bindings_desktop?.value ?? [];
+        const values = await readConfigEntries(runtime.configDir, 'controls');
+        if (!values) throw new Error('controls.json unreadable');
+        const bindingsArray = (values.bindings_desktop?.value ?? []) as Array<{ action?: string }>;
         const bindingsObj: Record<string, unknown> = {};
         for (const b of bindingsArray) {
           if (b.action) bindingsObj[b.action] = b;
@@ -4381,40 +4351,16 @@ async function main(): Promise<void> {
     ) {
       // T05: Serve chat/report tunables so client-side limits mirror server
       // enforcement; the network file also carries the client ping thresholds.
-      const fs = await import('node:fs/promises');
-      const path = await import('node:path');
-      const configName = url.pathname.slice('/config/'.length);
-
-      try {
-        const raw = await fs.readFile(
-          path.resolve(runtime.configDir, `${configName}.json`),
-          'utf8',
-        );
-        const values = JSON.parse(raw).values ?? {};
-        const flat: Record<string, unknown> = {};
-        for (const [key, entry] of Object.entries(values)) {
-          flat[key] = (entry as { value?: unknown }).value;
-        }
-        sendJson(response, 200, flat);
-        return;
-      } catch {
-        sendJson(response, 200, {});
-        return;
-      }
+      const flat = await readFlatConfig(runtime.configDir, url.pathname.slice('/config/'.length));
+      sendJson(response, 200, flat ?? {});
+      return;
     }
 
     if (url.pathname === '/config/ui') {
       // C01: Serve UI config
-      const fs = await import('node:fs/promises');
-      const path = await import('node:path');
-
       try {
-        const configDir = runtime.configDir;
-        const uiPath = path.resolve(configDir, 'ui.json');
-        const raw = await fs.readFile(uiPath, 'utf8');
-        const config = JSON.parse(raw);
-
-        const values = config.values || {};
+        const values = await readConfigEntries(runtime.configDir, 'ui');
+        if (!values) throw new Error('ui.json unreadable');
         const uiConfig = {
           text_scale: values.text_scale?.value ?? 1.0,
           layers: values.layers?.value ?? {
