@@ -61,6 +61,9 @@ pass.
 | FIX-26 ✔ | Serialise saves per plant | F24 | S | — |
 | FIX-27 ✔ | Numeric migration order and checksums | F25 | S | — |
 | FIX-28 ✔ | Let the eye touch the ground, and clamp it there | F26 | S | — |
+| FIX-29 ✔ | Open a seed-sized hollow, and keep the eye above ground without one | F27 | S | — |
+| FIX-30 ✔ | Ease the orbit floor instead of stamping it | F28 | S | — |
+| FIX-31 ✔ | Stand the seed on the highest ground under its footprint | F29 | S | — |
 
 Sizes: S ≈ under an hour, M ≈ half a day, L ≈ a day or more.
 

@@ -61,6 +61,16 @@ export const ROOT_CAVITY_FLAT_RATIO = 0.08;
 export const ROOT_CAVITY_CROWN_CLEARANCE = 1.6;
 
 /**
+ * Mouth radius of the pit a plant with no roots may open, in seed radii.
+ *
+ * A seed still sits in soil, so Root Sight has to have something to open or the
+ * toggle does nothing at all. Three radii is a seed in the middle with a seed's
+ * width of wall on each side: wide enough to see the coat, narrow enough that it
+ * cannot be mistaken for a dug cavity.
+ */
+export const ROOT_CAVITY_SEED_PIT_RADII = 3;
+
+/**
  * Smallest orbit radius the camera may keep while Root Sight is open, as a
  * multiple of the mouth radius.
  *

@@ -84,6 +84,7 @@ import {
 } from './renderers/environment/cavity/apertureVolume.ts';
 import { cavityDepthM } from './renderers/environment/cavity/profile.ts';
 import {
+  ROOT_CAVITY_SEED_PIT_RADII,
   ROOT_SIGHT_APERTURE_EYE_CLEARANCE,
   rootCavityShape,
 } from './renderers/environment/cavity/shape.ts';
@@ -1518,6 +1519,16 @@ const keyboardZoomState = {
 
 // Smooth camera focus and zoom animation
 let targetCameraDistance = -1; // Desired distance from target; smoothly lerps when > 0
+/**
+ * The orbit floor actually in force, eased towards `currentCameraMinDistance()`.
+ *
+ * Root Sight raises the floor to the cavity mouth's clearance the instant the
+ * cavity exists; applying that in one frame teleported the eye outwards.
+ */
+let cameraMinDistanceEased = 0;
+const CAMERA_MIN_DISTANCE_EASE_S = 0.2;
+/** Metres of orbit-floor rise allowed in one frame, whatever the frame took. */
+const CAMERA_MIN_DISTANCE_MAX_RISE_M = 0.15;
 
 function focusCameraOnNode(
   nodeData: PlantNodeData,
@@ -2029,6 +2040,19 @@ function respawnPlayer(): void {
  * offset (including Root Sight's negative one) is preserved while the player
  * falls and lands.
  */
+/**
+ * Whether Root Sight may take the eye under the soil.
+ *
+ * The transition alone is not enough. A plant with nothing dug opens no cavity,
+ * and an eye let underground anyway sits inside solid dirt: the ground clamp is
+ * off, the view is the underside of the terrain, and the orbit pushes the eye in
+ * and out of the surface every frame - the up/down shake. The eye only crosses
+ * the soil when there is a cavity to be in.
+ */
+function rootSightHoldsACavity(): boolean {
+  return (rootSightMachine?.progress ?? 0) > 0.001 && cavityApertureM > 0.001;
+}
+
 function settlePlayerOnGround(deltaTime: number): void {
   const planetRadius = renderConfig?.planetRadiusM ?? 0;
   if (planetRadius <= 0) return;
@@ -2052,7 +2076,7 @@ function settlePlayerOnGround(deltaTime: number): void {
   // Progress, not the on/off state, decides: while the cutaway is closing the
   // eye is still allowed under the soil, so the ground does not shove it up in
   // the middle of the transition.
-  const rootSightEngaged = (rootSightMachine?.progress ?? 0) > 0.001;
+  const rootSightEngaged = rootSightHoldsACavity();
   if (rootSightEngaged && (rootSightConfig?.cameraBurrowEnabled ?? false)) {
     const floor = eyeGroundY - Math.max(0, rootSightConfig?.maxBurrowDepthM ?? 12);
     if (camera.position.y < floor) camera.position.y = floor;
@@ -2112,8 +2136,9 @@ function clampEyeToGround(): void {
   const planetRadius = renderConfig?.planetRadiusM ?? 0;
   if (planetRadius <= 0) return;
   // Progress, not the on/off flag: while the cutaway opens or closes the eye is
-  // still allowed under the soil, so the ground cannot shove it up mid-fade.
-  if ((rootSightMachine?.progress ?? 0) > 0.001) return;
+  // still allowed under the soil, so the ground cannot shove it up mid-fade -
+  // but only when there is a cavity for it to be in.
+  if (rootSightHoldsACavity()) return;
   const touch = renderConfig?.cameraGroundTouchM ?? 0.02;
   const ground = planetTerrainY(
     planetRadius,
@@ -2190,9 +2215,11 @@ function describeRootSightStatus(): string {
   const d = rootSightDiagnostic;
   switch (d.reason) {
     case 'no_underground_nodes':
-      return d.roots === 0
-        ? 'ON - no underground nodes at all (a seed has nothing to excavate)'
-        : `ON - ${d.roots} root node(s) but none in the soil, so nothing is cut`;
+      return d.apertureM > 0
+        ? `ON - seed pit: no roots yet, a ${(d.apertureM * 2).toFixed(2)} m hollow of its own`
+        : d.roots === 0
+          ? 'ON - no underground nodes and no seed to open around'
+          : `ON - ${d.roots} root node(s) but none in the soil, so nothing is cut`;
     case 'opening':
       return `ON - opening: ${d.bubbles} bubble(s), aperture ${d.apertureM.toFixed(2)} m, ${cavityRimMode} ground`;
     case 'open':
@@ -2454,6 +2481,33 @@ function updateRootSight(deltaTime: number): void {
     // volume's top landed ~18 m above the plant, its floor landed on the water
     // table, and the water clip then left the sheet standing inside the pit.
     const crownSurfaceY = clientSurfaceY(rootSightTarget.x, rootSightTarget.z, 0);
+    // A seedling's roots are thinner than its seed. Without the drawn crown
+    // radius the mouth is smaller than the coat and the pit is invisible.
+    let crownRadiusM = 0;
+    for (const node of plantNodes.values()) {
+      if (node.isSeed !== true && node.nodeType !== 'seed') continue;
+      crownRadiusM = resolveDrawnRadius(node.nodeType, node.radius ?? 0.05, node.biomass);
+      break;
+    }
+    // A plant with nothing dug still has a seed in the soil, and Root Sight has
+    // to be able to open *that*: refusing to open until roots exist made the
+    // toggle look broken on a fresh plant. The seed's own hollow is the pit, and
+    // it is capped to a seed's width - a seed in the middle with a seed's wall
+    // on each side - so it can never be mistaken for a dug cavity.
+    const seedPitRadiusM = Math.max(0.06, crownRadiusM * ROOT_CAVITY_SEED_PIT_RADII);
+    const seedOnly = own.length === 0;
+    const cavityBubbles = seedOnly
+      ? [
+          {
+            x: rootSightTarget.x,
+            y: crownSurfaceY - Math.max(0.05, crownRadiusM),
+            z: rootSightTarget.z,
+            radius: Math.max(0.06, crownRadiusM),
+          },
+        ]
+      : own;
+    const apertureCapM = seedOnly ? seedPitRadiusM : Number.POSITIVE_INFINITY;
+    const effectiveApertureM = Math.min(configuredApertureM, apertureCapM);
     // Sample the whole column, not just its rim: the highest soil inside the
     // opening is what the cut has to clear. Sampling only the rim let an uphill
     // rise inside the circle sit above the cut's top, so it stayed as a ceiling
@@ -2473,21 +2527,13 @@ function updateRootSight(deltaTime: number): void {
         );
       }
     }
-    // A seedling's roots are thinner than its seed. Without the drawn crown
-    // radius the mouth is smaller than the coat and the pit is invisible.
-    let crownRadiusM = 0;
-    for (const node of plantNodes.values()) {
-      if (node.isSeed !== true && node.nodeType !== 'seed') continue;
-      crownRadiusM = resolveDrawnRadius(node.nodeType, node.radius ?? 0.05, node.biomass);
-      break;
-    }
     const ownShape = rootCavityShape({
-      bubbles: own,
+      bubbles: cavityBubbles,
       crownX: rootSightTarget.x,
       crownZ: rootSightTarget.z,
       surfaceY: crownSurfaceY,
-      configuredApertureM,
-      apertureMinM: rootSightConfig.apertureMinM,
+      configuredApertureM: effectiveApertureM,
+      apertureMinM: Math.min(rootSightConfig.apertureMinM, apertureCapM),
       crownRadiusM,
       groundHeights: groundSamples,
     });
@@ -2550,7 +2596,7 @@ function updateRootSight(deltaTime: number): void {
         radius: Math.max(0.12, edit.radiusM * 1.8),
       });
     }
-    rootSightCavityField = buildCavityField(own, rival, {
+    rootSightCavityField = buildCavityField(cavityBubbles, rival, {
       maxBubbles: rootSightConfig.maxCavityBubbles,
       mergeCellM: rootSightConfig.bubbleMergeCellM,
       paddingM: rootSightConfig.bubblePaddingM,
@@ -7406,9 +7452,35 @@ function handleGrowthEvent(payload: unknown): void {
       growthProgress = node.growthProgress ?? 1.0;
     }
 
+    // A seed is drawn as an ovoid standing on the soil: its stored height is the
+    // contact point and the renderers lift the body by its half-height. On a
+    // slope the uphill side of that footprint stands above the contact point, so
+    // the seed sank into the hill - and a half-buried seed let the eye sit inside
+    // the ground beside it. Stand the seed on the highest ground under its own
+    // radius instead, so an uphill contact can never swallow the downhill rim.
+    const seedNode = node.isSeed ?? node.type === 'seed';
+    let nodePosition = surfacePosition(node.x, node.z, node.y);
+    if (seedNode) {
+      const planetRadiusM = renderConfig?.planetRadiusM ?? 0;
+      const field = getTerrainParams();
+      const baseAboveSurface = Math.max(0, node.y);
+      const footprint = Math.max(0.02, node.radius ?? 0.05);
+      let footing = nodePosition.y;
+      for (const [dx, dz] of [
+        [footprint, 0],
+        [-footprint, 0],
+        [0, footprint],
+        [0, -footprint],
+      ]) {
+        const ground = planetTerrainY(planetRadiusM, node.x + dx, node.z + dz, field);
+        if (ground + baseAboveSurface > footing) footing = ground + baseAboveSurface;
+      }
+      nodePosition = new THREE.Vector3(nodePosition.x, footing, nodePosition.z);
+    }
+
     return {
       id: node.id,
-      position: surfacePosition(node.x, node.z, node.y),
+      position: nodePosition,
       type: nodeTypeNum,
       // Use server-authoritative radius (Murray's law) if available
       radius: node.radius ?? nodeRadius(node.biomass, nodeTypeNum, node.y),
@@ -8764,8 +8836,25 @@ function renderFrame(deltaTime: number): void {
   // The orbit floor follows what is being inspected: plant-sized above ground,
   // root-tip-sized in the root layer. Planet view sets its own floors.
   if (!planetViewActive) {
-    const orbitMinDistance = currentCameraMinDistance();
-    controls.minDistance = orbitMinDistance;
+    // Ease the floor instead of stamping it. The aperture clearance jumps from a
+    // metre to the width of the cavity the moment Root Sight opens, and pushing
+    // the camera out to it in one frame read as R setting the view by hand rather
+    // than just opening a hole. The floor still rises; it takes a fifth of a
+    // second, and OrbitControls does the pushing from the eased value.
+    const wantedMinDistance = currentCameraMinDistance();
+    const ease = Math.min(1, deltaTime / CAMERA_MIN_DISTANCE_EASE_S);
+    if (cameraMinDistanceEased <= 0) {
+      cameraMinDistanceEased = wantedMinDistance;
+    } else {
+      // The ease alone is proportional to dt, so one long frame (a shader
+      // compile the moment the cavity appears) took the whole rise at once and
+      // the floor still looked stamped. Cap the change per frame as well, in
+      // both directions: the floor must fall again when Root Sight closes.
+      const gap = wantedMinDistance - cameraMinDistanceEased;
+      const step = Math.min(CAMERA_MIN_DISTANCE_MAX_RISE_M, Math.abs(gap) * ease) * Math.sign(gap);
+      cameraMinDistanceEased += step;
+    }
+    controls.minDistance = cameraMinDistanceEased;
   }
   controls.update();
   resolveCameraCollision();
@@ -8774,7 +8863,7 @@ function renderFrame(deltaTime: number): void {
   // enforce the floor here too: after leaving the root layer the camera must be
   // pushed back out of the plant instead of staying inside it.
   if (!planetViewActive) {
-    const orbitMinDistance = currentCameraMinDistance();
+    const orbitMinDistance = cameraMinDistanceEased;
     const orbitDistance = camera.position.distanceTo(controls.target);
     if (orbitDistance < orbitMinDistance - 1e-4) {
       tempVector.copy(camera.position).sub(controls.target).normalize();
