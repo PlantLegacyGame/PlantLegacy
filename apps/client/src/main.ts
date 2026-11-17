@@ -9221,15 +9221,23 @@ function renderFrame(deltaTime: number): void {
   // read it as a slow GPU and the pixel ratio fell to the resolution floor. The
   // tab then went on drawing at half resolution - soft in exactly the window a
   // background tab lives in - until enough visible frames had climbed back.
-  if (qualityController && !document.hidden && !skipQualitySample) {
-    qualityController.update(
-      {
-        frameMs: frameCostMs,
-        gpuMs: gpuCostMs,
-        triangles: renderer.info.render.triangles ?? 0,
-      },
-      performance.now(),
-    );
+  //
+  // Only the sample is withheld. The band's decision still has to be applied
+  // every frame, and the LOD scale and the plants' atmosphere are state the
+  // scene needs whether or not anyone is grading it - starving them on the
+  // frames where the tab is least able to recover would leave the picture
+  // wrong long after the sample itself stops mattering.
+  if (qualityController) {
+    if (!document.hidden && !skipQualitySample) {
+      qualityController.update(
+        {
+          frameMs: frameCostMs,
+          gpuMs: gpuCostMs,
+          triangles: renderer.info.render.triangles ?? 0,
+        },
+        performance.now(),
+      );
+    }
     const ratio = qualityController.pixelRatio;
     if (Number.isFinite(ratio) && Math.abs(renderer.getPixelRatio() - ratio) > 0.001) {
       renderer.setPixelRatio(ratio);
@@ -9246,7 +9254,8 @@ function renderFrame(deltaTime: number): void {
       plantRenderer.setAtmosphere(environmentRenderer.getAtmosphere());
     }
   }
-  skipQualitySample = false;
+  // Same rule for the flag: a hidden frame is not the frame it was waiting for.
+  if (!document.hidden) skipQualitySample = false;
 
   // AL-01: the benchmark consumes the same numbers the band controller sees, so
   // its report describes the frame the player is actually getting.
