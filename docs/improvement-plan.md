@@ -94,7 +94,13 @@ tests excluded: a key explained in prose but read nowhere is exactly how eleven
 of them survived, and a test that restates the fixture would hide the same rot.
 Exceptions must be listed in `tools/config-keys/allowlist.json` with a reason, and
 an exemption that matches no key is itself an error, so the list cannot go stale
-quietly. Today: 639 keys declared, 49 allowlisted, 590 read. Its first run found two
+quietly. Today: 639 keys declared, 49 allowlisted, 590 read — 388 as quoted literals and
+202 only as identifiers (`data.<key>`, `values.<key>`, a declared field), which
+the report counts so the literal-only gap stays visible and `--identifiers` lists.
+Its rules are pinned by `tools/config-keys/check.test.mjs`: seven fixtures for a
+literal read, a comment-only mention, a regex body, a regex of comment openers, a
+substring of a longer identifier, an identifier-only read and a stale exemption,
+plus two on the scanner itself, all run by `pnpm test`. Its first run found two
 tunables that had been superseded without being removed:
 `plant_renderer.root_sight_cutaway_radius` and `.root_sight_soil_opacity` were
 copies of `config/root_sight.json`'s `cutaway_radius` / `soil_opacity`, left

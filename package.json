@@ -17,7 +17,7 @@
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "format": "biome format --write .",
-    "test": "pnpm -r --if-present test",
+    "test": "node --test \"tools/**/*.test.mjs\" && pnpm -r --if-present test",
     "config:validate": "node tools/config-validator/src/cli.ts",
     "config:keys": "node tools/config-keys/check.mjs",
     "verify": "pnpm lint && pnpm typecheck && pnpm config:validate && pnpm config:keys && pnpm docs:check && pnpm test",

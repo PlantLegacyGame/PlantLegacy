@@ -1,0 +1,4 @@
+[
+  { "key": "chat.probe_key", "reason": "fixture: exempted on purpose" },
+  { "key": "chat.ghost_key", "reason": "fixture: names a key that does not exist" }
+]

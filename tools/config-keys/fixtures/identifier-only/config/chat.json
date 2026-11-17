@@ -1,0 +1,6 @@
+{
+  "_meta": { "system": "chat", "version": "1.0.0" },
+  "values": {
+    "probe_key": { "type": "integer", "value": 1, "range": [0, 10] }
+  }
+}
