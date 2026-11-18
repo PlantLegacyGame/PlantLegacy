@@ -2146,7 +2146,19 @@ function settlePlayerOnGround(deltaTime: number): void {
   // eye is still allowed under the soil, so the ground does not shove it up in
   // the middle of the transition.
   const rootSightEngaged = rootSightHoldsACavity();
-  if (rootSightEngaged && (rootSightConfig?.cameraBurrowEnabled ?? false)) {
+  // The orbit may not dive. This branch used to run whenever a cavity existed, so
+  // a vertical drag around the plant was allowed past the horizon: the eye went
+  // under the plant, the cavity clamp then pressed it back into the pit every
+  // frame, and the view stuck there - "the camera gets stuck below the plant".
+  // The burrow allowance now governs an eye that is *already* under the surface
+  // (a transition, a held dev pose); the controls cannot take it there, so the
+  // ground stops the orbit exactly as it does with Root Sight closed.
+  const eyeAlreadyUnderSurface = camera.position.y < eyeGroundY - 0.02;
+  if (
+    rootSightEngaged &&
+    eyeAlreadyUnderSurface &&
+    (rootSightConfig?.cameraBurrowEnabled ?? false)
+  ) {
     // Never below the earth's body. There is no earth under its underside, and
     // an eye down there watched the pit's own shell from outside against open
     // sky - the "cave walls" the underground view showed. The configured depth
