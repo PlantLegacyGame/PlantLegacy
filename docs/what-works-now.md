@@ -40,7 +40,7 @@ Honest list. No feature promises (T42, RULE_13). Updated at every gate.
 - **Water as a medium (2026-11-16):** water is no longer only a surface you look *at*. `renderers/environment/underwater.ts` answers "how much water is over the eye?" from the water field's own surfaces (`waterSurfacesAt`), and the renderer applies the consequences: a fog that pulls in to metres and takes the water's colour, a dimmed sun (Beer–Lambert `exp(-depth · k)` on the beam), and a water shader that shades its **underside** as Snell's window — a bright, rippling opening straight overhead, dim self-reflection beyond ~48.6°. A damp ankle is still air: immersion starts at 6 cm over the eye. The sheets themselves end radially (`sheet_edge_fade`), because a square grid seen from a high camera drew the water as a square.
 - **A planet-wide sea (2026-11-17):** the world has an ocean, not just local water. `renderers/environment/ocean.ts` builds one dome over the whole play area whose height is the planet's own curvature (`y = sea_level_m − r² / (2·planet_radius_m)`), so a single mesh covers every direction: no sheet edge, no LOD seam, and no reachable place without water. Its coastline is not authored — the terrain is drawn at the same radius, so a shore is wherever the ground rises through it — and it draws with the same water material in **ocean mode** (`uOceanMode`), where the shader measures the column down to the ground grid (pale shelves, dark basins) instead of a per-cell depth, skips the "water above the ground" discard that would delete it, and softens its last 25 cm at the shore instead of cutting a polygon edge. `sea_level_m` (6 m above the play area's tangent plane, so the 5.6–20.8 m plateau stays dry and the basins flood) and `ocean_enabled` live in `config/water.json`; the sea is appended to `waterSurfacesAt`, so a step into it is water over the eye rather than clear air. The first attempt was a sphere of `planet_radius + sea_level` with 80 rings — its polar cap is a chord, so 900 m out the water lay ~17 m *below* the terrain that should have been under it and the ground covered the sea everywhere; the analytic dome has no such sag. The horizon is the camera's far plane, so the water fades out at 2.2–2.48 km rather than ending in cut geometry.
 
-  The sea also carries its **own bed height field** (`buildBedTexture`, 640² samples over ±900 m). The water field's grids stop at 180 m and 560 m, which left the shore players actually look at — the plateau rim 600 m out — with no depth sample at all, so every fragment there fell back to one constant column and the whole ocean shaded as a single flat grey band. With the bed, the shader has a shallow-to-deep gradient all the way out. Its **wave field** is three octaves in ocean mode (`seaNormal`: a long swell, a wind chop, a fine ripple) whose slope is carried into the sky reflection, so the surface bands like moving water and the sun writes a broad glitter path (`sea_wave_strength` 1.2, `sea_wave_scale_m` 5.5); a **foam line** sits wherever the water is shallower than `sea_foam_width_m` (0.9 m), which is what ties the sea's edge to the ground rather than to the dome's outline. The sea's material is transparent and **`depthWrite` is false** (`TRANSPARENT` single layer, side chosen from where the eye is), so the ocean can never occlude the rain, the plant or the bed under it; the shallow shelf shows the ground through the water, and rain streaks draw over the sea (`144`, `145`).
+  The sea also carries its **own bed height field** (`buildBedTexture`, 640² samples over ±900 m). The water field's grids stop at 180 m and 560 m, which left the shore players actually look at — the plateau rim 600 m out — with no depth sample at all, so every fragment there fell back to one constant column and the whole ocean shaded as a single flat grey band. With the bed, the shader has a shallow-to-deep gradient all the way out. Its **wave field** is three octaves in ocean mode (`seaNormal`: a long swell, a wind chop, a fine ripple) whose slope is carried into the sky reflection, so the surface bands like moving water and the sun writes a broad glitter path (`sea_wave_strength` 1.2, `sea_wave_scale_m` 5.5); a **foam line** sits wherever the water is shallower than `sea_foam_width_m` (0.9 m), which is what ties the sea's edge to the ground rather than to the dome's outline. The sea's material is transparent and **`depthWrite` is false** (`TRANSPARENT` single layer, side chosen from where the eye is), so the ocean can never occlude the rain, the plant or the bed under it; the shallow shelf shows the ground through the water, and rain streaks draw over the sea.
 - **Water as environment (2026-11-15):** water is no longer a Root Sight ornament and it is not fitted to anything. Two fields, both from the simulation:
   - **Rain puddles.** Rain adds depth to a shallow-water sheet; the mass-conserving solver in `packages/shared/src/world/surfaceWater.ts` runs it downhill into hollows, where it soaks in and evaporates. Puddles therefore appear on the ground whether or not Root Sight is open.
   - **The water table.** `ResourceWorld.getWaterTableHeightAt` reads the per-tile groundwater the server already simulates (saturation puts the table at the *regional* ground level — the undug terrain averaged over `groundwater_table_smoothing_m` — and an empty cell sits `groundwater_table_depth_m` below it), so the level rises with rain, falls as roots drink, refills from wet neighbours, and low ground pools instead of every tile tracking its own bumps. Measuring against the regional level is what keeps a dug tunnel from acting as a drain: the table stays put and the hole fills. Its height field is streamed in `RESOURCE_UPDATE.waterTable` (48 × 2 m cells, twice a second) and drawn as one continuous mesh: nearby water connects, and terrain—not a fitted disc—hides it where it is underground. The Root Sight pit is the hole through which that same surface is seen from below. That hole is cut in both faces of the double-sided soil skin: a front-face-only cut left the earth a closed ceiling from underneath, so the cavity could be seen from outside and from above but not from inside the ground. The earthen lip stays a surface effect and fades out with the eye under the soil, which is what the old front-face gate was really there for.
@@ -181,17 +181,16 @@ a wade/swim camera.
 
 ### 2026-11-16 — browser pass
 
-Run in Chromium against the dev stack, screenshots in
-`docs/verify/pass-2026-11-16/`.
+Run in Chromium against the dev stack.
 
 - **The ground was not being drawn at all**, and this was the "looks weird" part
   of Root Sight and everything else. A trailing comma in a GLSL call stopped the
   soil program from linking; the browser logged `useProgram: program not valid`
   every frame. Fixed, with a string-level regression test in
   `ground/shaderOverrides.test.ts`. Terrain, soil detail, water and the shore
-  came back (`05-ground-restored.png`).
+  came back.
 - **Root Sight** now opens a real pit: a soft rim, a dry bowl, and the
-  roots hanging into it, with the seed sitting at the mouth (`39`, `41`). `R`
+  roots hanging into it, with the seed sitting at the mouth. `R`
   closes and reopens it. Getting there fixed four separate faults: the aperture
   is floored at the seed's own width (R9); the orbit floor is half the mouth, so
   the eye can be brought over the hole and dived through it (R10, R22); the cavity's
@@ -203,19 +202,19 @@ Run in Chromium against the dev stack, screenshots in
   no soil behind it: it showed as a brown collar of dots and a crescent of shell
   around the mouth, which made the pit look like it sat below its own hole (R14).
   The flare is gone, the rim band is off, and a colour-coded pass now shows the
-  bowl filling the aperture exactly, soil purple and water green around it (`61`)
-  and the same scene with a blue pit on red soil (`60`).
+  bowl filling the aperture exactly, soil purple and water green around it
+  and the same scene with a blue pit on red soil.
 - **The pit looks like dug earth (R16-R17).** Its wall and floor are built from
   the *dry* soil colour (0.86 at the lip, 0.62 at the floor) with every shader
   term a shade around 1.0, so it reads as dirt instead of a black void; the grain
   is sampled in cylindrical coordinates (angle x mouth radius, world height) and
   no longer smears down the wall. The rim is flush with the cut and its ring is a
   circumscribed 96-gon, so the sawtooth of sky that used to run round the mouth
-  at grazing angles is gone (`70`), and the bowl's lip is the same material as its wall, not a separate band,
+  at grazing angles is gone, and the bowl's lip is the same material as its wall, not a separate band,
   the wall so it reads as the lip's shadow rather than a pale line.
 - **Growth gizmo.** The ring sits on the part, the arrow points along the aim and
   the ground marker follows the drawn soil; seen from the spawn camera it reads
-  correctly (`08-aim-after-drag.png`). The three-angle and lateral-bud checks
+  correctly. The three-angle and lateral-bud checks
   could not be driven: the preview tooling has no real drag, synthetic pointer
   events do not reach OrbitControls' pointer capture, and the dev panel has no
   "grow one lateral bud" action.
@@ -225,12 +224,12 @@ Run in Chromium against the dev stack, screenshots in
   three that have no other grant path, handed out from the dev panel's new
   Inventory section (`dev_grant_item`). The two seeds and the booster show their
   reason line and a disabled **Unavailable** state rather than a button that
-  lies (`23`, `25`). The prose no longer repeats the "Use:" sentence now that
+  lies. The prose no longer repeats the "Use:" sentence now that
   the panel generates it.
 - **Rerooting.** The crawl settles after roughly 2-3 m on damp ground, so a
   long move is a series of uproots: driven through `dev_uproot_plant` plus
   `dev_reroot` east, the plant covered 117 m in 47 legs without losing nodes,
-  and its Root Sight pit followed it (`43`, `44`). The joints travel with the
+  and its Root Sight pit followed it. The joints travel with the
   body now: each node's attachment point on its parent is part of the rigid pose
   the crawl rewrites, on the server and in the uproot packets, so an uprooted
   plant no longer comes apart at its laterals (R15). Measured on a live crawl:
@@ -238,7 +237,7 @@ Run in Chromium against the dev stack, screenshots in
   where they were 3.4 m before. The seed joint itself was a second fault: the SDF
   pass drew a seed's children from the seed's contact point rather than the stored
   attachment, so an uprooted plant lifted its seed and left the roots hanging in
-  the air (`75`, `76`, `84`). The crawl still moves smoothly: the pose is eased
+  the air. The crawl still moves smoothly: the pose is eased
   toward each packet again, and each joint is carried as a fixed offset from its
   parent, so it is re-derived from the parent's drawn position every frame rather
   than snapped ahead of it (0.00 m joint error across a live crawl).
@@ -264,7 +263,7 @@ Run in Chromium against the dev stack, screenshots in
   that stands above the ground is therefore unreachable for it. Forcing a table
   in dev (49 × 24 m cells, socket closed so the server's 48 × 2 m grid could not
   replace it) and a dev-patched copy raised 0.35 m above the terrain gave frames
-  identical with the test on and off (`109`/`110`, `113`/`114`). The part of the
+  identical with the test on and off. The part of the
   test that does act is the film and river allowance, which trims sheet geometry
   standing above the drawn ground on a slope.
 - **The Root Sight pit follows the scene light (R20).** The dug wall and floor are
