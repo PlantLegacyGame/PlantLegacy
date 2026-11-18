@@ -1,7 +1,11 @@
 # Bug inventory
 
-The current defect list, with the evidence for each entry. This is the single
-home for *what is broken now*; the order to fix it in is
+The current defect list, with the evidence for each entry. Evidence is a test,
+or a **committed** capture sitting directly in
+[`docs/verify/`](./verify/README.md): a browser pass's dump
+(`docs/verify/pass-YYYY-MM-DD/`), a root-level `*.png` or anything in `screens/`
+or `screenshots/` is gitignored, and must not be cited. This is the single home
+for *what is broken now*; the order to fix it in is
 [`bugfix-plan.md`](./bugfix-plan.md) (verified 2026-11-16, defect by defect) and
 [`improvement-plan.md`](./improvement-plan.md) (value ranking), the programme is
 [`PlantLegacy-Abyssal-Integration-Plan.md`](./PlantLegacy-Abyssal-Integration-Plan.md),

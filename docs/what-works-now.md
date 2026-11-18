@@ -181,7 +181,10 @@ a wade/swim camera.
 
 ### 2026-11-16 — browser pass
 
-Run in Chromium against the dev stack.
+Run in Chromium against the dev stack. A capture cited from this section is a
+curated image committed directly in `docs/verify/` (see its README); a pass
+dump (`docs/verify/pass-YYYY-MM-DD/`, root `*.png`, `screens/`, `screenshots/`)
+is gitignored and is not cited.
 
 - **The ground was not being drawn at all**, and this was the "looks weird" part
   of Root Sight and everything else. A trailing comma in a GLSL call stopped the
