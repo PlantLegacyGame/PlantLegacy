@@ -190,10 +190,16 @@ export function createSkyDome(
     uniforms: {
       uZenithColor: { value: zenithColor },
       uHorizonColor: { value: horizonColor },
-      uSunDir: { value: sunDir },
+      // Copies, not the caller's vectors. The renderer blanks these uniforms at
+      // night to hide the sun's disc and show the moon; while they aliased
+      // `bodies.sunDir` / `bodies.moonDir`, that blanking also overwrote the real
+      // sun direction, so every reader after it - the fog, the fill light, the
+      // water, the sky's own hour grading - saw a sun pointing straight down
+      // instead of the one below the horizon.
+      uSunDir: { value: sunDir.clone() },
       uSunColor: { value: new THREE.Color(config.sunColorDay) },
       uSunIntensity: { value: config.sunIntensityDay },
-      uMoonDir: { value: moonDir },
+      uMoonDir: { value: moonDir.clone() },
       uMoonColor: { value: new THREE.Color(config.sunColorNight) },
       uEyeUnderGround: { value: 0 },
       // The earth tone as configured, not quartered. At a quarter it was #0e0a07

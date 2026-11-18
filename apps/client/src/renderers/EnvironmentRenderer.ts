@@ -30,8 +30,9 @@ const CAVITY_DAYLIGHT_REFERENCE = 1.08;
 /** How far the fill light's colour is pulled to neutral; 0 = raw sky, 1 = grey. */
 const SKYLIGHT_DESATURATION = 0.55;
 
-/** Scratch colour for the dusk grade: one frame, no allocation. */
+/** Scratch colours for the sky's hour grade: one frame, no allocation. */
 const skyDuskScratch = new THREE.Color();
+const skyNightScratch = new THREE.Color();
 
 import {
   CAVITY_CUT_OVERREACH,
@@ -962,12 +963,16 @@ export class EnvironmentRenderer {
     });
     this.localZenithTarget.copy(weatherTargets.zenithColor).multiplyScalar(localBrightness);
     this.localHorizonTarget.copy(weatherTargets.horizonColor).multiplyScalar(localBrightness);
-    // Dusk is a colour, not only a dimmer. The weather palette is one set of
-    // colours per weather state, so sunset kept the noon hue all the way to the
-    // horizon and back; the graded dusk palette (`sky_zenith_dusk` /
-    // `sky_horizon_dusk`) warms the target as the sun crosses it.
-    this.applyDuskGrade(this.localZenithTarget, this.config.skyZenithDusk);
-    this.applyDuskGrade(this.localHorizonTarget, this.config.skyHorizonDusk);
+    this.gradeSkyTarget(
+      this.localZenithTarget,
+      this.config.skyZenithDusk,
+      this.config.skyZenithNight,
+    );
+    this.gradeSkyTarget(
+      this.localHorizonTarget,
+      this.config.skyHorizonDusk,
+      this.config.skyHorizonNight,
+    );
     this.sky.zenithColor.lerp(this.localZenithTarget, lerpRate);
     this.sky.horizonColor.lerp(this.localHorizonTarget, lerpRate);
     // The sky shader's zenith/horizon uniforms hold these same Color instances,
@@ -1128,15 +1133,33 @@ export class EnvironmentRenderer {
   }
 
   /**
-   * Warm a sky target towards the dusk palette as the sun crosses the horizon.
-   * The weight peaks at `sunDir.y === 0` and is zero by mid-morning, night and
-   * below, so the weather's own colours still lead at every other hour.
+   * Give the sky its hour: the day, dusk and night palettes from the config.
+   *
+   * The weather palette is one set of colours per weather state, so a clear sky
+   * was noon blue at midnight and held the noon hue all the way through sunset.
+   * The sun's own height picks the palette instead: the weather's colours lead
+   * in full day, the dusk palette warms the horizon as the sun crosses it, and
+   * the night palette takes over once the sun is down, so midnight is a night
+   * sky rather than a dimmed daytime one.
+   *
+   * The height is `bodies.sunDir.y`, the true sun. The sky dome keeps its own
+   * copy of that vector (it blanks its uniform at night to hide the disc), so
+   * reading the uniform here reported the sun as either overhead or straight
+   * down - never near the horizon - which is how a 4 am sky came out warm red.
    */
-  private applyDuskGrade(target: THREE.Color, duskHex: string): void {
-    const duskWeight = 1 - Math.min(1, Math.abs(this.bodies.sunDir.y) / 0.28);
-    if (duskWeight <= 0) return;
-    skyDuskScratch.set(duskHex);
-    target.lerp(skyDuskScratch, duskWeight * 0.55);
+  private gradeSkyTarget(target: THREE.Color, duskHex: string, nightHex: string): void {
+    const sunHeight = this.bodies.sunDir.y;
+    const day = THREE.MathUtils.smoothstep(sunHeight, 0.02, 0.32);
+    const night = 1 - THREE.MathUtils.smoothstep(sunHeight, -0.22, -0.02);
+    const dusk = Math.max(0, 1 - day - night);
+    if (dusk > 0) {
+      skyDuskScratch.set(duskHex);
+      target.lerp(skyDuskScratch, dusk * 0.55);
+    }
+    if (night > 0) {
+      skyNightScratch.set(nightHex);
+      target.lerp(skyNightScratch, night * 0.92);
+    }
   }
 
   /** The terrain mesh, or null when the ground is hidden. */
