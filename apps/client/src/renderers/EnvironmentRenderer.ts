@@ -27,6 +27,12 @@ import { type AtmosphereParams, atmosphereFromConfig } from './environment/atmos
  */
 const CAVITY_DAYLIGHT_REFERENCE = 1.08;
 
+/** How far the fill light's colour is pulled to neutral; 0 = raw sky, 1 = grey. */
+const SKYLIGHT_DESATURATION = 0.55;
+
+/** Scratch colour for the dusk grade: one frame, no allocation. */
+const skyDuskScratch = new THREE.Color();
+
 import {
   CAVITY_CUT_OVERREACH,
   CAVITY_WATER_DRAIN_APERTURES,
@@ -956,11 +962,30 @@ export class EnvironmentRenderer {
     });
     this.localZenithTarget.copy(weatherTargets.zenithColor).multiplyScalar(localBrightness);
     this.localHorizonTarget.copy(weatherTargets.horizonColor).multiplyScalar(localBrightness);
+    // Dusk is a colour, not only a dimmer. The weather palette is one set of
+    // colours per weather state, so sunset kept the noon hue all the way to the
+    // horizon and back; the graded dusk palette (`sky_zenith_dusk` /
+    // `sky_horizon_dusk`) warms the target as the sun crosses it.
+    this.applyDuskGrade(this.localZenithTarget, this.config.skyZenithDusk);
+    this.applyDuskGrade(this.localHorizonTarget, this.config.skyHorizonDusk);
     this.sky.zenithColor.lerp(this.localZenithTarget, lerpRate);
     this.sky.horizonColor.lerp(this.localHorizonTarget, lerpRate);
     // The sky shader's zenith/horizon uniforms hold these same Color instances,
     // so they follow the lerp without a second per-frame copy.
+    // Skylight is blue; the earth is not. The fill light took the zenith colour
+    // at full saturation and multiplies every upward-facing albedo, which is
+    // what turned the Root Sight pit's grey deep stratum the colour of water and
+    // made the blue of the old water sheets look like they were still there.
+    // Half the saturation keeps the hour's hue on the terrain without repainting
+    // the soil.
     this.hemisphereLight.color.copy(this.sky.zenithColor);
+    const zenith = this.hemisphereLight.color;
+    const luma = 0.2126 * zenith.r + 0.7152 * zenith.g + 0.0722 * zenith.b;
+    zenith.setRGB(
+      THREE.MathUtils.lerp(zenith.r, luma, SKYLIGHT_DESATURATION),
+      THREE.MathUtils.lerp(zenith.g, luma, SKYLIGHT_DESATURATION),
+      THREE.MathUtils.lerp(zenith.b, luma, SKYLIGHT_DESATURATION),
+    );
     this.hemisphereLight.groundColor.copy(this.sky.horizonColor);
     // The fill light shares the ambient's budget. It kept Three's default
     // intensity through night and storm - only its colour followed the sky - so
@@ -1100,6 +1125,18 @@ export class EnvironmentRenderer {
       lightMultiplier: this.lightMultiplier,
       sunOrbitalDistance: this.config.sunOrbitalDistance,
     });
+  }
+
+  /**
+   * Warm a sky target towards the dusk palette as the sun crosses the horizon.
+   * The weight peaks at `sunDir.y === 0` and is zero by mid-morning, night and
+   * below, so the weather's own colours still lead at every other hour.
+   */
+  private applyDuskGrade(target: THREE.Color, duskHex: string): void {
+    const duskWeight = 1 - Math.min(1, Math.abs(this.bodies.sunDir.y) / 0.28);
+    if (duskWeight <= 0) return;
+    skyDuskScratch.set(duskHex);
+    target.lerp(skyDuskScratch, duskWeight * 0.55);
   }
 
   /** The terrain mesh, or null when the ground is hidden. */

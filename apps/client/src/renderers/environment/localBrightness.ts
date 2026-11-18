@@ -11,6 +11,9 @@
 
 const DEFAULT_TILE_LIGHT_BASE = 80;
 
+/** How much sky colour survives at midnight, as a fraction of the day's. */
+const NIGHT_SKY_FLOOR = 0.12;
+
 export function localSkyBrightness(params: {
   /** Average light of the plant's covered tiles, or null before any packet. */
   localTileLight: number | null;
@@ -29,7 +32,15 @@ export function localSkyBrightness(params: {
       : clamp(params.localTileLight / base, 0, 1.5);
   // Shade bottoms out at 0.55 so a plant in deep shade still reads as a lit
   // world; light above full day adds a little more, and nothing more than that.
-  return 0.55 + 0.45 * Math.min(1, light01) + Math.max(0, light01 - 1) * 0.25;
+  const tileGrade = 0.55 + 0.45 * Math.min(1, light01) + Math.max(0, light01 - 1) * 0.25;
+  // The tiles are not the clock. A covered tile, a packet stale by a few
+  // seconds, or simply an open meadow keeps reporting light at 4 am, and the
+  // weather palette is one set of colours per weather state - so the sky stayed
+  // drawn in daylight blue under a rising moon, which is the "literally 4 am and
+  // as bright as day" report. The sun's own height cannot be fooled: below the
+  // horizon the sky is night, whatever the tiles say.
+  const nightCeiling = NIGHT_SKY_FLOOR + (1 - NIGHT_SKY_FLOOR) * clamp(params.dayFactor, 0, 1);
+  return tileGrade * nightCeiling;
 }
 
 function clamp(value: number, lo: number, hi: number): number {
