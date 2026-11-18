@@ -1352,9 +1352,18 @@ planet and every root was therefore "behind the earth".
    surface. The window is added only when the cavity is already open, so a buried
    camera cannot excavate ground the plant never dug.
 
-**Consequences.** A camera can follow a root down and still see it, and the
-cavity is a space rather than a picture. The eye window is bounded by
-`max_burrow_depth_m`, and it is one more bubble in a 64-slot uniform array.true## ADR-065 — Inland water stops being geometry
+**Consequences.** The cavity is a space rather than a picture, and the eye window
+is bounded by `max_burrow_depth_m`; it is one more bubble in a 64-slot uniform
+array.
+
+**Amended 2026-11-18: the camera does not follow a root down.** The volume and
+the eye window stay, and a trapped or transitioning eye still gets its bubble,
+but the *orbit* stops at the ground while Root Sight is open. Lifting the polar
+limit for the whole scene is what let a vertical drag put the eye under the
+plant, where the cavity clamp then held it with no way out. `max_burrow_depth_m`
+now only bounds an eye that is already under the surface *and* standing in the
+opening's column; an eye under the surface anywhere else is in solid dirt and
+`clampEyeToGround` lifts it back to the ground.true## ADR-065 — Inland water stops being geometry
 
 **Status:** proposed 2026-11-17 (W6), not built.
 

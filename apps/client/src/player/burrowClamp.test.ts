@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { clampToCavity } from './burrowClamp.ts';
+import { clampToCavity, isInsideCavityColumn } from './burrowClamp.ts';
 
 const CAVITY = { x: 3, z: -2, radius: 2 };
 
@@ -39,5 +39,32 @@ describe('burrow clamp', () => {
 
   it('does nothing for a position that is not a number', () => {
     assert.equal(clampToCavity({ x: Number.NaN, z: 0 }, CAVITY, 0.2), null);
+  });
+});
+
+describe('the opening is the only underground space', () => {
+  it('counts an eye inside the column, with the clearance taken off', () => {
+    assert.equal(isInsideCavityColumn({ x: 3.5, z: -2.5 }, CAVITY, 0.2), true);
+    assert.equal(isInsideCavityColumn({ x: 3 + 1.5, z: -2 }, CAVITY, 0.2), true);
+  });
+
+  it('does not count an eye beside the pit', () => {
+    // This is the case the camera has to lift back to the surface: beside the
+    // opening the dirt is real, and clamping the eye into the pit instead is
+    // what left a buried view stuck below the plant.
+    assert.equal(isInsideCavityColumn({ x: 3 + 3, z: -2 }, CAVITY, 0.2), false);
+    // 0.8 m aperture less the 0.2 m clearance leaves 0.6 m of column.
+    assert.equal(
+      isInsideCavityColumn({ x: 3, z: -2 + 0.5 }, { ...CAVITY, radius: 0.8 }, 0.2),
+      true,
+    );
+    assert.equal(
+      isInsideCavityColumn({ x: 3, z: -2 + 0.5 }, { ...CAVITY, radius: 0.3 }, 0.2),
+      false,
+    );
+  });
+
+  it('has no column without an aperture', () => {
+    assert.equal(isInsideCavityColumn({ x: 3, z: -2 }, { ...CAVITY, radius: 0 }, 0.2), false);
   });
 });

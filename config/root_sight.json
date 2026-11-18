@@ -87,13 +87,13 @@
     "camera_burrow_enabled": {
       "type": "boolean",
       "value": true,
-      "notes": "Allow the eye to travel below the surface while Root Sight is open."
+      "notes": "Allow an eye that is already below the surface to stay there while Root Sight is open. The orbit itself stops at the ground, and an eye below the surface anywhere but the opening's column is lifted back up."
     },
     "max_burrow_depth_m": {
       "type": "number",
       "value": 12.0,
       "range": [0, 50],
-      "notes": "Deepest the Root Sight camera may descend below the local surface."
+      "notes": "Deepest an eye that is already below the surface may sit there, while it stands in the opening's column."
     },
     "cavity_clearance_m": {
       "type": "number",

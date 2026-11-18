@@ -70,7 +70,7 @@ import {
 } from './net/dispatch.js';
 import { playerWorldY, spawnPlayer, stepPlayerVertical } from './physics/playerPhysics.js';
 import { plantPhysicsSync, rapierWorld } from './physics/RapierPhysicsManager.js';
-import { clampToCavity } from './player/burrowClamp.ts';
+import { clampToCavity, isInsideCavityColumn } from './player/burrowClamp.ts';
 import { ownBodyNodes, resolveOwnAnchor } from './player/ownPlantAnchor.js';
 import { decideAutoOpenRootSight } from './player/rootSightAutoOpen.js';
 import { isBelowSoil } from './player/underground.js';
@@ -2122,6 +2122,26 @@ function rootSightHoldsACavity(): boolean {
   return (rootSightMachine?.progress ?? 0) > 0.001 && cavityApertureM > 0.001;
 }
 
+/**
+ * Is the eye standing in the opening's own column?
+ *
+ * The pit is the only hole in the ground, so it is the only place an eye can be
+ * below the surface and still be in a space. Anywhere else under the surface the
+ * dirt is real, and the camera lifts the eye back up instead of clamping it
+ * sideways into the pit.
+ */
+function eyeInCavityColumn(): boolean {
+  if (!rootSightHoldsACavity()) return false;
+  const radius = soilCutawayUniforms.uRootSightApertureRadius.value;
+  if (!(radius > 0.05)) return false;
+  const centre = soilCutawayUniforms.uRootSightApertureCenter.value;
+  return isInsideCavityColumn(
+    { x: camera.position.x, z: camera.position.z },
+    { x: centre.x, z: centre.z, radius },
+    rootSightConfig?.cavityClearanceM ?? 0.2,
+  );
+}
+
 function settlePlayerOnGround(deltaTime: number): void {
   const planetRadius = renderConfig?.planetRadiusM ?? 0;
   if (planetRadius <= 0) return;
@@ -2157,6 +2177,7 @@ function settlePlayerOnGround(deltaTime: number): void {
   if (
     rootSightEngaged &&
     eyeAlreadyUnderSurface &&
+    eyeInCavityColumn() &&
     (rootSightConfig?.cameraBurrowEnabled ?? false)
   ) {
     // Never below the earth's body. There is no earth under its underside, and
@@ -2259,6 +2280,11 @@ function clampEyeToCavity(): void {
   if (!(rootSightConfig?.cameraBurrowEnabled ?? false)) return;
   const radius = soilCutawayUniforms.uRootSightApertureRadius.value;
   if (!(radius > 0.05)) return;
+  // Only the eye already standing in the column is pressed back to its wall.
+  // Applied to any buried eye, this dragged the camera from wherever it was into
+  // the pit every frame, so a buried eye had no way out - it now leaves it alone
+  // and `clampEyeToGround` lifts the eye back to the surface.
+  if (!eyeInCavityColumn()) return;
   const planetRadius = renderConfig?.planetRadiusM ?? 0;
   const groundY = planetTerrainY(
     planetRadius,
@@ -2286,8 +2312,9 @@ function clampEyeToGround(): void {
   if (planetRadius <= 0) return;
   // Progress, not the on/off flag: while the cutaway opens or closes the eye is
   // still allowed under the soil, so the ground cannot shove it up mid-fade -
-  // but only when there is a cavity for it to be in.
-  if (rootSightHoldsACavity()) return;
+  // but only while it is standing in the opening itself. An eye under the
+  // surface anywhere else is in solid dirt, and this is how it gets back up.
+  if (rootSightHoldsACavity() && eyeInCavityColumn()) return;
   const touch = renderConfig?.cameraGroundTouchM ?? 0.02;
   const field = getTerrainParams();
   const dir = camera.position.clone().sub(controls.target);
