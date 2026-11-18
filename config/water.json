@@ -8,6 +8,11 @@
     "notes": "Surface rain sheet only. The water table is simulated by the server per tile (resources.groundwater_*) and streamed to the client, so its depth is not tuned here."
   },
   "values": {
+    "enabled": {
+      "type": "boolean",
+      "value": false,
+      "notes": "Draw the water field at all: the rain sheet, the water table, the stream and the sea. Off while the current implementation is replaced: it drapes a flat sheet two centimetres over the terrain, so it floods slopes, covers the ground at eye level and reads as a teal film rather than water lying in basins. A realistic pass replaces it; until then the world is dry and nothing here is hidden behind a flag nobody can find."
+    },
     "surface_cells": {
       "type": "integer",
       "value": 72,

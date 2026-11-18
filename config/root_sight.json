@@ -87,7 +87,7 @@
     "camera_burrow_enabled": {
       "type": "boolean",
       "value": true,
-      "notes": "Allow an eye that is already below the surface to stay there while Root Sight is open. The orbit itself stops at the ground, and an eye below the surface anywhere but the opening's column is lifted back up."
+      "notes": "Allow the orbit to dive into the opening while the eye stands in its column, so a drag down over the pit takes the camera inside it. Everywhere else the ground stops the orbit, and an eye below the surface outside the column is lifted back up."
     },
     "max_burrow_depth_m": {
       "type": "number",

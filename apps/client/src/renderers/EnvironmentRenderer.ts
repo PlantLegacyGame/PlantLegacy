@@ -391,31 +391,38 @@ export class EnvironmentRenderer {
       const innerCellM = (innerRadiusM * 2) / innerSegments;
       const farSegments = Math.max(24, Math.round(innerSegments * 0.6));
       const farCellM = (Math.max(20, terrainParams.patchRadiusM) * 2) / farSegments;
-      this.waterField = createWaterField(
-        (x, z) => planetTerrainY(planetRadius, x, z, getTerrainParams()),
-        {
-          ...this.waterTuning,
-          groundTestCellM: farCellM,
-          groundTestFineCellM: innerCellM,
-          groundTestFineRadiusM: innerRadiusM,
-        },
-        // Wet ground is the same colour the soil shader uses for wetness, taken
-        // a step darker: soil in contact with standing water is waterlogged.
-        new THREE.Color(config.soilWetColor).multiplyScalar(0.55),
-        surveyedRiver && riverMask
-          ? {
-              stations: surveyedRiver.stations,
-              halfWidthM: surveyedRiver.halfWidthM,
-              waterDepthM: surveyedRiver.waterDepthM,
-              flowMps: Math.max(0, terrainParams.riverFlowSpeedMps ?? 0),
-              mask: riverMask,
-            }
-          : null,
-        // The water's own colours: body, shallow end, reflection. Data, so the
-        // underwater tint and the sheet it comes from are one value.
-        this.waterTuning.colors ?? DEFAULT_WATER_COLORS,
-      );
-      scene.add(this.waterField.group);
+      // `water_enabled` is the whole field: sheets, table, stream and sea. It is
+      // off while the current water is replaced - a flat sheet draped over the
+      // terrain floods slopes and covers the ground at eye level - and leaving the
+      // meshes in the scene hidden would only make the next bug hide there.
+      const waterEnabled = this.waterTuning.enabled ?? true;
+      this.waterField = waterEnabled
+        ? createWaterField(
+            (x, z) => planetTerrainY(planetRadius, x, z, getTerrainParams()),
+            {
+              ...this.waterTuning,
+              groundTestCellM: farCellM,
+              groundTestFineCellM: innerCellM,
+              groundTestFineRadiusM: innerRadiusM,
+            },
+            // Wet ground is the same colour the soil shader uses for wetness, taken
+            // a step darker: soil in contact with standing water is waterlogged.
+            new THREE.Color(config.soilWetColor).multiplyScalar(0.55),
+            surveyedRiver && riverMask
+              ? {
+                  stations: surveyedRiver.stations,
+                  halfWidthM: surveyedRiver.halfWidthM,
+                  waterDepthM: surveyedRiver.waterDepthM,
+                  flowMps: Math.max(0, terrainParams.riverFlowSpeedMps ?? 0),
+                  mask: riverMask,
+                }
+              : null,
+            // The water's own colours: body, shallow end, reflection. Data, so the
+            // underwater tint and the sheet it comes from are one value.
+            this.waterTuning.colors ?? DEFAULT_WATER_COLORS,
+          )
+        : null;
+      if (this.waterField) scene.add(this.waterField.group);
     }
     // The cavity bowl is the only underground backdrop. There used to be a
     // second, concentric "subsoil" sphere below the ground as well; from above
@@ -428,7 +435,7 @@ export class EnvironmentRenderer {
       // sphere for the whole world. The puddles, the stream and the water table
       // are local detail on top of it; this is the water that has to be
       // somewhere, everywhere, with no edge.
-      if (this.waterTuning.oceanEnabled ?? true) {
+      if ((this.waterTuning.enabled ?? true) && (this.waterTuning.oceanEnabled ?? true)) {
         this.ocean = createOcean(
           config.planetRadiusM,
           this.waterTuning.seaLevelM ?? DEFAULT_WATER_FIELD_TUNING.seaLevelM,

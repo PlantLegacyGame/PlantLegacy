@@ -31,6 +31,15 @@ export const DEFAULT_WATER_COLORS: WaterColors = {
 };
 
 export interface WaterFieldTuning {
+  /**
+   * Draw the water field at all: sheets, table, stream and sea.
+   *
+   * Off while the current water is replaced. It lies as a flat sheet a couple of
+   * centimetres above the terrain, so it floods slopes and covers the ground at
+   * eye level instead of pooling in basins; a switch in config is the honest way
+   * to take it out of the world instead of leaving meshes hidden in the scene.
+   */
+  enabled: boolean;
   /** Surface sheet resolution (vertices per side). */
   surfaceCells: number;
   /** Half-extent of the surface sheet around the origin, metres. */
@@ -129,6 +138,7 @@ export interface WaterFieldTuning {
 }
 
 export const DEFAULT_WATER_FIELD_TUNING: WaterFieldTuning = {
+  enabled: true,
   surfaceCells: 96,
   surfaceExtentM: 64,
   flowRatePerS: 0.55,
@@ -204,6 +214,7 @@ export function parseWaterTuning(data: Record<string, unknown>): Partial<WaterFi
   };
   const int = (key: string, value: number): number => Math.round(num(key, value));
   return {
+    enabled: data.enabled !== false,
     surfaceCells: int('surface_cells', fallback.surfaceCells ?? 72),
     surfaceExtentM: num('surface_extent_m', fallback.surfaceExtentM ?? 64),
     flowRatePerS: num('surface_flow_rate_per_s', fallback.flowRatePerS ?? 0.55),

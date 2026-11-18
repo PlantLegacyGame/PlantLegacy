@@ -1356,14 +1356,15 @@ planet and every root was therefore "behind the earth".
 is bounded by `max_burrow_depth_m`; it is one more bubble in a 64-slot uniform
 array.
 
-**Amended 2026-11-18: the camera does not follow a root down.** The volume and
-the eye window stay, and a trapped or transitioning eye still gets its bubble,
-but the *orbit* stops at the ground while Root Sight is open. Lifting the polar
-limit for the whole scene is what let a vertical drag put the eye under the
-plant, where the cavity clamp then held it with no way out. `max_burrow_depth_m`
-now only bounds an eye that is already under the surface *and* standing in the
-opening's column; an eye under the surface anywhere else is in solid dirt and
-`clampEyeToGround` lifts it back to the ground.true## ADR-065 — Inland water stops being geometry
+**Amended 2026-11-18: the camera enters the opening, it does not roam under the
+ground.** The volume and the eye window stay, and a trapped or transitioning eye
+still gets its bubble, but the free orbit is granted only while the eye stands in
+the opening's own column. Lifting the polar limit for the whole scene is what let
+a vertical drag put the eye under the plant, where the cavity clamp then held it
+with no way out. So a drag down over the pit now takes the eye through the hole
+and inside the pit, bounded by `max_burrow_depth_m` and the pit's own floor; a
+drag anywhere else stops at the ground, and an eye that leaves the column
+underground is in solid dirt and `clampEyeToGround` lifts it back up.true## ADR-065 — Inland water stops being geometry
 
 **Status:** proposed 2026-11-17 (W6), not built.
 

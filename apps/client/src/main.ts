@@ -2130,6 +2130,17 @@ function rootSightHoldsACavity(): boolean {
  * dirt is real, and the camera lifts the eye back up instead of clamping it
  * sideways into the pit.
  */
+/** Is the eye standing over the opening itself (not just near it)? */
+function eyeOverAperture(): boolean {
+  if (!rootSightHoldsACavity()) return false;
+  const radius = soilCutawayUniforms.uRootSightApertureRadius.value;
+  if (!(radius > 0.05)) return false;
+  const centre = soilCutawayUniforms.uRootSightApertureCenter.value;
+  // Nine tenths of the mouth: the wall itself is the last few centimetres, and a
+  // camera pressed against it should still count as being over the hole.
+  return Math.hypot(camera.position.x - centre.x, camera.position.z - centre.z) <= radius * 0.9;
+}
+
 function eyeInCavityColumn(): boolean {
   if (!rootSightHoldsACavity()) return false;
   const radius = soilCutawayUniforms.uRootSightApertureRadius.value;
@@ -2145,6 +2156,21 @@ function eyeInCavityColumn(): boolean {
 function settlePlayerOnGround(deltaTime: number): void {
   const planetRadius = renderConfig?.planetRadiusM ?? 0;
   if (planetRadius <= 0) return;
+  // The orbit has to be able to reach the opening at all. The configured floor
+  // (2.4 m) is wider than a young pit's mouth (under 2 m), so the eye could not
+  // be brought over the hole - which is why entering the pit was impossible.
+  // While Root Sight holds a cavity the orbit may come in to the pit's own radius.
+  const orbitFloorM = renderConfig?.cameraMinDistance ?? 0.5;
+  // The mouth the soil actually cuts, not the cavity's own sizing radius: the
+  // orbit has to be able to reach the hole that is drawn.
+  const mouthM = soilCutawayUniforms.uRootSightApertureRadius.value;
+  const cavityOrbitFloorM =
+    rootSightHoldsACavity() && mouthM > 0.05
+      ? Math.max(0.3, Math.min(orbitFloorM, mouthM * 0.6))
+      : orbitFloorM;
+  if (Math.abs(controls.minDistance - cavityOrbitFloorM) > 1e-4) {
+    controls.minDistance = cavityOrbitFloorM;
+  }
   const field = getTerrainParams();
   const groundY = planetTerrainY(planetRadius, controls.target.x, controls.target.z, field);
   playerVertical = stepPlayerVertical(
@@ -2166,20 +2192,16 @@ function settlePlayerOnGround(deltaTime: number): void {
   // eye is still allowed under the soil, so the ground does not shove it up in
   // the middle of the transition.
   const rootSightEngaged = rootSightHoldsACavity();
-  // The orbit may not dive. This branch used to run whenever a cavity existed, so
-  // a vertical drag around the plant was allowed past the horizon: the eye went
-  // under the plant, the cavity clamp then pressed it back into the pit every
-  // frame, and the view stuck there - "the camera gets stuck below the plant".
-  // The burrow allowance now governs an eye that is *already* under the surface
-  // (a transition, a held dev pose); the controls cannot take it there, so the
-  // ground stops the orbit exactly as it does with Root Sight closed.
-  const eyeAlreadyUnderSurface = camera.position.y < eyeGroundY - 0.02;
-  if (
-    rootSightEngaged &&
-    eyeAlreadyUnderSurface &&
-    eyeInCavityColumn() &&
-    (rootSightConfig?.cameraBurrowEnabled ?? false)
-  ) {
+  // The orbit may dive into the opening, and only into it. This branch used to run
+  // whenever a cavity existed, so a vertical drag anywhere was allowed past the
+  // horizon: the eye went under the plant far from the pit, the cavity clamp then
+  // pressed it back to the wall every frame, and the view stuck there. It now
+  // needs the eye to be standing in the opening's own column - so zoomed in over
+  // the pit a downward drag takes the eye through the hole and into the pit, and
+  // anywhere else the ground stops the orbit exactly as it does with Root Sight
+  // closed. An eye that leaves the column underground is lifted back up.
+  const overOpening = eyeOverAperture();
+  if (rootSightEngaged && overOpening && (rootSightConfig?.cameraBurrowEnabled ?? false)) {
     // Never below the earth's body. There is no earth under its underside, and
     // an eye down there watched the pit's own shell from outside against open
     // sky - the "cave walls" the underground view showed. The configured depth
@@ -2314,7 +2336,7 @@ function clampEyeToGround(): void {
   // still allowed under the soil, so the ground cannot shove it up mid-fade -
   // but only while it is standing in the opening itself. An eye under the
   // surface anywhere else is in solid dirt, and this is how it gets back up.
-  if (rootSightHoldsACavity() && eyeInCavityColumn()) return;
+  if (rootSightHoldsACavity() && eyeOverAperture()) return;
   const touch = renderConfig?.cameraGroundTouchM ?? 0.02;
   const field = getTerrainParams();
   const dir = camera.position.clone().sub(controls.target);
