@@ -270,6 +270,7 @@ export function createGround(
     shader.uniforms.uRootSightApertureBottomY = soilUniforms.uRootSightApertureBottomY;
     shader.uniforms.uRootSightWallColor = soilUniforms.uRootSightWallColor;
     shader.uniforms.uRootSightCamera = soilUniforms.uRootSightCamera;
+    shader.uniforms.uRootSightEyeInPit = soilUniforms.uRootSightEyeInPit;
     shader.uniforms.uRootSightNodes = soilUniforms.uRootSightNodes;
     shader.uniforms.uRootSightNodeCount = soilUniforms.uRootSightNodeCount;
     // Set from the camera's height above the actual displaced terrain, not from

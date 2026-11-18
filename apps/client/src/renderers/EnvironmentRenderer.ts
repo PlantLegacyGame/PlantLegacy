@@ -851,15 +851,26 @@ export class EnvironmentRenderer {
         terrain,
       );
       const eyeUnder = this.camera.position.y < surfaceY - 0.02;
+      // An eye standing in the open pit is below the ground's sheet but not
+      // inside the earth: the mouth above it is real sky, and the ground around
+      // it is lit hillside. Treated as buried, the sky dome paints its earth
+      // cone in every direction below 35 degrees ("inside the earth") and the
+      // ground shades itself as an enclosure that fades to a fifth of its light
+      // with distance - together a wall of soil where the sky should be, at
+      // exactly the height where a camera hovering over the pit ends up (R23).
+      // The camera's own answer says which case this is: the flag is set while
+      // it is buried *and* standing inside the opening's column.
+      const eyeInPit = this.soilUniforms.uRootSightEyeInPit.value > 0.5;
+      const eyeBuried = eyeUnder && !eyeInPit;
       const skyUniforms = this.sky.material.uniforms;
       if (skyUniforms?.uEyeUnderGround) {
-        skyUniforms.uEyeUnderGround.value = eyeUnder ? 1 : 0;
+        skyUniforms.uEyeUnderGround.value = eyeBuried ? 1 : 0;
       }
       const groundUniforms = this.groundMaterial.userData.shader?.uniforms;
       if (groundUniforms?.uEyeUnderGround) {
-        groundUniforms.uEyeUnderGround.value = eyeUnder ? 1 : 0;
+        groundUniforms.uEyeUnderGround.value = eyeBuried ? 1 : 0;
       }
-      this.updatePlanetBodyVisibility(eyeUnder);
+      this.updatePlanetBodyVisibility(eyeBuried);
     }
     this.elapsedSeconds += dt;
     if (this.cavityBowl) {

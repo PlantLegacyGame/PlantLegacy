@@ -193,8 +193,8 @@ Run in Chromium against the dev stack, screenshots in
 - **Root Sight** now opens a real pit: a soft rim, a dry bowl, and the
   roots hanging into it, with the seed sitting at the mouth (`39`, `41`). `R`
   closes and reopens it. Getting there fixed four separate faults: the aperture
-  is floored at the seed's own width (R9); the orbit cannot come closer than
-  1.25 mouths, so the eye never ends up inside the bowl (R10); the cavity's
+  is floored at the seed's own width (R9); the orbit floor is half the mouth, so
+  the eye can be brought over the hole and dived through it (R10, R22); the cavity's
   surface height was being computed with the planet radius added twice, which
   put the whole volume 18 m above the plant (R11); and the opening was lifted to
   the highest ground under the rim, burying the seed in a well on any slope

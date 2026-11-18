@@ -70,7 +70,7 @@ import {
 } from './net/dispatch.js';
 import { playerWorldY, spawnPlayer, stepPlayerVertical } from './physics/playerPhysics.js';
 import { plantPhysicsSync, rapierWorld } from './physics/RapierPhysicsManager.js';
-import { clampToCavity, isInsideCavityColumn } from './player/burrowClamp.ts';
+import { clampToCavity } from './player/burrowClamp.ts';
 import { ownBodyNodes, resolveOwnAnchor } from './player/ownPlantAnchor.js';
 import { decideAutoOpenRootSight } from './player/rootSightAutoOpen.js';
 import { isBelowSoil } from './player/underground.js';
@@ -2002,6 +2002,27 @@ function cancelCameraAutoMove(): void {
 const NODE_DOUBLE_CLICK_PICK_PX = 24;
 const nodePickVector = new THREE.Vector3();
 
+/**
+ * The orbit floor while Root Sight holds a cavity, in metres.
+ *
+ * Half a mouth is the pit's own scale: close enough for the eye to be brought
+ * over the hole and dived through it, far enough that the near wall does not
+ * fill the frame, and reachable for the smallest pit (a 28 cm mouth asks for
+ * 0.14 m, against the 15 cm root-layer floor).
+ *
+ * One function on purpose. The number used to be written in two places that
+ * disagreed: `settlePlayerOnGround` set `mouth * 0.6`, and a few lines later the
+ * render loop stamped the eased `currentCameraMinDistance()` over it, which
+ * asked for `mouth * 1.25`. The larger floor won every frame, so the eye could
+ * never come within 0.9 mouths of the centre, `eyeOverAperture()` was never
+ * true, and the dive branch below it was dead code - the camera could not go
+ * below the opening at all.
+ */
+function cavityOrbitFloorM(mouthM: number): number {
+  const rootMin = renderConfig?.cameraMinDistanceRoot ?? 0.15;
+  return Math.max(rootMin, mouthM * 0.5);
+}
+
 // How close the orbit may get depends on what is being inspected. Above ground
 // the camera must not enter the plant (camera_min_distance), while the root
 // layer needs to reach root tips (camera_min_distance_root): Root Sight makes
@@ -2014,11 +2035,17 @@ function currentCameraMinDistance(): number {
   const belowSurface =
     isBelowSoil(camera.position, surface) || isBelowSoil(controls.target, surface);
   const base = rootSightOn || belowSurface ? Math.min(surfaceMin, rootMin) : surfaceMin;
-  // Root Sight lowers the usable floor into the root layer, which let the orbit
-  // come closer than the mouth it had just opened: the eye ended up inside the
-  // bowl, with its far wall filling the frame. Keep the orbit one mouth of
-  // clearance outside the aperture while the cavity is open.
   if (rootSightOn && cavityApertureM > 0) {
+    // Root Sight lowers the usable floor into the root layer. While the dive is
+    // on offer the floor is the pit's own scale, so the eye can stand over the
+    // hole and then down through it (ADR-064); the one-mouth clearance used to
+    // sit outside the rim that `eyeOverAperture()` tests, which made the cavity
+    // impossible to enter. With the dive turned off there is nothing to enter,
+    // and the clearance still keeps the eye outside the bowl rather than inside
+    // its far wall.
+    if (rootSightConfig?.cameraBurrowEnabled ?? false) {
+      return Math.max(base, cavityOrbitFloorM(cavityApertureM));
+    }
     return Math.max(base, cavityApertureM * ROOT_SIGHT_APERTURE_EYE_CLEARANCE);
   }
   return base;
@@ -2130,47 +2157,44 @@ function rootSightHoldsACavity(): boolean {
  * dirt is real, and the camera lifts the eye back up instead of clamping it
  * sideways into the pit.
  */
-/** Is the eye standing over the opening itself (not just near it)? */
+/**
+ * Is the eye standing in the opening at all, its own wall included?
+ *
+ * The whole mouth, not most of it. This test used to stop at nine tenths of the
+ * radius, on the reasoning that the wall is the last few centimetres - but that
+ * last tenth is exactly where a burrowing camera is held by
+ * `clampEyeToCavity` (`mouth - cavity_clearance_m`, i.e. 0.9 mouths and a bit
+ * with the default 0.2 m clearance on a 1.9 m mouth). Pushing on towards the wall
+ * therefore left the answer false: the cavity clamp let go, and
+ * `clampEyeToGround` - which exempts only while this is true - threw the eye up
+ * to the surface in one frame. That is the teleport out of the pit that should
+ * have been a stop against its wall.
+ *
+ * One clearance past the mouth, because that is the band the wall clamp works
+ * in: a single frame of travel can carry the eye over the limit it is pressed
+ * back to, and it has to be caught there instead of being handed to the ground
+ * clamp on the way.
+ */
 function eyeOverAperture(): boolean {
   if (!rootSightHoldsACavity()) return false;
   const radius = soilCutawayUniforms.uRootSightApertureRadius.value;
   if (!(radius > 0.05)) return false;
   const centre = soilCutawayUniforms.uRootSightApertureCenter.value;
-  // Nine tenths of the mouth: the wall itself is the last few centimetres, and a
-  // camera pressed against it should still count as being over the hole.
-  return Math.hypot(camera.position.x - centre.x, camera.position.z - centre.z) <= radius * 0.9;
-}
-
-function eyeInCavityColumn(): boolean {
-  if (!rootSightHoldsACavity()) return false;
-  const radius = soilCutawayUniforms.uRootSightApertureRadius.value;
-  if (!(radius > 0.05)) return false;
-  const centre = soilCutawayUniforms.uRootSightApertureCenter.value;
-  return isInsideCavityColumn(
-    { x: camera.position.x, z: camera.position.z },
-    { x: centre.x, z: centre.z, radius },
-    rootSightConfig?.cavityClearanceM ?? 0.2,
+  const clearance = rootSightConfig?.cavityClearanceM ?? 0.2;
+  return (
+    Math.hypot(camera.position.x - centre.x, camera.position.z - centre.z) <= radius + clearance
   );
 }
 
 function settlePlayerOnGround(deltaTime: number): void {
   const planetRadius = renderConfig?.planetRadiusM ?? 0;
   if (planetRadius <= 0) return;
-  // The orbit has to be able to reach the opening at all. The configured floor
-  // (2.4 m) is wider than a young pit's mouth (under 2 m), so the eye could not
-  // be brought over the hole - which is why entering the pit was impossible.
-  // While Root Sight holds a cavity the orbit may come in to the pit's own radius.
-  const orbitFloorM = renderConfig?.cameraMinDistance ?? 0.5;
-  // The mouth the soil actually cuts, not the cavity's own sizing radius: the
-  // orbit has to be able to reach the hole that is drawn.
-  const mouthM = soilCutawayUniforms.uRootSightApertureRadius.value;
-  const cavityOrbitFloorM =
-    rootSightHoldsACavity() && mouthM > 0.05
-      ? Math.max(0.3, Math.min(orbitFloorM, mouthM * 0.6))
-      : orbitFloorM;
-  if (Math.abs(controls.minDistance - cavityOrbitFloorM) > 1e-4) {
-    controls.minDistance = cavityOrbitFloorM;
-  }
+  // The orbit floor is deliberately not set here. It was, at `mouth * 0.6`, and
+  // the render loop overwrote it with the eased `currentCameraMinDistance()` a
+  // few lines later - which asked for `mouth * 1.25`, outside the rim the dive
+  // gate tests. That silent second writer is why the eye could never reach the
+  // opening. `currentCameraMinDistance()` owns the floor now, through
+  // `cavityOrbitFloorM()`, so the dive and the orbit cannot disagree again.
   const field = getTerrainParams();
   const groundY = planetTerrainY(planetRadius, controls.target.x, controls.target.z, field);
   playerVertical = stepPlayerVertical(
@@ -2302,11 +2326,14 @@ function clampEyeToCavity(): void {
   if (!(rootSightConfig?.cameraBurrowEnabled ?? false)) return;
   const radius = soilCutawayUniforms.uRootSightApertureRadius.value;
   if (!(radius > 0.05)) return;
-  // Only the eye already standing in the column is pressed back to its wall.
-  // Applied to any buried eye, this dragged the camera from wherever it was into
-  // the pit every frame, so a buried eye had no way out - it now leaves it alone
-  // and `clampEyeToGround` lifts the eye back to the surface.
-  if (!eyeInCavityColumn()) return;
+  // An eye standing anywhere in the opening - including pressed against its
+  // wall - is held at the wall rather than let through it. This used to ask
+  // whether the eye was inside the column *minus its clearance*, which is the
+  // line the clamp itself enforces: one more centimetre towards the wall and the
+  // clamp stopped running, so the dirt was left to the ground clamp and the eye
+  // was lifted to the surface. An eye in solid earth outside the opening is
+  // still left alone, and `clampEyeToGround` brings that one back up.
+  if (!eyeOverAperture()) return;
   const planetRadius = renderConfig?.planetRadiusM ?? 0;
   const groundY = planetTerrainY(
     planetRadius,
@@ -2603,6 +2630,18 @@ function updateRootSight(deltaTime: number): void {
     getTerrainParams(),
   );
   const eyeUnderSoil = camera.position.y < groundUnderEye - 0.05;
+  // Standing inside the pit is not the same as being buried elsewhere in the
+  // earth: the ground beyond the rim is above the eye, so the only face of it an
+  // eye down here can meet is its underside - a wall of soil across the frame at
+  // lip height, with the pit's sky behind it. The flag is the camera's own
+  // answer, so an eye buried in solid earth still gets its dirt enclosure.
+  // Two centimetres, the same test `EnvironmentRenderer` makes for "the eye is
+  // under the sheet". With its own threshold here the two disagreed in a narrow
+  // band: three centimetres under the ground the environment called the eye
+  // buried while this flag said it was still on the surface, so the dome painted
+  // its earth cone and the pit came back as the wall of soil (R23).
+  soilCutawayUniforms.uRootSightEyeInPit.value =
+    camera.position.y < groundUnderEye - 0.02 && eyeOverAperture() ? 1 : 0;
 
   // Size the pit to the plant, capped by the configured radius. A fixed 50-unit
   // cutaway around a seed was a crater with a speck in the middle.

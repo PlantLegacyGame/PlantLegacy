@@ -45,6 +45,17 @@ export interface RootSightUniforms {
   uRootSightWallColor: { value: THREE.Color };
   /** Eye position: used to keep the cavity enclosed and shaded while underground. */
   uRootSightCamera: { value: THREE.Vector3 };
+  /**
+   * 1 while the eye is buried inside the cavity's own column.
+   *
+   * The ground beyond the rim, above such an eye, can only ever be the
+   * *underside* of the earth's skin: from inside the pit there is no top surface
+   * to see past the lip, so drawing it puts a wall of soil where the sky belongs
+   * and the pit disappears at eye level (R23). A buried eye anywhere else is
+   * inside solid earth, where that skin is the medium it stands in and must be
+   * drawn.
+   */
+  uRootSightEyeInPit: { value: number };
 }
 
 /** The presentation values Root Sight takes from `config/root_sight.json`. */
@@ -108,6 +119,7 @@ export function createRootSightUniforms(): RootSightUniforms {
     uRootSightNodeCount: { value: 0 },
     uRootSightWallColor: { value: new THREE.Color(0x241d16) },
     uRootSightCamera: { value: new THREE.Vector3() },
+    uRootSightEyeInPit: { value: 0 },
   };
 }
 

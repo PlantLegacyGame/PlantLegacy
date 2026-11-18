@@ -57,6 +57,8 @@ uniform float uRootSightApertureTopY;
 uniform float uRootSightApertureBottomY;
 uniform vec3 uRootSightWallColor;
 uniform vec3 uRootSightCamera;
+// 1 while the eye stands buried inside the cavity's own column (R23).
+uniform float uRootSightEyeInPit;
 // T02 organic envelope: every subterranean root node, fused with a smooth
 // minimum so the cut follows the branching root paths instead of one sphere.
 uniform vec4 uRootSightNodes[64];
@@ -241,6 +243,18 @@ vec3 soilBumpNormal(vec3 normal, vec2 uv, float strength) {
     if (eyeIsUnder) {
       cutMask = max(cutMask, bubbleMask);
     }
+  }
+
+  // From inside the pit, the ground beyond the rim is seen from *underneath*:
+  // the eye is below the sheet, so every fragment of that ground it faces is a
+  // back face. There is no dirt there to draw - the earth is solid under the
+  // pit, and the only opening is the mouth - so what reaches the screen is a
+  // wall of soil across the whole frame at lip height, with the pit's sky cut
+  // off behind it. The top of the ground cannot be seen from below it, so only
+  // the underside is dropped; a buried eye anywhere else is inside the dirt and
+  // keeps its enclosure.
+  if (uRootSightEyeInPit > 0.5 && !gl_FrontFacing && vSoilWorldPos.y > uRootSightCamera.y) {
+    discard;
   }
 
   // Surface coordinates: metres of arc from the planet's pole, in the azimuth

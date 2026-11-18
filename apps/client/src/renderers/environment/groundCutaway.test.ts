@@ -61,6 +61,19 @@ test('every soil patch is cut, so the pit does not vanish past the detail edge',
   assert.match(shader, /setSurfaceCut\(patches\.outer, true\)/);
 });
 
+test('a buried eye in the pit does not see the underside of the ground beyond the rim', () => {
+  // At lip height that underside is a wall of soil across the frame, with the
+  // pit's sky behind it: the eye is under the sheet, so every fragment of the
+  // ground past the rim it faces is a back face (R23). Only back faces above
+  // the eye go; the uphill ground's front faces and everything below the eye
+  // are still dirt a buried eye really can see.
+  assert.match(shader, /uniform float uRootSightEyeInPit;/);
+  assert.match(
+    shader,
+    /if \(uRootSightEyeInPit > 0\.5 && !gl_FrontFacing && vSoilWorldPos\.y > uRootSightCamera\.y\) \{\s*discard;/,
+  );
+});
+
 test('the underground rim shading stays a surface effect', () => {
   // The lip is what used to draw a bright ring around the opening when seen
   // from below, so it is deliberately faded out with the eye under the soil.

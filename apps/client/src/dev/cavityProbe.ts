@@ -69,7 +69,7 @@ export function createCavityProbe(input: {
   const { scene, camera, getTarget } = input;
   let hold: CavityProbePose | null = null;
   /** Restores, one per material touched, so a tint is always reversible. */
-  let restores: Array<() => void> = [];
+  const restores: Array<() => void> = [];
   let before: THREE.Mesh | null = null;
 
   const findMesh = (name: string): THREE.Mesh | null => {
