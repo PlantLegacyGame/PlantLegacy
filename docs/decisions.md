@@ -1364,7 +1364,9 @@ a vertical drag put the eye under the plant, where the cavity clamp then held it
 with no way out. So a drag down over the pit now takes the eye through the hole
 and inside the pit, bounded by `max_burrow_depth_m` and the pit's own floor; a
 drag anywhere else stops at the ground, and an eye that leaves the column
-underground is in solid dirt and `clampEyeToGround` lifts it back up.true## ADR-065 — Inland water stops being geometry
+underground is in solid dirt and `clampEyeToGround` lifts it back up.
+
+## ADR-065 — Inland water stops being geometry
 
 **Status:** proposed 2026-11-17 (W6), not built.
 
@@ -1383,3 +1385,52 @@ not for the surface count.
 masks and no depth bias — and no specular reflection worth the name unless a
 screen-space pass is added later. Groundwater stays as simulation data; only its
 drawing goes away.
+
+## ADR-066 — Sky uniforms are copies, and the sky takes its hour from palettes
+
+**Status:** accepted 2026-11-18. Supersedes nothing; amends the sky grading added
+in the same day's fixes.
+
+**Context.** The sky read daylight colours at 4 am and the first repair (a
+tile-light ceiling on the sky's brightness) only dimmed the wrong palette. The
+next attempt graded the dome's zenith/horizon from the sun's height and produced
+a warm red horizon at 4 am, which made no sense for a sun half a sky underground.
+
+The cause was not the formula. `createSkyDome` was handed `bodies.sunDir` and
+`bodies.moonDir` and stored those **instances** as its shader uniforms, and
+`applyCelestialLighting` blanks them at night - the sun's uniform is replaced by
+`(0, -1, 0)` so the disc disappears below the horizon, the moon's takes its
+place. Writing "the sun is straight down" into the uniform therefore also wrote
+it into the renderer's own sun direction. From the first night frame onwards
+every reader of `bodies.sunDir` - the fog, the fill light, the water field, the
+cavity light, the sky's hour grade - saw a sun pointing at the ground instead of
+one just below the horizon. A grade that reads a height of -1 all night cannot
+produce dusk; the one frame that caught a height near zero before the clock was
+frozen painted the horizon with the sunset palette, which is the red.
+
+**Decision.**
+
+1. **Uniforms own their values.** The dome clones the vectors it is given. The
+   celestial pass is then free to blank its uniforms without touching the
+   renderer's state; a regression test blanks both and asserts the caller's
+   vectors are unchanged.
+2. **The sky's hour comes from palettes, not from brightness.** `gradeSkyTarget`
+   blends the weather's colours toward `sky_*_dusk` as the sun crosses the
+   horizon (mix `0.55`) and toward `sky_*_night` once it is down (mix `0.92`), so
+   midnight is the configured night sky rather than dimmed daytime blue.
+3. **One night treatment.** The tile-light ceiling (`localSkyBrightness`) is
+   gone: it was a second, competing way to make night dark, and it dimmed the
+   night palette as well as choosing it. `localSkyBrightness` now only reports
+   how lit the plant's own ground is.
+4. **Weather still leads at night.** The night palette is scaled by the weather's
+   own light multiplier, floored at `sky_night_min_light`, so a stormy night is
+   darker than a clear one instead of both snapping to the same colour.
+5. **The values are data.** `sky_night_min_light` and `skylight_desaturation` are
+   `config/render.json` entries, not constants in the renderer.
+
+**Consequences.** The sun direction is trustworthy after the celestial pass, and
+anything that wants the hour reads it. Night sky colour and night brightness are
+one decision made in one place, which is also what makes storm-night darkness a
+property of the weather rather than of a missing ceiling. The cost is that a
+shader uniform can no longer be the place where shared state is stored: uniforms
+that the pass rewrites must be copies, and a test now holds that line for the sky.

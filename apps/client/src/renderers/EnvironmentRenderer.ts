@@ -27,8 +27,11 @@ import { type AtmosphereParams, atmosphereFromConfig } from './environment/atmos
  */
 const CAVITY_DAYLIGHT_REFERENCE = 1.08;
 
-/** How far the fill light's colour is pulled to neutral; 0 = raw sky, 1 = grey. */
-const SKYLIGHT_DESATURATION = 0.55;
+/** How much of the dusk palette the sky takes at the horizon crossing. */
+const SKY_DUSK_MIX = 0.55;
+
+/** How much of the night palette the sky takes once the sun is down. */
+const SKY_NIGHT_MIX = 0.92;
 
 /** Scratch colours for the sky's hour grade: one frame, no allocation. */
 const skyDuskScratch = new THREE.Color();
@@ -986,10 +989,11 @@ export class EnvironmentRenderer {
     this.hemisphereLight.color.copy(this.sky.zenithColor);
     const zenith = this.hemisphereLight.color;
     const luma = 0.2126 * zenith.r + 0.7152 * zenith.g + 0.0722 * zenith.b;
+    const desaturation = THREE.MathUtils.clamp(this.config.skylightDesaturation, 0, 1);
     zenith.setRGB(
-      THREE.MathUtils.lerp(zenith.r, luma, SKYLIGHT_DESATURATION),
-      THREE.MathUtils.lerp(zenith.g, luma, SKYLIGHT_DESATURATION),
-      THREE.MathUtils.lerp(zenith.b, luma, SKYLIGHT_DESATURATION),
+      THREE.MathUtils.lerp(zenith.r, luma, desaturation),
+      THREE.MathUtils.lerp(zenith.g, luma, desaturation),
+      THREE.MathUtils.lerp(zenith.b, luma, desaturation),
     );
     this.hemisphereLight.groundColor.copy(this.sky.horizonColor);
     // The fill light shares the ambient's budget. It kept Three's default
@@ -1154,11 +1158,22 @@ export class EnvironmentRenderer {
     const dusk = Math.max(0, 1 - day - night);
     if (dusk > 0) {
       skyDuskScratch.set(duskHex);
-      target.lerp(skyDuskScratch, dusk * 0.55);
+      target.lerp(skyDuskScratch, dusk * SKY_DUSK_MIX);
     }
     if (night > 0) {
+      // One night treatment, and this is all of it. The palette is the colour;
+      // the weather's own light multiplier is the brightness, applied to the
+      // palette and to whatever weather tint survives the blend, so a stormy
+      // night is darker than a clear one everywhere in the sky instead of only
+      // in the palette term. The floor keeps a black storm from erasing it.
+      const weatherLight = THREE.MathUtils.clamp(
+        Number.isFinite(this.lightMultiplier) ? this.lightMultiplier : 1,
+        this.config.skyNightMinLight,
+        1,
+      );
       skyNightScratch.set(nightHex);
-      target.lerp(skyNightScratch, night * 0.92);
+      target.lerp(skyNightScratch, night * SKY_NIGHT_MIX);
+      target.multiplyScalar(THREE.MathUtils.lerp(1, weatherLight, night));
     }
   }
 

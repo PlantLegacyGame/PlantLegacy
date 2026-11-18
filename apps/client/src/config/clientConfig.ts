@@ -91,6 +91,10 @@ export interface RenderConfig {
   skyHorizonDusk: string;
   skyZenithNight: string;
   skyHorizonNight: string;
+  /** Floor on the weather light that scales the night palette (`sky_night_min_light`). */
+  skyNightMinLight: number;
+  /** How far the fill light's sky colour is pulled to neutral (`skylight_desaturation`). */
+  skylightDesaturation: number;
   skyZenithRain: string;
   skyHorizonRain: string;
   skyZenithStorm: string;
@@ -468,6 +472,10 @@ interface RenderConfigResponse {
   skyZenithNight?: string;
   sky_horizon_night?: string;
   skyHorizonNight?: string;
+  sky_night_min_light?: number;
+  skyNightMinLight?: number;
+  skylight_desaturation?: number;
+  skylightDesaturation?: number;
   sky_zenith_rain?: string;
   skyZenithRain?: string;
   sky_horizon_rain?: string;
@@ -864,6 +872,10 @@ function normalizeRenderConfig(data: RenderConfigResponse, fallback: RenderConfi
     skyHorizonDusk: data.sky_horizon_dusk ?? data.skyHorizonDusk ?? fallback.skyHorizonDusk,
     skyZenithNight: data.sky_zenith_night ?? data.skyZenithNight ?? fallback.skyZenithNight,
     skyHorizonNight: data.sky_horizon_night ?? data.skyHorizonNight ?? fallback.skyHorizonNight,
+    skyNightMinLight:
+      data.sky_night_min_light ?? data.skyNightMinLight ?? fallback.skyNightMinLight,
+    skylightDesaturation:
+      data.skylight_desaturation ?? data.skylightDesaturation ?? fallback.skylightDesaturation,
     skyZenithRain: data.sky_zenith_rain ?? data.skyZenithRain ?? fallback.skyZenithRain,
     skyHorizonRain: data.sky_horizon_rain ?? data.skyHorizonRain ?? fallback.skyHorizonRain,
     skyZenithStorm: data.sky_zenith_storm ?? data.skyZenithStorm ?? fallback.skyZenithStorm,
@@ -1273,6 +1285,8 @@ export async function loadRenderConfig(serverOrigin: string): Promise<RenderConf
     skyHorizonDusk: '#D4553A',
     skyZenithNight: '#0B0E14',
     skyHorizonNight: '#1B202A',
+    skyNightMinLight: 0.12,
+    skylightDesaturation: 0.55,
     skyZenithRain: '#2E3A44',
     skyHorizonRain: '#5A6E7C',
     skyZenithStorm: '#181C22',

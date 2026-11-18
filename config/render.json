@@ -290,6 +290,18 @@
       "value": "#1B202A",
       "notes": "Sky horizon color during night."
     },
+    "sky_night_min_light": {
+      "type": "number",
+      "value": 0.12,
+      "range": [0, 1],
+      "notes": "Floor on the weather light that scales the night sky palette: a stormy night is darker than a clear one, but never so dark the palette disappears."
+    },
+    "skylight_desaturation": {
+      "type": "number",
+      "value": 0.55,
+      "range": [0, 1],
+      "notes": "How far the fill light's sky colour is pulled to neutral. At 0 every upward-facing surface (the inside of the Root Sight pit included) is tinted the sky's full blue; at 1 the skylight is grey."
+    },
     "sky_zenith_rain": {
       "type": "color",
       "value": "#2E3A44",
