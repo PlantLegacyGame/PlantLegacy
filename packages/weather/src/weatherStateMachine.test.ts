@@ -10,6 +10,8 @@ import {
   weatherStateMachineGetTimeOfDay,
   weatherStateMachineGetWeatherState,
   weatherStateMachineIsDay,
+  weatherStateMachineSetTimePaused,
+  weatherStateMachineSetTimeScale,
   weatherStateMachineUpdate,
 } from './weatherStateMachine.ts';
 
@@ -170,5 +172,45 @@ describe('T07 WeatherStateMachine', () => {
 
     machine.currentState = 'thunderstorm_active';
     assert.equal(weatherStateMachineGetMoistureGainPerS(machine), 2.0);
+  });
+  it('freezes the clock on the server while the weather keeps running', () => {
+    const machine = createWeatherStateMachine(weatherConfig, dayNightConfig);
+    const before = weatherStateMachineGetTimeOfDay(machine);
+
+    weatherStateMachineSetTimePaused(machine, true);
+    for (let i = 0; i < 10; i++) weatherStateMachineUpdate(machine, 10);
+    assert.equal(weatherStateMachineGetTimeOfDay(machine), before);
+
+    weatherStateMachineSetTimePaused(machine, false);
+    weatherStateMachineUpdate(machine, 10);
+    assert.notEqual(weatherStateMachineGetTimeOfDay(machine), before);
+  });
+
+  it('runs the clock faster without changing the cycle length', () => {
+    const slow = createWeatherStateMachine(weatherConfig, dayNightConfig);
+    const fast = createWeatherStateMachine(weatherConfig, dayNightConfig);
+    weatherStateMachineSetTimeScale(fast, 10);
+
+    weatherStateMachineUpdate(slow, 20);
+    weatherStateMachineUpdate(fast, 20);
+
+    const slowMoved = weatherStateMachineGetTimeOfDay(slow) - 0.25;
+    const fastMoved = weatherStateMachineGetTimeOfDay(fast) - 0.25;
+    assert.ok(
+      fastMoved > slowMoved * 9,
+      'ten times the scale should move the clock about ten times as far',
+    );
+    assert.equal(fast.cycleLengthS, slow.cycleLengthS);
+  });
+
+  it('reports the clock mode in the broadcast so every panel agrees', () => {
+    const machine = createWeatherStateMachine(weatherConfig, dayNightConfig);
+    weatherStateMachineSetTimePaused(machine, true);
+    weatherStateMachineSetTimeScale(machine, 5);
+
+    const broadcast = weatherStateMachineGetBroadcast(machine);
+
+    assert.equal(broadcast.timePaused, true);
+    assert.equal(broadcast.timeScale, 5);
   });
 });

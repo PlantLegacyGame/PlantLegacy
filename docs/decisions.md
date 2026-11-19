@@ -13,6 +13,16 @@ written.
 
 Format: **Context → Decision → Consequences.**
 
+**On `AL-nn` identifiers.** Several ADRs below name work packages such as
+`AL-08` or `AL-17`. Those ids belong to the Abyssal integration programme
+(`PlantLegacy-Abyssal-Integration-Plan.md`), deleted on 2026-11-16 because its
+state audit and its description of the upstream source were wrong. The rulings
+stand; only the label's home moved. Read an `AL-nn` reference as "the renderer or
+world work described in `DESIGN.md` Part 11 under the matching `T`/`C` task", and
+see [`abyssal-garden-source-analysis.md`](./abyssal-garden-source-analysis.md)
+for what is actually worth building and in what order. `AL-01`, `AL-03` and
+`AL-04` also have task records in `docs/tasks/`, because they were started.
+
 ---
 
 ## ADR-001 — Run TypeScript directly on Node
@@ -782,7 +792,7 @@ bcrypt references above describe the state when this record was written.
 **Context.** DESIGN C02 specifies a *transparent WebGPU canvas layered over the
 Three.js environment*. That split cannot share depth, so a plant is never
 occluded by nearby relief, and light shafts and water refraction cannot read
-plant depth. A proposal (`PlantLegacy-Abyssal-Integration-Plan.md` §4.3) called
+plant depth. A proposal made on 2026-11-14 called
 this split a defect and described a single-frame renderer as already locked by
 DESIGN. It is not: C02 is the locked spec.
 
@@ -939,14 +949,16 @@ disagreed. `DESIGN.md` contradicted itself on impostors and used three tier
 schemes. Merging everything would put week estimates into the document read most
 often and mix a living spec with dated approval records.
 
-**Decision.** `DESIGN.md` owns rules and task specs. The Abyssal integration plan
-stays a programme document but **never restates a spec or a config value** — it
-references the owner. Decisions become ADRs here. The AG technique catalogue
-lives in `docs/abyssal-mechanisms.md`. `docs/tunables.md` owns the config file
-count; other documents link rather than quote a number. The standalone v5.4 approval record was folded into
-`docs/PlantLegacy-Abyssal-Integration-Plan.md` §0.3 on 2026-11-14, after its
-77-file count was corrected to 78 with a pointer to `docs/tunables.md`. No
-decision in it was altered.
+**Decision.** `DESIGN.md` owns rules and task specs. Decisions become ADRs here.
+The AG technique catalogue lives in [`abyssal-garden-source-analysis.md`](./abyssal-garden-source-analysis.md)
+(it moved there on 2026-11-16, when the earlier reference and programme
+documents were deleted for being wrong about the source). `docs/tunables.md` owns
+the config file count; other documents link rather than quote a number. The
+standalone v5.4 approval record was folded into the programme document on
+2026-11-14, after its 77-file count was corrected to 78 with a pointer to
+`docs/tunables.md`. No decision in it was altered. That programme document was
+deleted on 2026-11-16; the approved task specs remain in `DESIGN.md` Parts 11 and
+16, so no approval was lost.
 
 **Consequences.** Adding a fact means choosing one owner and linking the rest.
 The failure mode to watch is duplication, not file count: a single document that
@@ -1434,3 +1446,403 @@ one decision made in one place, which is also what makes storm-night darkness a
 property of the weather rather than of a missing ceiling. The cost is that a
 shader uniform can no longer be the place where shared state is stored: uniforms
 that the pass rewrites must be copies, and a test now holds that line for the sky.
+
+## ADR-067 — The HUD has one owner per fact, and dashboards are not player UI
+
+**Context.** The in-world HUD answered "what is my plant doing" three times. A
+tick card in the bottom-left printed biomass, energy, water and minerals next to
+`Server tick: 161259`, the raw plant id and `Synced 1 plants from server`; the
+status card at the top centre printed the same four numbers again alongside the
+day and the clock; the readout at the top right printed them a third time with
+the season. Everything was full-precision (`40.0/40`, `+0.0/s`), every label was
+9.3px because `--hud-font-sm` bottomed out at `0.58rem`, and Grow mode was
+announced by one line *inside the tick card*, which no player could see.
+
+**Decision.** One surface per fact, and the operator dashboard is not a surface.
+
+1. **Vitals card owns the numbers that tick**: biomass, energy, light, water and
+   minerals, plus the world clock and the weather chip. A store with a capacity
+   gets a bar; a store without one gets a number. A rate is shown only when it is
+   not zero.
+2. **Status card owns the body**: phase word, health bar, mutation bill, node
+   count, reroot controls. It no longer repeats a single resource, the clock or
+   the weather, and it says "healthy" by staying silent rather than by printing
+   the word on every frame.
+3. **The tick card is an operator tool**: off by default, toggled with F3, and
+   refused outright unless the server grants dev tools (ADR through INV-AU-13).
+   Player-facing outcomes that used to be lines in it (a growth landing, a
+   refused growth, a new season, a lost connection) are toasts or contextual
+   hints instead.
+4. **Modes are visual**: Grow mode tints the screen edge, switches the cursor,
+   holds the action bar's Grow button down and shows a badge. It is not text in a
+   readout.
+5. **Type has a floor from config** (`ui.hud_font_small_px`,
+   `ui.hud_font_secondary_px`), because the smallest HUD label is a readability
+   decision, not a stylesheet accident.
+
+**Consequences.** The player sees four numbers once, in one corner, with the
+clock and the weather next to them, and gains a bottom action bar that names
+every verb the keyboard used to hide. The cost is that a HUD element can no
+longer borrow a number that another element happens to already have in scope:
+the status card now refuses `energy`/`water`/`minerals` even when the caller
+passes them, and a screen that wants them has to go to the vitals card.
+
+## ADR-068 — A junction is a rule about a parent and a child, not about a part
+
+**Context.** The drawn plant was a pile of pipes. A branch met its trunk as a
+cone whose base was the trunk's own diameter, so the narrowest thing on screen
+was the branch's *tip* and the widest was its *base*; a 12 cm internode from a
+4.5 cm trunk to a 1.7 cm branch was drawn 2.65x its own shank with a 19.4 degree
+half angle at growth 1. The taper from that base to the tip was linear, so the
+whole internode was a funnel. The tube also began 0.9 of the parent's radius out
+from the attach point, i.e. on the parent's surface, leaving its rim tangent to
+that surface as a crease. And each segment's curve was built from its own chord
+(a midpoint plus a bow), so consecutive segments met at unrelated angles: every
+node was a kink, and a fork knuckle was a sphere sized from the parent's end
+alone.
+
+The same defect had already been fixed once, in the title screen's roots, where
+it read as a flange. The 3D form survived because two renderers each carried
+their own copy of the radius rule, and `packages/shared/src/growth/geometry.ts`
+is where they stop disagreeing.
+
+**Decision.** The junction is derived from the parent *and* the child, in one
+place, for both renderers and the Lab.
+
+1. `jointStartRadius(parentRadiusAtAttach, childRadius, softOrgan)` returns
+   `min(parent, child * joint_flare_ratio)` — a knuckle, capped by the part that
+   carries it, so a child can never be wider than its parent. A soft organ
+   (leaf, cotyledon, flower, spore sac) is `min(parent, child)` and gets no
+   knuckle, because a leaf expands from its stalk rather than socketing into it.
+2. The parent's radius at the *attach point*, not its nominal radius:
+   `segmentRadiusAt(parentStart, parentEnd, attachFraction)`. A lateral that
+   leaves 60% along a necking stem is not as thick there as at the stem's base.
+3. `segmentRadiusAt(r0, r1, t)` = `lerp(r0, r1, 1 - (1-t)^exponent)`. The neck
+   finishes inside the first quarter of a segment and the shank holds, which is
+   the difference between a branch and a spike socket.
+4. `socketInset(parentRadius)` = 0.15 of it, measured from the attach point along
+   the child's own direction, because the attach point is on the parent's *axis*:
+   starting inside the parent's body lets the parent's own surface hide the
+   child's base disc, where starting on the surface shows its rim.
+5. One control-point rule (`segmentControlPoint`) for every segment, and the
+   measurement calls it too. The start tangent is mixed from the parent's
+   arrival direction toward the child's own chord, with the mix growing as the
+   part forks harder: a continuation is C1, and a fork turns by at most about
+   half the angle it forked. Wobble and gravitropism are capped at 12% of the
+   segment, so they bend the middle of a tube instead of kicking its base.
+6. A fork's knuckle sphere is sized from the widest thing it has to cover — the
+   parent's end **and** every child's base.
+
+**Consequences.** A trunk-to-branch junction goes from 2.65x its shank and 19.4
+degrees to 1.25x and 2.0; a leaf stays 1.00x. On a chain that forks twice, the
+worst drawn-tangent kink went from 44.9 degrees to 5.0. Two metrics were added
+to `measureDrawnPlant` so the rule is measurable rather than intended:
+`maxJointToShankRatio` and `maxTangentKinkDeg` (the second compares the drawn
+curves, not the chords, because a fork angle is real and a kink is not). The
+cost is that a junction now needs both nodes, so `resolveSegmentFrame` takes the
+parent's start radius; a caller that omits it falls back to the parent's nominal
+radius, which is the old behaviour, and the first frame of the Three.js path
+does exactly that until the parent's own segment exists. The dead
+`addCurvedTube` in the WebGPU builder — a second copy of the linear taper that
+nothing called — was deleted rather than left to drift back into use.
+
+## ADR-069 — A layout answers the viewport, and a phone is a width not a device
+
+**Context.** The title screen's hero was a flat `width: 380px` column: the
+logotype, the name box and the buttons. That is a phone's width, and it did not
+change with the window, so on a 2560 × 1440 monitor the whole menu occupied 15%
+of the screen — measured in an iframe harness at seven widths, the stack was
+380px at every size from 768 to 2560. The name box was 20px narrower than the
+buttons under it for no reason. The mascot plant was `clamp(150px, 17vw, 232px)`,
+so it stopped growing at a phone's size too. Separately, the action bar dropped
+its keyboard badges under `@media (pointer: coarse)`, which a laptop with a
+touchscreen also matches: the most desktop thing in the HUD disappeared on a
+machine with a keyboard.
+
+**Decision.**
+
+1. The hero is one variable, `--pl-hero: clamp(380px, 30vw, 560px)`, and both the
+   stack and the name box read it, so they line up and both answer the window.
+2. The mascot's cap follows: `clamp(150px, 17vw, 300px)`.
+3. Controls scale at `min-width: 1200px` — a 46px Play button inside a 560px
+   column is a phone button. The block sits after the base rules, because the
+   Play button's own rule would otherwise win on source order.
+4. The finger layout asks for `(hover: none) and (pointer: coarse)`: no keyboard,
+   not merely a coarse pointer.
+5. A phone layout is chosen by width (≤ 560px for the one-sheet panels, ≤ 640px
+   for the vitals row), not by sniffing a device. There is no user-agent check
+   anywhere in the client.
+
+**Consequences.** At 390px the phone layout is unchanged (stack 360px, 92% of
+the viewport); at 1280px it is 384px (30%); at 1920px and 2560px it is 560px
+(29% and 22%). Anything that wants the hero's width now reads `--pl-hero`
+instead of a number, so a future card or popover cannot drift back to a phone's
+width. The cost is that a very wide screen gets a 560px column rather than a
+proportional one: a menu stretched to 30% of 2560px would look like a form, not
+a title screen, so the cap is deliberate.
+
+**Measured with** a throwaway harness (`public/__layout.html`, deleted after the
+pass) that loaded the real app in one iframe and recorded the title layout at
+390, 768, 1024, 1280, 1440, 1920 and 2560 — the screenshots this environment
+cannot take, because the preview tab cannot capture a page that runs a render
+loop. Numbers, not impressions.
+
+## ADR-070 — Proportion is a rule, so a mutation cannot outgrow its own plant
+
+**Context.** Two player reports, one cause. "Mutations affect growth wildly" and
+"things are unattached from each other" are the same defect: growth length was
+`base segment length × sizeMultiplier`, and `sizeMultiplier` is a *product* of
+every size mutation held and every level card taken. Nothing capped the product.
+A branch leaving a 95 cm stem could be 2.5 m long, with the joint geometry still
+exact — every anchor met, and it still did not read as a plant, because a plant's
+parts are proportional to each other. Separately, the mutation *appearance* pass
+paints from `visualCaps`/`visualStyles`, which is a separate surface from the
+geometry that mutation was silently changing.
+
+**Decision.**
+
+1. `config/mutations.json` gains `max_size_multiplier` (2), applied once in
+   `mutationEffects` after every mutation and every card, so the ceiling and the
+   tuning cannot disagree.
+2. `config/growth.json` gains `max_child_length_ratio` (1.6): a new segment may
+   not exceed 1.6× the length of the part it grows out of.
+3. The rule itself is shared geometry — `clampChildSegmentLength` next to
+   `jointStartRadius` — so roots, canopy and any future Lab read the same number.
+4. A parent with no length (the seed) imposes no ceiling: there is nothing to be
+   proportional to yet.
+5. Both keys are optional in their config types, so a fixture that predates them
+   keeps working and a sizeless config does not invent a rule it never declared.
+
+**Consequences.** A size mutation still grows the body — up to 2× a normal
+internode, and up to 1.6× its parent — but the growth reads as a bigger plant
+rather than as a pole. The clamp is on *length only*: radius still follows biomass
+through the mass model, so a long part stays as thick as its tissue says it is.
+
+**Verified by** `geometry.test.ts` (*keeps a new segment in proportion to the
+part it leaves*) and `mutations.test.ts` (*caps the product of size multipliers
+at the configured ceiling*), plus the existing junction tests, which never saw the
+clamp because it always holds for ordinary growth.
+
+## ADR-071 — The menu is laid out for the pane it is in, and a quote belongs to the growth
+
+**Context.** Two defects with one shape: a value was taken from the wrong place at
+the wrong time. (1) The title menu's hero column starts just below the ground line
+and grows downward, and nothing in the layout knew the pane's height: measured in a
+900x420 pane, Settings and Shop sat at y 394..438, at 1200x300 the whole menu was
+outside the pane (plant above the top, buttons below the bottom), and at 1280x800
+the Shop row overlapped the guest line by 14px. An embedded preview panel is a pane
+that is not the window, so this is the common case, not an edge. (2) A growing
+part's target mass was re-derived every tick from the plant's *current* mutation
+size scale, and a mutation rolls per growth - so a size mutation gained mid-flight
+re-priced a part the player was already paying for.
+
+**Decision.**
+
+1. `title/menuFit.ts` owns one rule, `menuFit`, returning a scale and a lift:
+   scale the column so its foot clears the guest line and the key hint, then take
+   whatever the scale floor cannot remove out of the column's top offset. It never
+   scales above 1, and it never lifts past the top of the pane.
+2. Measurements come from `offsetTop`/`offsetHeight`, which ignore transforms, so
+   the rule cannot feed back into itself on every resize.
+3. The mascot answers to height as well as width: `clamp(120px, min(17vw, 34vh), 300px)`.
+4. `growthTargetMass(node, quoted)` stamps a growth's quoted mass on its first tick
+   and returns the stamp thereafter. A mutation gained afterwards applies to the
+   parts the plant grows next.
+
+**Consequences.** A short pane now overlaps the menu with its own illustration
+rather than pushing buttons off the screen - the buttons are the game. A part's
+final mass is the mass the menu quoted, whatever the plant mutates into while it
+grows; the next part quotes at the new scale.
+
+**Measured with** a throwaway harness (deleted) that loaded the real app in an
+iframe and resized it through 1280x800, 531x653, 900x420, 1200x300, 390x844 and
+320x240, reporting every hero element's top/bottom against the pane. After the
+change: nothing outside the pane at any of the six, and 531x653 (the size of this
+machine's in-app preview) fits at scale 1.
+
+**Amendment — the ground line answers to the plant, not only to the pane (same
+session).** Scaling the column was only half the defect. The ground line was a
+*fixed share* of the pane height - `ui.title_horizon_fraction` (54%), lowered to
+44% and 36% by media queries - and the plant stands *on* that line and grows upward.
+So at 1200x300 the horizon sat at 162px for a 183px plant, and the mascot's top was
+21px above the top of the pane; the media queries were two more places holding an
+opinion about one number. `horizonForPane({viewportPx, fraction, plantPx,
+minGroundPx})` in the same module now owns it: use the configured share while the
+plant fits above it, push the line down to `plant + sky padding` when it does not,
+and stop at `pane - ground band` - when a pane cannot hold both, the top of the art
+gives way, because buttons beat illustration. `GROUND_BAND_PX` (96) is the band
+reserved under the line, and `mascotMaxWidthPx` caps the drawing at that band
+through `--pl-mascot-max`. The two media-query horizon overrides and the
+`max-height: 560px` plant `scale(0.8)` are gone: one owner for one number.
+
+A pane that cannot hold the column *and* the two lines of small print at its foot
+is compact: `.pl-menu.is-compact` drops the guest line and the H hint, keeps the
+title, the name and the three buttons, and reclaims their space for the column.
+Compact is decided by the pane (under 560px tall, or a column that cannot be placed
+without lifting it), not by "the fit had to shrink" - at 1280x800 the column scales
+to 0.91 for its own reasons and the guest line belongs there.
+
+**Re-measured, same harness shape:** 1280x800 - plant 188..432, Play 651..699, Shop
+707..748, guest line and hint shown; 531x653 - 245..353, 505..551, 559..601, both
+shown; 1200x300 - 48..162, 239..265, 269..292, both hidden; 320x240 - 22..130,
+182..206, 210..232, both hidden. Nothing outside the pane at any size, and the plant
+is inside it too, which the scale-only fix could not promise.
+
+## ADR-072 — A press on the plant is a tap until it moves
+
+**Context.** The title mascot was one big "grow bigger" click target: any press
+played the same 900ms perk-up. Making it answer per part ran into a conflict the
+first draft did not survive: the bud and the tender leaves are at the *top* of the
+drawing, which is exactly where a bend drag has to start. A fixed grab zone - "any
+press above 42% of the plant begins a bend" - therefore made the bud untappable:
+measured, a press on the bud produced no bud nod and set `is-bending` instead. The
+same press cannot mean two things decided in advance.
+
+**Decision.**
+
+1. The gesture is decided by what the pointer *does next*. `pointerdown` records a
+   candidate part; travel beyond `DRAG_SLOP_PX` (6) begins a bend; releasing where
+   the press started taps the part under it. A tap on the bud nods the bud; a drag
+   from the same pixel bends the stem.
+2. Every part answers with its own shape, not the same perk-up: a leaf flicks about
+   its own attachment and alternates direction by index (`tapResponse`, `swingAngle`,
+   `leafSwingSign`), the stem rocks the whole canopy on a slow period, the bud nods,
+   the roots flex a little. All damped sines that reach exactly 0 at the end of their
+   duration - a reaction that ends mid-swing is a drawing that jumps.
+3. A bend is a two-part hinge, not a rotation of the whole plant: the lower band
+   turns `BEND_LOWER_SHARE` (0.32) about the soil line and the tip `BEND_TIP_SHARE`
+   (0.72) about the middle of the stem, so a bent plant curves instead of tilting
+   like a signpost. Releasing starts `releaseAngle`: a spring that overshoots through
+   straight and settles at exactly 0 after 1600ms.
+4. The plant leans toward a pointer that is over it (`leanTowardPointer`, at most
+   3.2 degrees) and straightens when the pointer leaves; a breeze gust passes every
+   9-21 seconds (`nextGustAt`, `gustAngle`, at most 2.4 degrees, zero at both ends
+   and rocking twice). Both are motion only: the mascot is a drawing, not a control,
+   so nothing changes colour and nothing is outlined - the earlier rule that it gets
+   no hover highlight and no reaction glow still holds.
+5. Reduced motion removes the lean, the gust and the sway, and keeps the taps: the
+   parts still answer, they just do not drift while nothing is happening.
+6. A capture failure is not a drag failure. `setPointerCapture` throws for an unknown
+   pointer id (and for any synthetic event), and the drag still works while the
+   pointer stays over the element, so both captures are wrapped.
+
+**Consequences.** The mascot is a set of parts you can touch rather than a button
+that says "bigger". The drawing gains `data-part` per group and two hinge groups,
+which is also what a holiday variant needs. Nothing about the game state changes -
+this is a title screen - so no protocol, config or server surface is involved, and
+the only tunables are the ones the animation needed anyway.
+
+**Measured with** a throwaway harness (deleted) driving real `PointerEvent`s into
+the live app in an iframe: three consecutive leaf taps produced -1.01, +2.01 and
+-1.77 degrees (alternating) and each cleared to nothing afterwards; a press on the
+bud produced a 3.29-degree nod with `is-budding` set and no bend; a 48px drag from
+the top leaf bent the tip 4.76 degrees and the lower band 2.12 degrees, and both
+returned to exactly 0 after the spring; a double tap peaked the canopy at 3.25
+degrees and settled. The preview tab is throttled, so these are the values at the
+frames that actually ran - the direction, alternation, and settling are what the
+probe asserts, not the exact angles.
+
+## ADR-073 — The scene is the drag surface
+
+**Context.** Dragging the title background did nothing at all, and it had never
+worked: `.pl-menu__world` and `.pl-menu__ui` are `pointer-events: none` so the
+buttons stay clickable, and `pointer-events` **inherits** - the scene root, a child
+of the world layer, inherited `none`, so its `pointerdown` handler could never fire.
+The only thing that worked was the plant, which opted back in for itself. The
+canvas was also `touch-action: pan-y`, which let a horizontal touch drag scroll the
+page instead of moving the scene.
+
+**Decision.** `.pl-scene` sets `pointer-events: auto` and `touch-action: none`
+explicitly, and says why, because the inheritance is not visible where the drag is
+written. The interface layer is stacked above the scene and its own controls still
+take their clicks, so nothing else changes. `cursor: grab` already promised the
+gesture; now the gesture exists.
+
+**Consequences.** The background pans, and a press on the plant no longer travels
+to the scene (`stopPropagation` on the plant's own pointer handlers), so the two
+gestures cannot happen at once.
+
+**Measured:** a synthetic 60px drag on the scene moved `.pl-scene__layer--far` from
+`translate3d(0px, 0px, 0px)` to `translate3d(-18.22px, -1.52px, 0px)`, which is 60px
+times that layer's configured depth of 0.35 - the depth map is doing its job.
+
+
+## ADR-074 — The overlay scales with the pane instead of rearranging itself
+
+**Context.** The HUD answered a narrow pane by rearranging: under 640px the vitals
+card went full width under the status card, and under 560px the two player panels
+became one full-width sheet. Both rules were written for a phone and fire on any
+pane, including the common non-phone case for this game — an embedded preview, a
+window at half width, a laptop with the browser not maximised. Measured in a
+531x653 browser pane: the vitals card alone took 515x143 (21% of the pane), the
+inventory sheet 515x474 (87%), and with both panels open the world was visible only
+in the gaps. Reported from inside the game as "the game is in full panel mode ... the
+game is only showing a small portion instead of scaling to the correct dimensions".
+
+**Decision.**
+
+1. One continuous number, not more breakpoints. `ui/uiScale.ts` owns
+   `uiScaleForPane({paneW, paneH, finePointer})`: the smaller of the two axis ratios
+   against the reference pane (1000x760), clamped to [0.72, 1]. Written as
+   `--pl-ui-scale` by the same pass that sizes the canvas, so "how big is the pane"
+   has one owner.
+2. The overlay is scaled with CSS `zoom`, not a transform: zoom scales layout and
+   hit-testing together, so a control still takes its click where it is drawn
+   (measured: the action bar 458x45 → 333x33, and a click at the centre of a button
+   landed on that button). A transform would also re-anchor `position: fixed`
+   children to the transformed box, which is the whole overlay.
+3. `#grow-mode-tint` is excluded: it is a full-pane wash and must cover the pane
+   rather than shrink inside it.
+4. The title screen is excluded by the inverse (`.pl-menu { zoom: calc(1 /
+   var(--pl-ui-scale)) }`): it already lays itself out for the pane in `menuFit.ts`,
+   and scaling it would count the same fit twice. Measured at 531x653: the name box
+   and Play button are 368 wide and the title 210, identical to before the change.
+5. The two "phone" rearrangements are gated on the finger layout —
+   `(hover: none) and (pointer: coarse)` — which is the same query ADR-069 uses, so
+   a phone is unchanged and a narrow desktop pane keeps the corner vitals card and
+   the two side panels, only smaller. The sheet keeps a width-only condition under
+   480px, because two panels cannot fit there however they are sized.
+6. The scale is computed from the *panes*, not the device, and a finger layout is
+   never shrunk: scaling touch targets down trades away the one thing the finger
+   layout exists for.
+7. The floor is 0.72, set by type: the smallest HUD size is 11px
+   (`ui.hud_font_secondary_px`), and 8px is where a number stops being glanceable.
+   The reference and floor are module constants like `MENU_FIT_MIN_SCALE`, not config:
+   they describe the interface, not the game.
+
+**Consequences.** A small pane now shows the same interface, smaller, with the world
+still filling the frame: at 531x653 the overlay went from 21% + 87% to a 127x144
+vitals card in the corner, a 158x37 status pill, a 333x33 action bar, and two 216px
+panels — measured, nothing outside the pane. At 900x700 the scale is 0.9, at
+1280x800 it is 1 and the layout is byte-identical to before. The cost is honest:
+HUD type is drawn smaller than its configured size in a small pane (11px at 0.72 is
+8px), which is the trade a player asks for when the alternative is a sheet over the
+world.
+
+**Measured with** a throwaway harness (deleted) that hosted the real app in an
+iframe at 531x653 and drove it title → world → inventory → pause → settings, then
+resized the same instance through 900x700, 1280x800, 390x844 and 320x240. One
+finding is left open and stated rather than hidden: at 320x240 the vitals card is
+144 tall in a 240 tall pane and overflows the bottom. That pane is smaller than any
+phone and below the floor where the interface can be shrunk further without
+becoming unreadable.
+
+## ADR-075 — A scale is written on the first frame, not on the first resize
+
+**Context.** The first version of the overlay scale was written only from
+`applyViewportSize`, which runs on `window.resize` and from a `ResizeObserver` on the
+canvas container. Neither fires at boot — the observer's first callback reports the
+size it already had and returns early — so `--pl-ui-scale` did not exist until the
+player resized the window by hand. Measured: `--pl-ui-scale` was the empty string in
+a freshly loaded page, so every pane below the reference stayed at full size until
+the first resize, which is the one moment the bug is invisible to the person who
+wrote it.
+
+**Decision.** The viewport pass is called once immediately after the observer is
+installed, and the observer keeps the "did it change" guard for later callbacks. The
+same pass reads the pointer capability, so a mouse plugged in mid-session re-runs it
+without a resize.
+
+**Consequences.** The scale is correct on the first painted frame. Any future value
+that depends on the pane belongs in that one function rather than in a second resize
+listener: a listener that never fires on layout is a value that never gets set.

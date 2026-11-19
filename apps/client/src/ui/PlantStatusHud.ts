@@ -1,11 +1,14 @@
 /**
  * C04 plant status HUD.
  *
- * Reads like body state, not a menu: biomass and its rate, rooted/uprooted
- * state, structural integrity against the uproot threshold, mutation bill, and
- * the reroot window with its controls. Every number comes from server state;
- * the client only derives the displayed rate from consecutive authoritative
- * biomass values and counts the window down between packets.
+ * Reads like body state, not a menu: the phase word (rooted/uprooted), the
+ * health bar against the uproot threshold, the mutation bill, and the reroot
+ * window with its controls.
+ *
+ * Deliberately not here: biomass, energy, water, minerals, the clock and the
+ * weather. Those live in the single vitals readout. This card used to repeat all
+ * of them next to that readout, which left the player with three copies of the
+ * same four numbers and no idea which one to watch.
  */
 
 import { damageCueDue } from './damageCue.ts';
@@ -70,10 +73,31 @@ export interface PlantStatusHudOptions {
 export interface PlantStatusHudAPI {
   readonly element: HTMLElement;
   update(view: PlantStatusView): void;
-  setWeather(weather: WeatherStatusView): void;
   pulseDamage(): void;
   setVisible(visible: boolean): void;
   dispose(): void;
+}
+
+const STYLE_ID = 'pl-status-hud-style';
+
+const STYLE = `
+  /* A D-pad is a thumb control: press and hold, one arrow at a time. A desktop
+     player crawls with WASD instead, so the pad is touch-only and the keys are
+     shown in its place. A desktop with a touchscreen keeps the keyboard layout,
+     because it has the keys the layout names. */
+  @media (hover: hover) and (pointer: fine) {
+    .pl-reroot-pad { display: none !important; }
+    .pl-reroot-keys { display: inline !important; }
+  }
+  .pl-reroot-keys { display: none; }
+`;
+
+function installStyles(): void {
+  if (document.getElementById(STYLE_ID)) return;
+  const style = document.createElement('style');
+  style.id = STYLE_ID;
+  style.textContent = STYLE;
+  document.head.appendChild(style);
 }
 
 const HEALTH_COLORS: Record<PlantHealthStatus, string> = {
@@ -132,6 +156,7 @@ export function formatCountdown(seconds: number): string {
 }
 
 export function createPlantStatusHud(options: PlantStatusHudOptions = {}): PlantStatusHudAPI {
+  installStyles();
   const panel = document.createElement('section');
   panel.id = 'plant-status-hud';
   panel.className = 'hud-panel';
@@ -143,7 +168,13 @@ export function createPlantStatusHud(options: PlantStatusHudOptions = {}): Plant
     transform: 'translateX(-50%)',
     zIndex: '205',
     display: 'none',
-    minWidth: 'clamp(220px, 24vw, 360px)',
+    // A width, not just a minimum: the health row is a flex line, and a flex
+    // track measured against an auto-width panel could overflow the card's own
+    // rounded edge and paint a green bar straight out of the panel.
+    width: 'clamp(220px, 24vw, 360px)',
+    maxWidth: 'calc(100vw - 2 * var(--hud-corner, 12px))',
+    boxSizing: 'border-box',
+    overflow: 'hidden',
     padding: '6px 10px',
     pointerEvents: 'auto',
     fontVariantNumeric: 'tabular-nums',
@@ -170,70 +201,31 @@ export function createPlantStatusHud(options: PlantStatusHudOptions = {}): Plant
     justifyContent: 'center',
     flexWrap: 'wrap',
     gap: '10px',
+    minWidth: '0',
     fontSize: 'var(--hud-font-sm)',
     color: 'var(--warm-ink)',
     whiteSpace: 'nowrap',
   });
-  const biomassEl = span('0.0');
-  const rateEl = span('', 'opacity:0.72');
   const stateEl = span('Rooted', 'font-weight:700;color:var(--leaf-300)');
   const mutationEl = span('', 'opacity:0.72');
-  topLine.append(labeled('Biomass', biomassEl), rateEl, labeled('State', stateEl), mutationEl);
-
-  const vitalsLine = document.createElement('div');
-  Object.assign(vitalsLine.style, {
-    display: 'grid',
-    gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
-    gap: '1px 12px',
-    marginTop: '4px',
-    paddingTop: '4px',
-    borderTop: '1px solid var(--hud-border, rgba(239,233,216,0.12))',
-    fontSize: 'var(--hud-font-sm)',
-    color: 'var(--ink-muted)',
-    whiteSpace: 'nowrap',
-  });
-  const energyEl = span('0.0');
-  const nodeCountEl = span('0');
-  const waterEl = span('0 / 0');
-  const mineralEl = span('0 / 0');
-  vitalsLine.append(
-    labeled('Energy', energyEl),
-    labeled('Nodes', nodeCountEl),
-    labeled('Water', waterEl),
-    labeled('Minerals', mineralEl),
-  );
-
-  const weatherLine = document.createElement('div');
-  Object.assign(weatherLine.style, {
-    display: 'flex',
-    alignItems: 'baseline',
-    justifyContent: 'center',
-    flexWrap: 'wrap',
-    gap: '8px',
-    marginTop: '2px',
-    fontSize: 'var(--hud-font-sm)',
-    color: 'var(--ink-muted)',
-    whiteSpace: 'nowrap',
-  });
-  const clockEl = span('');
-  const weatherEl = span('');
-  const forecastEl = span('', 'opacity:0.72');
-  weatherLine.append(clockEl, weatherEl, forecastEl);
+  topLine.append(stateEl, mutationEl);
 
   const structureRow = document.createElement('div');
   Object.assign(structureRow.style, {
     display: 'none',
     alignItems: 'center',
     gap: '8px',
+    minWidth: '0',
     marginTop: '5px',
     fontSize: 'var(--hud-font-sm)',
     color: 'var(--warm-ink)',
   });
-  const structureLabel = span('Health', 'opacity:0.72;min-width:58px');
+  const structureLabel = span('Health', 'opacity:0.72;min-width:58px;flex:none;white-space:nowrap');
   const structureTrack = document.createElement('div');
   Object.assign(structureTrack.style, {
     position: 'relative',
-    flex: '1',
+    flex: '1 1 0',
+    minWidth: '0',
     height: '5px',
     borderRadius: '3px',
     background: 'rgba(239,233,216,0.14)',
@@ -264,7 +256,13 @@ export function createPlantStatusHud(options: PlantStatusHudOptions = {}): Plant
     fontSize: 'var(--hud-font-sm)',
   });
   const rerootTimer = span('', 'min-width:64px;color:var(--gold-400)');
+  const rerootKeys = span(
+    'W A S D',
+    'letter-spacing:0.1em;font-size:var(--hud-font-xs);color:var(--ink-dim)',
+  );
+  rerootKeys.className = 'pl-reroot-keys';
   const pad = document.createElement('div');
+  pad.className = 'pl-reroot-pad';
   Object.assign(pad.style, {
     display: 'grid',
     gridTemplateColumns: 'repeat(3, 28px)',
@@ -314,13 +312,16 @@ export function createPlantStatusHud(options: PlantStatusHudOptions = {}): Plant
     button('\u2192', 'right', '2 / 3'),
     button('\u2193', 'back', '3 / 2'),
   );
-  rerootRow.append(rerootTimer, pad);
+  rerootRow.append(rerootTimer, rerootKeys, pad);
 
-  panel.append(topLine, weatherLine, vitalsLine, structureRow, rerootRow);
+  const nodeLine = span(
+    '',
+    'display:block;margin-top:2px;font-size:var(--hud-font-xs);color:var(--ink-dim);text-align:center;white-space:normal;overflow-wrap:anywhere',
+  );
+  nodeLine.textContent = '';
+  panel.append(topLine, nodeLine, structureRow, rerootRow);
 
   let interval: ReturnType<typeof setInterval> | null = null;
-  let lastWeatherAtMs = 0;
-  let weather: WeatherStatusView | null = null;
   let currentView: PlantStatusView | null = null;
   let lastRenderAtMs = 0;
   const updateIntervalMs = Math.max(50, options.updateIntervalMs ?? 100);
@@ -334,18 +335,16 @@ export function createPlantStatusHud(options: PlantStatusHudOptions = {}): Plant
 
   const render = (): void => {
     if (!currentView) return;
-    biomassEl.textContent = currentView.biomass.toFixed(1);
-    rateEl.textContent =
-      currentView.biomassRatePerSecond === null
-        ? ''
-        : `${currentView.biomassRatePerSecond >= 0 ? '+' : ''}${currentView.biomassRatePerSecond.toFixed(1)}/s`;
+    // "Healthy" on every frame is noise; the word is news only when it is not.
     if (currentView.phase === 'rooted') {
       const fraction = currentView.structure ? structureFraction(currentView.structure) : 1;
       const health = plantHealthStatus(fraction, healthThresholds);
-      stateEl.textContent = plantHealthLabel(health);
+      stateEl.textContent = health === 'healthy' ? '' : plantHealthLabel(health);
+      stateEl.style.display = health === 'healthy' ? 'none' : '';
       stateEl.style.color = HEALTH_COLORS[health];
     } else {
       stateEl.textContent = phaseLabel(currentView.phase);
+      stateEl.style.display = '';
       stateEl.style.color = 'var(--ember-400)';
     }
     const mutationEnergy =
@@ -355,10 +354,8 @@ export function createPlantStatusHud(options: PlantStatusHudOptions = {}): Plant
       currentView.mutationCount > 0
         ? `${currentView.mutationCount} mutation${currentView.mutationCount === 1 ? '' : 's'} \u00B7 ${mutationEnergy.toFixed(2)} E/s \u00B7 ${mutationBiomass.toFixed(2)} B/s`
         : '';
-    energyEl.textContent = (currentView.energy ?? 0).toFixed(1);
-    nodeCountEl.textContent = String(Math.max(0, Math.round(currentView.nodeCount ?? 0)));
-    waterEl.textContent = `${(currentView.storedWater ?? 0).toFixed(1)} / ${Math.round(currentView.waterCapacity ?? 0)}`;
-    mineralEl.textContent = `${(currentView.storedMinerals ?? 0).toFixed(1)} / ${Math.round(currentView.mineralCapacity ?? 0)}`;
+    const nodes = Math.max(0, Math.round(currentView.nodeCount ?? 0));
+    nodeLine.textContent = nodes === 1 ? '1 node' : `${nodes} nodes`;
 
     if (currentView.structure) {
       const fraction = structureFraction(currentView.structure);
@@ -375,17 +372,6 @@ export function createPlantStatusHud(options: PlantStatusHudOptions = {}): Plant
       currentView.rerootWindowRemainingS === null
         ? 'Reroot'
         : `Reroot ${formatCountdown(currentView.rerootWindowRemainingS)}`;
-
-    if (weather) {
-      const elapsed = (performance.now() - lastWeatherAtMs) / 1000;
-      clockEl.textContent = `Day ${weather.dayNumber ?? 1} \u00B7 ${formatClock(weather.timeOfDay)}`;
-      weatherEl.textContent = weatherLabel(weather.weatherState);
-      const untilNext = weather.forecast.timeUntilNextStateS - elapsed;
-      forecastEl.textContent =
-        untilNext > 0 && weather.forecast.nextWeatherState !== weather.weatherState
-          ? `${weatherLabel(weather.forecast.nextWeatherState)} in ${formatCountdown(untilNext)}`
-          : '';
-    }
   };
 
   interval = setInterval(render, 250);
@@ -399,11 +385,6 @@ export function createPlantStatusHud(options: PlantStatusHudOptions = {}): Plant
       // only repaint the same numbers.
       if (now - lastRenderAtMs < updateIntervalMs) return;
       lastRenderAtMs = now;
-      render();
-    },
-    setWeather: (next) => {
-      weather = next;
-      lastWeatherAtMs = performance.now();
       render();
     },
     pulseDamage: () => {
@@ -449,15 +430,5 @@ function span(text: string, extra = ''): HTMLSpanElement {
   const el = document.createElement('span');
   el.textContent = text;
   if (extra) el.style.cssText = extra;
-  return el;
-}
-
-function labeled(label: string, value: HTMLElement): HTMLSpanElement {
-  const el = document.createElement('span');
-  el.style.cssText = 'display:inline-flex;align-items:baseline;gap:4px;';
-  const name = document.createElement('span');
-  name.textContent = label;
-  name.style.cssText = 'opacity:0.72;';
-  el.append(name, value);
   return el;
 }

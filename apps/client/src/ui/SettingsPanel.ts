@@ -4,7 +4,12 @@
  * Settings owns text size and reduced motion; Controls is a read-only view of
  * the bindings the input bus actually loaded, so the panel can never claim a
  * key the game does not use. Rebinding is deliberately not exposed yet.
+ *
+ * On a finger layout the Controls tab lists the touch gestures instead: those
+ * have no binding table to quote, so their words come from `touchCopy.ts`.
  */
+
+import { TOUCH_GESTURES } from './touchCopy.ts';
 
 export interface BindingView {
   keys: string[];
@@ -19,6 +24,8 @@ export interface SettingsPanelOptions {
   initialReducedMotion: boolean;
   onTextScale?: (scale: number) => void;
   onReducedMotion?: (enabled: boolean) => void;
+  /** Told whenever the panel opens or closes, so the title can stand down. */
+  onOpenChange?: (open: boolean) => void;
 }
 
 export interface SettingsPanelAPI {
@@ -26,6 +33,8 @@ export interface SettingsPanelAPI {
   readonly isOpen: boolean;
   setOpen(open: boolean): void;
   toggle(): void;
+  /** Open straight to a tab: the pause menu's Controls entry lands here. */
+  showTab(tab: 'settings' | 'controls'): void;
   dispose(): void;
 }
 
@@ -38,8 +47,9 @@ const STYLE = `
     background: radial-gradient(circle at 50% 42%, rgba(10, 14, 8, 0.55), rgba(5, 7, 4, 0.82));
     pointer-events: auto;
   }
-  .pl-settings-backdrop.is-open { display: grid; }
+  .pl-settings-backdrop.is-open { display: grid; backdrop-filter: blur(3px); }
   .pl-settings {
+    position: relative;
     width: min(680px, 94vw); max-height: min(78vh, 640px); display: flex; flex-direction: column;
     border-radius: 16px; overflow: hidden; color: var(--bone-200, #efe9d8);
     border: 1px solid rgba(126, 154, 74, 0.44); border-top-color: rgba(200, 232, 108, 0.4);
@@ -49,13 +59,39 @@ const STYLE = `
     box-shadow: 0 30px 80px rgba(0, 0, 0, 0.64), inset 0 1px 0 rgba(220, 240, 160, 0.09);
     font-family: "Inter", system-ui, sans-serif; font-size: 0.78rem;
   }
-  .pl-settings__head { display: flex; align-items: center; justify-content: space-between;
-    padding: 12px 15px; border-bottom: 1px solid rgba(126, 154, 74, 0.28); }
+  @keyframes pl-settings-in {
+    from { opacity: 0; transform: translateY(10px) scale(0.985); }
+    to { opacity: 1; transform: none; }
+  }
+  .pl-settings-backdrop.is-open .pl-settings {
+    animation: pl-settings-in 200ms cubic-bezier(0.22, 0.9, 0.3, 1);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .pl-settings-backdrop.is-open .pl-settings { animation: none; }
+  }
+  .pl-settings__head { display: flex; align-items: baseline; gap: 10px;
+    padding: 14px 56px 12px 16px; border-bottom: 1px solid rgba(126, 154, 74, 0.28); }
   .pl-settings__title { margin: 0; color: var(--leaf-300, #c8ff80); font-size: 0.82rem;
     letter-spacing: 0.16em; text-transform: uppercase; }
-  .pl-settings__close { width: 26px; height: 26px; border-radius: 8px; cursor: pointer;
+  .pl-settings__sub { color: var(--ink-dim, #9a937a); font-size: 0.7rem; }
+  /* Standard corner close: pinned to the panel's top right, a 30px target, and it
+     reads as a button on hover instead of a glyph floating in the header. */
+  .pl-settings__close {
+    position: absolute; top: 10px; right: 10px;
+    width: 30px; height: 30px; display: grid; place-items: center;
+    border-radius: 9px; cursor: pointer; font-size: 1.05rem; line-height: 1;
     border: 1px solid rgba(126, 154, 74, 0.35); background: rgba(44, 52, 30, 0.8);
-    color: var(--bone-200, #efe9d8); font: inherit; }
+    color: var(--bone-200, #efe9d8);
+    transition: background 140ms ease, border-color 140ms ease, transform 140ms ease;
+  }
+  .pl-settings__close:hover {
+    background: rgba(90, 144, 46, 0.32);
+    border-color: var(--leaf-400, #9ed95c);
+  }
+  .pl-settings__close:active { transform: scale(0.94); }
+  .pl-settings__close:focus-visible {
+    outline: 2px solid var(--leaf-300, #c8ff80); outline-offset: 2px;
+  }
   .pl-settings__tabs { display: flex; gap: 4px; padding: 8px 14px 0; }
   .pl-settings__tab { padding: 6px 14px; border-radius: 8px 8px 0 0; cursor: pointer;
     border: 1px solid transparent; border-bottom: none; background: transparent;
@@ -84,6 +120,15 @@ const STYLE = `
   .pl-controls__action { color: var(--bone-100, #f7f4ed); }
   .pl-controls__key { color: var(--leaf-200, #dfee8e); font-family: ui-monospace, monospace; }
   .pl-controls__context { color: var(--ink-dim, #9a937a); }
+  /* The touch layout of the same controls. A phone reading a table of keys is
+     reading a manual for a device it is not holding. */
+  .pl-controls-touch { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+  .pl-controls-touch li {
+    display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
+    padding: 8px 10px; border-radius: 9px;
+    border: 1px solid rgba(126, 154, 74, 0.18); background: rgba(8, 11, 8, 0.4);
+  }
+  .pl-controls-touch__gesture { color: var(--leaf-200, #dfee8e); text-align: right; }
 
   html[data-reduced-motion="true"] *,
   html[data-reduced-motion="true"] *::before,
@@ -95,6 +140,12 @@ const STYLE = `
   @media (max-width: 620px) {
     .pl-settings { max-height: 88vh; }
     .pl-settings__row { align-items: flex-start; flex-direction: column; gap: 6px; }
+  }
+  /* A 30px corner close is a mouse target. A thumb gets the same floor as every
+     other control in the game. */
+  @media (hover: none) and (pointer: coarse) {
+    .pl-settings__close { width: 44px; height: 44px; font-size: 1.25rem; }
+    .pl-settings__head { padding-right: 64px; }
   }
 `;
 
@@ -111,6 +162,12 @@ function prettyAction(action: string): string {
     .split('_')
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(' ');
+}
+
+/** Same query the stylesheet uses for its finger layout. */
+function isFingerLayout(): boolean {
+  if (typeof window.matchMedia !== 'function') return false;
+  return window.matchMedia('(hover: none) and (pointer: coarse)').matches;
 }
 
 function prettyKey(key: string): string {
@@ -175,9 +232,19 @@ export function createSettingsPanel(options: SettingsPanelOptions): SettingsPane
   document.addEventListener('keydown', onKeyDown);
 
   function setOpen(next: boolean): void {
+    if (open === next) return;
     open = next;
     backdrop.classList.toggle('is-open', next);
-    if (next) render();
+    if (next) {
+      // Come to the front of the layer it shares. The title screen is mounted on
+      // the same layer and *after* this panel, so opening Settings from the menu
+      // put it behind the menu: nothing appeared to happen, and the panel was
+      // still open (and therefore visible) after Play. Re-appending moves it to
+      // the end of the layer, which is where "in front" lives.
+      backdrop.parentElement?.appendChild(backdrop);
+      render();
+    }
+    options.onOpenChange?.(next);
   }
 
   function render(): void {
@@ -248,12 +315,35 @@ export function createSettingsPanel(options: SettingsPanelOptions): SettingsPane
   }
 
   function renderControls(): void {
+    if (isFingerLayout()) {
+      const list = document.createElement('ul');
+      list.className = 'pl-controls-touch';
+      for (const row of TOUCH_GESTURES) {
+        const item = document.createElement('li');
+        const label = document.createElement('span');
+        label.className = 'pl-controls__action';
+        label.textContent = row.action;
+        const gesture = document.createElement('span');
+        gesture.className = 'pl-controls-touch__gesture';
+        gesture.textContent = row.gesture;
+        item.append(label, gesture);
+        list.appendChild(item);
+      }
+      body.appendChild(list);
+      return;
+    }
     const table = document.createElement('table');
     table.className = 'pl-controls';
     table.innerHTML =
       '<thead><tr><th>Action</th><th>Keys</th><th>Mouse</th><th>Mode</th></tr></thead><tbody></tbody>';
     const tbody = table.querySelector('tbody') as HTMLElement;
-    const entries = Object.entries(options.bindings).sort(([a], [b]) => a.localeCompare(b));
+    // A binding with no key and no mouse button is not a control: it is an action
+    // waiting for a producer (the metrics overlay, for one, is a dev-panel switch
+    // with no binding on purpose). Listing it as a row of dashes was noise in the
+    // one screen a player opens to find out what they can press.
+    const entries = Object.entries(options.bindings)
+      .filter(([, binding]) => binding.keys.length > 0 || binding.mouse !== '')
+      .sort(([a], [b]) => a.localeCompare(b));
     for (const [action, binding] of entries) {
       const row = document.createElement('tr');
       const keys = [...binding.keys.map(prettyKey), binding.mouse].filter(Boolean).join(' / ');
@@ -273,6 +363,10 @@ export function createSettingsPanel(options: SettingsPanelOptions): SettingsPane
 
   return {
     element: backdrop,
+    showTab: (next) => {
+      tab = next;
+      render();
+    },
     get isOpen() {
       return open;
     },

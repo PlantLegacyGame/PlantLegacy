@@ -77,6 +77,31 @@
       "value": "/ready",
       "max_length": 64
     },
+    "dev_allowed_environments": {
+      "type": "array",
+      "value": ["local"],
+      "notes": "Environments where the dev panel and /dev endpoints may exist at all. Remove 'local' to require an admin account even on your own machine."
+    },
+    "dev_admin_accounts": {
+      "type": "array",
+      "value": [],
+      "notes": "Account ids allowed to use dev tools outside a local run. The admin role also qualifies; an anonymous connection never does."
+    },
+    "metrics_path": {
+      "type": "string",
+      "value": "/metrics",
+      "max_length": 64,
+      "notes": "Serves the tick timing window (active/near/dormant ms, budget warnings). Set to an empty string to disable the route."
+    },
+    "metrics_window_ticks": {
+      "type": "integer",
+      "value": 300,
+      "range": [
+        20,
+        3600
+      ],
+      "notes": "Ticks of history the tick metrics keep before overwriting: 300 is 15 s at 20 Hz."
+    },
     "trust_proxy": {
       "type": "boolean",
       "value": false,

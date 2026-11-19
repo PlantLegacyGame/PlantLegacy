@@ -509,7 +509,13 @@ function buildGamePlant(
     for (const childId of parent.children ?? []) {
       const node = byId.get(childId);
       if (!node) continue;
-      const frame = resolveSegmentFrame(node, parent, byId.values(), parentFrame?.animated);
+      const frame = resolveSegmentFrame(
+        node,
+        parent,
+        byId.values(),
+        parentFrame?.animated,
+        parentFrame?.startRadius,
+      );
       const material =
         node.nodeType === 'radicle'
           ? rootMaterial

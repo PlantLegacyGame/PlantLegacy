@@ -5,19 +5,25 @@ import process from 'node:process';
 import type { ConfigEntry } from '@plant-legacy/shared/config';
 import { loadConfigDir } from '@plant-legacy/shared/config';
 import { createLogger } from '../ops/log.ts';
+import { resolveDevEnvironment } from './devAccess.ts';
 
 const log = createLogger('debug');
 
 /**
- * Dev tooling exists only in a local run.
+ * May this deployment expose dev tools at all?
  *
- * The old gate was `NODE_ENV === 'production'`, which left every other deployed
- * environment — `staging` is a configured one — able to reach `/dev/config` and
- * DEV_ACTION, including live mutations such as `persistence_enabled` and
- * force-save. Unset NODE_ENV is `local` by the same defaulting in core/config.
+ * Takes the runtime's validated environment, never `process.env` directly. The old
+ * version read the variable itself and defaulted a missing `NODE_ENV` to `local`,
+ * so a server that forgot to set it handed the whole dev surface - weather, the
+ * world clock, tiles, config writes - to every player who connected. The decision
+ * lives in `ops/devAccess.ts` so the HTTP endpoints and `DEV_ACTION` cannot
+ * disagree about it.
  */
-export function devToolsAllowed(): boolean {
-  return (process.env.NODE_ENV ?? 'local') === 'local';
+export function devToolsAllowed(
+  environment: string,
+  allowedEnvironments: readonly string[],
+): boolean {
+  return resolveDevEnvironment(environment, allowedEnvironments).allowed;
 }
 
 function defaultConfigDir(): string {
@@ -144,8 +150,10 @@ export function serializeDevConfig(configs: Map<string, ConfigEntry>): Record<st
 export async function handleGetDevConfig(
   _req: IncomingMessage,
   res: ServerResponse,
+  environment: string,
+  allowedEnvironments: readonly string[],
 ): Promise<void> {
-  if (!devToolsAllowed()) {
+  if (!devToolsAllowed(environment, allowedEnvironments)) {
     res.writeHead(404, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: 'not_found' }));
     return;
@@ -167,8 +175,10 @@ export async function handleGetDevConfig(
 export async function handlePostDevConfig(
   req: IncomingMessage,
   res: ServerResponse,
+  environment: string,
+  allowedEnvironments: readonly string[],
 ): Promise<Array<{ key: string; value: unknown }> | null> {
-  if (!devToolsAllowed()) {
+  if (!devToolsAllowed(environment, allowedEnvironments)) {
     res.writeHead(404, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: 'not_found' }));
     return null;

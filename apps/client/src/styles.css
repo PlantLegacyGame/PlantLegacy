@@ -97,7 +97,11 @@
   /* Responsive HUD metrics. Every panel pulls its padding, type size and edge
      inset from these, so the whole HUD tightens on small screens and stops
      wasting space on large ones instead of using fixed pixels. */
-  --hud-font-sm: clamp(0.58rem, 0.5rem + 0.26vw, 0.74rem);
+  /* 0.58rem (9.3px) was unreadable on a laptop. The floor is set from
+     ui.hud_font_small_px at boot; this is the fallback before config loads.
+     Multiplied by --text-scale so the settings slider still reaches HUD text. */
+  --hud-font-sm: calc(clamp(12px, 8px + 0.32vw, 15px) * var(--text-scale));
+  --hud-font-xs: calc(clamp(11px, 8px + 0.2vw, 13px) * var(--text-scale));
   --hud-font-md: clamp(0.64rem, 0.55rem + 0.3vw, 0.82rem);
   --hud-pad-y: clamp(3px, 0.6vh, 8px);
   --hud-pad-x: clamp(6px, 0.8vw, 12px);
@@ -148,6 +152,41 @@ body {
   line-height: 1.3;
   overflow: hidden;
   -webkit-font-smoothing: antialiased;
+}
+
+/* The interface scales with the pane it is in.
+   The HUD was drawn for a wide window and answered a narrow one by rearranging
+   itself into a finger layout: below 640px the vitals card went full width, and
+   below 560px the player panels became one full-pane sheet. Measured in a 531x653
+   browser pane, the vitals card alone took 515x143 and the inventory covered
+   515x474 - the world was visible only in the gaps, which is what "the game is in
+   full panel mode" looks like from inside it.
+   One number instead of more breakpoints: the overlay is zoomed by --pl-ui-scale
+   (written from uiScale.ts) so the arrangement that works at 1280 wide keeps
+   working, only smaller, and the game keeps the frame. `zoom` is deliberate rather
+   than a transform - it scales layout and hit-testing together, so a button still
+   takes the click where it is drawn. 1 for a finger layout and for a pane that is
+   big enough, never below the floor that keeps 11px HUD type readable.
+   `#grow-mode-tint` is not in the list on purpose: it is a full-pane wash and must
+   cover the pane rather than shrink inside it. */
+.ui-layer,
+#plant-status-hud,
+#detail,
+#hint-card,
+.pl-sheet-tabs,
+.pl-side-panel,
+#emote-wheel {
+  zoom: var(--pl-ui-scale, 1);
+}
+
+/* The title screen is the exception. It lays itself out for the pane it is in
+   (ui/title/menuFit.ts: scale to clear the foot, then lift), so scaling it with the
+   overlay would count the same fit twice and leave a small pane with a needlessly
+   tiny menu. Zoom composes multiplicatively, so the inverse cancels the layer's
+   zoom for this one subtree - it rides in the modal layer with Settings and the
+   pause menu, which do scale. */
+.pl-menu {
+  zoom: calc(1 / var(--pl-ui-scale, 1));
 }
 
 #app {

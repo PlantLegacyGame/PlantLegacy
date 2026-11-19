@@ -11,10 +11,12 @@ import type {
 import {
   applyMutationShapeBias,
   canCrossLayer,
+  clampChildSegmentLength,
   clampGrowthDirectionByGene,
   getAvailableGrowthTypes,
   getLayerForNodeType,
   getNodeTypeDefinition,
+  growthTargetMass,
   healthPhotosynthesisMultiplier,
   nodeHealth,
   nodeRenderRadius,
@@ -24,6 +26,7 @@ import {
   tissueMassQuota,
 } from '@plant-legacy/shared/growth';
 import { newId } from '@plant-legacy/shared/ids';
+import { isCleanRepair, repairPlantGraph } from '@plant-legacy/shared/plantGraphRepair';
 import { validatePlantGraph } from '@plant-legacy/shared/plantGraphValidator';
 import { eventBus, GAME_EVENTS } from './eventBus.ts';
 import { NodeSpatialIndex } from './growth/nodeSpatialIndex.ts';
@@ -36,10 +39,12 @@ import {
   type GrowthChargeScale,
   getGrowthSpeed,
   growthDrawPerSecond,
+  isUsableDirection,
   maxCotyledonsForPlant,
   nodeName,
   normalizeDirection,
   validateGrowthDirection,
+  validateIntentDirection,
 } from './growth/rules.ts';
 import {
   applyLevelUp as applyLevelUpRule,
@@ -262,10 +267,9 @@ export class PlantWorld {
         [0, 0],
         [1, 1],
       ],
-      consumptionTriggerTileMineralThreshold: 10,
-      consumptionTriggerDungItem: false,
-      consumptionTriggerFertilizerItem: false,
       diffusionRate: 0.1,
+      lightDirtyThreshold: 0.05,
+      resourceDirtyThreshold: 0.1,
       maxAbsorptionPerTick: 10,
       groundwaterBase: 0,
       groundwaterCapacity: 400,
@@ -1261,6 +1265,16 @@ export class PlantWorld {
   }
 
   createPlant(ownerId: string, worldId: string, startX: number, startZ: number): Plant {
+    // INV-ID-09: an empty owner is not a legal plant. `ownerId` is how reclaim
+    // finds the plant again, so a row written with '' can never be claimed by
+    // anyone, and every caller already has an identity to supply: an account, a
+    // connection id, or a gallery id. Refusing here keeps that row from existing.
+    if (!ownerId) {
+      throw new Error('createPlant needs a non-empty ownerId (INV-ID-09)');
+    }
+    if (!worldId) {
+      throw new Error('createPlant needs a non-empty worldId (INV-ID-09)');
+    }
     const plantId = newId('plant');
     const seedNodeId = nodeName(plantId, null, 'seed', () => false);
 
@@ -2116,8 +2130,13 @@ export class PlantWorld {
       // budget: mass may never exceed what the part is actually drawn as. A
       // size mutation raises that quoted mass, which is why a mutated part
       // grows materially bigger for the same build cost.
+      // Quoted once, on the first tick of growth, and then frozen: a mutation
+      // gained mid-growth must not re-price a part that is already half built.
       const massScale = node.layer === 'root' ? scales.root : scales.canopy;
-      const targetMass = computeGrowthCostQuote(this.config, nodeDef, massScale).biomassGain;
+      const targetMass = growthTargetMass(
+        node,
+        computeGrowthCostQuote(this.config, nodeDef, massScale).biomassGain,
+      );
       const biomassThisTick = targetMass * progressThisTick;
       plant.totalBiomass += biomassThisTick;
       node.biomass = (node.biomass ?? 0) + biomassThisTick;
@@ -2239,6 +2258,17 @@ export class PlantWorld {
       }
     }
 
+    // INV-GR-03: the direction the player aimed is the direction we grow in -
+    // it is never taken from the parent. What it must be is a real vector.
+    // `normalizeDirection` turned a zero vector into "grow straight down" and
+    // let NaN through arithmetic, so a bad intent either grew the wrong way or
+    // placed a node at NaN coordinates. Refuse it and say why; everything else
+    // continues through the gene clamp and the node-type sector below.
+    const intentDirection = validateIntentDirection(intent.direction);
+    if (!intentDirection.ok) {
+      return { success: false, reason: 'invalid_direction' };
+    }
+
     // A mutation whose name promises a shape (columnar habit, drooping fronds)
     // bends the direction first and is then clamped by the same gene sector as
     // any other intent, so the shape is real and still legal.
@@ -2250,6 +2280,11 @@ export class PlantWorld {
       targetLayer === 'root' ? 'root' : 'canopy',
     );
     const dir = normalizeDirection(clampedDir);
+    // Backstop for the invariant, not a second policy: every caller is validated
+    // above, so reaching this with a non-finite vector is a programming error.
+    if (!isUsableDirection(dir)) {
+      throw new Error(`growNode received a non-finite direction for ${targetType} (INV-GR-03)`);
+    }
     // Calculate energy cost - stepwise germination: radicle/cotyledon are separate actions (INV-GR-13).
     let nodeDef: NodeTypeDefinition;
     if (parentNode.type === 'seed' && parentNode.isSeed && targetType === 'radicle') {
@@ -2264,7 +2299,17 @@ export class PlantWorld {
     const sizeEffects = this.getMutationEffects(plant);
     const sizeScale =
       targetLayer === 'root' ? sizeEffects.rootSizeMultiplier : sizeEffects.sizeMultiplier;
-    const speed = (nodeDef.segment_length ?? getGrowthSpeed(this.config, targetLayer)) * sizeScale;
+    // A size mutation scales the new part, and nothing used to bound it: with two
+    // size mutations the new internode could be several times the length of the
+    // trunk it left. Proportion is part of looking like a plant, so the segment is
+    // capped against the part it grows out of (config: max_child_length_ratio).
+    const baseLength = nodeDef.segment_length ?? getGrowthSpeed(this.config, targetLayer);
+    const parentLength = getNodeTypeDefinition(this.config, parentNode.type).segment_length ?? 0;
+    const speed = clampChildSegmentLength(
+      baseLength * sizeScale,
+      parentLength,
+      this.config.maxChildLengthRatio,
+    );
     // Lateral roots, branches and vines are buds on an existing organ, so they
     // leave the parent part-way along its segment; everything else continues
     // from its end. An intent may override the fraction explicitly.
@@ -2755,6 +2800,18 @@ export class PlantWorld {
   }
 
   loadPlant(plant: Plant): void {
+    // INV-GR-02/04/05: repair what the data itself determines before deciding
+    // whether the plant is corrupt. `parentId` is the authority, so a drifted
+    // child list, a node carrying another plant's id, or a subtree hanging off
+    // a missing parent is fixed here; validation below still refuses anything
+    // the data cannot settle (two roots, non-finite positions). Before this, a
+    // drifted child list was enough to lose a player's plant at boot.
+    const repair = repairPlantGraph(plant);
+    if (!isCleanRepair(repair)) {
+      console.debug(
+        `[plant-load] repaired ${plant.id}: ${repair.plantIdFixed} id, ${repair.childListsRebuilt} child list, ${repair.danglingChildrenDropped} dangling, ${repair.orphansDropped} orphan, ${repair.rootNodeAdopted} root`,
+      );
+    }
     if (plant.totalEnergy === undefined || plant.totalEnergy === null) {
       plant.totalEnergy =
         computePlantCapacity(plant, this.config).energy * this.config.initialEnergyFraction;

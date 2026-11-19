@@ -552,6 +552,19 @@ export class AccountsService {
         return { error: 'Invalid or expired access token' };
       }
 
+      // INV-AU-03: a signature only proves the token was minted. The account
+      // behind it can have been deleted, locked out, or demoted since, so the
+      // token is not trusted on its own. This is one indexed read on an
+      // authenticated request, not a per-frame cost.
+      const account = await this.getAccountById(decoded.sub);
+      if (!account) return { error: 'Invalid or expired access token' };
+      if (account.lockedUntil && account.lockedUntil > new Date()) {
+        return { error: 'Account is locked' };
+      }
+      if (account.role !== decoded.role) {
+        return { error: 'Access level changed; sign in again' };
+      }
+
       return { accountId: decoded.sub, role: decoded.role };
     } catch (_error) {
       return { error: 'Invalid or expired access token' };

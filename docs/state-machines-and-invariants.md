@@ -376,8 +376,8 @@ Status legend: `ENFORCED`, `PARTIAL`, `UNENFORCED`, `BROKEN`.
 | INV-ID-06 | Reconnect restores visibility to other clients. | FIXED (2026-11-10) | When persistence enabled, plant stays for reconnect window; `PLANT_REMOVED` broadcasts only on window expiry or actual death. When disabled, immediate removal is correct per ADR-029. | Keep this behavior; ensure docs match. |
 | INV-ID-07 | Anonymous reclaim is keyed consistently. | FIXED (2026-11-10) | `removePlayer` and `reclaimPlantById` both use `anon_<plantId>`; `accountId` stays undefined for anonymous (`main.ts:388`, `533`). | Keep one key builder. |
 | INV-ID-08 | Plants spawn at distinct, valid positions. | FIXED (2026-11-10) | `findSpawnPosition` uses golden-angle spiral with 5-unit clearance and fallback scan (`main.ts:145-196`). | Test spawn collision under concurrent joins. |
-| INV-ID-09 | `plantWorld.createPlant` receives non-empty `ownerId`/`worldId`. | UNENFORCED | No guard in `createPlant`. | Validate before insert. |
-| INV-ID-10 | Pending inputs and intents are bounded. | UNENFORCED | `pendingInputs` is never read or cleared; `pendingGrowthIntents` is unbounded. | Cap queues; drop oldest; add per-player rate limit. |
+| INV-ID-09 | `plantWorld.createPlant` receives non-empty `ownerId`/`worldId`. | FIXED (2026-11-16) | `createPlant` throws on an empty owner or world. Every caller already has one (`accountId ?? playerId`, a gallery id), and an empty owner is a row nobody can reclaim. | Keep the guard; a new caller must name an owner, not invent one. |
+| INV-ID-10 | Pending inputs and intents are bounded. | FIXED (2026-11-16) | `pendingInputs` is cleared then set, so it holds the one input being applied; growth intents are capped by `maxIntentsPerPlayer` and refuse with `intent_queue_full`. | New queues need an explicit cap and a refusal reason. |imit. |
 | INV-ID-11 | A HELLO arrives once, before any other message. | FIXED (2026-11-08) | Second HELLO ignored; pre-HELLO non-HELLO messages silently dropped. | Close with a protocol error; reject duplicates. |
 | INV-ID-12 | One message handler per socket. | FIXED (2026-11-08) | Two handlers remain attached after HELLO (`main.ts:1330`, `1456`). | Register once; dispatch on connection state. |
 
@@ -386,10 +386,10 @@ Status legend: `ENFORCED`, `PARTIAL`, `UNENFORCED`, `BROKEN`.
 | ID | Invariant | Status | Evidence / failure | Fix |
 |---|---|---|---|---|
 | INV-GR-01 | `rootNodeId` points to a real node. | PARTIAL | `?? ''`, `!`, and `?? seedNode.id` fallbacks; loaded plants are not validated. | Validate on load and before every use; fail closed. |
-| INV-GR-02 | Every node's `parentId`/`children` are reciprocal. | UNENFORCED | Client `GROWTH_EVENT` does not update parent children; load does not verify. | Validator + a single `linkNode`/`unlinkNode` pair. |
-| INV-GR-03 | A node sits at parent + direction × speed. | UNENFORCED | Not revalidated on load; zero/NaN direction creates a coincident node. | Reject zero/non-finite direction; validate on load. |
-| INV-GR-04 | `node.plantId === plant.id`. | UNENFORCED | `loadPlant` does not check. | Set on load from the owning plant; assert in dev. |
-| INV-GR-05 | Node ids are globally unique. | UNENFORCED | `findPlantByNodeId` returns the first match; no duplicate check. | Assert uniqueness at insert; regenerate collisions. |
+| INV-GR-02 | Every node's `parentId`/`children` are reciprocal. | ENFORCED (2026-11-16) | `validatePlantGraph` checks reciprocity and reachability at load; `repairPlantGraph` rebuilds `children` from `parentId` first, so a drifted list is corrected rather than costing the plant. `growNode`/`removePlant` maintain both sides at runtime. | `parentId` stays the structural authority; never trust a child list. |nkNode` pair. |
+| INV-GR-03 | A node sits at parent + direction × speed. | FIXED (2026-11-16) | The direction is the player's aim, validated by `validateIntentDirection` (finite, non-zero) and then fitted to the node type's sector - it is never taken from the parent. `normalizeDirection` no longer silently converts a zero vector into "grow down"; growth returns `invalid_direction` instead. | Reject degenerate vectors; never substitute a direction the player did not choose. |. |
+| INV-GR-04 | `node.plantId === plant.id`. | FIXED (2026-11-16) | Checked at load by `validatePlantGraph`; `repairPlantGraph` rewrites a node carrying another plant's id before validation runs. | Keep repair-before-validate on every load path. |
+| INV-GR-05 | Node ids are globally unique. | FIXED (2026-11-16) | `nodeName` now takes 16 characters of the plant id instead of 8: with 8, two plants sharing a prefix produced identical node ids and `findPlantByNodeId` grew the wrong plant. 16 makes that collision unobservable. | Keep the tag long enough that a collision is not reachable; do not shorten it for payload size. |
 | INV-GR-06 | `totalUpkeep` equals the sum of node upkeeps. | ENFORCED | Fixed 2026-11-08: `processPlantUpkeep`/`processDormantPlant` recompute the sum and subtract it once. | Test: `spends upkeep once per tick, equal to the node sum`. |
 | INV-GR-07 | `totalBiomass > 0` iff the plant is alive. | PARTIAL | Multiple death checks; stale references can still mutate. | Single `killPlant` transition; guard all mutators. |
 | INV-GR-08 | `0 <= totalEnergy <= computePlantCapacity(plant).energy`, and the same for stored water/minerals against their plant-derived capacities. | ENFORCED | Fixed 2026-11-12: `ops/plantCapacity.ts` derives capacity from the plant's own biomass and `clampPlantStorage` is applied after every mutation (growth spend, absorption, photosynthesis, item use, dev fill, save load). | Test: `plantCapacity` bounds + PlantWorld suites. |
@@ -445,12 +445,12 @@ Status legend: `ENFORCED`, `PARTIAL`, `UNENFORCED`, `BROKEN`.
 | INV-RS-04 | Weather durations come from config. | ENFORCED | Fixed 2026-11-08: graph owns transitions, `WeatherConfig` owns durations. | Keep it this way; no duration literals. |
 | INV-RS-05 | Forecast equals the sampled next state. | ENFORCED | Fixed 2026-11-08: `machine.nextState` is preselected and reused by `advance`. | Preserve the single-sample rule. |
 | INV-RS-06 | Every weather state maps to a client condition. | PARTIAL | `conditionMapping[state] ?? 'sun'` silently falls back. | Validate all five states at config load. |
-| INV-RS-07 | Client and server agree on day/night. | BROKEN | Different sun curves and switch points; client has its own hardcoded clock. | Server broadcast is authoritative; client extrapolates only between broadcasts. |
+| INV-RS-07 | Client and server agree on day/night. | FIXED (2026-11-16) | One clock policy (`client/renderers/environment/worldClock.ts`): the server's `timeOfDay` is adopted on every broadcast, the client only interpolates between them with the same configured cycle length, and the freeze and speed are server state carried in the payload. Both sides derive"is it day" from the same sun arc. | Never reintroduce a client-only clock, freeze or speed; send the dev change to the server. |only between broadcasts. |
 | INV-RS-08 | Rain is authoritative from weather. | PARTIAL | `ResourceWorld.setRaining` is dead; moisture uses the weather rate. | Delete `setRaining` or wire it. |
-| INV-RS-09 | Reads do not mutate. | BROKEN | `ResourceWorld.getState` calls `getDirtyTiles`, flipping `hasBroadcast`. | Separate `peekState` from `consumeDirty`. |
-| INV-RS-10 | Dirty thresholds come from config. | UNENFORCED | Hardcoded 0.05/0.1. | Read from `resources.json`. |
+| INV-RS-09 | Reads do not mutate. | FIXED (2026-11-16) | `getState` reads through `peekDirtyTiles`; `getDirtyTiles` is only reached where something is already dirty, so a read no longer flips `hasBroadcast`. | Keep state reads non-consuming; add a `consume` verb for the mutating one. |
+| INV-RS-10 | Dirty thresholds come from config. | FIXED (2026-11-16) | `light_dirty_threshold` (0.05) and `resource_dirty_threshold` (0.1) are `config/resources.json` values read into the world config; the module constants are gone. | New thresholds are config values, not constants. |
 | INV-RS-11 | Death deposit happens exactly once per death. | FIXED (2026-11-10) | Same as INV-GR-14; `killPlant` queues death, `processPlantDeaths` calls `onPlantDeath` once (`main.ts:125-147`). | Keep single deposit path. |
-| INV-RS-12 | Consumption triggers reflect consumed items. | BROKEN | `checkConsumptionTriggers` returns config booleans as if they were world state (`resourceWorld.ts`). | Track actual consumption events. |
+| INV-RS-12 | Consumption triggers reflect consumed items. | CLOSED (2026-11-16) | The only implementation, `checkConsumptionTriggers`, had no call sites and returned two config booleans as world state plus a mineral-threshold test. Rather than fix a query nothing asked, the function and its three orphaned config values (`consumption_trigger_*`) were deleted; there is no consumption system to trigger yet. | When consumption lands, track consumed items and expose that; do not reintroduce a flag read as state. |
 | INV-RS-13 | Canopy shading has a single source of truth. | ENFORCED (2026-11-14) | `getCanopyShadingAt` was removed with root attack; `ResourceWorld.updateLight` is the only shade path and reads `resources.canopy_shade_reduction`. | Keep the radius and strength in config. |
 | INV-RS-14 | A root is visible exactly where the ground is open. | ENFORCED (2026-11-16) | The plant passes hide a fragment when the planet stands between the eye and it (`soilOccludes`). Above ground that test is a cylinder the size of the aperture, because the soil is cut in plan view — a sphere around the crown both hid deep roots that sat in the hole and exposed shallow ones outside it. Tests: `shaderSmoke`, `groundCutaway`. | Keep the aperture radius as the one source: `uRootSightApertureRadius` feeds the soil cut, the bowl mouth and the plant pass. |
 | INV-RS-15 | A buried eye sees the cavity it opened. | ENFORCED (2026-11-16) | Two rules. The eye is told to the plant pass (`setCameraUnderSoil`) and the surface test is skipped, because dirt between a buried eye and a root is the medium the eye stands in. And a bubble of air (`root_sight.eye_window_radius_m`) is fused into the same envelope as the roots, so the soil skin is cut around the eye. Without both, a camera flown down into the pit saw a brown wall and no roots. | The window is added only when the cavity is already open, so a buried camera cannot excavate a hole the plant never dug. |
@@ -469,14 +469,14 @@ Status legend: `ENFORCED`, `PARTIAL`, `UNENFORCED`, `BROKEN`.
 | INV-NET-05 | `GROWTH_EVENT` fully describes growth. | FIXED (2026-11-09) | Emits `newNode` or `newNodes` + `updatedParentNode`, `totalBiomass` and `totalEnergy`; germination is included. | — |
 | INV-NET-06 | Every accepted intent is processed. | FIXED (2026-11-10) | `growthIntentStateMachine` queues intents in FIFO order per player; same-tick intents no longer overwrite (`ops/growthIntentStateMachine.ts`). | Queue by intent id. |
 | INV-NET-07 | `PLANT_SYNC` covers every plant the client should see. | PARTIAL | Only connected players' plants; offline plants vanish. | Include interested/reclaimed plants. |
-| INV-NET-08 | Client validates payloads. | UNENFORCED | Everything is `as`-cast. | Schema guards at `onmessage`. |
+| INV-NET-08 | Client validates payloads. | HOLDS (2026-11-16) | `validateMessage` is imported from `@plant-legacy/shared/protocol/messageSchemas` and runs before the dispatch switch (`main.ts`), so a handler never sees an unvalidated payload; `net/dispatch.ts` takes `unknown` and documents that ordering. | `messageSchemas` tests; keep the guard before the switch, never inside handlers. |
 | INV-NET-09 | Client updates the full graph, not just the new node. | FIXED (2026-11-10) | `GROWTH_EVENT` links new nodes into parent's `children` array for own and other plants (`apps/client/src/main.ts:2861-2949`). | Apply links or request sync. |
 | INV-NET-10 | `plantReady`/`plantId`/`welcome` are consistent. | PARTIAL | `welcome` not cleared on close; `cameraFramed` not reset. | Own them in one session object. |
 | INV-NET-11 | Own-plant sync works when `plantId` is null. | FIXED (2026-11-10) | `PLANT_SYNC` matches by `ownerId === playerId` or `welcome.plantId` and sets `plantId` / `plantReady` (`apps/client/src/main.ts:3128-3135`). | Rebuild by owner/player id, not `plantId` alone. |
 | INV-NET-12 | Client `timeOfDay` matches the server. | PARTIAL | Hardcoded 1800s local advance. | Use broadcast interval + config. |
-| INV-NET-13 | Message type constants are shared. | PARTIAL | Client duplicates `MESSAGE_TYPE`; `DEV_RESPONSE = 99` has no server case. | Import from `net.ts`; add dev dispatch or remove. |
+| INV-NET-13 | Message type constants are shared. | FIXED (2026-11-16) | The client imports `MESSAGE_TYPE` from `@plant-legacy/shared/protocol` (no local copy), and `DEV_RESPONSE` is both sent by the server (dev path, `main.ts`) and dispatched by the client. | Keep one enum; add message types to shared, never to a client switch. |
 | INV-NET-14 | Server broadcasts respect interest cells. | PARTIAL (2026-11-09) | Same as INV-TM-10. | Wire interest filtering. |
-| INV-NET-15 | Client renders server text safely. | UNENFORCED | `innerHTML` with `label/reason/risk`. | `textContent`/DOM nodes. |
+| INV-NET-15 | Client renders server text safely. | FIXED (2026-11-16) | The two paths that put server strings in `innerHTML` — the growth-option label from `GROWTH_OPTIONS_RESULT` and the resource row label from `/config/resources` — now go through `escapeHtml` (as chat and reports already did). Other interpolations are numeric or client-owned strings. | Escape every server string at the DOM sink; prefer `textContent`. |
 | INV-NET-16 | `PROTOCOL_VERSION` has one source. | PARTIAL | Shared constant vs config vs hardcoded client `1`. | Import the shared constant everywhere. |
 
 ## F. Persistence (`INV-PR`)
@@ -498,16 +498,17 @@ Status legend: `ENFORCED`, `PARTIAL`, `UNENFORCED`, `BROKEN`.
 |---|---|---|---|---|
 | INV-AU-01 | Refresh tokens can be looked up by hash. | FIXED (2026-11-08) | Salted bcrypt on insert (`:228`, `:438`), re-hashed on lookup (`:379`, `:413`) → never matches. | Deterministic SHA-256 lookup hash, or opaque token id + bcrypt verify. |
 | INV-AU-02 | Session limit is `max`. | ENFORCED | Fixed 2026-11-08: revoke only `length - max` when `length > max`. | Add an integration test when the accounts test suite exists. |
-| INV-AU-03 | Access tokens belong to live, unlocked accounts. | PARTIAL | Signature/exp/iss/aud only (`:470-484`). | Check account + session state. |
+| INV-AU-03 | Access tokens belong to live, unlocked accounts. | FIXED (2026-11-16) | `verifyAccessToken` now loads the account after verifying the signature and refuses when it is gone, currently locked out, or carrying a different role than the token claims. Both the HTTP middleware and the WebSocket `HELLO` path get this for free. Tests in `service.jwt.test.ts`. | Keep the account read on the verify path; a signature alone is not identity here. |
 | INV-AU-04 | Rate limits are atomic. | FIXED (2026-11-09) | `DELETE → SELECT → INSERT/UPDATE` with no lock/unique constraint (`:129-168`). | `INSERT … ON CONFLICT DO UPDATE` + row lock. |
 | INV-AU-05 | Lockout resets after expiry. | PARTIAL | Failed count is not reset when the lock expires. | Reset on successful login / expiry check. |
 | INV-AU-06 | Display-name constraints hold at signup. | ENFORCED (2026-11-10) | `createAccount` and `changeDisplayName` both call shared `validateDisplayName` method (length and control characters). Tested in `service.test.ts`. | Maintain shared display name validator. |
 | INV-AU-07 | JWT secret is always configured. | FIXED (2026-11-09) | Falls back to `'dev-secret-change-in-production'` (`:566-568`). | Fail startup outside `local`. |
-| INV-AU-08 | Client IP is trustworthy. | UNENFORCED | Trusts `x-forwarded-for` unconditionally. | Configure trusted proxies. |
+| INV-AU-08 | Client IP is trustworthy. | FIXED (2026-11-16) | `getClientIp` reads `x-forwarded-for` only when `ops.trust_proxy` is true, and otherwise uses the socket address, so rate limits and lockout cannot be spoofed by a header. | Keep the proxy opt-in; never read the header unconditionally. |
 | INV-AU-09 | Accounts are actually used by the game loop. | FIXED (2026-11-09) | Client never sends a token, so every player is anonymous. | Send the access token in HELLO. |
 | INV-AU-10 | Usernames are uniquely identified consistently. | PARTIAL | Case-sensitive duplicate check only. | Normalize + DB unique index on `lower(username)`. |
 | INV-AU-11 | Logout revokes the presented session. | FIXED (2026-11-08) | Same cause as INV-AU-01; invalid token still returns success. | Verify the token belongs to a session; return an error otherwise. |
-| INV-AU-12 | CORS and WS origin checks agree. | PARTIAL | HTTP still processes disallowed origins; WS closes. | Reject at the HTTP boundary too. |
+| INV-AU-12 | CORS and WS origin checks agree. | FIXED (2026-11-16) | Both boundaries call `isAllowedOrigin` from `ops/originPolicy.ts`; an HTTP request from a disallowed origin is refused with 403 and a log line instead of being executed without a CORS header. A missing `Origin` stays allowed (non-browser client). Covered by `originPolicy.test.ts`. | Keep one policy function; never inline an origin list in a route. |
+| INV-AU-13 | Dev tools are not reachable by a random player. | ENFORCED (2026-11-16) | `ops/devAccess.ts` gates on the runtime environment (`ops.dev_allowed_environments`, default `["local"]`) and, outside `local`, on an `admin` role or a listed account. No `process.env` read, so an unset `NODE_ENV` no longer means "local". `DEV_ACTION` answers `dev_access_denied:<reason>`; `/dev/config` answers 404; the client probes before drawing the panel. | Add a dev capability to the policy, not to a route or a message handler. |
 
 ## H. Config discipline (`INV-CFG`)
 
@@ -558,7 +559,7 @@ features.
 
 ---
 
-## I. Damage and uproot (`INV-DM`)
+## J. Damage and uproot (`INV-DM`)
 
 | ID | Invariant | Status | Evidence / failure | Fix |
 |---|---|---|---|---|
@@ -567,6 +568,14 @@ features.
 | INV-DM-03 | Root contact never deals damage. | ENFORCED | `DamageSource` has weather/tool/herbivore/terrain only; no root-attack call site (ADR-051). | Reject any future plant-vs-plant source that is not a new task + ADR. |
 | INV-DM-04 | A reroot places the plant on valid soil inside the window. | ENFORCED | `updateUprootedPlant` requires `windowRemainingS > 0`, a settled phase and `rerootSoilIsValid` before accumulating `settledSeconds`. | Keep the window and moisture check together. |
 | INV-DM-05 | Every drop expires. | ENFORCED | `expireDrops` runs each tick against `expiresAtMs`; `DROP_EXPIRED` is broadcast. | Expiry must remain tick-driven, not client-driven. |
+
+## K. Rendering (`INV-RND`)
+
+| ID | Invariant | Status | Evidence / failure | Fix |
+|---|---|---|---|---|
+| INV-RND-01 | A close plant is drawn with depth testing, so terrain and the Root Sight cavity occlude it. | HOLDS (2026-11-16) | The close path is `MeshPlantRenderer` (`useMeshL0L1 = true`). The SDF raymarch is a fullscreen quad with `depthTest: false` and `depthWrite: false`, because a missed ray must output alpha 0 and blend over the sky. | Never route the close plant back to the raymarch quad; it composites over relief. See `docs/partitioning-lod.md`. |
+| INV-RND-02 | Every material that sees distance reads the same air. | HOLDS (2026-11-16) | The ground and plant shaders include `GLSL_ATMOSPHERE` from `renderers/environment/atmosphere.ts`; plain `MeshStandardMaterial`s go through `standardAtmosphere.ts`, which sets `material.fog = false` and applies the same model in a world-space varying. `scene.fog` survives only on materials that have not opted in. | Do not reintroduce `THREE.Fog` on ground or plant materials; add a new material to the shared model instead. |
+| INV-RND-03 | Image quality settings that the renderer relies on are config, not constants. | HOLDS (2026-11-16) | The impostor switch and refresh interval, the three VRAM budgets and the texture-array size/layers are `config/render.json` values threaded through `clientConfig.ts` into `WebGPURenderer`; the former `TEXTURE_ARRAY_SIZE`/`TEXTURE_ARRAY_LAYERS` module constants are gone. | Add a renderer tuning knob to `render.json` and `docs/tasks/C02b.md`, never to the config object's defaults. |
 
 # Part 4 — Remediation plan (retired)
 

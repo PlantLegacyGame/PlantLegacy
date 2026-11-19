@@ -23,11 +23,13 @@
 | Emote wheel | `E` | Opens emote selection |
 | Inventory / Overview | `I` | Toggles combined inventory + plant overview panel |
 | Inventory slot 1–10 | `1`–`9`, `0` | Selects inventory slot |
-| Cancel growth / Close panel | `Escape` / Right-click (context) | Cancels growth drawing, hides panels |
-| Dev panel toggle | `` ` `` (backtick) | Opens dev panel with admin commands (only with `?dev=1`) |
+| Cancel growth / Close panel | `Escape` / Right-click (context) | Cancels growth drawing, closes the topmost open panel or wheel, otherwise opens the pause menu |
+| Pause menu | `Escape` in the world | Resume, Settings, Controls, Leave to title. Also the action bar's Menu button, so it is reachable on touch |
+| Operator readout, growth readout | dev panel → Debug | The tick card and the growth readout are switches in the dev panel. They were F3 and F2: F3 is the browser's find bar in Chrome and quick-find in Firefox, and both are function keys a browser game must not claim |
+| Dev panel toggle | `` ` `` (backtick) | Opens dev panel with admin commands (only with `?dev=1`). The dev panel's Debug tab also owns the three readouts below |
 | Planet orbit view | Dev panel → Camera → Orbit Planet / Local View | No key binding by request; the action is `planet_view_toggle` but it is not bound |
-| Debug overlay toggle | `Shift` | Toggles debug metrics overlay |
-| Hint card toggle | `H` | Shows/hides first-spawn hint card |
+| Debug overlay | dev panel → Debug → Metrics overlay | Unbound on purpose. It used to be a bare `Shift`, which fired every time a player held shift to select or capitalise, and swallowed the modifier. |
+| Hints | `H` | Shows the key list on demand and re-enables hints. Hints themselves are contextual: each one appears once, when it is relevant |
 | Regenerate plant (dev) | `R` (dev context) | Generates test plant at origin |
 
 Input is sampled and sent to the server at 20 Hz. The camera is client-side and
@@ -36,21 +38,62 @@ server-unvalidated: `INPUT` frames are stored and only advance `lastInputTick`
 rather than left as a pretend movement check. `REJECT` is returned for invalid
 growth intents, not for movement. The client never moves its own cube.
 
-The first-spawn hint card auto-hides after
-`onboarding.show_hint_card_duration_ms`; `H` toggles it back on.
-The light/water/minerals readout and its tooltips exist and show real tile
-readings once the server sends `RESOURCE_UPDATE` data.
+Hints are contextual: each appears once, when it is relevant, for
+`ui.hint_card_duration_ms`. `H` (or the bar's Hints button) shows the three-line
+key list on demand. The vitals card reads real tile totals once the server sends
+`RESOURCE_UPDATE` data.
+
+## No function keys
+
+Nothing in the game binds `F1`-`F12`, and no bare modifier acts as a toggle.
+Function keys belong to the browser (find, reload, fullscreen, devtools), and a
+bare `Shift` or `Alt` is a key players hold while doing something else. The
+metrics overlay, growth readout and tick card are switches in the dev panel's
+Debug tab instead.
+
+## Action bar
+
+The bottom row names every verb that used to be keyboard-only, with its key as a
+badge: Grow (`G`), Root sight (`R`), Inventory (`I`), Chat (`T`), Emotes (`E`),
+Hints (`H`), Menu (`Esc`). On a coarse pointer the badges are dropped, the targets
+grow to 48 px and the row wraps instead of overflowing a phone, which is how those
+verbs are reachable on a phone at all. Root sight is in the bar because a touch
+player otherwise had no door into the underground view: `R` was its only binding.
+
+## Phone layout
+
+- The vitals card drops below the status card and spans the width.
+- Inspect and Inventory become one full-width sheet with an Inspect / Inventory
+  switch at the top, instead of two half-width columns.
+- Chat opens full width above the action bar instead of as a corner column.
+- The mode badge rides inside the action bar, so it can never overlap it.
+- Nothing names a key on a finger layout: the action bar drops its badges, the
+  pause rows drop theirs, and contextual hints swap their text for the `touchText`
+  written beside it.
+
+## One home for the finger copy
+
+Every word a phone is told about its own controls lives in
+[`apps/client/src/ui/touchCopy.ts`](../apps/client/src/ui/touchCopy.ts): the
+gesture table the Settings → Controls tab renders, the title screen's one hint
+line, and the two device-specific lines of the Hints card. It was three copies
+before that (a config key, a table in the settings panel and a string in the title
+scene) and they had already drifted. The keyboard card still comes from
+`config/onboarding.json`, and the touch card borrows that card's last line, so the
+game's description of what the player is has one owner.
 
 ## Grow Mode vs Normal Mode
 
 - **Normal Mode (default):** Left-click a node → camera smoothly focuses on that node. No growth panel opens.
 - **Grow Mode:** Press `G` to toggle. Left-click a node → growth options panel opens for that node. Select an option, then drag on the canvas to set growth direction, release to confirm.
 
-Mode state is shown in the UI (top-left indicator).
+Mode is shown three ways, none of them text in a readout: the screen edge takes a
+green tint, the cursor becomes a crosshair, and the bar's Grow button is held
+down with a `GROW MODE` badge above it.
 
 ## Chat (T05)
 
-- **Chat panel** (`T` key): proximity and world tabs, send on Enter, auto-shows briefly on new messages, scrollback capped at 50 messages.
+- **Chat panel** (`T` key): proximity and world tabs, send on Enter, auto-shows briefly on new messages, scrollback capped at 50 messages. Full width above the action bar under 560px.
 - **Rate limiting:** world chat limited to `chat.world_rate_msg_per_min` (default 12/min).
 - **Block:** right-click any chat message → Block player. Blocked players' chat and emotes are hidden from you. Block persists for the session.
 - **Report:** right-click any chat message → Report. Opens a modal dialog with pre-filled target, reason dropdown (RULE_6 categories), free-text additional info, and optional block checkbox. Reports are sent server-side with a context snapshot of recent chat lines. Rate-limited to `reports.report_rate_limit_per_min` (default 5/min).
@@ -67,7 +110,9 @@ Mode state is shown in the UI (top-left indicator).
 
 ## Not built yet
 
-- Touch producers for mobile (desktop only currently).
+- Touch producers for growth aiming beyond tap-to-pick (long-press a node for its
+  menu, per DESIGN 17.5). The camera, the action bar, the reroot pad and the panels
+  all work on touch today; the growth aim still turns from a drag, not a gesture.
 - Rebinding UI and persistence.
 - Camera recenter and game actions beyond movement.
 - Inventory slot selection logic (actions bound, grid rendered, selection not wired).

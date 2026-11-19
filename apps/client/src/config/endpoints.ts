@@ -34,3 +34,25 @@ export const wsOrigin = serverOrigin
 
 // D01: Dev mode gate - only enable dev features with ?dev=1 query param.
 export const isDevMode = new URLSearchParams(location.search).has('dev');
+
+/**
+ * Does this server offer dev tools at all?
+ *
+ * `?dev=1` only asks. The server decides by environment and account, and its
+ * `/config/dev` endpoint answers 404 when the answer is no, so the panel can
+ * check before drawing controls that could only be refused. A network failure
+ * is treated as "no": a panel that silently does nothing is worse than none.
+ *
+ * The path is `/dev/config`. The dev server has to proxy `/dev` for this to
+ * reach the API at all: without that entry every probe returned Vite's 404 and
+ * the panel stayed shut for the operators it exists for.
+ */
+export async function probeDevTools(): Promise<boolean> {
+  if (!isDevMode) return false;
+  try {
+    const response = await fetch(`${httpOrigin}/dev/config`, { credentials: 'omit' });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}

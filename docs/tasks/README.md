@@ -34,7 +34,7 @@ through ADR-029 and by ADR-041/ADR-048:
 6. Remaining C02b work. Shared depth is **not** a C02b blocker: ADR-041 gates it
    on volumetric terrain (T56).
 
-Full programme: [`../PlantLegacy-Abyssal-Integration-Plan.md`](../PlantLegacy-Abyssal-Integration-Plan.md).
+Specs for every task in this list are in [`DESIGN.md` Part 11](../../DESIGN.md).
 
 ## Status
 
@@ -67,8 +67,7 @@ Full programme: [`../PlantLegacy-Abyssal-Integration-Plan.md`](../PlantLegacy-Ab
 ## Approved V5.4 tasks (not started)
 
 These are post-alpha extensions, approved 2026-11-09. The full specs are in
-`DESIGN.md` Part 11; the index and rationale are in
-[`../PlantLegacy-Abyssal-Integration-Plan.md`](../PlantLegacy-Abyssal-Integration-Plan.md) §0.3 and §12. Create task records
+`DESIGN.md` Part 11 and the rule amendments in Part 16; create a task record
 when each task starts.
 
 | Task | Name | Status | Spec |
@@ -84,11 +83,9 @@ when each task starts.
 
 ## Programme documents
 
-- [`../PlantLegacy-Abyssal-Integration-Plan.md`](../PlantLegacy-Abyssal-Integration-Plan.md)
-  — work packages, waves, risks and acceptance for extending the world. Owns no
-  task specs; links to DESIGN Part 11.
-- [`../abyssal-mechanisms.md`](../abyssal-mechanisms.md) — technique reference
-  (Abyssal Garden mechanisms P L may adopt, and what must change).
+- [`../abyssal-garden-source-analysis.md`](../abyssal-garden-source-analysis.md)
+  — what Abyssal Garden's source actually does, what is worth taking from it, and
+  the order the renderer work should happen in (Part II §15).
 - [`../decisions.md`](../decisions.md) — ADR-041 to ADR-049 record the 2026-11-14
   review: deferred renderer unification, L2 ellipsoid/L3 atlas, scoped terrain
   slice, burial calamity, two water slices, full trait model, fauna before

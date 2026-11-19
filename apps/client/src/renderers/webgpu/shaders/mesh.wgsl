@@ -286,6 +286,15 @@ fn lookForOrgan(plantIndex: u32, nodeType: f32) -> LookOrgan {
    var lit = vec4f(baseColor * (0.45 + 0.55 * nDotL) + skyFill, 1.0);
 
     let viewDirection = normalize(frame.cameraPos.xyz - input.worldPosition);
+    // Backlight: a leaf with the sun behind it glows through its own tissue. This
+    // is what makes foliage read as alive at golden hour instead of painted. The
+    // selection outline is not tissue, so it is excluded, like every other
+    // surface term here.
+    if (!isOutline) {
+      let backlight = pow(max(dot(-viewDirection, sunDirection), 0.0), 2.0);
+      let transmission = vec3f(1.0, 0.82, 0.5) * backlight * frame.sunWarmth * 0.5;
+      lit = vec4f(lit.rgb + baseColor.rgb * transmission, lit.a);
+    }
     let rim = pow(1.0 - max(dot(normal, viewDirection), 0.0), 3.0) * 0.18;
     lit = vec4f(lit.rgb + vec3f(0.18, 0.30, 0.18) * rim, lit.a);
 

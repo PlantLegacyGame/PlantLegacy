@@ -16,7 +16,7 @@
         "Left-click: Select (Normal: focus, Grow: options)  |  G: Grow Mode  |  R: Root Sight  |  E: Emotes  |  I: Inventory",
         "You are a plant. Grow roots down, canopy up. Read light, water, minerals."
       ],
-      "notes": "Exactly 3 lines per RULE_13. No editorial text, no strategy hints."
+      "notes": "Exactly 3 lines per RULE_13. No editorial text, no strategy hints. The finger-layout card is built in apps/client/src/ui/touchCopy.ts from the same facts, and borrows this card's last line."
     },
     "show_hint_card_duration_ms": {
       "type": "integer",

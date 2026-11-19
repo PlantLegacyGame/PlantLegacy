@@ -149,7 +149,7 @@ together.
 | Config files: owner, status, value count | [`docs/tunables.md`](./docs/tunables.md) — values live in `config/` |
 | What is built, what is not, known gaps | [`docs/what-works-now.md`](./docs/what-works-now.md) |
 | What happened, when | [`docs/history.md`](./docs/history.md) — append-only, not current state |
-| What comes next | [`docs/PlantLegacy-Abyssal-Integration-Plan.md`](./docs/PlantLegacy-Abyssal-Integration-Plan.md) |
+| What comes next | [`docs/tasks/README.md`](./docs/tasks/README.md) — the ordered backlog; renderer work is ranked in [`docs/abyssal-garden-source-analysis.md`](./docs/abyssal-garden-source-analysis.md) Part II §15 |
 | What to fix in the built system, in order | [`docs/improvement-plan.md`](./docs/improvement-plan.md) |
 | The 2026-11-16 verified defect pass, fix by fix | [`docs/bugfix-plan.md`](./docs/bugfix-plan.md) |
 | What is broken right now, with evidence and status | [`docs/bug-inventory.md`](./docs/bug-inventory.md) |
@@ -162,7 +162,7 @@ Supporting references: [`docs/controls.md`](./docs/controls.md) (bindings),
 [`docs/tick-budget.md`](./docs/tick-budget.md) (tick timing),
 [`docs/compliance-policy.md`](./docs/compliance-policy.md),
 [`docs/what-spores-are.md`](./docs/what-spores-are.md),
-[`docs/abyssal-mechanisms.md`](./docs/abyssal-mechanisms.md) (AG technique reference),
+[`docs/abyssal-garden-source-analysis.md`](./docs/abyssal-garden-source-analysis.md) (Abyssal Garden source analysis and what to take from it),
 [`ATTRIBUTION.md`](./ATTRIBUTION.md) (asset licences).
 
 ## Approved extensions (not built)
@@ -170,13 +170,14 @@ Supporting references: [`docs/controls.md`](./docs/controls.md) (bindings),
 The v5.4 extension program is **approved 2026-11-09, not built**. It covers reactive
 non-sapient fauna, material simulation (water/sand/lava/fire), sparse volumetric
 terrain, parametric terrain features, streamed world objects, ecological
-succession, and cloud-native World orchestration. The index is
-[`docs/PlantLegacy-Abyssal-Integration-Plan.md`](./docs/PlantLegacy-Abyssal-Integration-Plan.md) §0.3; the task specs and rule amendments are in [`DESIGN.md`](./DESIGN.md) Parts 2, 11 and 16.
+succession, and cloud-native World orchestration. The task specs and rule
+amendments are in [`DESIGN.md`](./DESIGN.md) Parts 2, 11 and 16; the task index is
+[`docs/tasks/README.md`](./docs/tasks/README.md).
 
-**Reviewed 2026-11-14:** [`docs/PlantLegacy-Abyssal-Integration-Plan.md`](./docs/PlantLegacy-Abyssal-Integration-Plan.md)
-is the programme for extending that work (work packages, waves, risks), and
-[`docs/abyssal-mechanisms.md`](./docs/abyssal-mechanisms.md) is the technique
-reference behind it. Its nine review decisions are ADR-041 to ADR-049 in
+**Abyssal Garden, reviewed 2026-11-14:** what the upstream source actually does,
+where earlier descriptions of it were wrong, and the order to adopt it in are in
+[`docs/abyssal-garden-source-analysis.md`](./docs/abyssal-garden-source-analysis.md).
+Its nine review decisions are ADR-041 to ADR-049 in
 [`docs/decisions.md`](./docs/decisions.md).
 
 Nothing in that program changes the current 78-file config count (owned by

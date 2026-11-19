@@ -129,6 +129,10 @@ export interface WeatherStateMachine {
   dayFraction: number;
   conditionMapping: Record<string, string>;
   rng: () => number;
+  /** Dev control: the world clock stands still while true. Weather still runs. */
+  timePaused: boolean;
+  /** Dev control: multiplier on the clock's advance rate. */
+  timeScale: number;
 }
 
 export function createWeatherStateMachine(
@@ -155,6 +159,8 @@ export function createWeatherStateMachine(
     dayFraction: dayNightConfig.dayFraction,
     conditionMapping: dayNightConfig.conditionMapping,
     rng: mulberry32(worldSeed),
+    timePaused: false,
+    timeScale: 1,
   };
 }
 
@@ -203,6 +209,20 @@ function pickNextState(current: WeatherStateName, rng: () => number): WeatherSta
   return entries[entries.length - 1][0];
 }
 
+/** Dev control: hold the world clock where it is, or let it run again. */
+export function weatherStateMachineSetTimePaused(
+  machine: WeatherStateMachine,
+  paused: boolean,
+): void {
+  machine.timePaused = paused;
+}
+
+/** Dev control: how fast the world clock advances, as a multiplier on real time. */
+export function weatherStateMachineSetTimeScale(machine: WeatherStateMachine, scale: number): void {
+  if (!Number.isFinite(scale)) return;
+  machine.timeScale = Math.min(100, Math.max(0, scale));
+}
+
 export function weatherStateMachineUpdate(
   machine: WeatherStateMachine,
   dtSeconds: number,
@@ -210,7 +230,15 @@ export function weatherStateMachineUpdate(
   machine.totalElapsedS += dtSeconds;
   machine.stateTimerS += dtSeconds;
 
-  machine.timeOfDay = (machine.timeOfDay + dtSeconds / machine.cycleLengthS) % 1.0;
+  // The clock is server state, so a dev freeze or speed change has to live here
+  // rather than in a renderer that the next broadcast overwrites. Weather keeps
+  // running while the clock is paused: stopping the rain because time stopped
+  // would be two controls pretending to be one.
+  if (!machine.timePaused) {
+    machine.timeOfDay =
+      (machine.timeOfDay + (dtSeconds * machine.timeScale) / machine.cycleLengthS) % 1.0;
+    if (machine.timeOfDay < 0) machine.timeOfDay += 1.0;
+  }
 
   if (machine.stateTimerS >= machine.currentDurationS) {
     return weatherStateMachineAdvance(machine);
@@ -287,6 +315,8 @@ export function weatherStateMachineGetNextState(machine: WeatherStateMachine): W
 export function weatherStateMachineGetBroadcast(machine: WeatherStateMachine): {
   dayNumber: number;
   timeOfDay: number;
+  timePaused: boolean;
+  timeScale: number;
   isDay: boolean;
   sunIntensity: number;
   lightMultiplier: number;
@@ -315,6 +345,8 @@ export function weatherStateMachineGetBroadcast(machine: WeatherStateMachine): {
     dayNumber:
       1 + Math.floor((machine.totalElapsedS + machine.cycleLengthS * 0.25) / machine.cycleLengthS),
     timeOfDay: machine.timeOfDay,
+    timePaused: machine.timePaused,
+    timeScale: machine.timeScale,
     isDay: isDayTime,
     sunIntensity,
     lightMultiplier: weatherStateMachineGetLightMultiplier(machine),

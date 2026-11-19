@@ -1,6 +1,6 @@
 # Art bible
 
-**Status:** stub (T00). Owned by the C-series rendering tasks; updated at every gate.
+**Status:** in use (T00). Owned by the C-series rendering tasks; updated at every gate. The pillars, the organism anatomy, the mutation-signature rules and the water rules are populated; audio direction (C06) and the sky/weather palette notes (C03) are still open.
 **Source of truth:** DESIGN.md Part 19. This file exists so every AI session shares
 one visual language; it is not a second spec.
 
@@ -14,7 +14,21 @@ one visual language; it is not a second spec.
 ## Direction
 
 Stylized naturalism (D-18). PBR-lite, one directional light, hemispheric ambient,
-rim light on plants, aerial-perspective fog, per-time-of-day color grading.
+rim light on plants, aerial-perspective fog.
+
+**What is built, and what is still direction (verified 2026-11-16):**
+
+- *Built:* the shared atmosphere model (`renderers/environment/atmosphere.ts`,
+  one air for ground, plants and the sky), the underwater medium
+  (`underwater.ts`, §Water below), sky dome and celestial arcs, weather tinting.
+- *Direction only:* **per-time-of-day colour grading** and any bloom or exposure
+  work. The client renders with no tone mapping and no post chain — the vignette
+  and grain are a DOM overlay — so bright and emissive values clip rather than
+  grade. The ranking for fixing that is Wave 3-D in
+  [`improvement-plan.md`](./improvement-plan.md); the reasoning is §12.2 of
+  [`abyssal-garden-source-analysis.md`](./abyssal-garden-source-analysis.md).
+- *Direction only:* cascaded or contact shadows. There is one shadow map,
+  refreshed on a timer.
 
 ## Organism Anatomy & Visual Fusion (C02 / T02)
 
@@ -26,10 +40,10 @@ Plants in Plant Legacy are living organisms, not collections of intersecting geo
 
 ## To be filled by
 
-- **C01** — quality tiers, dynamic resolution, debug overlay budget.
-- **C02 / C02b** — plant materials, mutation visual signatures, LOD appearance.
-- **C03** — sky, weather, terrain, cutaway reuse.
-- **C06** — audio direction.
+- **C01** — quality tiers, dynamic resolution, debug overlay budget. *(landed; see `render/QualityController.ts`)*
+- **C02 / C02b** — plant materials, mutation visual signatures, LOD appearance. *(landed; see `docs/tasks/C02.md`, `C02b.md`)*
+- **C03** — sky, weather, terrain, cutaway reuse. *(landed; see `docs/tasks/C03.md`)*
+- **C06** — audio direction. *(open)*
 
 ## Asset policy (D-19)
 

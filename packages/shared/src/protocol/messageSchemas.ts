@@ -260,6 +260,9 @@ export const MESSAGE_SCHEMAS: Record<number, Record<string, FieldRule>> = {
     accessToken: { type: 'string' },
     plantId: { type: 'string' },
     reconnectToken: { type: 'string' },
+    // The name other players see. Optional so an old client still connects;
+    // the server sanitizes it and falls back to 'Player'.
+    displayName: { type: 'string' },
   },
   2: {
     // INPUT

@@ -50,18 +50,54 @@ export type NodeHealthStatus = 'growing' | 'intact' | 'fading' | 'depleted' | 'g
 
 export function nodeHealthStatus(health: number, growthProgress = 1): NodeHealthStatus {
   if (!(health > 0)) return 'gone';
+  // A part still filling in is not damaged; the server says the same.
   if (growthProgress < 1) return 'growing';
-  if (health >= 0.7) return 'intact';
-  if (health >= 0.4) return 'fading';
+  // Three bands, not five: a part that has lost a tenth of its tissue is still
+  // whole to the player, and calling that "Fading" made the panel shout damage
+  // at a plant nobody had touched. Only a real loss gets a warning word.
+  if (health >= 0.85) return 'intact';
+  if (health >= 0.5) return 'fading';
   return 'depleted';
+}
+
+/**
+ * What a health band looks like *on the plant*, not in a panel.
+ *
+ * The inspect panel could say "Wilted" while the 3D part was drawn in the same
+ * green as a healthy one: the status existed in one place and the scene in
+ * another, so the sentence and the picture disagreed. These numbers hang off the
+ * same bands the panel prints, so the plant cannot look healthy and read wilted.
+ */
+export interface NodeHealthLook {
+  /** How far the part's colour is pulled toward dry straw (0..1). */
+  straw: number;
+  /** How much saturation it loses (0..1): dry tissue is not vivid. */
+  desaturate: number;
+  /** Extra surface scatter; dry tissue is less glossy. */
+  roughness: number;
+}
+
+export function nodeHealthLook(status: NodeHealthStatus): NodeHealthLook {
+  switch (status) {
+    case 'depleted':
+      return { straw: 0.72, desaturate: 0.42, roughness: 0.55 };
+    case 'gone':
+      return { straw: 1, desaturate: 0.6, roughness: 0.7 };
+    case 'fading':
+      return { straw: 0.32, desaturate: 0.18, roughness: 0.28 };
+    // Filling in is not damage, and neither is being whole: both keep their own
+    // colour, so the panel's "Growing" and "Healthy" look the same in the world.
+    default:
+      return { straw: 0, desaturate: 0, roughness: 0 };
+  }
 }
 
 export function nodeHealthLabel(status: NodeHealthStatus): string {
   const labels: Record<NodeHealthStatus, string> = {
     growing: 'Growing',
-    intact: 'Intact',
-    fading: 'Fading',
-    depleted: 'Depleted',
+    intact: 'Healthy',
+    fading: 'Damaged',
+    depleted: 'Wilted',
     gone: 'Gone',
   };
   return labels[status];

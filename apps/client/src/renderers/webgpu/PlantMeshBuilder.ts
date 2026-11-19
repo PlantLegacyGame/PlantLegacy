@@ -1,10 +1,14 @@
 import {
   getSeedBodyHeightRatio,
+  getSegmentTaperExponent,
+  jointStartRadius,
   nodeAttachmentPoint,
   nodeRenderRadius,
   resolveDrawnRadius,
   seedBodyCentreY,
   seedBodyHalfHeight,
+  segmentRadiusAt,
+  socketInset,
 } from '@plant-legacy/shared/growth';
 import { hash01 } from '@plant-legacy/shared/math';
 import * as THREE from 'three';
@@ -64,6 +68,10 @@ export interface PlantMeshBuildOptions {
   leafCountPerNode: number;
   tubeSides: number;
   rootSides: number;
+  /** Ring every this many metres along a drawn tube. */
+  chainRingSpacingM?: number;
+  /** How far a drawn tube's polyline may sag off its curve, in metres. */
+  chainSagittaTolM?: number;
   now: number;
   sunDirection: THREE.Vector3;
   /** Per-plant look parameters (petals, leaf and seed scale). */
@@ -461,98 +469,10 @@ class MeshAccumulator {
     }
   }
 
-  // Quadratic bezier curve tube with organic noise-based curvature
-  addCurvedTube(
-    start: THREE.Vector3,
-    end: THREE.Vector3,
-    control: THREE.Vector3,
-    radiusA: number,
-    radiusB: number,
-    sides: number,
-    packed: number,
-    segments = 8,
-    spawnTime = 0,
-    growthProgress = 1,
-    jointIndex = 0,
-  ): void {
-    // Sample curve points
-    const emergentR = growthProgress;
-    const rA = Math.max(0.005, radiusA) * emergentR;
-    const rB = Math.max(0.003, radiusB) * emergentR;
-    const points: THREE.Vector3[] = [];
-    const radii: number[] = [];
-    for (let i = 0; i <= segments; i += 1) {
-      const t = i / segments;
-      const invT = 1 - t;
-      const pos = start
-        .clone()
-        .multiplyScalar(invT * invT)
-        .addScaledVector(control, 2 * invT * t)
-        .addScaledVector(end, t * t);
-      points.push(pos);
-      radii.push(rA * invT + rB * t);
-    }
-
-    // Build tube rings along curve
-    for (let i = 0; i <= segments; i += 1) {
-      const pos = points[i];
-      const radius = radii[i];
-
-      // Tangent direction for this segment
-      let tangent: THREE.Vector3;
-      if (i === 0) {
-        tangent = points[1].clone().sub(points[0]).normalize();
-      } else if (i === segments) {
-        tangent = points[segments]
-          .clone()
-          .sub(points[segments - 1])
-          .normalize();
-      } else {
-        tangent = points[i + 1]
-          .clone()
-          .sub(points[i - 1])
-          .normalize();
-      }
-
-      const { u, v } = perpendicularBasis(tangent);
-      const ringStart = this.vertexCount;
-
-      for (let side = 0; side <= sides; side += 1) {
-        const angle = (side / sides) * Math.PI * 2;
-        const offset = u
-          .clone()
-          .multiplyScalar(Math.cos(angle))
-          .addScaledVector(v, Math.sin(angle));
-        const normal = offset.clone().normalize();
-        const position = pos.clone().addScaledVector(offset, radius);
-        const segmentWeight = 1.0 - i / segments;
-        const nextSegmentWeight = i / segments;
-        this.pushVertex(
-          position,
-          normal,
-          side / sides,
-          i / segments,
-          packed,
-          spawnTime,
-          growthProgress,
-          [jointIndex, jointIndex + 1, 0, 0],
-          [segmentWeight, nextSegmentWeight, 0, 0],
-        );
-      }
-
-      if (i > 0) {
-        const prevStart = ringStart - (sides + 1);
-        for (let side = 0; side < sides; side += 1) {
-          const a0 = prevStart + side;
-          const a1 = prevStart + side + 1;
-          const b0 = ringStart + side;
-          const b1 = ringStart + side + 1;
-          this.addTriangle(a0, b0, a1);
-          this.addTriangle(a1, b0, b1);
-        }
-      }
-    }
-  }
+  // A dead `addCurvedTube` used to live here: a quadratic tube that sampled
+  // `rA * (1 - t) + rB * t` along its own rings. Nothing called it, and it was
+  // a second copy of the radius rule that the chain pass owns, so it was deleted
+  // rather than left to drift back into use with the old linear taper.
 
   /**
    * One continuous tapered tube through a run of segments, the way the lab
@@ -939,6 +859,160 @@ export interface SegmentFrame {
 }
 
 /**
+ * Rings a segment may have, however short or straight it is.
+ *
+ * Four was enough for a straight cone. It is not enough for a flared neck: the
+ * radius rule finishes most of its necking inside the first quarter of a
+ * segment, so four evenly spaced rings draw that belly as three straight facets.
+ */
+export const CHAIN_MIN_SAMPLES = 6;
+/** Ceiling per segment, so a long wandering root cannot flood the buffer. */
+export const CHAIN_MAX_SAMPLES = 16;
+
+/**
+ * How many rings one segment needs.
+ *
+ * Two things decide it: how long the segment is, and how far its curve bends off
+ * its own chord. The old rule was a fixed ring every 5 cm with no idea of
+ * curvature, so every segment between 10 and 15 cm got the same four rings -
+ * a strongly bent branch and a straight stem were drawn with the same polyline,
+ * and four rings cannot show the neck at the joint either.
+ *
+ * `bend` is the curve's second difference, `|start - 2*control + end|`. A
+ * quadratic leaves its chord by at most `bend / 8`, and a polyline of n steps
+ * leaves the curve by about `bend / (8 n^2)`, so n falls out of the tolerance.
+ */
+export function chainSampleCount(
+  length: number,
+  bend: number,
+  ringSpacingM = 0.05,
+  sagittaTolM = 0.0015,
+): number {
+  const spacing = Number.isFinite(ringSpacingM) && ringSpacingM > 1e-4 ? ringSpacingM : 0.05;
+  const tolerance = Number.isFinite(sagittaTolM) && sagittaTolM > 1e-6 ? sagittaTolM : 0.0015;
+  const byLength = (Number.isFinite(length) ? Math.max(0, length) : 0) / spacing;
+  const byBend = Math.sqrt((Number.isFinite(bend) ? Math.max(0, bend) : 0) / (8 * tolerance));
+  return Math.max(
+    CHAIN_MIN_SAMPLES,
+    Math.min(CHAIN_MAX_SAMPLES, Math.ceil(Math.max(byLength, byBend))),
+  );
+}
+
+/**
+ * Ring positions along a segment, from 0 to 1.
+ *
+ * Bunched toward the joint on purpose: the radius rule does most of its necking
+ * in the first quarter of a segment, so that is where evenly spaced rings leave
+ * the belly as a polygon. Warping by the same exponent that shapes the radius
+ * puts the rings where the silhouette actually changes, and keeps both ends
+ * exact.
+ */
+export function chainSampleFractions(
+  count: number,
+  taperExponent = getSegmentTaperExponent(),
+): number[] {
+  const steps = Math.max(1, Math.round(count));
+  const exponent = taperExponent > 0 ? taperExponent : 1;
+  const fractions: number[] = [];
+  for (let i = 0; i <= steps; i += 1) {
+    if (i === 0) {
+      fractions.push(0);
+    } else if (i === steps) {
+      fractions.push(1);
+    } else {
+      fractions.push(1 - (1 - i / steps) ** (1 / exponent));
+    }
+  }
+  return fractions;
+}
+
+/**
+ * Control point of the quadratic that draws one segment.
+ *
+ * Two rules live here, both of them about junctions rather than parts:
+ *
+ * - The curve leaves the joint along a direction mixed from its **parent's own
+ *   outgoing tangent**: a control point built from this segment alone (a chord
+ *   midpoint plus a bow) has an end tangent unrelated to the next segment's
+ *   start tangent, so every node in a chain is a visible kink and the plant
+ *   reads as assembled from pieces. A part that forks away is mixed back toward
+ *   its own chord, because holding the parent's direction there would hook.
+ * - The bend and gravitropism bias still bow the tube, capped so they cannot
+ *   rotate the joint they start from.
+ */
+export function segmentControlPoint(
+  node: PlantNodeData,
+  start: THREE.Vector3,
+  target: THREE.Vector3,
+  parentSegment?: { position: THREE.Vector3; control: THREE.Vector3 },
+): THREE.Vector3 {
+  const length = start.distanceTo(target);
+
+  // Per-part gravtropism/phototropism bias
+  let tropismStrength = 0.25;
+  let gravityBias = -0.1;
+  if (node.nodeType === 'radicle') {
+    tropismStrength = 0.35;
+    gravityBias = -0.15;
+  } else if (node.nodeType === 'root') {
+    tropismStrength = 0.3;
+    gravityBias = -0.12;
+  } else if (node.nodeType === 'lateral_root') {
+    tropismStrength = 0.2;
+    gravityBias = -0.08;
+  } else if (node.nodeType === 'stem' || node.nodeType === 'branch') {
+    tropismStrength = 0.1;
+    gravityBias = 0.08; // Stems curve upward toward light
+  } else if (node.nodeType === 'vine') {
+    tropismStrength = 0.4;
+    gravityBias = -0.05;
+  }
+
+  // Add subtle noise-based bend for organic feel
+  const curvature = length * tropismStrength;
+  const branchDir = new THREE.Vector3().subVectors(target, start).normalize();
+  const bendDir = new THREE.Vector3().crossVectors(branchDir, new THREE.Vector3(0, 1, 0));
+  if (bendDir.lengthSq() < 1e-6) bendDir.set(1, 0, 0);
+  else bendDir.normalize();
+
+  const parentOutgoing = parentSegment
+    ? parentSegment.position.clone().sub(parentSegment.control)
+    : null;
+
+  // How the curve leaves the joint. A part that continues its parent's
+  // direction must leave along that direction exactly, or the two tubes meet at
+  // an angle and every node in a chain reads as a kink - a plant assembled from
+  // pieces rather than grown. A part that forks away must not: leaving along the
+  // parent's direction and then turning inside its own short segment is a hook.
+  //
+  // So the start direction is mixed from the parent's arrival toward the child's
+  // own chord, and the mix grows with the fork. A continuation is C1; a fork
+  // turns by at most half the angle it forked, which is a bend at a knuckle
+  // rather than a crease.
+  let direction = branchDir;
+  if (parentOutgoing && parentOutgoing.lengthSq() > 1e-8) {
+    parentOutgoing.normalize();
+    const alignment = THREE.MathUtils.clamp(branchDir.dot(parentOutgoing), 0, 1);
+    const mix = 0.5 * (1 - alignment * alignment);
+    direction = parentOutgoing.clone().lerp(branchDir, mix).normalize();
+  }
+
+  // Wobble is what makes a plant look grown, but it must not rotate the joint:
+  // capped at a fraction of the segment, it bends the middle of the tube instead
+  // of kicking the base.
+  const wobble = new THREE.Vector3()
+    .addScaledVector(bendDir, curvature * (hash01(node.id, 'bend') - 0.5) * 0.6)
+    .addScaledVector(new THREE.Vector3(0, 1, 0), gravityBias * length * 0.5);
+  const wobbleLimit = length * 0.12;
+  if (wobble.length() > wobbleLimit) wobble.setLength(wobbleLimit);
+
+  return start
+    .clone()
+    .addScaledVector(direction, length * 0.45)
+    .add(wobble);
+}
+
+/**
  * Resolve where one node is drawn, using the exact rules the mesh pass uses.
  *
  * Exported so Plant Lab and measurements can consume the same code instead of a
@@ -950,6 +1024,8 @@ export function resolveSegmentFrame(
   parent: PlantNodeData,
   allById: Iterable<PlantNodeData>,
   parentDrawnEnd?: THREE.Vector3,
+  /** The parent's own start radius, so a bud uses the radius *there*. */
+  parentFrameStartRadius?: number,
 ): SegmentFrame {
   const growthEase = node.growthProgress ?? 0;
   const hasTarget =
@@ -1022,38 +1098,77 @@ export function resolveSegmentFrame(
     target = resolveDrawnNodePosition(node, parent, allById);
   }
 
-  // Leave the parent on its surface rather than its centre line. The child
-  // still overlaps the parent body, so the joint reads as grown tissue instead
-  // of a pin pushed through the middle.
   const parentType = (parent.nodeType ?? '').toLowerCase();
+  const parentRadius = resolveDrawnRadius(parent.nodeType, parent.radius, parent.biomass);
+  const nodeRadius = resolveDrawnRadius(node.nodeType, node.radius, node.biomass);
+
+  // The parent's radius *where the child leaves it*. A lateral takes a fraction
+  // of its parent's segment, and a segment necks down along its own length, so
+  // using the parent's nominal radius sized a bud near the parent's tip as if it
+  // sat at the parent's base.
+  const parentStartRadius = parentFrameStartRadius ?? parentRadius;
+  const localFraction =
+    typeof node.attachFraction === 'number' && node.attachFraction < 1
+      ? Math.min(1, Math.max(0, node.attachFraction))
+      : 1;
+  const parentRadiusAtAttach = segmentRadiusAt(parentStartRadius, parentRadius, localFraction);
+
+  // Start the child inside the parent body and let the parent's own surface hide
+  // the base disc. Pushing the base out to the parent's surface leaves its rim
+  // tangent to that surface, which reads as a crease - the drawn form of a pin
+  // pushed through the middle.
   if (parentType !== 'seed') {
     const outward = target.clone().sub(start);
     const span = outward.length();
     if (span > 1e-5) {
-      const parentRadiusForSocket = resolveDrawnRadius(
-        parent.nodeType,
-        parent.radius,
-        parent.biomass,
+      start.addScaledVector(
+        outward.normalize(),
+        Math.min(socketInset(parentRadiusAtAttach), span * 0.4),
       );
-      start.addScaledVector(outward.normalize(), Math.min(parentRadiusForSocket * 0.9, span * 0.4));
+    }
+  }
+
+  // A child never starts outside its parent's drawn body. The server ships the
+  // attach point once, and a plant that has been re-massed by a mutation,
+  // uprooted, or resynced can move under it; a stale point put a child's base in
+  // the air beside its parent, which is exactly what reads as an unattached part.
+  // Project the start onto the parent's drawn segment and hold it inside the
+  // parent's own radius of that line. A child that already sits on the body (a
+  // lateral at its own fraction) is untouched.
+  if (parentDrawnEnd && parentType !== 'seed') {
+    const pStart = new THREE.Vector3(
+      parent.parentAttachX ?? parent.position.x,
+      parent.parentAttachY ?? parent.position.y,
+      parent.parentAttachZ ?? parent.position.z,
+    );
+    const pEnd = parentDrawnEnd;
+    const along = pEnd.clone().sub(pStart);
+    const spanSq = along.lengthSq();
+    const fractionOnParent =
+      spanSq > 1e-9
+        ? THREE.MathUtils.clamp(start.clone().sub(pStart).dot(along) / spanSq, 0, 1)
+        : 0;
+    const closest = pStart.clone().addScaledVector(along, fractionOnParent);
+    const offset = start.clone().sub(closest);
+    const reach = Math.max(1e-4, parentRadiusAtAttach * 1.05);
+    if (offset.length() > reach) {
+      start = closest.addScaledVector(offset.normalize(), reach);
     }
   }
 
   const animated = start.clone().lerp(target, growthEase);
   const branch = new THREE.Vector3().subVectors(animated, start);
 
-  const parentRadius = resolveDrawnRadius(parent.nodeType, parent.radius, parent.biomass);
-  const nodeRadius = resolveDrawnRadius(node.nodeType, node.radius, node.biomass);
-
-  // Anything emerging from a seed starts thin so the seed never turns into a
-  // cone with a giant base.
-  let startRadius = parentRadius;
   const softPart =
     (node.nodeType ?? '').toLowerCase() === 'leaf' ||
     (node.nodeType ?? '').toLowerCase() === 'cotyledon' ||
     (node.nodeType ?? '').toLowerCase() === 'flower' ||
     (node.nodeType ?? '').toLowerCase() === 'spore_sac';
-  if (softPart) startRadius = Math.min(parentRadius, nodeRadius);
+
+  // A junction belongs to the parent and the child: a knuckle wider than the
+  // child's shank, never wider than the parent that carries it. A seed is drawn
+  // as an ovoid rather than a tube, so anything leaving it still starts thin.
+  let startRadius = jointStartRadius(parentRadiusAtAttach, nodeRadius, softPart);
   if (parent.nodeType === 'seed') {
     startRadius = Math.min(parentRadius, nodeRadius, isRootNodeType(node.nodeType) ? 0.03 : 0.028);
   }
@@ -1077,6 +1192,16 @@ export interface PlantGeometryMetrics {
   maxAngleDiscontinuityDeg: number;
   /** Largest `node.radius / nodeRenderRadius(type, biomass)`. 1.0 means they agree. */
   maxRadiusRatio: number;
+  /**
+   * Largest drawn junction radius divided by the part's own radius.
+   *
+   * The junction rule caps a woody part at `joint_flare_ratio` of its own shank;
+   * before that rule a branch off a trunk was drawn at 2.65x. One number, so a
+   * regression shows up in a test instead of in a screenshot.
+   */
+  maxJointToShankRatio: number;
+  /** Largest angle between the direction a curve leaves with and the one its parent arrives with. */
+  maxTangentKinkDeg: number;
   drawnRadiusRange: [number, number];
 }
 
@@ -1105,12 +1230,23 @@ export function measureDrawnPlant(nodes: PlantNodeData[]): PlantGeometryMetrics 
     maxDrawnOffset: 0,
     maxAngleDiscontinuityDeg: 0,
     maxRadiusRatio: 0,
+    maxJointToShankRatio: 0,
+    maxTangentKinkDeg: 0,
     drawnRadiusRange: [Number.POSITIVE_INFINITY, 0],
   };
 
+  /** The curve each segment was drawn with, so drawn tangents can be compared. */
+  const drawnCurves = new Map<string, { start: THREE.Vector3; control: THREE.Vector3 }>();
+
   const walk = (parent: PlantNodeData, parentFrame?: SegmentFrame): void => {
     for (const node of children.get(parent.id) ?? []) {
-      const frame = resolveSegmentFrame(node, parent, byId.values(), parentFrame?.animated);
+      const frame = resolveSegmentFrame(
+        node,
+        parent,
+        byId.values(),
+        parentFrame?.animated,
+        parentFrame?.startRadius,
+      );
       metrics.segmentCount += 1;
       const expectedStart = nodeAttachmentPoint(
         {
@@ -1146,6 +1282,12 @@ export function measureDrawnPlant(nodes: PlantNodeData[]): PlantGeometryMetrics 
       );
 
       const drawn = resolveDrawnRadius(node.nodeType, node.radius, node.biomass);
+      if (drawn > 1e-5) {
+        metrics.maxJointToShankRatio = Math.max(
+          metrics.maxJointToShankRatio,
+          frame.startRadius / drawn,
+        );
+      }
       const reference = nodeRenderRadius(node.nodeType, node.biomass);
       if (reference > 0) {
         metrics.maxRadiusRatio = Math.max(metrics.maxRadiusRatio, drawn / reference);
@@ -1164,6 +1306,30 @@ export function measureDrawnPlant(nodes: PlantNodeData[]): PlantGeometryMetrics 
             (Math.acos(dot) * 180) / Math.PI,
           );
         }
+      }
+
+      // The chord angle above is a real fork angle, not a defect. What must be
+      // continuous is the **drawn** tangent: the direction the curve leaves its
+      // start, which is `control - start`. Compare it with the direction the
+      // parent's curve arrives, which is `end - control`.
+      const parentCurve = parentFrame ? drawnCurves.get(parent.id) : undefined;
+      const control = segmentControlPoint(
+        node,
+        frame.start,
+        frame.target,
+        parentCurve && parentFrame
+          ? { position: parentFrame.animated, control: parentCurve.control }
+          : undefined,
+      );
+      drawnCurves.set(node.id, { start: frame.start.clone(), control });
+      const outgoing = control.clone().sub(frame.start);
+      const incoming = parentCurve ? parentFrame!.target.clone().sub(parentCurve.control) : null;
+      if (incoming && incoming.lengthSq() > 1e-8 && outgoing.lengthSq() > 1e-8) {
+        const dot = THREE.MathUtils.clamp(incoming.normalize().dot(outgoing.normalize()), -1, 1);
+        metrics.maxTangentKinkDeg = Math.max(
+          metrics.maxTangentKinkDeg,
+          (Math.acos(dot) * 180) / Math.PI,
+        );
       }
 
       walk(node, frame);
@@ -1194,6 +1360,8 @@ export function buildPlantMesh(
   // Sight reveals them, so keep every tube above prism territory.
   const sides = Math.max(6, Math.min(14, Math.round(options.tubeSides)));
   const rootSides = Math.max(8, Math.min(12, Math.round(options.rootSides)));
+  const ringSpacingM = options.chainRingSpacingM ?? 0.05;
+  const sagittaTolM = options.chainSagittaTolM ?? 0.0015;
   const mesh = new MeshAccumulator();
   const plantData: PlantRenderPlant[] = [];
   const plantLooks: MutationLookStack[] = [];
@@ -1318,6 +1486,7 @@ export function buildPlantMesh(
         parent,
         allById.values(),
         drawnSegments.get(parent.id)?.position,
+        drawnSegments.get(parent.id)?.startRadius,
       );
       const parentAttachPos = frame.start;
       const targetPosition = frame.target;
@@ -1350,45 +1519,14 @@ export function buildPlantMesh(
         const visualNodeType = getVisualNodeType(node);
         const variationIdx = getVariationIndex(node, visualNodeType);
 
-        // Organic curvature with botanical gravitropism
-        const length = parentAttachPos.distanceTo(targetPosition);
-
-        // Per-part gravtropism/phototropism bias
-        let tropismStrength = 0.25;
-        let gravityBias = -0.1;
-        if (node.nodeType === 'radicle') {
-          tropismStrength = 0.35;
-          gravityBias = -0.15;
-        } else if (node.nodeType === 'root') {
-          tropismStrength = 0.3;
-          gravityBias = -0.12;
-        } else if (node.nodeType === 'lateral_root') {
-          tropismStrength = 0.2;
-          gravityBias = -0.08;
-        } else if (node.nodeType === 'stem' || node.nodeType === 'branch') {
-          tropismStrength = 0.1;
-          gravityBias = 0.08; // Stems curve upward toward light
-        } else if (node.nodeType === 'vine') {
-          tropismStrength = 0.4;
-          gravityBias = -0.05;
-        }
-
-        // Add subtle noise-based bend for organic feel
-        const curvature = length * tropismStrength;
-        const branchDir = new THREE.Vector3()
-          .subVectors(targetPosition, parentAttachPos)
-          .normalize();
-        const bendDir = new THREE.Vector3()
-          .crossVectors(branchDir, new THREE.Vector3(0, 1, 0))
-          .normalize();
-        if (bendDir.lengthSq() < 1e-6) bendDir.set(1, 0, 0);
-
-        const controlPoint = parentAttachPos
-          .clone()
-          .add(targetPosition)
-          .multiplyScalar(0.5)
-          .addScaledVector(bendDir, curvature * (hash01(node.id, 'bend') - 0.5) * 2)
-          .addScaledVector(new THREE.Vector3(0, 1, 0), gravityBias * length);
+        // One owner for the curve: the build loop and the measurement call the
+        // same function, so a metric can never describe a curve nobody draws.
+        const controlPoint = segmentControlPoint(
+          node,
+          parentAttachPos,
+          targetPosition,
+          drawnSegments.get(parent.id),
+        );
 
         // Geometry is emitted per chain after the walk, so consecutive segments
         // can share their boundary rings instead of meeting sphere-to-tube.
@@ -1558,9 +1696,15 @@ export function buildPlantMesh(
         // Sample the segment's curve; the first ring of every segment after the
         // first is the previous segment's last ring, so nothing is duplicated.
         const length = info.start.distanceTo(info.position);
-        const samples = Math.max(4, Math.min(12, Math.ceil(length / 0.05)));
+        const bend = info.start
+          .clone()
+          .addScaledVector(info.control, -2)
+          .add(info.position)
+          .length();
+        const samples = chainSampleCount(length, bend, ringSpacingM, sagittaTolM);
+        const fractions = chainSampleFractions(samples);
         for (let i = first ? 0 : 1; i <= samples; i += 1) {
-          const t = i / samples;
+          const t = fractions[i];
           const invT = 1 - t;
           const position = new THREE.Vector3()
             .addScaledVector(info.start, invT * invT)
@@ -1568,7 +1712,7 @@ export function buildPlantMesh(
             .addScaledVector(info.position, t * t);
           points.push({
             position,
-            radius: info.startRadius * invT + info.radius * t,
+            radius: segmentRadiusAt(info.startRadius, info.radius, t),
             packed: info.packed,
             jointA: info.jointIndex,
             jointB: info.jointIndex + 1,
@@ -1599,8 +1743,17 @@ export function buildPlantMesh(
         const forkChildren: PlantNodeData[] = childrenMap.get(chainEnd) ?? [];
         if (forkChildren.length >= 2) {
           // A fork: one sphere covers the junction, then each branch is its own
-          // chain (this is the only place a sphere is still needed).
-          addJointSphere(chainEnd, 1.15);
+          // chain (this is the only place a sphere is still needed). Sized by the
+          // widest thing it has to cover - the parent's end *and* every child's
+          // base - because a knuckle smaller than a child's base leaves that
+          // child's base disc sticking out of it.
+          const parentEnd = drawnSegments.get(chainEnd)?.radius ?? 0;
+          const widestChild = forkChildren.reduce(
+            (widest, child) => Math.max(widest, drawnSegments.get(child.id)?.startRadius ?? 0),
+            0,
+          );
+          const knuckle = Math.max(parentEnd, widestChild);
+          addJointSphere(chainEnd, parentEnd > 1e-6 ? (knuckle * 1.05) / parentEnd : 1.15);
           for (const child of forkChildren) pending.push(child.id);
         }
       }

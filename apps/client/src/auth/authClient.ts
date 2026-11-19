@@ -12,6 +12,8 @@ export interface AuthSession {
   accessToken: string;
   refreshToken: string;
   displayName?: string;
+  /** The account handle, shown as @username. Not unique-looking, but unique. */
+  username?: string;
 }
 
 export interface StoredSession {
@@ -74,11 +76,11 @@ function toSession(payload: Record<string, unknown>): AuthSession {
     throw new Error('auth_response_missing_tokens');
   }
   const account = payload.account;
-  const displayName =
-    account && typeof account === 'object'
-      ? readString(account as Record<string, unknown>, 'displayName', 'display_name')
-      : undefined;
-  return { accessToken, refreshToken, displayName };
+  const record =
+    account && typeof account === 'object' ? (account as Record<string, unknown>) : null;
+  const displayName = record ? readString(record, 'displayName', 'display_name') : undefined;
+  const username = record ? readString(record, 'username', 'user_name') : undefined;
+  return { accessToken, refreshToken, displayName, username };
 }
 
 async function post(

@@ -1,4 +1,4 @@
-# Tunables
+33 |28 |14 |1 |14 |# Tunables
 
 Every gameplay and ops value lives in `config/<system>.json` (RULE_3). This page
 is the index: which file owns which system, what is populated today, and how many
@@ -65,8 +65,8 @@ owning task fills it.
 | `damage` | T06 | active | 23 |
 | `daynight` | T07 | active | 4 |
 | `deep_time` | T20 | stub | 0 |
-| `dev` | D01 | active | 18 |
-| `emotes` | T05 | active | 2 |
+| `dev` | D01 | active | 14 |
+| `emotes` | T05 | active | 1 |
 | `epoch_map` | T37 | stub | 0 |
 | `extraction` | T51 | stub | 0 |
 | `fragments` | T51 | stub | 0 |
@@ -74,7 +74,7 @@ owning task fills it.
 | `gift_bundles` | T45 | stub | 0 |
 | `gift_packs` | T50 | stub | 0 |
 | `gifts` | T29 | stub | 0 |
-| `growth` | T01 | active | 62 |
+| `growth` | T01 | active | 66 |
 | `growth_scale` | T23 | stub | 0 |
 | `guilds` | T44 | stub | 0 |
 | `heirlooms` | T06A | stub | 0 |
@@ -88,29 +88,30 @@ owning task fills it.
 | `marketplace` | T14 | stub | 0 |
 | `messaging` | T27 | stub | 0 |
 | `minimap` | T48 | stub | 0 |
-| `mutations` | T04 | active | 59 |
+| `mutations` | T04 | active | 60 |
 | `mutation_visuals` | T04 | active | 3 |
 | `naming` | T17 | stub | 0 |
-| `net_proto` | T03P | draft | 16 |
+| `net_proto` | T03P | draft | 14 |
 | `network` | T03 | active | 2 |
 | `observation` | T28 | stub | 0 |
 | `onboarding` | T00A | active | 3 |
-| `ops` | O01 | active | 13 |
+| `ops` | O01 | active | 17 |
 | `paid_spawn` | T21 | stub | 0 |
 | `parasitism` | T10 | stub | 0 |
 | `persistence` | T26 | stub | 0 |
 | `physics` | C02c | active | 14 |
-| `plant_renderer` | C02 | active | 37 |
+| `plant_renderer` | C02 | active | 33 |
 | `prestige` | T08B | stub | 0 |
 | `profiles` | T47 | stub | 0 |
 | `relics` | T18 | stub | 0 |
-| `render` | C01 | active | 118 |
+| `render` | C01 | active | 132 |
 | `reports` | T05 | active | 5 |
 | `reproduction` | T53 | stub | 0 |
 | `reputation` | T43 | stub | 0 |
-| `resources` | T00A | draft | 51 |
-| `root_sight` | T02 | active | 20 |
+| `resources` | T00A | draft | 50 |
+| `root_sight` | T02 | active | 28 |
 | `session` | T08 | stub | 0 |
+| `shop` | C05 | active | 4 |
 | `spectating` | T30 | stub | 0 |
 | `spectating_ui` | T36 | stub | 0 |
 | `spectator` | T34 | stub | 0 |
@@ -121,14 +122,14 @@ owning task fills it.
 | `territory` | T49 | stub | 0 |
 | `tumbling` | T06 | active | 10 |
 | `tutorial` | T33 | stub | 0 |
-| `ui` | C01 | active | 16 |
+| `ui` | C01 | active | 35 |
 | `uproot` | T06 | active | 19 |
-| `water` | T31 | active | 25 |
+| `water` | T31 | active | 33 |
 | `weather` | T07 | active | 19 |
 | `world` | T03 | active | 17 |
 
 
-Total: **79 files**; 29 populated and 50 stubs (3 of them `draft`).
+Total: **80 files**; 30 populated and 50 stubs (3 of them `draft`).
 
 **This line owns the count.** Other documents link here rather than quoting a
 number (ADR-049).
@@ -136,9 +137,8 @@ Populated: `accounts`, `chat`, `compliance`, `controls`, `daynight`, `dev`, `emo
 
 ## Approved V5.4 config files (not created yet)
 
-These are specified in `DESIGN.md` Part 11 and indexed in
-[`PlantLegacy-Abyssal-Integration-Plan.md`](./PlantLegacy-Abyssal-Integration-Plan.md) §11.1. They are **not** in
-`config/` yet, so the validator count stays at 79.
+These are specified in `DESIGN.md` Part 11 and named in the tables below. They
+are **not** in `config/` yet, so the validator count stays at 80.
 
 | File | Owner | Purpose |
 |---|---|---|

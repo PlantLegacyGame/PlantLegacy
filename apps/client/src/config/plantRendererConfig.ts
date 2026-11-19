@@ -17,7 +17,6 @@ export interface PlantRendererConfig {
   shaderQuality: string;
   maxGpuBuffers: number;
   computeShaderWorkgroupSize: number;
-  tubeRingCount: number;
   tubeLengthSegments: number;
   leafCountPerNode: number;
   leafSize: number;
@@ -53,7 +52,12 @@ export interface PlantRendererConfig {
   l0RaymarchEpsilon: number;
   l1RaymarchEpsilon: number;
   l2RaymarchEpsilon: number;
+  /** Radial segments around a root tube; roots are the most-looked-at part. */
   rootSides: number;
+  /** Ring every this many metres along a drawn tube. */
+  chainRingSpacingM: number;
+  /** How far a drawn tube's polyline may sag off its curve, in metres. */
+  chainSagittaTolM: number;
   // C02b/MeshPlantRenderer tessellation
   meshTubeRadialSegments: number;
   meshTubeLengthSegments: number;
@@ -79,7 +83,6 @@ let plantRendererConfig: PlantRendererConfig = {
   shaderQuality: 'high',
   maxGpuBuffers: 8,
   computeShaderWorkgroupSize: 64,
-  tubeRingCount: 8,
   tubeLengthSegments: 8,
   leafCountPerNode: 1,
   leafSize: 0.25, // metres: the WebGPU mesh builder draws blades at this length
@@ -110,7 +113,9 @@ let plantRendererConfig: PlantRendererConfig = {
   l0RaymarchEpsilon: 0.005,
   l1RaymarchEpsilon: 0.012,
   l2RaymarchEpsilon: 0.025,
-  rootSides: 4,
+  rootSides: 8,
+  chainRingSpacingM: 0.05,
+  chainSagittaTolM: 0.0015,
   meshTubeRadialSegments: 12,
   meshTubeLengthSegments: 6,
   meshLeafSegments: 4,
@@ -172,7 +177,6 @@ export async function loadPlantRendererConfig(serverOrigin: string): Promise<Pla
           'compute_shader_workgroup_size',
           current.computeShaderWorkgroupSize,
         ),
-        tubeRingCount: readValue(payload, 'tube_ring_count', current.tubeRingCount),
         tubeLengthSegments: readValue(payload, 'tube_length_segments', current.tubeLengthSegments),
         leafCountPerNode: readValue(payload, 'leaf_count_per_node', current.leafCountPerNode),
         leafSize: readValue(payload, 'leaf_size', current.leafSize),
@@ -219,7 +223,9 @@ export async function loadPlantRendererConfig(serverOrigin: string): Promise<Pla
         l0RaymarchEpsilon: readValue(payload, 'l0_raymarch_epsilon', current.l0RaymarchEpsilon),
         l1RaymarchEpsilon: readValue(payload, 'l1_raymarch_epsilon', current.l1RaymarchEpsilon),
         l2RaymarchEpsilon: readValue(payload, 'l2_raymarch_epsilon', current.l2RaymarchEpsilon),
-        rootSides: readValue(payload, 'root_sides', current.rootSides),
+        rootSides: readValue(payload, 'mesh_root_radial_segments', current.rootSides),
+        chainRingSpacingM: readValue(payload, 'chain_ring_spacing_m', current.chainRingSpacingM),
+        chainSagittaTolM: readValue(payload, 'chain_sagitta_tol_m', current.chainSagittaTolM),
         meshTubeRadialSegments: readValue(
           payload,
           'mesh_tube_radial_segments',

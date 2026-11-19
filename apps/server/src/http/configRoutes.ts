@@ -84,7 +84,6 @@ export async function handleConfigRequest(
         shader_quality: values.shader_quality?.value ?? 'high',
         max_gpu_buffers: values.max_gpu_buffers?.value ?? 8,
         compute_shader_workgroup_size: values.compute_shader_workgroup_size?.value ?? 64,
-        tube_ring_count: values.tube_ring_count?.value ?? 8,
         tube_length_segments: values.tube_length_segments?.value ?? 8,
         leaf_count_per_node: values.leaf_count_per_node?.value ?? 1,
         leaf_size: values.leaf_size?.value ?? 0.25,
@@ -138,7 +137,6 @@ export async function handleConfigRequest(
           shader_quality: 'high',
           max_gpu_buffers: 8,
           compute_shader_workgroup_size: 64,
-          tube_ring_count: 8,
           tube_length_segments: 8,
           leaf_count_per_node: 1,
           leaf_size: 0.25,
@@ -214,6 +212,9 @@ export async function handleConfigRequest(
           node_growth_seconds: nodeGrowthSeconds,
           seed_body_height_ratio: geometryNumber('seed_body_height_ratio', 1.35),
           branch_attach_fraction: geometryNumber('branch_attach_fraction', 0.6),
+          joint_flare_ratio: geometryNumber('joint_flare_ratio', 1.25),
+          segment_taper_exponent: geometryNumber('segment_taper_exponent', 2.2),
+          socket_inset_ratio: geometryNumber('socket_inset_ratio', 0.15),
           node_radius_profiles: parsed.values?.node_radius_profiles?.value ?? {},
         },
       };
@@ -228,6 +229,9 @@ export async function handleConfigRequest(
           node_growth_seconds: {},
           seed_body_height_ratio: 1.35,
           branch_attach_fraction: 0.6,
+          joint_flare_ratio: 1.25,
+          segment_taper_exponent: 2.2,
+          socket_inset_ratio: 0.15,
           node_radius_profiles: {},
         },
       };
@@ -263,7 +267,6 @@ export async function handleConfigRequest(
           idle_drop_timeout_ms: 30000,
           shadow_map_size: 2048,
           debug_overlay_enabled: true,
-          debug_overlay_key: '`',
           pause_on_hidden: true,
           quality_tiers: [
             {
@@ -550,6 +553,10 @@ export async function handleConfigRequest(
     // T04: the client paints mutations from the style table the config
     // validator owns, so appearance stays data (RULE_3).
     url.pathname === '/config/mutation_visuals' ||
+    // C05: the shop's catalogue and its currency name. The client has fetched
+    // `/config/shop` since the panel was written and no route ever answered it,
+    // so the shop rendered "Nothing for sale yet" no matter what the file said.
+    url.pathname === '/config/shop' ||
     // AL-01/ADR-027: the client reads the dev-only size class and the six
     // benchmark poses from the same file the dev panel edits.
     url.pathname === '/config/dev'

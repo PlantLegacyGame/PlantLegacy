@@ -45,7 +45,7 @@ describe('authClient', () => {
             success: true,
             accessToken: 'a',
             refreshToken: 'r',
-            account: { displayName: 'Fern' },
+            account: { displayName: 'Fern', username: 'fern' },
           },
         },
         calls,
@@ -54,7 +54,12 @@ describe('authClient', () => {
       { username: 'fern', password: 'Secret123' },
     );
 
-    assert.deepEqual(session, { accessToken: 'a', refreshToken: 'r', displayName: 'Fern' });
+    assert.deepEqual(session, {
+      accessToken: 'a',
+      refreshToken: 'r',
+      displayName: 'Fern',
+      username: 'fern',
+    });
     assert.equal(calls[0].url, 'http://localhost:8080/auth/login');
     assert.deepEqual(calls[0].body, { username: 'fern', password: 'Secret123' });
   });

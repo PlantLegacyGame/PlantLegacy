@@ -33,8 +33,14 @@ const SKY_FRAGMENT_SHADER = /* glsl */ `
   uniform vec3 uSunDir;
   uniform vec3 uSunColor;
   uniform float uSunIntensity;
+  // 0 with the sun overhead, 1 with it on the horizon: the warm scattering that
+  // makes golden hour look like light in the air rather than a tinted sky.
+  uniform float uSunWarmth;
   uniform vec3 uMoonDir;
   uniform vec3 uMoonColor;
+  // 0 at moonrise, 1 with the moon overhead: the halo grows instead of the moon
+  // appearing at full brightness the instant the sun sets.
+  uniform float uMoonIntensity;
   // Buried eyes see the earth in every direction except up through the opening.
   // Without this the dome paints sky downwards too, and that reads as a pale
   // floor under the ground instead of the inside of the earth.
@@ -144,6 +150,15 @@ const SKY_FRAGMENT_SHADER = /* glsl */ `
       sky = mix(sky, cloudColor, clouds * cloudFade * 0.30 * (1.0 - night));
     }
 
+    // Golden-hour scattering: a wide warm lobe around the sun plus a band lying
+    // along the horizon. The disc's own halo is tight; this is the air itself.
+    if (uSunWarmth > 0.01 && uSunDir.y > -0.25) {
+      float wide = max(0.0, dot(dir, normalize(uSunDir)));
+      float lobe = pow(wide, 6.0) * 0.11;
+      float band = pow(1.0 - smoothstep(0.0, 0.34, h), 3.0) * 0.07;
+      sky += uSunColor * (lobe + band) * uSunWarmth;
+    }
+
     // Solar disc and corona
     if (uSunDir.y > -0.1) {
       float sunDot = max(0.0, dot(dir, normalize(uSunDir)));
@@ -157,7 +172,7 @@ const SKY_FRAGMENT_SHADER = /* glsl */ `
       float moonDot = max(0.0, dot(dir, normalize(uMoonDir)));
       float moonCore = pow(moonDot, 384.0) * 0.9;
       float moonHalo = pow(moonDot, 20.0) * 0.15;
-      sky += uMoonColor * (moonCore + moonHalo);
+      sky += uMoonColor * (moonCore + moonHalo) * uMoonIntensity;
     }
 
     gl_FragColor = vec4(sky, 1.0);
@@ -199,8 +214,10 @@ export function createSkyDome(
       uSunDir: { value: sunDir.clone() },
       uSunColor: { value: new THREE.Color(config.sunColorDay) },
       uSunIntensity: { value: config.sunIntensityDay },
+      uSunWarmth: { value: 0 },
       uMoonDir: { value: moonDir.clone() },
       uMoonColor: { value: new THREE.Color(config.sunColorNight) },
+      uMoonIntensity: { value: 0 },
       uEyeUnderGround: { value: 0 },
       // The earth tone as configured, not quartered. At a quarter it was #0e0a07
       // - black to any eye - and every patch of "ground" painted with it read as

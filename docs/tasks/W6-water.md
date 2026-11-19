@@ -43,8 +43,8 @@ and they cannot at distance.
 | Cost | cheapest | medium | cheap, one extra texture fetch in the ground shader | heaviest; needs tiers |
 | Failure it removes | every overlap and depth-bias bug | table/ribbon/sheet duplication | all translucent-overlap bugs inland | none structural |
 
-**D** is what Abyssal Garden does (`docs/abyssal-mechanisms.md`, rows
-"Water surface", "Caustics", "Underwater absorption"). It is beautiful and it is
+**D** is what Abyssal Garden does (`docs/abyssal-garden-source-analysis.md` §6.1, §6.2, §6.5 —
+underwater absorption, caustics from the water texture, and the water surface from below). It is beautiful and it is
 one surface — but it is still a transparent layer over the ground, so it keeps
 exactly the depth fight this project keeps losing, and it needs a prepass and a
 quality tier to be affordable.

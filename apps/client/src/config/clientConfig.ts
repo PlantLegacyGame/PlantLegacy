@@ -61,6 +61,10 @@ export interface RenderConfig {
   cameraCollisionEnabled: boolean;
   cameraCollisionMargin: number;
   cameraStartDistance: number;
+  /** A fitted plant closer than this is framed from the young-plant elevation. */
+  cameraYoungMaxDistance: number;
+  /** Vertical part of the framing direction for a young plant. */
+  cameraYoungElevation: number;
   cameraPanSpeed: number;
   cameraZoomSpeed: number;
   idleDropTimeoutMs: number;
@@ -75,7 +79,6 @@ export interface RenderConfig {
   planetViewMinDistanceMultiplier: number;
   planetViewNearMultiplier: number;
   debugOverlayEnabled: boolean;
-  debugOverlayKey: string;
   pauseOnHidden: boolean;
   qualityTiers: Array<{
     name: string;
@@ -114,6 +117,12 @@ export interface RenderConfig {
   fogFarClear: number;
   fogNearRain: number;
   fogFarRain: number;
+  /** Fog distance multiplier at low sun: mist at dawn and dusk. */
+  fogHorizonMistScale: number;
+  /** Renderer exposure with the sun high, on the horizon and down. */
+  exposureDay: number;
+  exposureHorizon: number;
+  exposureNight: number;
   fogNearStorm: number;
   fogFarStorm: number;
   rainParticleCount: number;
@@ -186,6 +195,13 @@ export interface RenderConfig {
   webgpuHysteresisPromote: number;
   webgpuHysteresisDemote: number;
   webgpuMinDwellTime: number;
+  webgpuImpostorEnabled: boolean;
+  webgpuImpostorUpdateIntervalMs: number;
+  webgpuVramBudgetBytes: number;
+  webgpuVramMaxVertexBytes: number;
+  webgpuVramMaxIndexBytes: number;
+  webgpuTextureArraySize: number;
+  webgpuTextureArrayLayers: number;
   // C01: Node picking for growth selection
   nodePickRadius: number;
 }
@@ -223,6 +239,34 @@ export interface UIConfig {
   healthHealthyFraction: number;
   healthStressedFraction: number;
   healthWitheringFraction: number;
+  /** A store at or below this share of capacity is graded low. */
+  vitalsLowFraction: number;
+  /** A store at or below this share is graded critical. */
+  vitalsCriticalFraction: number;
+  /** Smallest HUD type in px at text scale 1. */
+  hudFontSmallPx: number;
+  /** Secondary HUD type (sub-lines, key badges) in px at text scale 1. */
+  hudFontSecondaryPx: number;
+  /** Longest accepted display name; the server enforces the same value on HELLO. */
+  displayNameMaxLength: number;
+  titleParallaxEnabled: boolean;
+  titleParallaxDragPx: number;
+  titleParallaxHover: number;
+  /** Per-layer multiplier: sky moves least, near moves most. */
+  titleParallaxDepth: Record<string, number>;
+  titleParallaxSettleMs: number;
+  titlePlantSwayMs: number;
+  titlePlantReactMs: number;
+  titlePlantReactCooldownMs: number;
+  titlePlantNamePrefixes: string[];
+  titlePlantNameNouns: string[];
+  titleHintFadeMs: number;
+  /** Length of one title-screen day, in seconds. */
+  titleDayNightSeconds: number;
+  /** Where the title-screen cycle starts: 0 midnight, 0.5 noon. */
+  titleDayNightStartFraction: number;
+  /** Ground line as a share of the screen height. */
+  titleHorizonFraction: number;
 }
 
 export interface RootSightConfig {
@@ -430,6 +474,10 @@ interface RenderConfigResponse {
   cameraCollisionMargin?: number;
   camera_start_distance?: number;
   cameraStartDistance?: number;
+  camera_young_max_distance?: number;
+  cameraYoungMaxDistance?: number;
+  camera_young_elevation?: number;
+  cameraYoungElevation?: number;
   camera_pan_speed?: number;
   cameraPanSpeed?: number;
   camera_zoom_speed?: number;
@@ -454,8 +502,6 @@ interface RenderConfigResponse {
   planetViewNearMultiplier?: number;
   debug_overlay_enabled?: boolean;
   debugOverlayEnabled?: boolean;
-  debug_overlay_key?: string;
-  debugOverlayKey?: string;
   pause_on_hidden?: boolean;
   pauseOnHidden?: boolean;
   quality_tiers?: QualityTierResponse[];
@@ -512,6 +558,14 @@ interface RenderConfigResponse {
   fogNearRain?: number;
   fog_far_rain?: number;
   fogFarRain?: number;
+  fog_horizon_mist_scale?: number;
+  fogHorizonMistScale?: number;
+  exposure_day?: number;
+  exposureDay?: number;
+  exposure_horizon?: number;
+  exposureHorizon?: number;
+  exposure_night?: number;
+  exposureNight?: number;
   fog_near_storm?: number;
   fogNearStorm?: number;
   fog_far_storm?: number;
@@ -617,6 +671,20 @@ interface RenderConfigResponse {
   webgpuHysteresisDemote?: number;
   webgpu_min_dwell_time?: number;
   webgpuMinDwellTime?: number;
+  webgpu_impostor_enabled?: boolean;
+  webgpuImpostorEnabled?: boolean;
+  webgpu_impostor_update_interval_ms?: number;
+  webgpuImpostorUpdateIntervalMs?: number;
+  webgpu_vram_budget_bytes?: number;
+  webgpuVramBudgetBytes?: number;
+  webgpu_vram_max_vertex_bytes?: number;
+  webgpuVramMaxVertexBytes?: number;
+  webgpu_vram_max_index_bytes?: number;
+  webgpuVramMaxIndexBytes?: number;
+  webgpu_texture_array_size?: number;
+  webgpuTextureArraySize?: number;
+  webgpu_texture_array_layers?: number;
+  webgpuTextureArrayLayers?: number;
   node_pick_radius?: number;
   nodePickRadius?: number;
 }
@@ -665,6 +733,44 @@ interface UIConfigResponse {
   healthStressedFraction?: number;
   health_withering_fraction?: number;
   healthWitheringFraction?: number;
+  vitals_low_fraction?: number;
+  vitalsLowFraction?: number;
+  vitals_critical_fraction?: number;
+  vitalsCriticalFraction?: number;
+  hud_font_small_px?: number;
+  hudFontSmallPx?: number;
+  hud_font_secondary_px?: number;
+  hudFontSecondaryPx?: number;
+  display_name_max_length?: number;
+  displayNameMaxLength?: number;
+  title_parallax_enabled?: boolean;
+  titleParallaxEnabled?: boolean;
+  title_parallax_drag_px?: number;
+  titleParallaxDragPx?: number;
+  title_parallax_hover?: number;
+  titleParallaxHover?: number;
+  title_parallax_depth?: Record<string, number>;
+  titleParallaxDepth?: Record<string, number>;
+  title_parallax_settle_ms?: number;
+  titleParallaxSettleMs?: number;
+  title_plant_sway_ms?: number;
+  titlePlantSwayMs?: number;
+  title_plant_react_ms?: number;
+  titlePlantReactMs?: number;
+  title_plant_react_cooldown_ms?: number;
+  titlePlantReactCooldownMs?: number;
+  title_plant_name_prefixes?: string[];
+  titlePlantNamePrefixes?: string[];
+  title_plant_name_nouns?: string[];
+  titlePlantNameNouns?: string[];
+  title_hint_fade_ms?: number;
+  titleHintFadeMs?: number;
+  title_day_night_seconds?: number;
+  titleDayNightSeconds?: number;
+  title_day_night_start_fraction?: number;
+  titleDayNightStartFraction?: number;
+  title_horizon_fraction?: number;
+  titleHorizonFraction?: number;
 }
 
 interface RootSightConfigResponse {
@@ -821,6 +927,12 @@ function normalizeRenderConfig(data: RenderConfigResponse, fallback: RenderConfi
       data.camera_min_distance_root ?? data.cameraMinDistanceRoot ?? fallback.cameraMinDistanceRoot,
     cameraMaxDistance:
       data.camera_max_distance ?? data.cameraMaxDistance ?? fallback.cameraMaxDistance,
+    cameraYoungMaxDistance:
+      data.camera_young_max_distance ??
+      data.cameraYoungMaxDistance ??
+      fallback.cameraYoungMaxDistance,
+    cameraYoungElevation:
+      data.camera_young_elevation ?? data.cameraYoungElevation ?? fallback.cameraYoungElevation,
     cameraMaxPolarAngle:
       data.camera_max_polar_angle ?? data.cameraMaxPolarAngle ?? fallback.cameraMaxPolarAngle,
     cameraCollisionEnabled:
@@ -857,7 +969,6 @@ function normalizeRenderConfig(data: RenderConfigResponse, fallback: RenderConfi
       fallback.planetViewNearMultiplier,
     debugOverlayEnabled:
       data.debug_overlay_enabled ?? data.debugOverlayEnabled ?? fallback.debugOverlayEnabled,
-    debugOverlayKey: data.debug_overlay_key ?? data.debugOverlayKey ?? fallback.debugOverlayKey,
     pauseOnHidden: data.pause_on_hidden ?? data.pauseOnHidden ?? fallback.pauseOnHidden,
     qualityTiers: tiers.map((tier) => ({
       name: tier.name ?? 'custom',
@@ -899,6 +1010,11 @@ function normalizeRenderConfig(data: RenderConfigResponse, fallback: RenderConfi
     fogFarClear: data.fog_far_clear ?? data.fogFarClear ?? fallback.fogFarClear,
     fogNearRain: data.fog_near_rain ?? data.fogNearRain ?? fallback.fogNearRain,
     fogFarRain: data.fog_far_rain ?? data.fogFarRain ?? fallback.fogFarRain,
+    fogHorizonMistScale:
+      data.fog_horizon_mist_scale ?? data.fogHorizonMistScale ?? fallback.fogHorizonMistScale,
+    exposureDay: data.exposure_day ?? data.exposureDay ?? fallback.exposureDay,
+    exposureHorizon: data.exposure_horizon ?? data.exposureHorizon ?? fallback.exposureHorizon,
+    exposureNight: data.exposure_night ?? data.exposureNight ?? fallback.exposureNight,
     fogNearStorm: data.fog_near_storm ?? data.fogNearStorm ?? fallback.fogNearStorm,
     fogFarStorm: data.fog_far_storm ?? data.fogFarStorm ?? fallback.fogFarStorm,
     rainParticleCount:
@@ -1005,6 +1121,30 @@ function normalizeRenderConfig(data: RenderConfigResponse, fallback: RenderConfi
       fallback.webgpuHysteresisDemote,
     webgpuMinDwellTime:
       data.webgpu_min_dwell_time ?? data.webgpuMinDwellTime ?? fallback.webgpuMinDwellTime,
+    webgpuImpostorEnabled:
+      data.webgpu_impostor_enabled ?? data.webgpuImpostorEnabled ?? fallback.webgpuImpostorEnabled,
+    webgpuImpostorUpdateIntervalMs:
+      data.webgpu_impostor_update_interval_ms ??
+      data.webgpuImpostorUpdateIntervalMs ??
+      fallback.webgpuImpostorUpdateIntervalMs,
+    webgpuVramBudgetBytes:
+      data.webgpu_vram_budget_bytes ?? data.webgpuVramBudgetBytes ?? fallback.webgpuVramBudgetBytes,
+    webgpuVramMaxVertexBytes:
+      data.webgpu_vram_max_vertex_bytes ??
+      data.webgpuVramMaxVertexBytes ??
+      fallback.webgpuVramMaxVertexBytes,
+    webgpuVramMaxIndexBytes:
+      data.webgpu_vram_max_index_bytes ??
+      data.webgpuVramMaxIndexBytes ??
+      fallback.webgpuVramMaxIndexBytes,
+    webgpuTextureArraySize:
+      data.webgpu_texture_array_size ??
+      data.webgpuTextureArraySize ??
+      fallback.webgpuTextureArraySize,
+    webgpuTextureArrayLayers:
+      data.webgpu_texture_array_layers ??
+      data.webgpuTextureArrayLayers ??
+      fallback.webgpuTextureArrayLayers,
     nodePickRadius: data.node_pick_radius ?? data.nodePickRadius ?? fallback.nodePickRadius,
   };
 }
@@ -1056,6 +1196,50 @@ function normalizeUIConfig(data: UIConfigResponse, fallback: UIConfig): UIConfig
       data.health_withering_fraction ??
       data.healthWitheringFraction ??
       fallback.healthWitheringFraction,
+    vitalsLowFraction:
+      data.vitals_low_fraction ?? data.vitalsLowFraction ?? fallback.vitalsLowFraction,
+    vitalsCriticalFraction:
+      data.vitals_critical_fraction ??
+      data.vitalsCriticalFraction ??
+      fallback.vitalsCriticalFraction,
+    hudFontSmallPx: data.hud_font_small_px ?? data.hudFontSmallPx ?? fallback.hudFontSmallPx,
+    hudFontSecondaryPx:
+      data.hud_font_secondary_px ?? data.hudFontSecondaryPx ?? fallback.hudFontSecondaryPx,
+    displayNameMaxLength:
+      data.display_name_max_length ?? data.displayNameMaxLength ?? fallback.displayNameMaxLength,
+    titleParallaxEnabled:
+      data.title_parallax_enabled ?? data.titleParallaxEnabled ?? fallback.titleParallaxEnabled,
+    titleParallaxDragPx:
+      data.title_parallax_drag_px ?? data.titleParallaxDragPx ?? fallback.titleParallaxDragPx,
+    titleParallaxHover:
+      data.title_parallax_hover ?? data.titleParallaxHover ?? fallback.titleParallaxHover,
+    titleParallaxDepth:
+      data.title_parallax_depth ?? data.titleParallaxDepth ?? fallback.titleParallaxDepth,
+    titleParallaxSettleMs:
+      data.title_parallax_settle_ms ?? data.titleParallaxSettleMs ?? fallback.titleParallaxSettleMs,
+    titlePlantSwayMs:
+      data.title_plant_sway_ms ?? data.titlePlantSwayMs ?? fallback.titlePlantSwayMs,
+    titlePlantReactMs:
+      data.title_plant_react_ms ?? data.titlePlantReactMs ?? fallback.titlePlantReactMs,
+    titlePlantReactCooldownMs:
+      data.title_plant_react_cooldown_ms ??
+      data.titlePlantReactCooldownMs ??
+      fallback.titlePlantReactCooldownMs,
+    titlePlantNamePrefixes:
+      data.title_plant_name_prefixes ??
+      data.titlePlantNamePrefixes ??
+      fallback.titlePlantNamePrefixes,
+    titlePlantNameNouns:
+      data.title_plant_name_nouns ?? data.titlePlantNameNouns ?? fallback.titlePlantNameNouns,
+    titleHintFadeMs: data.title_hint_fade_ms ?? data.titleHintFadeMs ?? fallback.titleHintFadeMs,
+    titleDayNightSeconds:
+      data.title_day_night_seconds ?? data.titleDayNightSeconds ?? fallback.titleDayNightSeconds,
+    titleDayNightStartFraction:
+      data.title_day_night_start_fraction ??
+      data.titleDayNightStartFraction ??
+      fallback.titleDayNightStartFraction,
+    titleHorizonFraction:
+      data.title_horizon_fraction ?? data.titleHorizonFraction ?? fallback.titleHorizonFraction,
   };
 }
 
@@ -1242,6 +1426,8 @@ export async function loadRenderConfig(serverOrigin: string): Promise<RenderConf
     cameraCollisionEnabled: true,
     cameraCollisionMargin: 0.3,
     cameraStartDistance: 6.0,
+    cameraYoungMaxDistance: 4,
+    cameraYoungElevation: 0.55,
     cameraPanSpeed: 8.0,
     cameraZoomSpeed: 2.0,
     idleDropTimeoutMs: 30000,
@@ -1254,7 +1440,6 @@ export async function loadRenderConfig(serverOrigin: string): Promise<RenderConf
     planetViewMinDistanceMultiplier: 1.4,
     planetViewNearMultiplier: 0.01,
     debugOverlayEnabled: true,
-    debugOverlayKey: 'Shift',
     pauseOnHidden: true,
     qualityTiers: [
       {
@@ -1301,6 +1486,10 @@ export async function loadRenderConfig(serverOrigin: string): Promise<RenderConf
     ambientIntensityDay: 0.6,
     ambientIntensityNight: 0.15,
     ambientFadeTauS: 0.35,
+    fogHorizonMistScale: 0.62,
+    exposureDay: 1.0,
+    exposureHorizon: 1.07,
+    exposureNight: 0.92,
     fogNearClear: 70.0,
     fogFarClear: 320.0,
     fogNearRain: 25.0,
@@ -1358,6 +1547,13 @@ export async function loadRenderConfig(serverOrigin: string): Promise<RenderConf
     webgpuHysteresisPromote: 1.15,
     webgpuHysteresisDemote: 0.85,
     webgpuMinDwellTime: 0.5,
+    webgpuImpostorEnabled: true,
+    webgpuImpostorUpdateIntervalMs: 5000,
+    webgpuVramBudgetBytes: 256 * 1024 * 1024,
+    webgpuVramMaxVertexBytes: 64 * 1024 * 1024,
+    webgpuVramMaxIndexBytes: 16 * 1024 * 1024,
+    webgpuTextureArraySize: 256,
+    webgpuTextureArrayLayers: 16,
     nodePickRadius: 0.35,
   });
 }
@@ -1400,6 +1596,25 @@ export async function loadUIConfig(serverOrigin: string): Promise<UIConfig> {
     healthHealthyFraction: 0.75,
     healthStressedFraction: 0.5,
     healthWitheringFraction: 0.25,
+    vitalsLowFraction: 0.25,
+    vitalsCriticalFraction: 0.1,
+    hudFontSmallPx: 12,
+    hudFontSecondaryPx: 11,
+    displayNameMaxLength: 32,
+    titleParallaxEnabled: true,
+    titleParallaxDragPx: 90,
+    titleParallaxHover: 0.35,
+    titleParallaxDepth: { sky: 0.15, far: 0.35, mid: 0.6, near: 1 },
+    titleParallaxSettleMs: 420,
+    titlePlantSwayMs: 5200,
+    titlePlantReactMs: 700,
+    titlePlantReactCooldownMs: 600,
+    titlePlantNamePrefixes: ['Mossy', 'Dewy', 'Ferny', 'Tender'],
+    titlePlantNameNouns: ['Sprout', 'Fern', 'Vine', 'Moss'],
+    titleHintFadeMs: 6000,
+    titleDayNightSeconds: 3600,
+    titleDayNightStartFraction: 0.4,
+    titleHorizonFraction: 0.54,
   });
 }
 
@@ -1787,4 +2002,64 @@ export async function loadDevSettings(serverOrigin: string): Promise<DevSettings
   } catch {
     return fallback;
   }
+}
+
+/** Shop surface: sections and the currency name. An empty catalogue is valid. */
+export interface ShopConfig {
+  enabled: boolean;
+  title: string;
+  currencyName: string;
+  sections: Array<{
+    id: string;
+    label: string;
+    items: Array<{ id: string; name: string; description?: string; price: number; icon?: string }>;
+  }>;
+}
+
+interface ShopConfigResponse {
+  shop_enabled?: boolean;
+  shop_title?: string;
+  shop_currency_name?: string;
+  shop_sections?: unknown;
+}
+
+/** Reads one section, dropping entries that cannot be rendered as an item. */
+function normalizeShopSections(raw: unknown): ShopConfig['sections'] {
+  if (!Array.isArray(raw)) return [];
+  const sections: ShopConfig['sections'] = [];
+  for (const entry of raw) {
+    if (typeof entry !== 'object' || entry === null) continue;
+    const record = entry as Record<string, unknown>;
+    const id = typeof record.id === 'string' ? record.id : '';
+    const label = typeof record.label === 'string' ? record.label : id;
+    if (!id) continue;
+    const items: ShopConfig['sections'][number]['items'] = [];
+    if (Array.isArray(record.items)) {
+      for (const candidate of record.items) {
+        if (typeof candidate !== 'object' || candidate === null) continue;
+        const item = candidate as Record<string, unknown>;
+        if (typeof item.id !== 'string' || typeof item.name !== 'string') continue;
+        if (typeof item.price !== 'number' || !Number.isFinite(item.price)) continue;
+        items.push({
+          id: item.id,
+          name: item.name,
+          description: typeof item.description === 'string' ? item.description : undefined,
+          price: item.price,
+          icon: typeof item.icon === 'string' ? item.icon : undefined,
+        });
+      }
+    }
+    sections.push({ id, label, items });
+  }
+  return sections;
+}
+
+export async function loadShopConfig(serverOrigin: string): Promise<ShopConfig> {
+  const data = await fetchFlat<ShopConfigResponse>(serverOrigin, '/config/shop', {});
+  return {
+    enabled: data.shop_enabled ?? true,
+    title: data.shop_title ?? 'Shop',
+    currencyName: data.shop_currency_name ?? '',
+    sections: normalizeShopSections(data.shop_sections),
+  };
 }

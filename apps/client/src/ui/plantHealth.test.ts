@@ -3,6 +3,7 @@ import { describe, it } from 'node:test';
 import {
   formatElapsed,
   nodeHealthLabel,
+  nodeHealthLook,
   nodeHealthStatus,
   plantHealthLabel,
   plantHealthStatus,
@@ -37,10 +38,13 @@ describe('plant health wording', () => {
   it('describes node health from biomass and growth progress', () => {
     assert.equal(nodeHealthStatus(0, 1), 'gone');
     assert.equal(nodeHealthStatus(0.2, 0.4), 'growing');
-    assert.equal(nodeHealthStatus(0.8, 1), 'intact');
+    assert.equal(nodeHealthStatus(1, 1), 'intact');
+    assert.equal(nodeHealthStatus(0.86, 1), 'intact');
+    assert.equal(nodeHealthStatus(0.84, 1), 'fading');
     assert.equal(nodeHealthStatus(0.5, 1), 'fading');
     assert.equal(nodeHealthStatus(0.2, 1), 'depleted');
-    assert.equal(nodeHealthLabel('fading'), 'Fading');
+    assert.equal(nodeHealthLabel('intact'), 'Healthy');
+    assert.equal(nodeHealthLabel('fading'), 'Damaged');
   });
 
   it('formats elapsed time compactly', () => {
@@ -48,5 +52,25 @@ describe('plant health wording', () => {
     assert.equal(formatElapsed(65), '1m 05s');
     assert.equal(formatElapsed(3725), '1h 02m');
     assert.equal(formatElapsed(Number.NaN), '0s');
+  });
+});
+
+describe('plant health appearance', () => {
+  it('dries a part in the same bands the panel reads', () => {
+    // The defect this pins: the inspect panel could say "Wilted" while the drawn
+    // part was the same green as a healthy one, because the status lived in one
+    // place and the material in another. Both now read nodeHealthStatus.
+    assert.deepEqual(nodeHealthLook('intact'), { straw: 0, desaturate: 0, roughness: 0 });
+    // A part still filling in is not damaged, so it keeps its own colour.
+    assert.deepEqual(nodeHealthLook('growing'), { straw: 0, desaturate: 0, roughness: 0 });
+    const fading = nodeHealthLook('fading');
+    const depleted = nodeHealthLook('depleted');
+    assert.ok(fading.straw > 0 && fading.straw < depleted.straw);
+    assert.ok(fading.desaturate < depleted.desaturate);
+    assert.ok(depleted.straw <= 1 && depleted.desaturate <= 1);
+    assert.equal(nodeHealthLook('gone').straw, 1);
+    // The band a value maps to is the panel's band, not a second set of numbers.
+    assert.equal(nodeHealthStatus(0.4, 1), 'depleted');
+    assert.ok(nodeHealthLook(nodeHealthStatus(0.4, 1)).straw > 0.5);
   });
 });

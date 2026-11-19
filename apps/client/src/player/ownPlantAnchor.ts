@@ -15,6 +15,8 @@
  * the last position the server streamed. No map iteration order, no staleness.
  */
 
+import { nodeBelongsToPlant } from '@plant-legacy/shared/growth';
+
 export interface Vec3Like {
   x: number;
   y: number;
@@ -80,10 +82,10 @@ export function ownBodyNodes<T extends { id: string }>(
   plantId: string | null | undefined,
 ): T[] {
   if (!plantId) return [...nodes];
-  const tag = `${plantId.replace(/^p_/, '').slice(0, 8)}:`;
+  // One reader for "is this node mine": the same rule that mints the ids.
   const kept: T[] = [];
   for (const node of nodes) {
-    if (node.id.startsWith(tag)) kept.push(node);
+    if (nodeBelongsToPlant(node.id, plantId)) kept.push(node);
   }
   // An unreadable id (a synthetic test node) must not empty the plant.
   return kept.length > 0 ? kept : [...nodes];

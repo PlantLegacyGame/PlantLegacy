@@ -9,19 +9,13 @@
  * marks, no celebratory visuals.
  */
 
-export interface UIConfig {
-  textScale: number;
-  layers: Record<string, number>;
-  theme: Record<string, string>;
-  toastDurationMs: number;
-  toastMaxStack: number;
-  hintCardDurationMs: number;
-  hintCardMaxLines: number;
-  panelDefaultWidthPx: number;
-  panelAnimationMs: number;
-  reducedMotion: boolean;
-  safeAreaPaddingPx: number;
-}
+/**
+ * The UI surface's view of `config/ui.json`. Defined once in the config loader
+ * and re-exported here, so the shell and its panels cannot drift apart.
+ */
+import type { UIConfig } from '../config/clientConfig.ts';
+
+export type { UIConfig };
 
 export interface ToastOptions {
   message: string;

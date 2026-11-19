@@ -66,6 +66,16 @@ export const MID_SEGMENT_BRANCH_TYPES: readonly NodeType[] = [
   'stolon',
 ];
 
+/** How much fatter than its own shank a part is allowed to be where it leaves. */
+export const DEFAULT_JOINT_FLARE_RATIO = 1.25;
+/** How fast a segment necks down from its junction belly to its shank. */
+export const DEFAULT_SEGMENT_TAPER_EXPONENT = 2.2;
+/** How far along its own direction a child's tube starts, as a fraction of the parent's radius. */
+export const DEFAULT_SOCKET_INSET_RATIO = 0.15;
+
+let activeJointFlareRatio = DEFAULT_JOINT_FLARE_RATIO;
+let activeSegmentTaperExponent = DEFAULT_SEGMENT_TAPER_EXPONENT;
+let activeSocketInsetRatio = DEFAULT_SOCKET_INSET_RATIO;
 let activeSeedBodyHeightRatio = SEED_BODY_HEIGHT_RATIO;
 let activeNodeRadiusProfiles: Readonly<Record<string, NodeRadiusProfile>> = NODE_RADIUS_PROFILES;
 let activeBranchAttachFraction = DEFAULT_BRANCH_ATTACH_FRACTION;
@@ -112,6 +122,85 @@ export function setGrowthGeometryTunables(tunables: GrowthGeometryTunables = {})
   activeBranchAttachFraction = clampAttachFraction(
     tunables.branchAttachFraction ?? DEFAULT_BRANCH_ATTACH_FRACTION,
   );
+  const positive = (value: number | undefined, fallback: number): number =>
+    typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : fallback;
+  activeJointFlareRatio = Math.min(
+    2,
+    Math.max(1, positive(tunables.jointFlareRatio, DEFAULT_JOINT_FLARE_RATIO)),
+  );
+  activeSegmentTaperExponent = Math.min(
+    4,
+    Math.max(1, positive(tunables.segmentTaperExponent, DEFAULT_SEGMENT_TAPER_EXPONENT)),
+  );
+  activeSocketInsetRatio = Math.min(
+    0.9,
+    Math.max(
+      0,
+      typeof tunables.socketInsetRatio === 'number' && Number.isFinite(tunables.socketInsetRatio)
+        ? tunables.socketInsetRatio
+        : DEFAULT_SOCKET_INSET_RATIO,
+    ),
+  );
+}
+
+export function getJointFlareRatio(): number {
+  return activeJointFlareRatio;
+}
+
+export function getSegmentTaperExponent(): number {
+  return activeSegmentTaperExponent;
+}
+
+export function getSocketInsetRatio(): number {
+  return activeSocketInsetRatio;
+}
+
+/**
+ * Radius of a part where it leaves its parent.
+ *
+ * The old rule used the parent's own radius, so a branch off a trunk was drawn
+ * as a cone with the trunk's diameter at its base - a spike socket, 2.65x its
+ * own shank and a 19 degree half-angle on a 12 cm internode. A junction is a
+ * property of the parent *and* the child: a little wider than the child's shank
+ * (the knuckle), never wider than the parent that carries it. Soft organs are
+ * capped at their own radius instead, so a leaf does not get a knuckle.
+ */
+export function jointStartRadius(
+  parentRadiusAtAttach: number,
+  childRadius: number,
+  softOrgan = false,
+): number {
+  const parent = Number.isFinite(parentRadiusAtAttach) ? Math.max(0, parentRadiusAtAttach) : 0;
+  const child = Number.isFinite(childRadius) ? Math.max(0, childRadius) : 0;
+  if (!(parent > 0)) return child;
+  if (!(child > 0)) return parent;
+  if (softOrgan) return Math.min(parent, child);
+  return Math.min(parent, child * activeJointFlareRatio);
+}
+
+/**
+ * Radius at a fraction `t` along a segment: a belly at the junction, most of the
+ * necking done early, then a near-constant shank.
+ *
+ * A straight start-to-end interpolation spreads the whole neck over the segment,
+ * which draws every internode as a cone. `1 - (1 - t)^p` reaches most of the way
+ * to the shank inside the first quarter and holds, which is how a branch is
+ * shaped rather than how a funnel is.
+ */
+export function segmentRadiusAt(startRadius: number, endRadius: number, t: number): number {
+  const start = Number.isFinite(startRadius) ? startRadius : 0;
+  const end = Number.isFinite(endRadius) ? endRadius : 0;
+  const clamped = Math.min(1, Math.max(0, Number.isFinite(t) ? t : 1));
+  if (clamped <= 0) return start;
+  if (clamped >= 1) return end;
+  const eased = 1 - (1 - clamped) ** activeSegmentTaperExponent;
+  return start + (end - start) * eased;
+}
+
+/** Altitude on the child's own direction where its tube begins, in metres. */
+export function socketInset(parentRadiusAtAttach: number): number {
+  const radius = Number.isFinite(parentRadiusAtAttach) ? Math.max(0, parentRadiusAtAttach) : 0;
+  return radius * activeSocketInsetRatio;
 }
 
 export function getSeedBodyHeightRatio(): number {
@@ -284,4 +373,38 @@ export function placeSegment(
       z: start.z + unit.z * step,
     },
   };
+}
+
+/**
+ * Longest a new segment may be, given the part it grows out of.
+ *
+ * A size mutation scales the segment a plant is about to make, and the scale is a
+ * product of every size mutation and level card it holds. Uncapped, a side branch
+ * could come out several times the length of the trunk it left: the geometry was
+ * still attached - every joint met - but a plant whose parts are out of proportion
+ * does not read as a plant, it reads as a stick stuck into another stick.
+ *
+ * The ratio is a config value, and a parent with no length of its own (the seed)
+ * imposes no ceiling: there is nothing to be proportional to yet.
+ */
+export function clampChildSegmentLength(
+  length: number,
+  parentLength: number,
+  maxRatio: number | undefined,
+): number {
+  const candidate = Number.isFinite(length) && length > 0 ? length : 0;
+  if (typeof maxRatio !== 'number' || !Number.isFinite(maxRatio) || maxRatio <= 0) return candidate;
+  if (!Number.isFinite(parentLength) || parentLength <= 0) return candidate;
+  return Math.min(candidate, parentLength * maxRatio);
+}
+
+/** Ceiling on a segment, from the loaded growth config. */
+export function getMaxChildLengthRatio(): number {
+  return maxChildLengthRatio;
+}
+
+let maxChildLengthRatio = 1.6;
+
+export function setMaxChildLengthRatio(ratio: number): void {
+  if (Number.isFinite(ratio) && ratio >= 1) maxChildLengthRatio = ratio;
 }

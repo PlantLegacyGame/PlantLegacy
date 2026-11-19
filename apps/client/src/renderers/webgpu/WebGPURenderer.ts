@@ -33,6 +33,57 @@ import type { WebGPUDevice } from './WebGPUDevice.js';
  */
 
 const FRAME_FLOATS = 96;
+/**
+ * The f32 fields of `FrameUniforms` in `shaders/common.wgsl`, in order.
+ *
+ * The frame buffer is written by index, so a field added to one side and not the
+ * other silently shifts every value after it. This list is asserted against the
+ * WGSL source in a test, which is the only way to catch that without a GPU.
+ */
+export const FRAME_UNIFORM_FIELDS = [
+  'viewProjection',
+  'projection',
+  'cameraPos',
+  'cameraRight',
+  'cameraUp',
+  'cameraForward',
+  'sunDirection',
+  'ownRootColor',
+  'rivalRootColor',
+  'rootSightCenter',
+  'time',
+  'windStrength',
+  'windSpeed',
+  'healthTintStrength',
+  'mutation0Param',
+  'mutation1Param',
+  'mutation2Param',
+  'viewportHeight',
+  'rootSightEnabled',
+  'rootSightProgress',
+  'rootSightRadius',
+  'rootSightAuraRadius',
+  'rootAuraNodeCount',
+  'tierThreshold0',
+  'tierThreshold1',
+  'tierThreshold2',
+  'tierThreshold3',
+  'hysteresisPromote',
+  'hysteresisDemote',
+  'minDwellTime',
+  'pointSizeScale',
+  'proj11',
+  'deltaTime',
+  'rootSightSoilOpacity',
+  'planetCenterX',
+  'planetCenterY',
+  'planetCenterZ',
+  'planetRadius',
+  'cameraUnderSoil',
+  'rootSightApertureRadius',
+  'rootSightEyeWindow',
+  'sunWarmth',
+] as const;
 const FRAME_BYTES = FRAME_FLOATS * 4;
 const PLANT_FLOATS = 12;
 const PLANT_STRIDE = PLANT_FLOATS * 4;
@@ -153,6 +204,10 @@ export interface WebGPURendererConfig {
   leafCountPerNode: number;
   tubeSides: number;
   rootSides: number;
+  /** Ring every this many metres along a drawn tube. */
+  chainRingSpacingM: number;
+  /** How far a drawn tube's polyline may sag off its curve, in metres. */
+  chainSagittaTolM: number;
   tierThresholds: [number, number, number, number];
   hysteresisPromote: number;
   hysteresisDemote: number;
@@ -190,6 +245,10 @@ export interface WebGPURendererConfig {
   vramBudgetBytes: number;
   vramMaxVertexBytes: number;
   vramMaxIndexBytes: number;
+  /** Variation layers in the plant texture array. */
+  textureArrayLayers: number;
+  /** Edge length of one texture-array layer, in texels. */
+  textureArraySize: number;
 }
 
 export const DEFAULT_WEBGPU_RENDERER_CONFIG: WebGPURendererConfig = {
@@ -199,6 +258,8 @@ export const DEFAULT_WEBGPU_RENDERER_CONFIG: WebGPURendererConfig = {
   tubeSides: 8,
   // Roots read as faceted spikes below eight sides; they taper to a point.
   rootSides: 8,
+  chainRingSpacingM: 0.05,
+  chainSagittaTolM: 0.0015,
   tierThresholds: [300, 80, 12, 2],
   hysteresisPromote: 1.15,
   hysteresisDemote: 0.85,
@@ -233,11 +294,9 @@ export const DEFAULT_WEBGPU_RENDERER_CONFIG: WebGPURendererConfig = {
   vramBudgetBytes: 256 * 1024 * 1024,
   vramMaxVertexBytes: 64 * 1024 * 1024,
   vramMaxIndexBytes: 16 * 1024 * 1024,
+  textureArrayLayers: 16,
+  textureArraySize: 256,
 };
-
-/** Texture array configuration for plant variation */
-const TEXTURE_ARRAY_LAYERS = 16; // Variations per plant part type (must match getVariationIndex range 0-15)
-const TEXTURE_ARRAY_SIZE = 256; // 256x256 per layer
 
 /** C02b: Simple VRAM pool allocator for buffer management */
 class VRAMPool {
@@ -407,6 +466,8 @@ export class WebGPURenderer {
   private readonly frameU32 = new Uint32Array(this.frameData.buffer);
   private readonly viewProjection = new THREE.Matrix4();
   private readonly sunDirection = new THREE.Vector3(0.45, 1, 0.35);
+  /** Golden-hour warmth from the environment, 0..1 (see `setSunWarmth`). */
+  private sunWarmth = 0;
   private readonly rootSightCenter = new THREE.Vector3();
   private readonly ownRootColor = new THREE.Color(DEFAULT_WEBGPU_RENDERER_CONFIG.ownRootColor);
   private readonly rivalRootColor = new THREE.Color(DEFAULT_WEBGPU_RENDERER_CONFIG.rivalRootColor);
@@ -1057,6 +1118,11 @@ export class WebGPURenderer {
     }
   }
 
+  /** Warmth of the light, 0 (high sun) to 1 (on the horizon). Drives backlight. */
+  setSunWarmth(warmth: number): void {
+    this.sunWarmth = Math.min(1, Math.max(0, warmth));
+  }
+
   setRootSight(
     enabled: boolean,
     progress: number,
@@ -1176,6 +1242,8 @@ export class WebGPURenderer {
       leafCountPerNode: this.config.leafCountPerNode,
       tubeSides: this.config.tubeSides,
       rootSides: this.config.rootSides,
+      chainRingSpacingM: this.config.chainRingSpacingM,
+      chainSagittaTolM: this.config.chainSagittaTolM,
       now: this.pendingNowMs,
       sunDirection: this.sunDirection,
       appearanceForPlant: (plantId) => this.appearanceByPlant.get(plantId),
@@ -1256,9 +1324,9 @@ export class WebGPURenderer {
       const texture = device.createTexture({
         label: `Texture array: ${PLANT_TEXTURE_TYPE_NAMES[texType]}`,
         size: {
-          width: TEXTURE_ARRAY_SIZE,
-          height: TEXTURE_ARRAY_SIZE,
-          depthOrArrayLayers: TEXTURE_ARRAY_LAYERS,
+          width: this.config.textureArraySize,
+          height: this.config.textureArraySize,
+          depthOrArrayLayers: this.config.textureArrayLayers,
         },
         format: 'rgba8unorm',
         usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
@@ -1274,8 +1342,8 @@ export class WebGPURenderer {
     const texture = this.textureArrays?.get(type);
     if (!texture) return;
 
-    const layers = TEXTURE_ARRAY_LAYERS;
-    const size = TEXTURE_ARRAY_SIZE;
+    const layers = this.config.textureArrayLayers;
+    const size = this.config.textureArraySize;
     const bytesPerLayer = size * size * 4;
 
     for (let layer = 0; layer < layers; layer++) {
@@ -2024,7 +2092,8 @@ export class WebGPURenderer {
     // The frame struct's last slot is the buried-eye bubble, so the occlusion
     // test can be limited to the air the eye is standing in.
     data[94] = this.rootSightEyeWindow;
-    data[95] = 0;
+    // The struct's last slot: warm light intensity for leaf backlight.
+    data[95] = this.sunWarmth;
 
     device.queue.writeBuffer(this.frameUniformBuffer, 0, data);
 

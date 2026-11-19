@@ -212,4 +212,37 @@ describe('child attachment to the drawn parent', () => {
       stemFrame.startRadius + (stemFrame.endRadius - stemFrame.startRadius) * 0.6;
     assert.ok(radial <= radiusAtJoint + 0.005, `branch radial ${radial.toFixed(3)}`);
   });
+
+  it('pulls a child back onto its parent when the shipped attach point is stale', () => {
+    // The server ships an attach point once. A mutation that re-masses the plant,
+    // an uproot, or a resync can move the parent under that point afterwards, and
+    // the child then started in mid-air beside its own stem - the "unattached
+    // part" look. The drawn start is clamped to the parent's drawn body.
+    const nodes = realSeedling();
+    const { byId, frames } = resolveAll(nodes);
+    const stem = mustGet(byId, 'stem');
+    const stemFrame = mustGet(frames, 'stem');
+    const branch = mustGet(byId, 'branch1');
+    const stale = {
+      ...branch,
+      parentAttachX: (branch.parentAttachX ?? 0) + 3,
+      parentAttachY: (branch.parentAttachY ?? 0) + 2,
+      parentAttachZ: (branch.parentAttachZ ?? 0) - 2,
+    };
+    const frame = resolveSegmentFrame(
+      stale,
+      stem,
+      byId.values(),
+      stemFrame.animated,
+      stemFrame.startRadius,
+    );
+    const fraction = stale.attachFraction ?? 1;
+    const radiusAtJoint =
+      stemFrame.startRadius + (stemFrame.endRadius - stemFrame.startRadius) * fraction;
+    const radial = distanceToSegment(frame.start, stemFrame.start, stemFrame.animated);
+    assert.ok(
+      radial <= radiusAtJoint + 0.005,
+      `a stale attach left the child ${(radial - radiusAtJoint).toFixed(3)} m off its parent`,
+    );
+  });
 });

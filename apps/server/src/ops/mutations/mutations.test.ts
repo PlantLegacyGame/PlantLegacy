@@ -282,6 +282,48 @@ describe('T04 mutation service', () => {
     assert.deepEqual(effects.unlockNodeTypes, ['flower']);
   });
 
+  it('caps the product of size multipliers at the configured ceiling', () => {
+    // Size is a product: two size mutations, each levelled, multiplied past three
+    // times a normal internode and a branch came out longer than the trunk it left.
+    // The ceiling is config (max_size_multiplier); this test pins that it is
+    // applied and that the value under it is left exactly as the mutations made it.
+    const p = plant();
+    p.mutations = [
+      { id: 'bulky', acquiredTick: 1, nodeId: null },
+      { id: 'bulkier', acquiredTick: 2, nodeId: null },
+    ];
+    const cfg = config({
+      maxSizeMultiplier: 2,
+      definitions: [
+        definition('bulky', { effects: { sizeMultiplier: 1.25, rootSizeMultiplier: 1.4 } }),
+        definition('bulkier', { effects: { sizeMultiplier: 1.3, rootSizeMultiplier: 1.3 } }),
+        definition('bulkiest', { effects: { sizeMultiplier: 1.4, rootSizeMultiplier: 1.4 } }),
+      ],
+    });
+    // 1.25 * 1.3 = 1.625 before any level card; the second mutation alone does not
+    // reach the ceiling, so the ceiling is exercised with a third.
+    const capped = mutationEffects(p, cfg);
+    assert.equal(capped.sizeMultiplier, 1.625);
+    assert.equal(Math.round(capped.rootSizeMultiplier * 1e6) / 1e6, 1.82);
+    p.mutations = [
+      { id: 'bulky', acquiredTick: 1, nodeId: null },
+      { id: 'bulkier', acquiredTick: 2, nodeId: null },
+      { id: 'bulkiest', acquiredTick: 3, nodeId: null },
+    ];
+    const over = mutationEffects(p, cfg);
+    // 1.25 * 1.3 * 1.4 = 2.275 -> capped at 2, and the root product with it.
+    assert.equal(over.sizeMultiplier, 2);
+    assert.equal(over.rootSizeMultiplier, 2);
+    // A plant under the ceiling keeps its real product.
+    const single = plant();
+    single.mutations = [{ id: 'bulky', acquiredTick: 1, nodeId: null }];
+    assert.equal(mutationEffects(single, cfg).sizeMultiplier, 1.25);
+    // A config that names no ceiling does not invent one.
+    assert.ok(
+      mutationEffects(p, config({ ...cfg, maxSizeMultiplier: undefined })).sizeMultiplier > 2,
+    );
+  });
+
   it('scales upkeep so a mutation costs more than holding none', () => {
     const p = plant();
     p.mutations = [{ id: 'leafy', acquiredTick: 1, nodeId: null }];

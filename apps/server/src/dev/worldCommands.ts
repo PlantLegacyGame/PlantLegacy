@@ -17,7 +17,17 @@ export interface WorldCommandPorts {
   tileCoordinates(worldX: number, worldZ: number): { tileX: number; tileZ: number };
   setTileResources(tileX: number, tileZ: number, resources: Record<string, number>): boolean;
   setTimeOfDay(fraction: number): void;
-  weatherBroadcast(): { timeOfDay: number; isDay: boolean; sunIntensity: number };
+  setTimePaused(paused: boolean): void;
+  setTimeScale(scale: number): void;
+  weatherBroadcast(): {
+    timeOfDay: number;
+    isDay: boolean;
+    sunIntensity: number;
+    timePaused?: boolean;
+    timeScale?: number;
+  };
+  /** Push the new clock to every connected player, not just the caller. */
+  broadcastWeather(): void;
   respond(actionType: string, payload: Record<string, unknown>): void;
 }
 
@@ -72,18 +82,44 @@ export function handleWorldCommand(ports: WorldCommandPorts, action: DevAction):
       // overwritten by the very next weather broadcast, which is why the world
       // sat at 04:00 while the renderer was told it was afternoon. Moving the
       // world clock here is the only way to get daylight on demand.
-      const fraction = Number(action.time_of_day);
-      if (!Number.isFinite(fraction)) {
+      //
+      // The same action carries the clock's mode, because a freeze or a speed
+      // change made only on the client was in the same position: reverted by the
+      // next broadcast, and invisible to everyone else on the server.
+      const hasTime = action.time_of_day !== undefined;
+      const fraction = hasTime ? Number(action.time_of_day) : undefined;
+      const paused = typeof action.paused === 'boolean' ? action.paused : undefined;
+      const hasScale = action.scale !== undefined;
+      // Not `Number(action.scale)` unconditionally: an absent scale became NaN,
+      // which is not nullish and so survived the `?? 1` fallback into the reply.
+      const scale = hasScale ? Number(action.scale) : undefined;
+
+      if (hasTime && !Number.isFinite(fraction)) {
         ports.respond(action.type, { ok: false, reason: 'bad_time' });
         return true;
       }
-      ports.setTimeOfDay(fraction);
+      if (hasScale && !Number.isFinite(scale)) {
+        ports.respond(action.type, { ok: false, reason: 'bad_scale' });
+        return true;
+      }
+      if (!hasTime && paused === undefined && !hasScale) {
+        ports.respond(action.type, { ok: false, reason: 'bad_time' });
+        return true;
+      }
+
+      if (hasTime) ports.setTimeOfDay(fraction as number);
+      if (paused !== undefined) ports.setTimePaused(paused);
+      if (scale !== undefined) ports.setTimeScale(scale);
+
       const moved = ports.weatherBroadcast();
+      ports.broadcastWeather();
       ports.respond(action.type, {
         ok: true,
         timeOfDay: moved.timeOfDay,
         isDay: moved.isDay,
         sunIntensity: moved.sunIntensity,
+        timePaused: moved.timePaused ?? paused ?? false,
+        timeScale: moved.timeScale ?? scale ?? 1,
       });
       return true;
     }

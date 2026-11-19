@@ -1,1 +1,1749 @@
-{"_meta":{"system":"mutations","version":"1.0.0","schema":"extended-1","owner_task":"T04","status":"active","notes":"Data-driven mutation table. Every mutation is an object entry; adding one needs no code. Triggers read T00A tiles and T07 weather. No rarity field anywhere (RULE_20)."},"values":{"mutation_chance_per_growth":{"type":"number","value":0.08,"range":[0,0.5],"notes":"Chance that a completed growth event rolls for a mutation. DESIGN caps this at 0.5."},"adaptive_pressure_enabled":{"type":"boolean","value":true,"notes":"Bias the mutation pool by recent investment in each growth category."},"decay_half_life_ticks":{"type":"number","value":12000,"range":[100,100000],"notes":"Half-life of adaptive pressure, in ticks. 12000 ticks is ten minutes at 20 Hz."},"max_pressure_multiplier":{"type":"number","value":3,"range":[1,10],"notes":"Ceiling on how far pressure can weight a mutation."},"shed_cooldown_s":{"type":"number","value":45,"range":[0,600],"notes":"Fallback cooldown between sheds when a mutation omits its own."},"node_type_to_category":{"type":"object","value":{"radicle":"root","root":"root","lateral_root":"root","root->storage":"storage","stem":"stem","branch":"stem","stem->storage":"storage","vine":"vine","leaf":"leaf","cotyledon":"leaf","flower":"flower","spore_sac":"spore_sac","effects":{},"trunk":"stem","culm":"stem","rhizome":"root","floating_leaf":"leaf","pneumatophore":"root","thorn":"stem","stolon":"stem","tuber":"root"},"notes":"Which growth category each node type counts as investment in. The `<type>->storage` rows are the second category a woody part also contributes to."},"category_to_tag_map":{"type":"object","value":{"root":["Root","WaterStorage","MineralUptake"],"stem":["Structure","Height"],"leaf":["Foliage","Photosynthesis"],"flower":["Reproduction","Pollinator"],"spore_sac":["Spore","Reproduction"],"vine":["Climbing","Reach"],"defense":["Toxic","Thorns","Bark"],"storage":["WaterStorage","Reserve"],"effects":{}},"notes":"Growth category -> gene tags whose mutations it biases."},"mutation_bioluminescent_lamina":{"type":"object","value":{"id":"bioluminescent_lamina","name":"Bioluminescent lamina","kind":"expressive","gene_tags":["Foliage","Glow"],"triggers":{"growth_chance_weight":1,"max_light":60},"maintenance":{"energy_per_second":0.08,"biomass_per_second":0},"effects":{"photosynthesis_multiplier":1.05},"movement":{"reroot_speed":1,"translocate":false,"parts":[],"drift":0},"shed":{"cooldown_s":45,"biomass_penalty_fraction":0.04}}},"mutation_thickened_bark":{"type":"object","value":{"id":"thickened_bark","name":"Thickened bark","kind":"structural","gene_tags":["Bark","Structure"],"triggers":{"growth_chance_weight":1,"min_light":30},"maintenance":{"energy_per_second":0.05,"biomass_per_second":0},"effects":{"energy_upkeep_multiplier":1.05,"unlock_node_types":["trunk"]},"movement":{"reroot_speed":0.95,"translocate":false,"parts":[],"drift":0},"shed":{"cooldown_s":60,"biomass_penalty_fraction":0.06}}},"mutation_variegated_foliage":{"type":"object","value":{"id":"variegated_foliage","name":"Variegated foliage","kind":"cosmetic","gene_tags":["Foliage"],"triggers":{"growth_chance_weight":1.2},"maintenance":{"energy_per_second":0.02,"biomass_per_second":0},"effects":{"photosynthesis_multiplier":0.95},"movement":{"reroot_speed":1,"translocate":false,"parts":[],"drift":0},"shed":{"cooldown_s":30,"biomass_penalty_fraction":0.02},"starter":true}},"mutation_rubescent_pigment":{"type":"object","value":{"id":"rubescent_pigment","name":"Rubescent pigment","kind":"cosmetic","gene_tags":["Foliage","Pigment"],"triggers":{"growth_chance_weight":1,"min_light":55},"maintenance":{"energy_per_second":0.03,"biomass_per_second":0},"effects":{},"movement":{"reroot_speed":1,"translocate":false,"parts":[],"drift":0},"shed":{"cooldown_s":30,"biomass_penalty_fraction":0.02},"starter":true}},"mutation_glaucous_wax":{"type":"object","value":{"id":"glaucous_wax","name":"Glaucous wax","kind":"stat","gene_tags":["Foliage","Drought"],"triggers":{"growth_chance_weight":1,"max_moisture":40},"maintenance":{"energy_per_second":0.03,"biomass_per_second":0},"effects":{"photosynthesis_multiplier":1.15},"movement":{"reroot_speed":1,"translocate":false,"parts":[],"drift":0},"shed":{"cooldown_s":45,"biomass_penalty_fraction":0.03},"starter":true}},"mutation_pale_tissue":{"type":"object","value":{"id":"pale_tissue","name":"Pale tissue","kind":"cosmetic","gene_tags":["Foliage","Pigment"],"triggers":{"growth_chance_weight":0.6,"max_light":25},"maintenance":{"energy_per_second":0.05,"biomass_per_second":0},"effects":{"photosynthesis_multiplier":0.8},"movement":{"reroot_speed":1,"translocate":false,"parts":[],"drift":0},"shed":{"cooldown_s":45,"biomass_penalty_fraction":0.03}}},"mutation_gold_mottle":{"type":"object","value":{"id":"gold_mottle","name":"Gold mottle","kind":"cosmetic","gene_tags":["Foliage","Pigment"],"triggers":{"growth_chance_weight":0.8,"min_minerals":55},"maintenance":{"energy_per_second":0.04,"biomass_per_second":0},"effects":{},"movement":{"reroot_speed":1,"translocate":false,"parts":[],"drift":0},"shed":{"cooldown_s":30,"biomass_penalty_fraction":0.02}}},"mutation_umbral_bark":{"type":"object","value":{"id":"umbral_bark","name":"Umbral bark","kind":"structural","gene_tags":["Bark","Structure"],"triggers":{"growth_chance_weight":0.7,"max_light":45},"maintenance":{"energy_per_second":0.06,"biomass_per_second":0},"effects":{"energy_upkeep_multiplier":1.08},"movement":{"reroot_speed":0.9,"translocate":false,"parts":[],"drift":0},"shed":{"cooldown_s":60,"biomass_penalty_fraction":0.06}}},"mutation_photic_nodes":{"type":"object","value":{"id":"photic_nodes","name":"Photic nodes","kind":"expressive","gene_tags":["Glow","Photosynthesis"],"triggers":{"growth_chance_weight":0.5,"time_of_day":"night"},"maintenance":{"energy_per_second":0.12,"biomass_per_second":0},"effects":{"photosynthesis_multiplier":1.1},"movement":{"reroot_speed":1,"translocate":false,"parts":[],"drift":0},"shed":{"cooldown_s":60,"biomass_penalty_fraction":0.05}}},"mutation_columnar_habit":{"type":"object","value":{"id":"columnar_habit","name":"Columnar habit","kind":"structural","gene_tags":["Structure","Height"],"triggers":{"growth_chance_weight":1,"min_light":50},"maintenance":{"energy_per_second":0.06,"biomass_per_second":0},"effects":{"growth_cost_multiplier":1.1,"vertical_bias":0.6},"movement":{"reroot_speed":1,"translocate":false,"parts":[],"drift":0},"shed":{"cooldown_s":60,"biomass_penalty_fraction":0.05},"effects_notes":"The name is a shape, so it is also a growth rule: branches bend toward vertical by 60% of their lateral intent."}},"mutation_drooping_fronds":{"type":"object","value":{"id":"drooping_fronds","name":"Drooping fronds","kind":"expressive","gene_tags":["Foliage","Reach"],"triggers":{"growth_chance_weight":0.9,"weather":["rain","thunderstorm_active"]},"maintenance":{"energy_per_second":0.04,"biomass_per_second":0},"effects":{"photosynthesis_multiplier":1.02,"drooping_bias":0.55},"movement":{"reroot_speed":1,"translocate":false,"parts":[],"drift":0},"shed":{"cooldown_s":45,"biomass_penalty_fraction":0.03},"effects_notes":"The name is a shape, so it is also a growth rule: new foliage bends downward by 55% of its upward intent."}},"mutation_spined_epidermis":{"type":"object","value":{"id":"spined_epidermis","name":"Spined epidermis","kind":"structural","gene_tags":["Thorns","Defense"],"triggers":{"growth_chance_weight":0.8,"min_moisture":45},"maintenance":{"energy_per_second":0.07,"biomass_per_second":0},"effects":{"unlock_node_types":["thorn"],"energy_upkeep_multiplier":1.04},"movement":{"reroot_speed":0.9,"translocate":false,"parts":[],"drift":0},"shed":{"cooldown_s":60,"biomass_penalty_fraction":0.06},"effects_notes":"Thorns on the epidermis: unlocks the thorn organ and draws real spines along woody tubes (config/mutation_visuals.json -> spines)."}},"mutation_maintenance_scale":{"type":"number","value":1.5,"range":[1,5],"notes":"Multiplier on every mutation energy upkeep. Mutations must cost more than not holding them."},"mutation_sparse_metabolism":{"type":"object","value":{"gene_tags":["Mutation"],"triggers":{"growth_chance_weight":1,"max_light":60},"maintenance":{"energy_per_second":0.03,"biomass_per_second":0},"movement":{"reroot_speed":1,"translocate":false,"parts":[],"drift":0},"shed":{"cooldown_s":45,"biomass_penalty_fraction":0.05},"id":"sparse_metabolism","name":"Sparse metabolism","kind":"stat","effects":{"energy_upkeep_multiplier":0.75,"photosynthesis_multiplier":0.9},"starter":true}},"mutation_ravenous_fixation":{"type":"object","value":{"gene_tags":["Mutation"],"triggers":{"growth_chance_weight":1.2,"min_light":55},"maintenance":{"energy_per_second":0.12,"biomass_per_second":0},"movement":{"reroot_speed":1,"translocate":false,"parts":[],"drift":0},"shed":{"cooldown_s":45,"biomass_penalty_fraction":0.05},"id":"ravenous_fixation","name":"Ravenous fixation","kind":"stat","effects":{"photosynthesis_multiplier":1.45,"energy_upkeep_multiplier":1.3}}},"mutation_fatty_reserve":{"type":"object","value":{"gene_tags":["Mutation"],"triggers":{"growth_chance_weight":1,"min_moisture":40},"maintenance":{"energy_per_second":0.07,"biomass_per_second":0.002},"movement":{"reroot_speed":1,"translocate":false,"parts":[],"drift":0},"shed":{"cooldown_s":45,"biomass_penalty_fraction":0.05},"id":"fatty_reserve","name":"Fatty reserve","kind":"stat","effects":{"energy_upkeep_multiplier":1.2,"photosynthesis_multiplier":1.1}}},"mutation_symbiotic_nodules":{"type":"object","value":{"gene_tags":["Mutation"],"triggers":{"growth_chance_weight":1,"min_minerals":45},"maintenance":{"energy_per_second":0.08,"biomass_per_second":0},"movement":{"reroot_speed":1,"translocate":false,"parts":[],"drift":0},"shed":{"cooldown_s":45,"biomass_penalty_fraction":0.05},"id":"symbiotic_nodules","name":"Symbiotic nodules","kind":"ability","effects":{"photosynthesis_multiplier":1.2,"energy_upkeep_multiplier":1.1}}},"mutation_violet_lamina":{"type":"object","value":{"gene_tags":["Mutation"],"triggers":{"growth_chance_weight":1,"min_light":30},"maintenance":{"energy_per_second":0.03,"biomass_per_second":0},"movement":{"reroot_speed":1,"translocate":false,"parts":[],"drift":0},"shed":{"cooldown_s":45,"biomass_penalty_fraction":0.05},"id":"violet_lamina","name":"Violet lamina","kind":"cosmetic","effects":{}}},"mutation_ashen_cuticle":{"type":"object","value":{"gene_tags":["Mutation"],"triggers":{"growth_chance_weight":1,"min_light":20},"maintenance":{"energy_per_second":0.03,"biomass_per_second":0},"movement":{"reroot_speed":1,"translocate":false,"parts":[],"drift":0},"shed":{"cooldown_s":45,"biomass_penalty_fraction":0.05},"id":"ashen_cuticle","name":"Ashen cuticle","kind":"cosmetic","effects":{"energy_upkeep_multiplier":1.05},"starter":true}},"mutation_copper_pigment":{"type":"object","value":{"gene_tags":["Mutation"],"triggers":{"growth_chance_weight":1,"min_light":40},"maintenance":{"energy_per_second":0.04,"biomass_per_second":0},"movement":{"reroot_speed":1,"translocate":false,"parts":[],"drift":0},"shed":{"cooldown_s":45,"biomass_penalty_fraction":0.05},"id":"copper_pigment","name":"Copper pigment","kind":"cosmetic","effects":{"photosynthesis_multiplier":1.05},"starter":true}},"mutation_thick_cortex":{"type":"object","value":{"gene_tags":["Mutation"],"triggers":{"growth_chance_weight":1,"min_light":25},"maintenance":{"energy_per_second":0.09,"biomass_per_second":0.003},"movement":{"reroot_speed":1,"translocate":false,"parts":[],"drift":0},"shed":{"cooldown_s":45,"biomass_penalty_fraction":0.05},"id":"thick_cortex","name":"Thick cortex","kind":"structural","effects":{"size_multiplier":1.25,"energy_upkeep_multiplier":1.08}}},"mutation_deep_taproot":{"type":"object","value":{"gene_tags":["Mutation"],"triggers":{"growth_chance_weight":1,"min_moisture":25},"maintenance":{"energy_per_second":0.08,"biomass_per_second":0.002},"movement":{"reroot_speed":1,"translocate":false,"parts":[],"drift":0},"shed":{"cooldown_s":45,"biomass_penalty_fraction":0.05},"id":"deep_taproot","name":"Deep taproot","kind":"structural","effects":{"root_size_multiplier":1.4}}},"mutation_rapid_extension":{"type":"object","value":{"gene_tags":["Mutation"],"triggers":{"growth_chance_weight":1.3,"min_light":45},"maintenance":{"energy_per_second":0.14,"biomass_per_second":0},"movement":{"reroot_speed":1,"translocate":false,"parts":[],"drift":0},"shed":{"cooldown_s":45,"biomass_penalty_fraction":0.05},"id":"rapid_extension","name":"Rapid extension","kind":"stat","effects":{"growth_speed_multiplier":1.35,"growth_cost_multiplier":1.2}}},"mutation_deliberate_compact":{"type":"object","value":{"gene_tags":["Mutation"],"triggers":{"growth_chance_weight":1,"max_light":70},"maintenance":{"energy_per_second":0.04,"biomass_per_second":0},"movement":{"reroot_speed":1,"translocate":false,"parts":[],"drift":0},"shed":{"cooldown_s":45,"biomass_penalty_fraction":0.05},"id":"deliberate_compact","name":"Deliberate compact","kind":"stat","effects":{"growth_speed_multiplier":0.85,"growth_cost_multiplier":0.9}}},"mutation_flowering_primordia":{"type":"object","value":{"gene_tags":["Mutation"],"triggers":{"growth_chance_weight":1,"min_light":50},"maintenance":{"energy_per_second":0.07,"biomass_per_second":0},"movement":{"reroot_speed":1,"translocate":false,"parts":[],"drift":0},"shed":{"cooldown_s":45,"biomass_penalty_fraction":0.05},"id":"flowering_primordia","name":"Flowering primordia","kind":"ability","effects":{"unlock_node_types":["flower","spore_sac"]}}},"mutation_secondary_canopy":{"type":"object","value":{"gene_tags":["Mutation"],"triggers":{"growth_chance_weight":1,"min_light":40},"maintenance":{"energy_per_second":0.1,"biomass_per_second":0},"movement":{"reroot_speed":1,"translocate":false,"parts":[],"drift":0},"shed":{"cooldown_s":45,"biomass_penalty_fraction":0.05},"id":"secondary_canopy","name":"Secondary canopy","kind":"ability","effects":{"unlock_node_types":["branch","vine"]}}},"mutation_motile_crown":{"type":"object","value":{"gene_tags":["Mutation"],"triggers":{"growth_chance_weight":1,"min_moisture":50},"maintenance":{"energy_per_second":0.15,"biomass_per_second":0},"movement":{"reroot_speed":1.6,"translocate":true,"parts":[],"drift":0.1},"shed":{"cooldown_s":45,"biomass_penalty_fraction":0.05},"id":"motile_crown","name":"Motile crown","kind":"ability","effects":{"reroot_speed_multiplier":1.6}}},"mutation_nocturnal_habit":{"type":"object","value":{"gene_tags":["Mutation"],"triggers":{"growth_chance_weight":0.8,"max_light":35},"maintenance":{"energy_per_second":0.06,"biomass_per_second":0},"movement":{"reroot_speed":1,"translocate":false,"parts":[],"drift":0},"shed":{"cooldown_s":45,"biomass_penalty_fraction":0.05},"id":"nocturnal_habit","name":"Nocturnal habit","kind":"ability","effects":{"photosynthesis_multiplier":1.15,"energy_upkeep_multiplier":0.9}}},"mutation_ample_reserves":{"type":"object","value":{"gene_tags":["Mutation"],"triggers":{"growth_chance_weight":1,"min_moisture":35},"maintenance":{"energy_per_second":0.06,"biomass_per_second":0},"movement":{"reroot_speed":1,"translocate":false,"parts":[],"drift":0},"shed":{"cooldown_s":45,"biomass_penalty_fraction":0.05},"name":"Ample reserves","kind":"stat","effects":{"water_capacity_multiplier":1.25,"mineral_capacity_multiplier":1.25},"id":"ample_reserves"}},"mutation_brine_tolerance":{"type":"object","value":{"gene_tags":["Mutation"],"triggers":{"growth_chance_weight":1,"min_moisture":50},"maintenance":{"energy_per_second":0.07,"biomass_per_second":0},"movement":{"reroot_speed":1,"translocate":false,"parts":[],"drift":0},"shed":{"cooldown_s":45,"biomass_penalty_fraction":0.05},"name":"Brine tolerance","kind":"structural","effects":{"water_capacity_multiplier":1.5},"id":"brine_tolerance"}},"mutation_mineral_hoard":{"type":"object","value":{"gene_tags":["Mutation"],"triggers":{"growth_chance_weight":1,"min_minerals":55},"maintenance":{"energy_per_second":0.07,"biomass_per_second":0},"movement":{"reroot_speed":1,"translocate":false,"parts":[],"drift":0},"shed":{"cooldown_s":45,"biomass_penalty_fraction":0.05},"name":"Mineral hoard","kind":"structural","effects":{"mineral_capacity_multiplier":1.5},"id":"mineral_hoard"}},"mutation_many_petaled":{"type":"object","value":{"gene_tags":["Mutation"],"triggers":{"growth_chance_weight":1,"min_light":45},"maintenance":{"energy_per_second":0.05,"biomass_per_second":0},"movement":{"reroot_speed":1,"translocate":false,"parts":[],"drift":0},"shed":{"cooldown_s":45,"biomass_penalty_fraction":0.05},"name":"Many-petaled","kind":"cosmetic","effects":{"petal_count":10},"id":"many_petaled"}},"mutation_double_bloom":{"type":"object","value":{"gene_tags":["Mutation"],"triggers":{"growth_chance_weight":1,"min_light":60},"maintenance":{"energy_per_second":0.07,"biomass_per_second":0},"movement":{"reroot_speed":1,"translocate":false,"parts":[],"drift":0},"shed":{"cooldown_s":45,"biomass_penalty_fraction":0.05},"name":"Double bloom","kind":"cosmetic","effects":{"petal_count":14,"leaf_scale_multiplier":0.95},"id":"double_bloom"}},"mutation_broad_leaf":{"type":"object","value":{"gene_tags":["Mutation"],"triggers":{"growth_chance_weight":1,"max_light":55},"maintenance":{"energy_per_second":0.05,"biomass_per_second":0},"movement":{"reroot_speed":1,"translocate":false,"parts":[],"drift":0},"shed":{"cooldown_s":45,"biomass_penalty_fraction":0.05},"name":"Broad leaf","kind":"cosmetic","effects":{"leaf_scale_multiplier":1.35},"id":"broad_leaf"}},"mutation_narrow_leaf":{"type":"object","value":{"gene_tags":["Mutation"],"triggers":{"growth_chance_weight":1,"min_light":40},"maintenance":{"energy_per_second":0.04,"biomass_per_second":0},"movement":{"reroot_speed":1,"translocate":false,"parts":[],"drift":0},"shed":{"cooldown_s":45,"biomass_penalty_fraction":0.05},"name":"Narrow leaf","kind":"cosmetic","effects":{"leaf_scale_multiplier":0.7,"growth_cost_multiplier":0.95},"id":"narrow_leaf"}},"mutation_plump_seed":{"type":"object","value":{"gene_tags":["Mutation"],"triggers":{"growth_chance_weight":1},"maintenance":{"energy_per_second":0.03,"biomass_per_second":0},"movement":{"reroot_speed":1,"translocate":false,"parts":[],"drift":0},"shed":{"cooldown_s":45,"biomass_penalty_fraction":0.05},"name":"Plump seed","kind":"cosmetic","effects":{"seed_scale_multiplier":1.4},"id":"plump_seed"}},"mutation_tiny_seed":{"type":"object","value":{"gene_tags":["Mutation"],"triggers":{"growth_chance_weight":1},"maintenance":{"energy_per_second":0.02,"biomass_per_second":0},"movement":{"reroot_speed":1,"translocate":false,"parts":[],"drift":0},"shed":{"cooldown_s":45,"biomass_penalty_fraction":0.05},"name":"Tiny seed","kind":"cosmetic","effects":{"seed_scale_multiplier":0.7},"id":"tiny_seed"}},"mutation_upkeep_node_scale":{"type":"number","value":0.05,"range":[0,1],"notes":"Extra upkeep fraction per node the mutation affects (kind-aware: root mutations bill roots)."},"mutation_upkeep_biomass_scale":{"type":"number","value":0.01,"range":[0,0.2],"notes":"Extra upkeep fraction per unit of affected node biomass."},"mutation_upkeep_max_multiplier":{"type":"number","value":3,"range":[1,10],"notes":"Ceiling on the node/biomass upkeep multiplier."},"upkeep_biomass_floor":{"type":"number","value":8,"range":[0,100],"notes":"Biomass level below which unpaid mutation upkeep stops taking tissue. Mutation upkeep never sheds a mutation and never kills the plant: an unpaid bill holds the plant at this floor until it earns again. Dropping a mutation is always the player's decision."},"oversize_decay":{"type":"object","value":{"wilt_per_s":0.02,"leak_per_s":0.05},"notes":"Over-form decay. A size mutation is real tissue, so shedding one leaves the plant heavier than its remaining form can carry. excess tissue is lost at wilt_per_s of itself per second (0.02 halves it in ~35 s), each part thinning as its own mass falls, so the body shrinks back gradually instead of snapping to its old size. Stored water, minerals and energy above the new capacity leak at leak_per_s of the excess per second for the same reason."},"level_up":{"type":"object","value":{"max_level":3,"cards_per_offer":3,"upkeep_per_level":0.15,"card_steps":{"photosynthesis_multiplier":1.12,"energy_upkeep_multiplier":0.92,"growth_cost_multiplier":0.95,"reroot_speed_multiplier":1.08,"growth_speed_multiplier":1.1,"size_multiplier":1.15,"root_size_multiplier":1.15,"leaf_scale_multiplier":1.08,"seed_scale_multiplier":1.08,"water_capacity_multiplier":1.15,"mineral_capacity_multiplier":1.15},"card_labels":{"photosynthesis_multiplier":"Denser chlorophyll","energy_upkeep_multiplier":"Leaner metabolism","growth_cost_multiplier":"Thriftier building","reroot_speed_multiplier":"Quicker crawl","growth_speed_multiplier":"Faster extension","size_multiplier":"Larger form","root_size_multiplier":"Deeper roots","leaf_scale_multiplier":"Broader lamina","seed_scale_multiplier":"Fatter seed","water_capacity_multiplier":"Wider water store","mineral_capacity_multiplier":"Wider mineral store"},"base_energy_cost":20,"energy_cost_per_level":40,"energy_cost_per_biomass":4,"energy_cost_per_biomass_per_level":2,"base_biomass_fraction":0.08,"biomass_fraction_per_level":0.06,"min_biomass_cost":1},"notes":"Mutation levels. A held mutation starts at level 1; the player spends stored resources to raise it and picks one card per level from that mutation's own effect pool. Energy cost = base_energy_cost + energy_cost_per_level per level already gained, plus energy_cost_per_biomass per unit of the plant's biomass (and energy_cost_per_biomass_per_level more per level), so a seedling can afford its first level and a mature plant pays in proportion to what it holds. Biomass cost is base_biomass_fraction of total biomass (+ biomass_fraction_per_level per level), never less than min_biomass_cost. Cards are the effect keys above: a card multiplies its effect by its step, so levelling a size mutation offers size cards and a cosmetic one offers the metabolism cards it can actually use. upkeep_per_level raises the running bill with every level. Only which cards are dealt is random; the level itself is the player's choice."},"mutation_hollow_culm":{"type":"object","value":{"id":"hollow_culm","name":"Hollow culm","kind":"expressive","gene_tags":["Stem","Structure"],"triggers":{"growth_chance_weight":1.1,"min_moisture":40},"maintenance":{"energy_per_second":0.06,"biomass_per_second":0},"effects":{"unlock_node_types":["culm"],"water_capacity_multiplier":1.5,"growth_speed_multiplier":1.3},"movement":{"reroot_speed":1,"translocate":false,"parts":[],"drift":0},"shed":{"cooldown_s":60,"biomass_penalty_fraction":0.06}}},"mutation_segmented_culm":{"type":"object","value":{"id":"segmented_culm","name":"Segmented culm","kind":"structural","gene_tags":["Stem","Structure"],"triggers":{"growth_chance_weight":0.9,"min_light":35},"maintenance":{"energy_per_second":0.05,"biomass_per_second":0},"effects":{"unlock_node_types":["culm"],"growth_speed_multiplier":1.15,"size_multiplier":1.05},"movement":{"reroot_speed":1,"translocate":false,"parts":[],"drift":0},"shed":{"cooldown_s":60,"biomass_penalty_fraction":0.06}}},"mutation_hollow_trunk":{"type":"object","value":{"id":"hollow_trunk","name":"Hollow trunk","kind":"structural","gene_tags":["Bark","Storage"],"triggers":{"growth_chance_weight":0.9,"min_moisture":35},"maintenance":{"energy_per_second":0.05,"biomass_per_second":0},"effects":{"unlock_node_types":["trunk"],"water_capacity_multiplier":1.4},"movement":{"reroot_speed":1,"translocate":false,"parts":[],"drift":0},"shed":{"cooldown_s":60,"biomass_penalty_fraction":0.06}}},"mutation_woody_trunk":{"type":"object","value":{"id":"woody_trunk","name":"Woody trunk","kind":"structural","gene_tags":["Bark","Structure"],"triggers":{"growth_chance_weight":1,"min_light":25},"maintenance":{"energy_per_second":0.05,"biomass_per_second":0},"effects":{"unlock_node_types":["trunk"],"root_size_multiplier":1.1},"movement":{"reroot_speed":1,"translocate":false,"parts":[],"drift":0},"shed":{"cooldown_s":60,"biomass_penalty_fraction":0.06}}},"mutation_clonal_rhizome":{"type":"object","value":{"id":"clonal_rhizome","name":"Clonal rhizome","kind":"ability","gene_tags":["Root","Structure"],"triggers":{"growth_chance_weight":0.8,"min_moisture":45},"maintenance":{"energy_per_second":0.06,"biomass_per_second":0},"effects":{"unlock_node_types":["rhizome","tuber"],"water_capacity_multiplier":1.15,"growth_speed_multiplier":1.05,"stored_resource_sharing":0.25},"movement":{"reroot_speed":1,"translocate":false,"parts":[],"drift":0},"shed":{"cooldown_s":60,"biomass_penalty_fraction":0.06}}},"mutation_clonal_network":{"type":"object","value":{"id":"clonal_network","name":"Clonal network","kind":"ability","gene_tags":["Root","Storage"],"triggers":{"growth_chance_weight":0.7,"min_moisture":50,"min_light":20},"maintenance":{"energy_per_second":0.07,"biomass_per_second":0},"effects":{"unlock_node_types":["rhizome","stolon"],"mineral_capacity_multiplier":1.2,"energy_upkeep_multiplier":0.95,"stored_resource_sharing":0.4},"movement":{"reroot_speed":1,"translocate":false,"parts":[],"drift":0},"shed":{"cooldown_s":60,"biomass_penalty_fraction":0.06}}},"mutation_floating_pads":{"type":"object","value":{"id":"floating_pads","name":"Floating pads","kind":"expressive","gene_tags":["Foliage","Water"],"triggers":{"growth_chance_weight":0.9,"min_moisture":55},"maintenance":{"energy_per_second":0.05,"biomass_per_second":0},"effects":{"unlock_node_types":["floating_leaf"],"photosynthesis_multiplier":1.25,"water_capacity_multiplier":1.1},"movement":{"reroot_speed":1,"translocate":false,"parts":[],"drift":0},"shed":{"cooldown_s":60,"biomass_penalty_fraction":0.06}}},"mutation_aerenchyma":{"type":"object","value":{"id":"aerenchyma","name":"Aerenchyma","kind":"structural","gene_tags":["Foliage","Water"],"triggers":{"growth_chance_weight":0.7,"min_moisture":60},"maintenance":{"energy_per_second":0.04,"biomass_per_second":0},"effects":{"unlock_node_types":["pneumatophore"],"water_capacity_multiplier":1.3,"photosynthesis_multiplier":1.05},"movement":{"reroot_speed":1,"translocate":false,"parts":[],"drift":0},"shed":{"cooldown_s":60,"biomass_penalty_fraction":0.06}}},"mutation_silica_cuticle":{"type":"object","value":{"id":"silica_cuticle","name":"Silica cuticle","kind":"structural","gene_tags":["Foliage","Defense"],"triggers":{"growth_chance_weight":0.8,"min_light":45},"maintenance":{"energy_per_second":0.05,"biomass_per_second":0},"effects":{"energy_upkeep_multiplier":0.95,"size_multiplier":1.02},"movement":{"reroot_speed":1,"translocate":false,"parts":[],"drift":0},"shed":{"cooldown_s":60,"biomass_penalty_fraction":0.06}}}}}
+{
+  "_meta": {
+    "system": "mutations",
+    "version": "1.0.0",
+    "schema": "extended-1",
+    "owner_task": "T04",
+    "status": "active",
+    "notes": "Data-driven mutation table. Every mutation is an object entry; adding one needs no code. Triggers read T00A tiles and T07 weather. No rarity field anywhere (RULE_20)."
+  },
+  "values": {
+    "mutation_chance_per_growth": {
+      "type": "number",
+      "value": 0.08,
+      "range": [
+        0,
+        0.5
+      ],
+      "notes": "Chance that a completed growth event rolls for a mutation. DESIGN caps this at 0.5."
+    },
+    "adaptive_pressure_enabled": {
+      "type": "boolean",
+      "value": true,
+      "notes": "Bias the mutation pool by recent investment in each growth category."
+    },
+    "decay_half_life_ticks": {
+      "type": "number",
+      "value": 12000,
+      "range": [
+        100,
+        100000
+      ],
+      "notes": "Half-life of adaptive pressure, in ticks. 12000 ticks is ten minutes at 20 Hz."
+    },
+    "max_pressure_multiplier": {
+      "type": "number",
+      "value": 3,
+      "range": [
+        1,
+        10
+      ],
+      "notes": "Ceiling on how far pressure can weight a mutation."
+    },
+    "shed_cooldown_s": {
+      "type": "number",
+      "value": 45,
+      "range": [
+        0,
+        600
+      ],
+      "notes": "Fallback cooldown between sheds when a mutation omits its own."
+    },
+    "node_type_to_category": {
+      "type": "object",
+      "value": {
+        "radicle": "root",
+        "root": "root",
+        "lateral_root": "root",
+        "root->storage": "storage",
+        "stem": "stem",
+        "branch": "stem",
+        "stem->storage": "storage",
+        "vine": "vine",
+        "leaf": "leaf",
+        "cotyledon": "leaf",
+        "flower": "flower",
+        "spore_sac": "spore_sac",
+        "effects": {},
+        "trunk": "stem",
+        "culm": "stem",
+        "rhizome": "root",
+        "floating_leaf": "leaf",
+        "pneumatophore": "root",
+        "thorn": "stem",
+        "stolon": "stem",
+        "tuber": "root"
+      },
+      "notes": "Which growth category each node type counts as investment in. The `<type>->storage` rows are the second category a woody part also contributes to."
+    },
+    "category_to_tag_map": {
+      "type": "object",
+      "value": {
+        "root": [
+          "Root",
+          "WaterStorage",
+          "MineralUptake"
+        ],
+        "stem": [
+          "Structure",
+          "Height"
+        ],
+        "leaf": [
+          "Foliage",
+          "Photosynthesis"
+        ],
+        "flower": [
+          "Reproduction",
+          "Pollinator"
+        ],
+        "spore_sac": [
+          "Spore",
+          "Reproduction"
+        ],
+        "vine": [
+          "Climbing",
+          "Reach"
+        ],
+        "defense": [
+          "Toxic",
+          "Thorns",
+          "Bark"
+        ],
+        "storage": [
+          "WaterStorage",
+          "Reserve"
+        ],
+        "effects": {}
+      },
+      "notes": "Growth category -> gene tags whose mutations it biases."
+    },
+    "mutation_bioluminescent_lamina": {
+      "type": "object",
+      "value": {
+        "id": "bioluminescent_lamina",
+        "name": "Bioluminescent lamina",
+        "kind": "expressive",
+        "gene_tags": [
+          "Foliage",
+          "Glow"
+        ],
+        "triggers": {
+          "growth_chance_weight": 1,
+          "max_light": 60
+        },
+        "maintenance": {
+          "energy_per_second": 0.08,
+          "biomass_per_second": 0
+        },
+        "effects": {
+          "photosynthesis_multiplier": 1.05
+        },
+        "movement": {
+          "reroot_speed": 1,
+          "translocate": false,
+          "parts": [],
+          "drift": 0
+        },
+        "shed": {
+          "cooldown_s": 45,
+          "biomass_penalty_fraction": 0.04
+        }
+      }
+    },
+    "mutation_thickened_bark": {
+      "type": "object",
+      "value": {
+        "id": "thickened_bark",
+        "name": "Thickened bark",
+        "kind": "structural",
+        "gene_tags": [
+          "Bark",
+          "Structure"
+        ],
+        "triggers": {
+          "growth_chance_weight": 1,
+          "min_light": 30
+        },
+        "maintenance": {
+          "energy_per_second": 0.05,
+          "biomass_per_second": 0
+        },
+        "effects": {
+          "energy_upkeep_multiplier": 1.05,
+          "unlock_node_types": [
+            "trunk"
+          ]
+        },
+        "movement": {
+          "reroot_speed": 0.95,
+          "translocate": false,
+          "parts": [],
+          "drift": 0
+        },
+        "shed": {
+          "cooldown_s": 60,
+          "biomass_penalty_fraction": 0.06
+        }
+      }
+    },
+    "mutation_variegated_foliage": {
+      "type": "object",
+      "value": {
+        "id": "variegated_foliage",
+        "name": "Variegated foliage",
+        "kind": "cosmetic",
+        "gene_tags": [
+          "Foliage"
+        ],
+        "triggers": {
+          "growth_chance_weight": 1.2
+        },
+        "maintenance": {
+          "energy_per_second": 0.02,
+          "biomass_per_second": 0
+        },
+        "effects": {
+          "photosynthesis_multiplier": 0.95
+        },
+        "movement": {
+          "reroot_speed": 1,
+          "translocate": false,
+          "parts": [],
+          "drift": 0
+        },
+        "shed": {
+          "cooldown_s": 30,
+          "biomass_penalty_fraction": 0.02
+        },
+        "starter": true
+      }
+    },
+    "mutation_rubescent_pigment": {
+      "type": "object",
+      "value": {
+        "id": "rubescent_pigment",
+        "name": "Rubescent pigment",
+        "kind": "cosmetic",
+        "gene_tags": [
+          "Foliage",
+          "Pigment"
+        ],
+        "triggers": {
+          "growth_chance_weight": 1,
+          "min_light": 55
+        },
+        "maintenance": {
+          "energy_per_second": 0.03,
+          "biomass_per_second": 0
+        },
+        "effects": {},
+        "movement": {
+          "reroot_speed": 1,
+          "translocate": false,
+          "parts": [],
+          "drift": 0
+        },
+        "shed": {
+          "cooldown_s": 30,
+          "biomass_penalty_fraction": 0.02
+        },
+        "starter": true
+      }
+    },
+    "mutation_glaucous_wax": {
+      "type": "object",
+      "value": {
+        "id": "glaucous_wax",
+        "name": "Glaucous wax",
+        "kind": "stat",
+        "gene_tags": [
+          "Foliage",
+          "Drought"
+        ],
+        "triggers": {
+          "growth_chance_weight": 1,
+          "max_moisture": 40
+        },
+        "maintenance": {
+          "energy_per_second": 0.03,
+          "biomass_per_second": 0
+        },
+        "effects": {
+          "photosynthesis_multiplier": 1.15
+        },
+        "movement": {
+          "reroot_speed": 1,
+          "translocate": false,
+          "parts": [],
+          "drift": 0
+        },
+        "shed": {
+          "cooldown_s": 45,
+          "biomass_penalty_fraction": 0.03
+        },
+        "starter": true
+      }
+    },
+    "mutation_pale_tissue": {
+      "type": "object",
+      "value": {
+        "id": "pale_tissue",
+        "name": "Pale tissue",
+        "kind": "cosmetic",
+        "gene_tags": [
+          "Foliage",
+          "Pigment"
+        ],
+        "triggers": {
+          "growth_chance_weight": 0.6,
+          "max_light": 25
+        },
+        "maintenance": {
+          "energy_per_second": 0.05,
+          "biomass_per_second": 0
+        },
+        "effects": {
+          "photosynthesis_multiplier": 0.8
+        },
+        "movement": {
+          "reroot_speed": 1,
+          "translocate": false,
+          "parts": [],
+          "drift": 0
+        },
+        "shed": {
+          "cooldown_s": 45,
+          "biomass_penalty_fraction": 0.03
+        }
+      }
+    },
+    "mutation_gold_mottle": {
+      "type": "object",
+      "value": {
+        "id": "gold_mottle",
+        "name": "Gold mottle",
+        "kind": "cosmetic",
+        "gene_tags": [
+          "Foliage",
+          "Pigment"
+        ],
+        "triggers": {
+          "growth_chance_weight": 0.8,
+          "min_minerals": 55
+        },
+        "maintenance": {
+          "energy_per_second": 0.04,
+          "biomass_per_second": 0
+        },
+        "effects": {},
+        "movement": {
+          "reroot_speed": 1,
+          "translocate": false,
+          "parts": [],
+          "drift": 0
+        },
+        "shed": {
+          "cooldown_s": 30,
+          "biomass_penalty_fraction": 0.02
+        }
+      }
+    },
+    "mutation_umbral_bark": {
+      "type": "object",
+      "value": {
+        "id": "umbral_bark",
+        "name": "Umbral bark",
+        "kind": "structural",
+        "gene_tags": [
+          "Bark",
+          "Structure"
+        ],
+        "triggers": {
+          "growth_chance_weight": 0.7,
+          "max_light": 45
+        },
+        "maintenance": {
+          "energy_per_second": 0.06,
+          "biomass_per_second": 0
+        },
+        "effects": {
+          "energy_upkeep_multiplier": 1.08
+        },
+        "movement": {
+          "reroot_speed": 0.9,
+          "translocate": false,
+          "parts": [],
+          "drift": 0
+        },
+        "shed": {
+          "cooldown_s": 60,
+          "biomass_penalty_fraction": 0.06
+        }
+      }
+    },
+    "mutation_photic_nodes": {
+      "type": "object",
+      "value": {
+        "id": "photic_nodes",
+        "name": "Photic nodes",
+        "kind": "expressive",
+        "gene_tags": [
+          "Glow",
+          "Photosynthesis"
+        ],
+        "triggers": {
+          "growth_chance_weight": 0.5,
+          "time_of_day": "night"
+        },
+        "maintenance": {
+          "energy_per_second": 0.12,
+          "biomass_per_second": 0
+        },
+        "effects": {
+          "photosynthesis_multiplier": 1.1
+        },
+        "movement": {
+          "reroot_speed": 1,
+          "translocate": false,
+          "parts": [],
+          "drift": 0
+        },
+        "shed": {
+          "cooldown_s": 60,
+          "biomass_penalty_fraction": 0.05
+        }
+      }
+    },
+    "mutation_columnar_habit": {
+      "type": "object",
+      "value": {
+        "id": "columnar_habit",
+        "name": "Columnar habit",
+        "kind": "structural",
+        "gene_tags": [
+          "Structure",
+          "Height"
+        ],
+        "triggers": {
+          "growth_chance_weight": 1,
+          "min_light": 50
+        },
+        "maintenance": {
+          "energy_per_second": 0.06,
+          "biomass_per_second": 0
+        },
+        "effects": {
+          "growth_cost_multiplier": 1.1,
+          "vertical_bias": 0.6
+        },
+        "movement": {
+          "reroot_speed": 1,
+          "translocate": false,
+          "parts": [],
+          "drift": 0
+        },
+        "shed": {
+          "cooldown_s": 60,
+          "biomass_penalty_fraction": 0.05
+        },
+        "effects_notes": "The name is a shape, so it is also a growth rule: branches bend toward vertical by 60% of their lateral intent."
+      }
+    },
+    "mutation_drooping_fronds": {
+      "type": "object",
+      "value": {
+        "id": "drooping_fronds",
+        "name": "Drooping fronds",
+        "kind": "expressive",
+        "gene_tags": [
+          "Foliage",
+          "Reach"
+        ],
+        "triggers": {
+          "growth_chance_weight": 0.9,
+          "weather": [
+            "rain",
+            "thunderstorm_active"
+          ]
+        },
+        "maintenance": {
+          "energy_per_second": 0.04,
+          "biomass_per_second": 0
+        },
+        "effects": {
+          "photosynthesis_multiplier": 1.02,
+          "drooping_bias": 0.55
+        },
+        "movement": {
+          "reroot_speed": 1,
+          "translocate": false,
+          "parts": [],
+          "drift": 0
+        },
+        "shed": {
+          "cooldown_s": 45,
+          "biomass_penalty_fraction": 0.03
+        },
+        "effects_notes": "The name is a shape, so it is also a growth rule: new foliage bends downward by 55% of its upward intent."
+      }
+    },
+    "mutation_spined_epidermis": {
+      "type": "object",
+      "value": {
+        "id": "spined_epidermis",
+        "name": "Spined epidermis",
+        "kind": "structural",
+        "gene_tags": [
+          "Thorns",
+          "Defense"
+        ],
+        "triggers": {
+          "growth_chance_weight": 0.8,
+          "min_moisture": 45
+        },
+        "maintenance": {
+          "energy_per_second": 0.07,
+          "biomass_per_second": 0
+        },
+        "effects": {
+          "unlock_node_types": [
+            "thorn"
+          ],
+          "energy_upkeep_multiplier": 1.04
+        },
+        "movement": {
+          "reroot_speed": 0.9,
+          "translocate": false,
+          "parts": [],
+          "drift": 0
+        },
+        "shed": {
+          "cooldown_s": 60,
+          "biomass_penalty_fraction": 0.06
+        },
+        "effects_notes": "Thorns on the epidermis: unlocks the thorn organ and draws real spines along woody tubes (config/mutation_visuals.json -> spines)."
+      }
+    },
+    "mutation_maintenance_scale": {
+      "type": "number",
+      "value": 1.5,
+      "range": [
+        1,
+        5
+      ],
+      "notes": "Multiplier on every mutation energy upkeep. Mutations must cost more than not holding them."
+    },
+    "mutation_sparse_metabolism": {
+      "type": "object",
+      "value": {
+        "gene_tags": [
+          "Mutation"
+        ],
+        "triggers": {
+          "growth_chance_weight": 1,
+          "max_light": 60
+        },
+        "maintenance": {
+          "energy_per_second": 0.03,
+          "biomass_per_second": 0
+        },
+        "movement": {
+          "reroot_speed": 1,
+          "translocate": false,
+          "parts": [],
+          "drift": 0
+        },
+        "shed": {
+          "cooldown_s": 45,
+          "biomass_penalty_fraction": 0.05
+        },
+        "id": "sparse_metabolism",
+        "name": "Sparse metabolism",
+        "kind": "stat",
+        "effects": {
+          "energy_upkeep_multiplier": 0.75,
+          "photosynthesis_multiplier": 0.9
+        },
+        "starter": true
+      }
+    },
+    "mutation_ravenous_fixation": {
+      "type": "object",
+      "value": {
+        "gene_tags": [
+          "Mutation"
+        ],
+        "triggers": {
+          "growth_chance_weight": 1.2,
+          "min_light": 55
+        },
+        "maintenance": {
+          "energy_per_second": 0.12,
+          "biomass_per_second": 0
+        },
+        "movement": {
+          "reroot_speed": 1,
+          "translocate": false,
+          "parts": [],
+          "drift": 0
+        },
+        "shed": {
+          "cooldown_s": 45,
+          "biomass_penalty_fraction": 0.05
+        },
+        "id": "ravenous_fixation",
+        "name": "Ravenous fixation",
+        "kind": "stat",
+        "effects": {
+          "photosynthesis_multiplier": 1.45,
+          "energy_upkeep_multiplier": 1.3
+        }
+      }
+    },
+    "mutation_fatty_reserve": {
+      "type": "object",
+      "value": {
+        "gene_tags": [
+          "Mutation"
+        ],
+        "triggers": {
+          "growth_chance_weight": 1,
+          "min_moisture": 40
+        },
+        "maintenance": {
+          "energy_per_second": 0.07,
+          "biomass_per_second": 0.002
+        },
+        "movement": {
+          "reroot_speed": 1,
+          "translocate": false,
+          "parts": [],
+          "drift": 0
+        },
+        "shed": {
+          "cooldown_s": 45,
+          "biomass_penalty_fraction": 0.05
+        },
+        "id": "fatty_reserve",
+        "name": "Fatty reserve",
+        "kind": "stat",
+        "effects": {
+          "energy_upkeep_multiplier": 1.2,
+          "photosynthesis_multiplier": 1.1
+        }
+      }
+    },
+    "mutation_symbiotic_nodules": {
+      "type": "object",
+      "value": {
+        "gene_tags": [
+          "Mutation"
+        ],
+        "triggers": {
+          "growth_chance_weight": 1,
+          "min_minerals": 45
+        },
+        "maintenance": {
+          "energy_per_second": 0.08,
+          "biomass_per_second": 0
+        },
+        "movement": {
+          "reroot_speed": 1,
+          "translocate": false,
+          "parts": [],
+          "drift": 0
+        },
+        "shed": {
+          "cooldown_s": 45,
+          "biomass_penalty_fraction": 0.05
+        },
+        "id": "symbiotic_nodules",
+        "name": "Symbiotic nodules",
+        "kind": "ability",
+        "effects": {
+          "photosynthesis_multiplier": 1.2,
+          "energy_upkeep_multiplier": 1.1
+        }
+      }
+    },
+    "mutation_violet_lamina": {
+      "type": "object",
+      "value": {
+        "gene_tags": [
+          "Mutation"
+        ],
+        "triggers": {
+          "growth_chance_weight": 1,
+          "min_light": 30
+        },
+        "maintenance": {
+          "energy_per_second": 0.03,
+          "biomass_per_second": 0
+        },
+        "movement": {
+          "reroot_speed": 1,
+          "translocate": false,
+          "parts": [],
+          "drift": 0
+        },
+        "shed": {
+          "cooldown_s": 45,
+          "biomass_penalty_fraction": 0.05
+        },
+        "id": "violet_lamina",
+        "name": "Violet lamina",
+        "kind": "cosmetic",
+        "effects": {}
+      }
+    },
+    "mutation_ashen_cuticle": {
+      "type": "object",
+      "value": {
+        "gene_tags": [
+          "Mutation"
+        ],
+        "triggers": {
+          "growth_chance_weight": 1,
+          "min_light": 20
+        },
+        "maintenance": {
+          "energy_per_second": 0.03,
+          "biomass_per_second": 0
+        },
+        "movement": {
+          "reroot_speed": 1,
+          "translocate": false,
+          "parts": [],
+          "drift": 0
+        },
+        "shed": {
+          "cooldown_s": 45,
+          "biomass_penalty_fraction": 0.05
+        },
+        "id": "ashen_cuticle",
+        "name": "Ashen cuticle",
+        "kind": "cosmetic",
+        "effects": {
+          "energy_upkeep_multiplier": 1.05
+        },
+        "starter": true
+      }
+    },
+    "mutation_copper_pigment": {
+      "type": "object",
+      "value": {
+        "gene_tags": [
+          "Mutation"
+        ],
+        "triggers": {
+          "growth_chance_weight": 1,
+          "min_light": 40
+        },
+        "maintenance": {
+          "energy_per_second": 0.04,
+          "biomass_per_second": 0
+        },
+        "movement": {
+          "reroot_speed": 1,
+          "translocate": false,
+          "parts": [],
+          "drift": 0
+        },
+        "shed": {
+          "cooldown_s": 45,
+          "biomass_penalty_fraction": 0.05
+        },
+        "id": "copper_pigment",
+        "name": "Copper pigment",
+        "kind": "cosmetic",
+        "effects": {
+          "photosynthesis_multiplier": 1.05
+        },
+        "starter": true
+      }
+    },
+    "mutation_thick_cortex": {
+      "type": "object",
+      "value": {
+        "gene_tags": [
+          "Mutation"
+        ],
+        "triggers": {
+          "growth_chance_weight": 1,
+          "min_light": 25
+        },
+        "maintenance": {
+          "energy_per_second": 0.09,
+          "biomass_per_second": 0.003
+        },
+        "movement": {
+          "reroot_speed": 1,
+          "translocate": false,
+          "parts": [],
+          "drift": 0
+        },
+        "shed": {
+          "cooldown_s": 45,
+          "biomass_penalty_fraction": 0.05
+        },
+        "id": "thick_cortex",
+        "name": "Thick cortex",
+        "kind": "structural",
+        "effects": {
+          "size_multiplier": 1.25,
+          "energy_upkeep_multiplier": 1.08
+        }
+      }
+    },
+    "mutation_deep_taproot": {
+      "type": "object",
+      "value": {
+        "gene_tags": [
+          "Mutation"
+        ],
+        "triggers": {
+          "growth_chance_weight": 1,
+          "min_moisture": 25
+        },
+        "maintenance": {
+          "energy_per_second": 0.08,
+          "biomass_per_second": 0.002
+        },
+        "movement": {
+          "reroot_speed": 1,
+          "translocate": false,
+          "parts": [],
+          "drift": 0
+        },
+        "shed": {
+          "cooldown_s": 45,
+          "biomass_penalty_fraction": 0.05
+        },
+        "id": "deep_taproot",
+        "name": "Deep taproot",
+        "kind": "structural",
+        "effects": {
+          "root_size_multiplier": 1.4
+        }
+      }
+    },
+    "mutation_rapid_extension": {
+      "type": "object",
+      "value": {
+        "gene_tags": [
+          "Mutation"
+        ],
+        "triggers": {
+          "growth_chance_weight": 1.3,
+          "min_light": 45
+        },
+        "maintenance": {
+          "energy_per_second": 0.14,
+          "biomass_per_second": 0
+        },
+        "movement": {
+          "reroot_speed": 1,
+          "translocate": false,
+          "parts": [],
+          "drift": 0
+        },
+        "shed": {
+          "cooldown_s": 45,
+          "biomass_penalty_fraction": 0.05
+        },
+        "id": "rapid_extension",
+        "name": "Rapid extension",
+        "kind": "stat",
+        "effects": {
+          "growth_speed_multiplier": 1.35,
+          "growth_cost_multiplier": 1.2
+        }
+      }
+    },
+    "mutation_deliberate_compact": {
+      "type": "object",
+      "value": {
+        "gene_tags": [
+          "Mutation"
+        ],
+        "triggers": {
+          "growth_chance_weight": 1,
+          "max_light": 70
+        },
+        "maintenance": {
+          "energy_per_second": 0.04,
+          "biomass_per_second": 0
+        },
+        "movement": {
+          "reroot_speed": 1,
+          "translocate": false,
+          "parts": [],
+          "drift": 0
+        },
+        "shed": {
+          "cooldown_s": 45,
+          "biomass_penalty_fraction": 0.05
+        },
+        "id": "deliberate_compact",
+        "name": "Deliberate compact",
+        "kind": "stat",
+        "effects": {
+          "growth_speed_multiplier": 0.85,
+          "growth_cost_multiplier": 0.9
+        }
+      }
+    },
+    "mutation_flowering_primordia": {
+      "type": "object",
+      "value": {
+        "gene_tags": [
+          "Mutation"
+        ],
+        "triggers": {
+          "growth_chance_weight": 1,
+          "min_light": 50
+        },
+        "maintenance": {
+          "energy_per_second": 0.07,
+          "biomass_per_second": 0
+        },
+        "movement": {
+          "reroot_speed": 1,
+          "translocate": false,
+          "parts": [],
+          "drift": 0
+        },
+        "shed": {
+          "cooldown_s": 45,
+          "biomass_penalty_fraction": 0.05
+        },
+        "id": "flowering_primordia",
+        "name": "Flowering primordia",
+        "kind": "ability",
+        "effects": {
+          "unlock_node_types": [
+            "flower",
+            "spore_sac"
+          ]
+        }
+      }
+    },
+    "mutation_secondary_canopy": {
+      "type": "object",
+      "value": {
+        "gene_tags": [
+          "Mutation"
+        ],
+        "triggers": {
+          "growth_chance_weight": 1,
+          "min_light": 40
+        },
+        "maintenance": {
+          "energy_per_second": 0.1,
+          "biomass_per_second": 0
+        },
+        "movement": {
+          "reroot_speed": 1,
+          "translocate": false,
+          "parts": [],
+          "drift": 0
+        },
+        "shed": {
+          "cooldown_s": 45,
+          "biomass_penalty_fraction": 0.05
+        },
+        "id": "secondary_canopy",
+        "name": "Secondary canopy",
+        "kind": "ability",
+        "effects": {
+          "unlock_node_types": [
+            "branch",
+            "vine"
+          ]
+        }
+      }
+    },
+    "mutation_motile_crown": {
+      "type": "object",
+      "value": {
+        "gene_tags": [
+          "Mutation"
+        ],
+        "triggers": {
+          "growth_chance_weight": 1,
+          "min_moisture": 50
+        },
+        "maintenance": {
+          "energy_per_second": 0.15,
+          "biomass_per_second": 0
+        },
+        "movement": {
+          "reroot_speed": 1.6,
+          "translocate": true,
+          "parts": [],
+          "drift": 0.1
+        },
+        "shed": {
+          "cooldown_s": 45,
+          "biomass_penalty_fraction": 0.05
+        },
+        "id": "motile_crown",
+        "name": "Motile crown",
+        "kind": "ability",
+        "effects": {
+          "reroot_speed_multiplier": 1.6
+        }
+      }
+    },
+    "mutation_nocturnal_habit": {
+      "type": "object",
+      "value": {
+        "gene_tags": [
+          "Mutation"
+        ],
+        "triggers": {
+          "growth_chance_weight": 0.8,
+          "max_light": 35
+        },
+        "maintenance": {
+          "energy_per_second": 0.06,
+          "biomass_per_second": 0
+        },
+        "movement": {
+          "reroot_speed": 1,
+          "translocate": false,
+          "parts": [],
+          "drift": 0
+        },
+        "shed": {
+          "cooldown_s": 45,
+          "biomass_penalty_fraction": 0.05
+        },
+        "id": "nocturnal_habit",
+        "name": "Nocturnal habit",
+        "kind": "ability",
+        "effects": {
+          "photosynthesis_multiplier": 1.15,
+          "energy_upkeep_multiplier": 0.9
+        }
+      }
+    },
+    "mutation_ample_reserves": {
+      "type": "object",
+      "value": {
+        "gene_tags": [
+          "Mutation"
+        ],
+        "triggers": {
+          "growth_chance_weight": 1,
+          "min_moisture": 35
+        },
+        "maintenance": {
+          "energy_per_second": 0.06,
+          "biomass_per_second": 0
+        },
+        "movement": {
+          "reroot_speed": 1,
+          "translocate": false,
+          "parts": [],
+          "drift": 0
+        },
+        "shed": {
+          "cooldown_s": 45,
+          "biomass_penalty_fraction": 0.05
+        },
+        "name": "Ample reserves",
+        "kind": "stat",
+        "effects": {
+          "water_capacity_multiplier": 1.25,
+          "mineral_capacity_multiplier": 1.25
+        },
+        "id": "ample_reserves"
+      }
+    },
+    "mutation_brine_tolerance": {
+      "type": "object",
+      "value": {
+        "gene_tags": [
+          "Mutation"
+        ],
+        "triggers": {
+          "growth_chance_weight": 1,
+          "min_moisture": 50
+        },
+        "maintenance": {
+          "energy_per_second": 0.07,
+          "biomass_per_second": 0
+        },
+        "movement": {
+          "reroot_speed": 1,
+          "translocate": false,
+          "parts": [],
+          "drift": 0
+        },
+        "shed": {
+          "cooldown_s": 45,
+          "biomass_penalty_fraction": 0.05
+        },
+        "name": "Brine tolerance",
+        "kind": "structural",
+        "effects": {
+          "water_capacity_multiplier": 1.5
+        },
+        "id": "brine_tolerance"
+      }
+    },
+    "mutation_mineral_hoard": {
+      "type": "object",
+      "value": {
+        "gene_tags": [
+          "Mutation"
+        ],
+        "triggers": {
+          "growth_chance_weight": 1,
+          "min_minerals": 55
+        },
+        "maintenance": {
+          "energy_per_second": 0.07,
+          "biomass_per_second": 0
+        },
+        "movement": {
+          "reroot_speed": 1,
+          "translocate": false,
+          "parts": [],
+          "drift": 0
+        },
+        "shed": {
+          "cooldown_s": 45,
+          "biomass_penalty_fraction": 0.05
+        },
+        "name": "Mineral hoard",
+        "kind": "structural",
+        "effects": {
+          "mineral_capacity_multiplier": 1.5
+        },
+        "id": "mineral_hoard"
+      }
+    },
+    "mutation_many_petaled": {
+      "type": "object",
+      "value": {
+        "gene_tags": [
+          "Mutation"
+        ],
+        "triggers": {
+          "growth_chance_weight": 1,
+          "min_light": 45
+        },
+        "maintenance": {
+          "energy_per_second": 0.05,
+          "biomass_per_second": 0
+        },
+        "movement": {
+          "reroot_speed": 1,
+          "translocate": false,
+          "parts": [],
+          "drift": 0
+        },
+        "shed": {
+          "cooldown_s": 45,
+          "biomass_penalty_fraction": 0.05
+        },
+        "name": "Many-petaled",
+        "kind": "cosmetic",
+        "effects": {
+          "petal_count": 10
+        },
+        "id": "many_petaled"
+      }
+    },
+    "mutation_double_bloom": {
+      "type": "object",
+      "value": {
+        "gene_tags": [
+          "Mutation"
+        ],
+        "triggers": {
+          "growth_chance_weight": 1,
+          "min_light": 60
+        },
+        "maintenance": {
+          "energy_per_second": 0.07,
+          "biomass_per_second": 0
+        },
+        "movement": {
+          "reroot_speed": 1,
+          "translocate": false,
+          "parts": [],
+          "drift": 0
+        },
+        "shed": {
+          "cooldown_s": 45,
+          "biomass_penalty_fraction": 0.05
+        },
+        "name": "Double bloom",
+        "kind": "cosmetic",
+        "effects": {
+          "petal_count": 14,
+          "leaf_scale_multiplier": 0.95
+        },
+        "id": "double_bloom"
+      }
+    },
+    "mutation_broad_leaf": {
+      "type": "object",
+      "value": {
+        "gene_tags": [
+          "Mutation"
+        ],
+        "triggers": {
+          "growth_chance_weight": 1,
+          "max_light": 55
+        },
+        "maintenance": {
+          "energy_per_second": 0.05,
+          "biomass_per_second": 0
+        },
+        "movement": {
+          "reroot_speed": 1,
+          "translocate": false,
+          "parts": [],
+          "drift": 0
+        },
+        "shed": {
+          "cooldown_s": 45,
+          "biomass_penalty_fraction": 0.05
+        },
+        "name": "Broad leaf",
+        "kind": "cosmetic",
+        "effects": {
+          "leaf_scale_multiplier": 1.35
+        },
+        "id": "broad_leaf"
+      }
+    },
+    "mutation_narrow_leaf": {
+      "type": "object",
+      "value": {
+        "gene_tags": [
+          "Mutation"
+        ],
+        "triggers": {
+          "growth_chance_weight": 1,
+          "min_light": 40
+        },
+        "maintenance": {
+          "energy_per_second": 0.04,
+          "biomass_per_second": 0
+        },
+        "movement": {
+          "reroot_speed": 1,
+          "translocate": false,
+          "parts": [],
+          "drift": 0
+        },
+        "shed": {
+          "cooldown_s": 45,
+          "biomass_penalty_fraction": 0.05
+        },
+        "name": "Narrow leaf",
+        "kind": "cosmetic",
+        "effects": {
+          "leaf_scale_multiplier": 0.7,
+          "growth_cost_multiplier": 0.95
+        },
+        "id": "narrow_leaf"
+      }
+    },
+    "mutation_plump_seed": {
+      "type": "object",
+      "value": {
+        "gene_tags": [
+          "Mutation"
+        ],
+        "triggers": {
+          "growth_chance_weight": 1
+        },
+        "maintenance": {
+          "energy_per_second": 0.03,
+          "biomass_per_second": 0
+        },
+        "movement": {
+          "reroot_speed": 1,
+          "translocate": false,
+          "parts": [],
+          "drift": 0
+        },
+        "shed": {
+          "cooldown_s": 45,
+          "biomass_penalty_fraction": 0.05
+        },
+        "name": "Plump seed",
+        "kind": "cosmetic",
+        "effects": {
+          "seed_scale_multiplier": 1.4
+        },
+        "id": "plump_seed"
+      }
+    },
+    "mutation_tiny_seed": {
+      "type": "object",
+      "value": {
+        "gene_tags": [
+          "Mutation"
+        ],
+        "triggers": {
+          "growth_chance_weight": 1
+        },
+        "maintenance": {
+          "energy_per_second": 0.02,
+          "biomass_per_second": 0
+        },
+        "movement": {
+          "reroot_speed": 1,
+          "translocate": false,
+          "parts": [],
+          "drift": 0
+        },
+        "shed": {
+          "cooldown_s": 45,
+          "biomass_penalty_fraction": 0.05
+        },
+        "name": "Tiny seed",
+        "kind": "cosmetic",
+        "effects": {
+          "seed_scale_multiplier": 0.7
+        },
+        "id": "tiny_seed"
+      }
+    },
+    "mutation_upkeep_node_scale": {
+      "type": "number",
+      "value": 0.05,
+      "range": [
+        0,
+        1
+      ],
+      "notes": "Extra upkeep fraction per node the mutation affects (kind-aware: root mutations bill roots)."
+    },
+    "mutation_upkeep_biomass_scale": {
+      "type": "number",
+      "value": 0.01,
+      "range": [
+        0,
+        0.2
+      ],
+      "notes": "Extra upkeep fraction per unit of affected node biomass."
+    },
+    "mutation_upkeep_max_multiplier": {
+      "type": "number",
+      "value": 3,
+      "range": [
+        1,
+        10
+      ],
+      "notes": "Ceiling on the node/biomass upkeep multiplier."
+    },
+    "upkeep_biomass_floor": {
+      "type": "number",
+      "value": 8,
+      "range": [
+        0,
+        100
+      ],
+      "notes": "Biomass level below which unpaid mutation upkeep stops taking tissue. Mutation upkeep never sheds a mutation and never kills the plant: an unpaid bill holds the plant at this floor until it earns again. Dropping a mutation is always the player's decision."
+    },
+    "oversize_decay": {
+      "type": "object",
+      "value": {
+        "wilt_per_s": 0.02,
+        "leak_per_s": 0.05
+      },
+      "notes": "Over-form decay. A size mutation is real tissue, so shedding one leaves the plant heavier than its remaining form can carry. excess tissue is lost at wilt_per_s of itself per second (0.02 halves it in ~35 s), each part thinning as its own mass falls, so the body shrinks back gradually instead of snapping to its old size. Stored water, minerals and energy above the new capacity leak at leak_per_s of the excess per second for the same reason."
+    },
+    "level_up": {
+      "type": "object",
+      "value": {
+        "max_level": 3,
+        "cards_per_offer": 3,
+        "upkeep_per_level": 0.15,
+        "card_steps": {
+          "photosynthesis_multiplier": 1.12,
+          "energy_upkeep_multiplier": 0.92,
+          "growth_cost_multiplier": 0.95,
+          "reroot_speed_multiplier": 1.08,
+          "growth_speed_multiplier": 1.1,
+          "size_multiplier": 1.15,
+          "root_size_multiplier": 1.15,
+          "leaf_scale_multiplier": 1.08,
+          "seed_scale_multiplier": 1.08,
+          "water_capacity_multiplier": 1.15,
+          "mineral_capacity_multiplier": 1.15
+        },
+        "card_labels": {
+          "photosynthesis_multiplier": "Denser chlorophyll",
+          "energy_upkeep_multiplier": "Leaner metabolism",
+          "growth_cost_multiplier": "Thriftier building",
+          "reroot_speed_multiplier": "Quicker crawl",
+          "growth_speed_multiplier": "Faster extension",
+          "size_multiplier": "Larger form",
+          "root_size_multiplier": "Deeper roots",
+          "leaf_scale_multiplier": "Broader lamina",
+          "seed_scale_multiplier": "Fatter seed",
+          "water_capacity_multiplier": "Wider water store",
+          "mineral_capacity_multiplier": "Wider mineral store"
+        },
+        "base_energy_cost": 20,
+        "energy_cost_per_level": 40,
+        "energy_cost_per_biomass": 4,
+        "energy_cost_per_biomass_per_level": 2,
+        "base_biomass_fraction": 0.08,
+        "biomass_fraction_per_level": 0.06,
+        "min_biomass_cost": 1
+      },
+      "notes": "Mutation levels. A held mutation starts at level 1; the player spends stored resources to raise it and picks one card per level from that mutation's own effect pool. Energy cost = base_energy_cost + energy_cost_per_level per level already gained, plus energy_cost_per_biomass per unit of the plant's biomass (and energy_cost_per_biomass_per_level more per level), so a seedling can afford its first level and a mature plant pays in proportion to what it holds. Biomass cost is base_biomass_fraction of total biomass (+ biomass_fraction_per_level per level), never less than min_biomass_cost. Cards are the effect keys above: a card multiplies its effect by its step, so levelling a size mutation offers size cards and a cosmetic one offers the metabolism cards it can actually use. upkeep_per_level raises the running bill with every level. Only which cards are dealt is random; the level itself is the player's choice."
+    },
+    "mutation_hollow_culm": {
+      "type": "object",
+      "value": {
+        "id": "hollow_culm",
+        "name": "Hollow culm",
+        "kind": "expressive",
+        "gene_tags": [
+          "Stem",
+          "Structure"
+        ],
+        "triggers": {
+          "growth_chance_weight": 1.1,
+          "min_moisture": 40
+        },
+        "maintenance": {
+          "energy_per_second": 0.06,
+          "biomass_per_second": 0
+        },
+        "effects": {
+          "unlock_node_types": [
+            "culm"
+          ],
+          "water_capacity_multiplier": 1.5,
+          "growth_speed_multiplier": 1.3
+        },
+        "movement": {
+          "reroot_speed": 1,
+          "translocate": false,
+          "parts": [],
+          "drift": 0
+        },
+        "shed": {
+          "cooldown_s": 60,
+          "biomass_penalty_fraction": 0.06
+        }
+      }
+    },
+    "mutation_segmented_culm": {
+      "type": "object",
+      "value": {
+        "id": "segmented_culm",
+        "name": "Segmented culm",
+        "kind": "structural",
+        "gene_tags": [
+          "Stem",
+          "Structure"
+        ],
+        "triggers": {
+          "growth_chance_weight": 0.9,
+          "min_light": 35
+        },
+        "maintenance": {
+          "energy_per_second": 0.05,
+          "biomass_per_second": 0
+        },
+        "effects": {
+          "unlock_node_types": [
+            "culm"
+          ],
+          "growth_speed_multiplier": 1.15,
+          "size_multiplier": 1.05
+        },
+        "movement": {
+          "reroot_speed": 1,
+          "translocate": false,
+          "parts": [],
+          "drift": 0
+        },
+        "shed": {
+          "cooldown_s": 60,
+          "biomass_penalty_fraction": 0.06
+        }
+      }
+    },
+    "mutation_hollow_trunk": {
+      "type": "object",
+      "value": {
+        "id": "hollow_trunk",
+        "name": "Hollow trunk",
+        "kind": "structural",
+        "gene_tags": [
+          "Bark",
+          "Storage"
+        ],
+        "triggers": {
+          "growth_chance_weight": 0.9,
+          "min_moisture": 35
+        },
+        "maintenance": {
+          "energy_per_second": 0.05,
+          "biomass_per_second": 0
+        },
+        "effects": {
+          "unlock_node_types": [
+            "trunk"
+          ],
+          "water_capacity_multiplier": 1.4
+        },
+        "movement": {
+          "reroot_speed": 1,
+          "translocate": false,
+          "parts": [],
+          "drift": 0
+        },
+        "shed": {
+          "cooldown_s": 60,
+          "biomass_penalty_fraction": 0.06
+        }
+      }
+    },
+    "mutation_woody_trunk": {
+      "type": "object",
+      "value": {
+        "id": "woody_trunk",
+        "name": "Woody trunk",
+        "kind": "structural",
+        "gene_tags": [
+          "Bark",
+          "Structure"
+        ],
+        "triggers": {
+          "growth_chance_weight": 1,
+          "min_light": 25
+        },
+        "maintenance": {
+          "energy_per_second": 0.05,
+          "biomass_per_second": 0
+        },
+        "effects": {
+          "unlock_node_types": [
+            "trunk"
+          ],
+          "root_size_multiplier": 1.1
+        },
+        "movement": {
+          "reroot_speed": 1,
+          "translocate": false,
+          "parts": [],
+          "drift": 0
+        },
+        "shed": {
+          "cooldown_s": 60,
+          "biomass_penalty_fraction": 0.06
+        }
+      }
+    },
+    "mutation_clonal_rhizome": {
+      "type": "object",
+      "value": {
+        "id": "clonal_rhizome",
+        "name": "Clonal rhizome",
+        "kind": "ability",
+        "gene_tags": [
+          "Root",
+          "Structure"
+        ],
+        "triggers": {
+          "growth_chance_weight": 0.8,
+          "min_moisture": 45
+        },
+        "maintenance": {
+          "energy_per_second": 0.06,
+          "biomass_per_second": 0
+        },
+        "effects": {
+          "unlock_node_types": [
+            "rhizome",
+            "tuber"
+          ],
+          "water_capacity_multiplier": 1.15,
+          "growth_speed_multiplier": 1.05,
+          "stored_resource_sharing": 0.25
+        },
+        "movement": {
+          "reroot_speed": 1,
+          "translocate": false,
+          "parts": [],
+          "drift": 0
+        },
+        "shed": {
+          "cooldown_s": 60,
+          "biomass_penalty_fraction": 0.06
+        }
+      }
+    },
+    "mutation_clonal_network": {
+      "type": "object",
+      "value": {
+        "id": "clonal_network",
+        "name": "Clonal network",
+        "kind": "ability",
+        "gene_tags": [
+          "Root",
+          "Storage"
+        ],
+        "triggers": {
+          "growth_chance_weight": 0.7,
+          "min_moisture": 50,
+          "min_light": 20
+        },
+        "maintenance": {
+          "energy_per_second": 0.07,
+          "biomass_per_second": 0
+        },
+        "effects": {
+          "unlock_node_types": [
+            "rhizome",
+            "stolon"
+          ],
+          "mineral_capacity_multiplier": 1.2,
+          "energy_upkeep_multiplier": 0.95,
+          "stored_resource_sharing": 0.4
+        },
+        "movement": {
+          "reroot_speed": 1,
+          "translocate": false,
+          "parts": [],
+          "drift": 0
+        },
+        "shed": {
+          "cooldown_s": 60,
+          "biomass_penalty_fraction": 0.06
+        }
+      }
+    },
+    "mutation_floating_pads": {
+      "type": "object",
+      "value": {
+        "id": "floating_pads",
+        "name": "Floating pads",
+        "kind": "expressive",
+        "gene_tags": [
+          "Foliage",
+          "Water"
+        ],
+        "triggers": {
+          "growth_chance_weight": 0.9,
+          "min_moisture": 55
+        },
+        "maintenance": {
+          "energy_per_second": 0.05,
+          "biomass_per_second": 0
+        },
+        "effects": {
+          "unlock_node_types": [
+            "floating_leaf"
+          ],
+          "photosynthesis_multiplier": 1.25,
+          "water_capacity_multiplier": 1.1
+        },
+        "movement": {
+          "reroot_speed": 1,
+          "translocate": false,
+          "parts": [],
+          "drift": 0
+        },
+        "shed": {
+          "cooldown_s": 60,
+          "biomass_penalty_fraction": 0.06
+        }
+      }
+    },
+    "mutation_aerenchyma": {
+      "type": "object",
+      "value": {
+        "id": "aerenchyma",
+        "name": "Aerenchyma",
+        "kind": "structural",
+        "gene_tags": [
+          "Foliage",
+          "Water"
+        ],
+        "triggers": {
+          "growth_chance_weight": 0.7,
+          "min_moisture": 60
+        },
+        "maintenance": {
+          "energy_per_second": 0.04,
+          "biomass_per_second": 0
+        },
+        "effects": {
+          "unlock_node_types": [
+            "pneumatophore"
+          ],
+          "water_capacity_multiplier": 1.3,
+          "photosynthesis_multiplier": 1.05
+        },
+        "movement": {
+          "reroot_speed": 1,
+          "translocate": false,
+          "parts": [],
+          "drift": 0
+        },
+        "shed": {
+          "cooldown_s": 60,
+          "biomass_penalty_fraction": 0.06
+        }
+      }
+    },
+    "mutation_silica_cuticle": {
+      "type": "object",
+      "value": {
+        "id": "silica_cuticle",
+        "name": "Silica cuticle",
+        "kind": "structural",
+        "gene_tags": [
+          "Foliage",
+          "Defense"
+        ],
+        "triggers": {
+          "growth_chance_weight": 0.8,
+          "min_light": 45
+        },
+        "maintenance": {
+          "energy_per_second": 0.05,
+          "biomass_per_second": 0
+        },
+        "effects": {
+          "energy_upkeep_multiplier": 0.95,
+          "size_multiplier": 1.02
+        },
+        "movement": {
+          "reroot_speed": 1,
+          "translocate": false,
+          "parts": [],
+          "drift": 0
+        },
+        "shed": {
+          "cooldown_s": 60,
+          "biomass_penalty_fraction": 0.06
+        }
+      }
+    },
+    "max_size_multiplier": {
+      "type": "number",
+      "value": 2,
+      "range": [
+        1,
+        6
+      ],
+      "notes": "Ceiling on the product of every size multiplier. Level cards and size mutations multiply, and the product reached three times a normal internode: a branch longer than the trunk it left, drawn as a pole with nothing on it. A plant that outgrows its own proportions is a bug, not a mutation."
+    }
+  }
+}

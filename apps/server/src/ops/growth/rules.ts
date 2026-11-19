@@ -18,6 +18,7 @@ import {
   NODE_GROWTH_CONSTRAINTS,
   nodeRenderRadius,
   plantHealth,
+  plantNodeTag,
 } from '@plant-legacy/shared/growth';
 
 export interface GrowthCostQuote {
@@ -231,7 +232,12 @@ export function nodeName(
   type: string,
   taken: (id: string) => boolean,
 ): string {
-  const tag = plantId.replace(/^p_/, '').slice(0, 8);
+  // INV-GR-05: sixteen characters of the plant id, not eight. The name is a
+  // per-node suffix on this tag, so two plants whose tags collided produced the
+  // same node ids - and `findPlantByNodeId` returns the first match, which grew
+  // the wrong plant. Eight hex-ish characters collide for about one plant pair
+  // in 56,000 at 1,000 plants; sixteen makes that unobservable.
+  const tag = plantNodeTag(plantId);
   const base = parent
     ? `${tag}:${parent.id
         .slice(tag.length + 1)
@@ -325,6 +331,32 @@ export function germinationGateReason(
   }
   if (missing.length === 0) return 'Germination conditions not met';
   return `Cannot germinate yet: ${missing.join(', ')}`;
+}
+
+/**
+ * INV-GR-03: is this vector usable at all?
+ *
+ * The player aims the growth, so the direction is theirs to choose; this only
+ * separates a real vector from garbage (NaN/Infinity, or a zero length that
+ * 'normalize' would silently reinterpret). It deliberately says nothing about
+ * which way a part may go - the node type's sector does that.
+ */
+export function isUsableDirection(dir: { x: number; y: number; z: number }): boolean {
+  if (!Number.isFinite(dir.x) || !Number.isFinite(dir.y) || !Number.isFinite(dir.z)) return false;
+  return dir.x !== 0 || dir.y !== 0 || dir.z !== 0;
+}
+
+export function validateIntentDirection(dir: { x: number; y: number; z: number }): {
+  ok: boolean;
+  reason?: string;
+} {
+  if (!Number.isFinite(dir.x) || !Number.isFinite(dir.y) || !Number.isFinite(dir.z)) {
+    return { ok: false, reason: 'invalid_direction' };
+  }
+  if (dir.x === 0 && dir.y === 0 && dir.z === 0) {
+    return { ok: false, reason: 'invalid_direction' };
+  }
+  return { ok: true };
 }
 
 /**

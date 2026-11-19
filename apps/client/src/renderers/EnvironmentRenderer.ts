@@ -50,7 +50,9 @@ import { CAVITY_PALETTE, type CavityPalette } from './environment/cavity/profile
 import {
   applyCelestialLighting,
   type CelestialBodies,
+  gradeExposure,
   stepAmbientLighting,
+  sunWarmth,
   updateCelestialBodies,
 } from './environment/celestial.js';
 import {
@@ -95,6 +97,7 @@ import {
   DEFAULT_WATER_FIELD_TUNING,
 } from './environment/waterFieldTuning.js';
 import { createEnvironmentWeatherMachine } from './environment/weatherPresets.js';
+import { advanceWorldClock, applyServerClock, withTimeOfDay } from './environment/worldClock.ts';
 import { getTerrainParams } from './terrain/terrainState.js';
 
 export type { RootSightUniforms as EnvironmentUniforms } from './environment/rootSightUniforms.js';
@@ -131,6 +134,10 @@ export interface WeatherPayload {
   sunIntensity: number;
   /** `weather.<state>_light_multiplier` as the server applied it. */
   lightMultiplier?: number;
+  /** The world clock's dev freeze state, so every panel shows the server's value. */
+  timePaused?: boolean;
+  /** The world clock's dev speed multiplier. */
+  timeScale?: number;
   weatherState: string;
   conditionToken: string;
   stateTimeRemainingS: number;
@@ -253,6 +260,10 @@ export class EnvironmentRenderer {
 
   // Time of day and sun intensity (client-side interpolation)
   private timeOfDay = 0.3;
+  /** True once the server has told us the hour; the boot estimate then stops. */
+  private timeFromServer = false;
+  /** Warmth of the light this frame (0 high sun, 1 on the horizon). */
+  private sunWarmthNow = 0;
   private sunIntensity = 1.0;
   /** The weather's light multiplier, from the broadcast. */
   private lightMultiplier = 1;
@@ -739,12 +750,36 @@ export class EnvironmentRenderer {
     this.weatherMachine.triggerLightning();
   }
 
+  /**
+   * Start the clock at the world's hour before the first frame.
+   *
+   * The renderer used to open at its own default hour and wait for the first
+   * weather broadcast, so a player reloading at night saw a bright world for a
+   * beat before it snapped dark. A broadcast always wins: if one has already
+   * landed, this is a no-op.
+   */
+  public primeTimeOfDay(t: number): void {
+    if (this.timeFromServer) return;
+    this.timeOfDay = withTimeOfDay(
+      { timeOfDay: this.timeOfDay, paused: false, scale: this.timeScale },
+      t,
+    ).timeOfDay;
+  }
+
   /** Apply a server weather update. */
   public handleWeatherUpdate(payload: WeatherPayload): void {
-    // A held clock must not be dragged back to the server's time on every
-    // broadcast: the dev panel's Time field looked like it did nothing because
-    // the next weather update (about once a second) reverted it immediately.
-    if (!this.timeFrozen) this.timeOfDay = payload.timeOfDay;
+    this.timeFromServer = true;
+    // One clock policy (`environment/worldClock.ts`): the hour is taken as given,
+    // and the freeze and the speed are the server's, so every client and every
+    // dev panel agree. The old local freeze flag overrode the server's hour for
+    // the rest of the session, which is why the two drifted apart.
+    const clock = applyServerClock(
+      { timeOfDay: this.timeOfDay, paused: this.timeFrozen, scale: this.timeScale },
+      payload,
+    );
+    this.timeOfDay = clock.timeOfDay;
+    this.timeFrozen = clock.paused;
+    this.timeScale = clock.scale;
     this.sunIntensity = payload.sunIntensity;
     this.lightMultiplier = Number.isFinite(payload.lightMultiplier)
       ? Math.min(1, Math.max(0, payload.lightMultiplier as number))
@@ -806,10 +841,16 @@ export class EnvironmentRenderer {
     const lerpRate = Math.min(1.0, dt * 2.5);
     this.sampleUnderwaterView();
 
-    // Advance client timeOfDay (server is authority, client interpolates) unless
-    // a dev override is holding the clock.
-    if (!this.timeFrozen && Date.now() >= devOverrideUntil) {
-      this.timeOfDay = (this.timeOfDay + (dt * this.timeScale) / this.dayLengthSeconds) % 1.0;
+    // The hour is the server's; the client only fills the gap between broadcasts
+    // (2 Hz) so the sun moves instead of stepping, and it stops when the server
+    // says the clock is stopped. A dev override still pins it for its duration.
+    if (Date.now() >= devOverrideUntil) {
+      const advanced = advanceWorldClock(
+        { timeOfDay: this.timeOfDay, paused: this.timeFrozen, scale: this.timeScale },
+        dt,
+        this.dayLengthSeconds,
+      );
+      this.timeOfDay = advanced.timeOfDay;
     }
 
     // `update` takes milliseconds (its fades and its strike decay are timed in
@@ -1016,9 +1057,19 @@ export class EnvironmentRenderer {
     //    the water: light scatters out within a couple of metres, so the far
     //    bank disappears while the surface overhead stays visible.
     const underwater = this.underwater;
-    const fogTargets = underwater
-      ? underwaterFog({ near: weatherTargets.fogNear, far: weatherTargets.fogFar }, underwater)
-      : { near: weatherTargets.fogNear, far: weatherTargets.fogFar };
+    // Mist: with the sun on the horizon the air thickens, so dawn and dusk carry
+    // a haze the same clear sky does not. One config ratio scales both distances.
+    const mist = this.sunWarmthNow;
+    const mistScale = THREE.MathUtils.lerp(
+      1,
+      THREE.MathUtils.clamp(this.config.fogHorizonMistScale, 0.1, 1),
+      mist,
+    );
+    const baseFog = {
+      near: weatherTargets.fogNear * mistScale,
+      far: weatherTargets.fogFar * mistScale,
+    };
+    const fogTargets = underwater ? underwaterFog(baseFog, underwater) : baseFog;
     if (this.scene.fog instanceof THREE.Fog) {
       this.scene.fog.near = THREE.MathUtils.lerp(this.scene.fog.near, fogTargets.near, lerpRate);
       this.scene.fog.far = THREE.MathUtils.lerp(this.scene.fog.far, fogTargets.far, lerpRate);
@@ -1117,6 +1168,7 @@ export class EnvironmentRenderer {
    */
   private updateSunPosition(dtSeconds = 0, snap = false): void {
     const elevation = updateCelestialBodies(this.bodies, this.timeOfDay);
+    this.sunWarmthNow = sunWarmth(elevation.sunElev);
     // Underwater the beam is eaten by the water: the sun's own 1.4 turns a
     // shallow dive into a white-out, so the same state that shortens the fog
     // also dims what the water lets through to the ambient level.
@@ -1266,6 +1318,16 @@ export class EnvironmentRenderer {
     });
   }
 
+  /** How warm the light is this frame: 0 high sun, 1 on the horizon. */
+  public getSunWarmth(): number {
+    return this.sunWarmthNow;
+  }
+
+  /** Renderer exposure for the current hour, from `render.json`. */
+  public getExposureGrade(): number {
+    return gradeExposure(this.bodies.sunDir.y, this.config);
+  }
+
   /** Current normalized time of day [0, 1). */
   public getTimeOfDay(): number {
     return this.timeOfDay;
@@ -1276,8 +1338,10 @@ export class EnvironmentRenderer {
    * also freezes the clock; the Freeze Time toggle releases it again.
    */
   public setTimeOfDay(t: number): void {
-    this.timeOfDay = t % 1.0;
-    if (this.timeOfDay < 0) this.timeOfDay += 1.0;
+    this.timeOfDay = withTimeOfDay(
+      { timeOfDay: this.timeOfDay, paused: this.timeFrozen, scale: this.timeScale },
+      t,
+    ).timeOfDay;
     this.timeFrozen = true;
   }
 

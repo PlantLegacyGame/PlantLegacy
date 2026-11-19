@@ -426,7 +426,7 @@ others settled first.
 | F5 `docs/tasks/T02.md` quotes 50 / 0.3 | Already fixed: the table at `docs/tasks/T02.md:51,53` reads 7.0 and 0.45. The inventory row is stale and must move to **Fixed**. |
 | A6 transition direction | Already fixed: `RootSightStateMachine` derives direction from target + progress and has a test. The inventory row is stale. |
 | Build warning "Top-level await is not available in the configured target environment" | Checked the artefact, not the warning: `dist/assets/index-legacy-*.js` is a `System.register` module with no top-level `await` (the bootstrap was wrapped). No confirmed defect. Re-check only if `main.ts` gains another top-level `await`. |
-| A1 "no strata to reveal" | A capability limit, not a bug. It needs real volume terrain (T56/C10), which the integration plan schedules later. |
+| A1 "no strata to reveal" | A capability limit, not a bug. It needs real volume terrain (T56/C10), which `DESIGN.md` Part 11 specifies and which nothing has started. |
 | 5.45 MB main chunk | A size warning, not a defect. Code-splitting is a performance task (AL-01 family), not a fix. |
 
 ## 7. To-do ledger

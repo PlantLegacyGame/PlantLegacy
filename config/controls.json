@@ -18,35 +18,262 @@
         "context": "string"
       },
       "value": [
-        { "action": "camera_orbit", "keys": [], "mouse": "left_drag", "mode": "hold", "context": "" },
-        { "action": "camera_pan", "keys": [], "mouse": "right_drag", "mode": "hold", "context": "" },
-        { "action": "camera_pan_forward", "keys": ["KeyW", "ArrowUp"], "mouse": "", "mode": "hold", "context": "" },
-        { "action": "camera_pan_backward", "keys": ["KeyS", "ArrowDown"], "mouse": "", "mode": "hold", "context": "" },
-        { "action": "camera_pan_left", "keys": ["KeyA", "ArrowLeft"], "mouse": "", "mode": "hold", "context": "" },
-        { "action": "camera_pan_right", "keys": ["KeyD", "ArrowRight"], "mouse": "", "mode": "hold", "context": "" },
-        { "action": "camera_zoom", "keys": [], "mouse": "wheel", "mode": "hold", "context": "" },
-        { "action": "camera_recenter", "keys": ["Space"], "mouse": "double_click_ground", "mode": "press", "context": "" },
-        { "action": "select_part", "keys": [], "mouse": "left_click", "mode": "press", "context": "" },
-        { "action": "grow_mode_toggle", "keys": ["KeyG"], "mouse": "", "mode": "toggle", "context": "" },
-        { "action": "root_sight_toggle", "keys": ["KeyR"], "mouse": "", "mode": "toggle", "context": "" },
-        { "action": "emote_wheel", "keys": ["KeyE"], "mouse": "", "mode": "press", "context": "" },
-        { "action": "inventory_overview_toggle", "keys": ["KeyI"], "mouse": "", "mode": "toggle", "context": "" },
-        { "action": "settings_toggle", "keys": ["KeyO"], "mouse": "", "mode": "toggle", "context": "" },
-        { "action": "inventory_slot_1", "keys": ["Digit1"], "mouse": "", "mode": "press", "context": "" },
-        { "action": "inventory_slot_2", "keys": ["Digit2"], "mouse": "", "mode": "press", "context": "" },
-        { "action": "inventory_slot_3", "keys": ["Digit3"], "mouse": "", "mode": "press", "context": "" },
-        { "action": "inventory_slot_4", "keys": ["Digit4"], "mouse": "", "mode": "press", "context": "" },
-        { "action": "inventory_slot_5", "keys": ["Digit5"], "mouse": "", "mode": "press", "context": "" },
-        { "action": "inventory_slot_6", "keys": ["Digit6"], "mouse": "", "mode": "press", "context": "" },
-        { "action": "inventory_slot_7", "keys": ["Digit7"], "mouse": "", "mode": "press", "context": "" },
-        { "action": "inventory_slot_8", "keys": ["Digit8"], "mouse": "", "mode": "press", "context": "" },
-        { "action": "inventory_slot_9", "keys": ["Digit9"], "mouse": "", "mode": "press", "context": "" },
-        { "action": "inventory_slot_10", "keys": ["Digit0"], "mouse": "", "mode": "press", "context": "" },
-        { "action": "grow_cancel", "keys": ["Escape"], "mouse": "right_click", "mode": "press", "context": "" },
-        { "action": "dev_panel_toggle", "keys": ["Backquote"], "mouse": "", "mode": "toggle", "context": "" },
-        { "action": "debug_toggle", "keys": ["ShiftLeft", "ShiftRight"], "mouse": "", "mode": "toggle", "context": "" },
-        { "action": "hint_card_toggle", "keys": ["KeyH"], "mouse": "", "mode": "toggle", "context": "" },
-        { "action": "plant_regenerate", "keys": ["KeyP"], "mouse": "", "mode": "press", "context": "dev" }
+        {
+          "action": "camera_orbit",
+          "keys": [],
+          "mouse": "left_drag",
+          "mode": "hold",
+          "context": ""
+        },
+        {
+          "action": "camera_pan",
+          "keys": [],
+          "mouse": "right_drag",
+          "mode": "hold",
+          "context": ""
+        },
+        {
+          "action": "camera_pan_forward",
+          "keys": [
+            "KeyW",
+            "ArrowUp"
+          ],
+          "mouse": "",
+          "mode": "hold",
+          "context": ""
+        },
+        {
+          "action": "camera_pan_backward",
+          "keys": [
+            "KeyS",
+            "ArrowDown"
+          ],
+          "mouse": "",
+          "mode": "hold",
+          "context": ""
+        },
+        {
+          "action": "camera_pan_left",
+          "keys": [
+            "KeyA",
+            "ArrowLeft"
+          ],
+          "mouse": "",
+          "mode": "hold",
+          "context": ""
+        },
+        {
+          "action": "camera_pan_right",
+          "keys": [
+            "KeyD",
+            "ArrowRight"
+          ],
+          "mouse": "",
+          "mode": "hold",
+          "context": ""
+        },
+        {
+          "action": "camera_zoom",
+          "keys": [],
+          "mouse": "wheel",
+          "mode": "hold",
+          "context": ""
+        },
+        {
+          "action": "camera_recenter",
+          "keys": [
+            "Space"
+          ],
+          "mouse": "double_click_ground",
+          "mode": "press",
+          "context": ""
+        },
+        {
+          "action": "select_part",
+          "keys": [],
+          "mouse": "left_click",
+          "mode": "press",
+          "context": ""
+        },
+        {
+          "action": "grow_mode_toggle",
+          "keys": [
+            "KeyG"
+          ],
+          "mouse": "",
+          "mode": "toggle",
+          "context": ""
+        },
+        {
+          "action": "root_sight_toggle",
+          "keys": [
+            "KeyR"
+          ],
+          "mouse": "",
+          "mode": "toggle",
+          "context": ""
+        },
+        {
+          "action": "emote_wheel",
+          "keys": [
+            "KeyE"
+          ],
+          "mouse": "",
+          "mode": "press",
+          "context": ""
+        },
+        {
+          "action": "inventory_overview_toggle",
+          "keys": [
+            "KeyI"
+          ],
+          "mouse": "",
+          "mode": "toggle",
+          "context": ""
+        },
+        {
+          "action": "settings_toggle",
+          "keys": [
+            "KeyO"
+          ],
+          "mouse": "",
+          "mode": "toggle",
+          "context": ""
+        },
+        {
+          "action": "inventory_slot_1",
+          "keys": [
+            "Digit1"
+          ],
+          "mouse": "",
+          "mode": "press",
+          "context": ""
+        },
+        {
+          "action": "inventory_slot_2",
+          "keys": [
+            "Digit2"
+          ],
+          "mouse": "",
+          "mode": "press",
+          "context": ""
+        },
+        {
+          "action": "inventory_slot_3",
+          "keys": [
+            "Digit3"
+          ],
+          "mouse": "",
+          "mode": "press",
+          "context": ""
+        },
+        {
+          "action": "inventory_slot_4",
+          "keys": [
+            "Digit4"
+          ],
+          "mouse": "",
+          "mode": "press",
+          "context": ""
+        },
+        {
+          "action": "inventory_slot_5",
+          "keys": [
+            "Digit5"
+          ],
+          "mouse": "",
+          "mode": "press",
+          "context": ""
+        },
+        {
+          "action": "inventory_slot_6",
+          "keys": [
+            "Digit6"
+          ],
+          "mouse": "",
+          "mode": "press",
+          "context": ""
+        },
+        {
+          "action": "inventory_slot_7",
+          "keys": [
+            "Digit7"
+          ],
+          "mouse": "",
+          "mode": "press",
+          "context": ""
+        },
+        {
+          "action": "inventory_slot_8",
+          "keys": [
+            "Digit8"
+          ],
+          "mouse": "",
+          "mode": "press",
+          "context": ""
+        },
+        {
+          "action": "inventory_slot_9",
+          "keys": [
+            "Digit9"
+          ],
+          "mouse": "",
+          "mode": "press",
+          "context": ""
+        },
+        {
+          "action": "inventory_slot_10",
+          "keys": [
+            "Digit0"
+          ],
+          "mouse": "",
+          "mode": "press",
+          "context": ""
+        },
+        {
+          "action": "grow_cancel",
+          "keys": [
+            "Escape"
+          ],
+          "mouse": "right_click",
+          "mode": "press",
+          "context": ""
+        },
+        {
+          "action": "dev_panel_toggle",
+          "keys": [
+            "Backquote"
+          ],
+          "mouse": "",
+          "mode": "toggle",
+          "context": ""
+        },
+        {
+          "action": "debug_toggle",
+          "keys": [],
+          "mouse": "",
+          "mode": "toggle",
+          "context": "dev",
+          "notes": "Unbound on purpose: a bare modifier cannot be a toggle. The overlay is switched from the dev panel (Debug tab)."
+        },
+        {
+          "action": "hint_card_toggle",
+          "keys": [
+            "KeyH"
+          ],
+          "mouse": "",
+          "mode": "toggle",
+          "context": ""
+        },
+        {
+          "action": "plant_regenerate",
+          "keys": [
+            "KeyP"
+          ],
+          "mouse": "",
+          "mode": "press",
+          "context": "dev"
+        }
       ]
     },
     "bindings_touch": {
@@ -57,42 +284,81 @@
         "context": "string"
       },
       "value": [
-        { "action": "camera_pan", "gesture": "one_finger_drag", "context": "" },
-        { "action": "camera_zoom", "gesture": "pinch", "context": "" },
-        { "action": "camera_orbit", "gesture": "two_finger_drag", "context": "" },
-        { "action": "camera_recenter", "gesture": "double_tap", "context": "" },
-        { "action": "select_part", "gesture": "tap", "context": "" },
-        { "action": "root_sight_toggle", "gesture": "edge_button", "context": "" }
+        {
+          "action": "camera_pan",
+          "gesture": "one_finger_drag",
+          "context": ""
+        },
+        {
+          "action": "camera_zoom",
+          "gesture": "pinch",
+          "context": ""
+        },
+        {
+          "action": "camera_orbit",
+          "gesture": "two_finger_drag",
+          "context": ""
+        },
+        {
+          "action": "camera_recenter",
+          "gesture": "double_tap",
+          "context": ""
+        },
+        {
+          "action": "select_part",
+          "gesture": "tap",
+          "context": ""
+        },
+        {
+          "action": "root_sight_toggle",
+          "gesture": "edge_button",
+          "context": ""
+        }
       ]
     },
     "touch_min_target_px": {
       "type": "number",
       "value": 44,
-      "range": [40, 64],
+      "range": [
+        40,
+        64
+      ],
       "notes": "Minimum touch target size in CSS pixels."
     },
     "hud_max_screen_fraction": {
       "type": "number",
       "value": 0.2,
-      "range": [0.1, 0.4],
+      "range": [
+        0.1,
+        0.4
+      ],
       "notes": "Maximum fraction of screen the HUD may cover."
     },
     "root_sight_mode": {
       "type": "enum",
-      "enum": ["toggle", "hold"],
+      "enum": [
+        "toggle",
+        "hold"
+      ],
       "value": "toggle",
       "notes": "Root Sight interaction mode."
     },
     "text_scale": {
       "type": "number",
-      "value": 1.0,
-      "range": [0.8, 1.5],
+      "value": 1,
+      "range": [
+        0.8,
+        1.5
+      ],
       "notes": "Global UI text scale (80-150%)."
     },
     "context_dock_fade_ms": {
       "type": "integer",
       "value": 150,
-      "range": [0, 500],
+      "range": [
+        0,
+        500
+      ],
       "notes": "Fade duration for context-dock actions appearing/disappearing."
     }
   }

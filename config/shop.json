@@ -1,0 +1,87 @@
+{
+  "_meta": {
+    "system": "shop",
+    "version": "0.1.0",
+    "schema": "extended-1",
+    "owner_task": "C05",
+    "status": "active",
+    "notes": "Main-menu and in-game shop. The catalogue is the six items the game already defines (config/items.json), so nothing is sold that the inventory cannot hold. Prices are stated in biomass, which the plant produces and the HUD already shows; the purchase itself is not open yet, and the panel says so instead of offering a Buy that does nothing."
+  },
+  "values": {
+    "shop_enabled": {
+      "type": "boolean",
+      "value": true,
+      "notes": "Show the Shop button on the title screen and in game. Off hides the entry points and refuses to open the panel."
+    },
+    "shop_title": {
+      "type": "string",
+      "value": "Shop",
+      "notes": "Panel heading. RULE_13: a noun, never a slogan."
+    },
+    "shop_currency_name": {
+      "type": "string",
+      "value": "biomass",
+      "notes": "What a price is paid in. Biomass is already produced, spent and shown, so a price in it is a number the player can read."
+    },
+    "shop_sections": {
+      "type": "array",
+      "value": [
+        {
+          "id": "growing",
+          "label": "Growing",
+          "items": [
+            {
+              "id": "starter_fertilizer",
+              "name": "Starter Fertilizer",
+              "description": "Feeds the plant and enriches the soil under its crown.",
+              "price": 30,
+              "icon": "◈"
+            },
+            {
+              "id": "starter_dung",
+              "name": "Starter Dung",
+              "description": "Water still in it. Feeds the plant and the soil under its root.",
+              "price": 20,
+              "icon": "●"
+            },
+            {
+              "id": "essence_growth",
+              "name": "Growth Essence",
+              "description": "Concentrated growth for the part the plant spends it on.",
+              "price": 45,
+              "icon": "◆"
+            }
+          ]
+        },
+        {
+          "id": "seeds",
+          "label": "Seeds",
+          "items": [
+            {
+              "id": "heirloom_seed_basic",
+              "name": "Basic Heirloom Seed",
+              "description": "A seed from a plant that was kept. Not usable yet.",
+              "price": 60,
+              "icon": "✿"
+            },
+            {
+              "id": "offspring_seed_basic",
+              "name": "Offspring Seed",
+              "description": "A seed from a plant that grew a seed of its own. Not usable yet.",
+              "price": 60,
+              "icon": "✿"
+            },
+            {
+              "id": "gene_booster_basic",
+              "name": "Basic Gene Booster",
+              "description": "A tuned gene compound for the booster system. Not usable yet.",
+              "price": 80,
+              "icon": "⚗"
+            }
+          ]
+        }
+      ],
+      "notes": "Sections in display order. Each entry is { id, label, items: [{ id, name, description, price, icon }] }. Item ids are the ids in config/items.json: a shop entry that names an item the inventory cannot hold is a promise the game cannot keep."
+    }
+  }
+}

@@ -49,6 +49,9 @@ export function loadGrowthConfig(configs: Map<string, ConfigFile>): GrowthConfig
       'node_radius_profiles',
     ),
     branchAttachFraction: optionalNumber(configs, 'growth', 'branch_attach_fraction'),
+    jointFlareRatio: optionalNumber(configs, 'growth', 'joint_flare_ratio'),
+    segmentTaperExponent: optionalNumber(configs, 'growth', 'segment_taper_exponent'),
+    socketInsetRatio: optionalNumber(configs, 'growth', 'socket_inset_ratio'),
   });
 
   // The four newer tissues are optional so a config that predates them (and the
@@ -111,6 +114,8 @@ export function loadGrowthConfig(configs: Map<string, ConfigFile>): GrowthConfig
     stemDamageWitherDelayS: optionalNumber(configs, 'growth', 'stem_damage_wither_delay_s') ?? 30,
     stemDamageWitherPerS: optionalNumber(configs, 'growth', 'stem_damage_wither_per_s') ?? 0.01,
     growthIntentCooldown: readNumber(configs, 'growth', 'growth_intent_cooldown'),
+    // Optional: a fixture that predates the ceiling simply has none.
+    maxChildLengthRatio: optionalNumber(configs, 'growth', 'max_child_length_ratio'),
     germinationMinMoisture: readNumber(configs, 'growth', 'germination_min_moisture'),
     germinationMinLight: readNumber(configs, 'growth', 'germination_min_light'),
     germinationFailureKillsSeed: readBoolean(configs, 'growth', 'germination_failure_kills_seed'),

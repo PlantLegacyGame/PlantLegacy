@@ -95,6 +95,8 @@ export interface HelloPayload {
   accessToken?: string;
   plantId?: string;
   reconnectToken?: string;
+  /** Display name from the menu; sanitized and length-capped before use. */
+  displayName?: string;
 }
 
 export interface SeasonUpdatePayload {

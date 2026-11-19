@@ -24,6 +24,8 @@ import {
   weatherStateMachineGetTimeOfDay,
   weatherStateMachineGetWeatherState,
   weatherStateMachineSetTimeOfDay,
+  weatherStateMachineSetTimePaused,
+  weatherStateMachineSetTimeScale,
   weatherStateMachineUpdate,
 } from './weatherStateMachine.ts';
 
@@ -69,6 +71,16 @@ export class WeatherSystem {
    */
   setTimeOfDay(timeOfDay: number): void {
     weatherStateMachineSetTimeOfDay(this.machine, timeOfDay);
+  }
+
+  /** Dev control: hold the world clock still, or release it. */
+  setTimePaused(paused: boolean): void {
+    weatherStateMachineSetTimePaused(this.machine, paused);
+  }
+
+  /** Dev control: how fast the world clock runs, as a multiplier on real time. */
+  setTimeScale(scale: number): void {
+    weatherStateMachineSetTimeScale(this.machine, scale);
   }
 
   getBroadcast() {

@@ -434,6 +434,7 @@ export function loadMutationsConfig(configs: Map<string, ConfigFile>): Mutations
     adaptivePressureEnabled: readBoolean(configs, 'mutations', 'adaptive_pressure_enabled'),
     decayHalfLifeTicks: readNumber(configs, 'mutations', 'decay_half_life_ticks'),
     maxPressureMultiplier: readNumber(configs, 'mutations', 'max_pressure_multiplier'),
+    maxSizeMultiplier: readNumber(configs, 'mutations', 'max_size_multiplier'),
     defaultShedCooldownS: readNumber(configs, 'mutations', 'shed_cooldown_s'),
     maintenanceScale: readNumber(configs, 'mutations', 'mutation_maintenance_scale'),
     upkeepNodeScale: readNumber(configs, 'mutations', 'mutation_upkeep_node_scale'),

@@ -526,9 +526,9 @@ Fuses modular mathematical primitives (tapered capsule segments for roots/stems/
 **Status:** config-only so far. `config/physics.json` carries `owner_task: C02c`,
 `status: active`, and real values (gravity, collider budgets, LOD distances), but
 there is **no task record**. The behaviour it sizes lives in
-`packages/shared/src/physics/plantColliderPlan.ts` and the client Rapier manager;
-AL-07 in `docs/PlantLegacy-Abyssal-Integration-Plan.md` formalises the record and
-extends the plan for hosts, water and fragments. Nothing new may be hardcoded
+`packages/shared/src/physics/plantColliderPlan.ts` and the client Rapier manager.
+A C02c task record does not exist yet; creating one and extending the plan for
+hosts, water and fragments is the remaining work. Nothing new may be hardcoded
 here (RULE_3).
 
 ### C03 · Environment Rendering — `config/render.json`

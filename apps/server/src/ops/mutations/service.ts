@@ -302,6 +302,15 @@ export function mutationEffects(plant: Plant, config: MutationsConfig): Resolved
     // Every level above the first is whatever card the player took to get there.
     for (const cardId of held.cards ?? []) applyCard(effects, cardId, config);
   }
+  // Size is a product of every mutation and every level card, and nothing capped
+  // it. Two size mutations at level three made a new internode twice the length of
+  // the trunk it left, which is not a bigger plant - it is a pole. The ceiling is
+  // one number in config so the ceiling and the tuning cannot disagree.
+  const maxSize = config.maxSizeMultiplier;
+  if (typeof maxSize === 'number' && Number.isFinite(maxSize) && maxSize > 0) {
+    effects.sizeMultiplier = Math.min(maxSize, Math.max(1, effects.sizeMultiplier));
+    effects.rootSizeMultiplier = Math.min(maxSize, Math.max(1, effects.rootSizeMultiplier));
+  }
   return effects;
 }
 

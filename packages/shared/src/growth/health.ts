@@ -19,6 +19,27 @@ export function tissueMassQuota(node: PlantNode, config: GrowthConfig): number {
   return cost * yieldFraction;
 }
 
+/**
+ * The mass a part's growth was quoted at.
+ *
+ * A part's target mass used to be re-quoted on every tick from the plant's
+ * *current* mutation size scale. Growth takes seconds, and a mutation can be
+ * acquired in those seconds (one rolls per growth), so a part could be re-priced
+ * while it was half built: it accrued mass at the new rate and finished heavier
+ * than the menu said it would, its drawn radius jumping with it. A quote is a
+ * fact about the growth, not about the plant's form this tick.
+ *
+ * Stamped once, on the first tick of growth, and never updated. A mutation the
+ * plant gains afterwards applies to the parts it grows next, which is what "this
+ * makes future growth bigger" has to mean.
+ */
+export function growthTargetMass(node: PlantNode, quoted: number): number {
+  if (node.growthTargetMass === undefined) {
+    node.growthTargetMass = Number.isFinite(quoted) && quoted > 0 ? quoted : 0;
+  }
+  return node.growthTargetMass;
+}
+
 export function nodeHealth(node: PlantNode, config: GrowthConfig): number {
   const quota = tissueMassQuota(node, config);
   if (!(quota > 0)) return 1;

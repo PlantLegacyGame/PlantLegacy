@@ -42,7 +42,13 @@ export default defineConfig({
     proxy: {
       '/health': serverOrigin,
       '/ready': serverOrigin,
+      // The title screen reads the world clock before any socket exists.
+      '/world': serverOrigin,
       '/config': serverOrigin,
+      // Dev-tool probes and actions (/dev/config). Without this the browser asked
+      // Vite, got a 404, and the dev panel refused to open in the very
+      // environment it is allowed in.
+      '/dev': serverOrigin,
       '/auth': serverOrigin,
       '/ws': {
         target: `ws://127.0.0.1:${SERVER_PORT}`,

@@ -21,6 +21,9 @@ function createPorts(overrides: Partial<WorldCommandPorts> = {}) {
       return true;
     },
     setTimeOfDay: (fraction) => calls.push(`time:${fraction}`),
+    setTimePaused: (paused) => calls.push(`paused:${paused}`),
+    setTimeScale: (scale) => calls.push(`scale:${scale}`),
+    broadcastWeather: () => calls.push('broadcast'),
     weatherBroadcast: () => ({ timeOfDay: 0.5, isDay: true, sunIntensity: 1.4 }),
     respond: (action, payload) => responses.push({ action, payload }),
     ...overrides,
@@ -91,13 +94,47 @@ describe('handleWorldCommand', () => {
   it('moves the world clock and answers with the state it settled on', () => {
     const { ports, calls, responses } = createPorts();
     handleWorldCommand(ports, { type: 'dev_set_time', time_of_day: 0.25 });
-    assert.deepEqual(calls, ['time:0.25']);
+    assert.deepEqual(calls, ['time:0.25', 'broadcast']);
     assert.deepEqual(responses[0]?.payload, {
       ok: true,
       timeOfDay: 0.5,
       isDay: true,
       sunIntensity: 1.4,
+      timePaused: false,
+      timeScale: 1,
     });
+  });
+
+  it('freezes and speeds the clock on the server, then tells everyone', () => {
+    const { ports, calls, responses } = createPorts({
+      weatherBroadcast: () => ({
+        timeOfDay: 0.5,
+        isDay: true,
+        sunIntensity: 1.4,
+        timePaused: true,
+        timeScale: 30,
+      }),
+    });
+
+    handleWorldCommand(ports, { type: 'dev_set_time', paused: true });
+    handleWorldCommand(ports, { type: 'dev_set_time', scale: 30 });
+
+    assert.deepEqual(calls, ['paused:true', 'broadcast', 'scale:30', 'broadcast']);
+    assert.deepEqual(responses.at(-1)?.payload, {
+      ok: true,
+      timeOfDay: 0.5,
+      isDay: true,
+      sunIntensity: 1.4,
+      timePaused: true,
+      timeScale: 30,
+    });
+  });
+
+  it('treats a command that names no clock setting as bad input', () => {
+    const { ports, calls, responses } = createPorts();
+    handleWorldCommand(ports, { type: 'dev_set_time' });
+    assert.deepEqual(calls, []);
+    assert.deepEqual(responses[0]?.payload, { ok: false, reason: 'bad_time' });
   });
 
   it('refuses a time it cannot read rather than moving the clock to NaN', () => {

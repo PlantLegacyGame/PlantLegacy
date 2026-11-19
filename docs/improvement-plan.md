@@ -34,7 +34,7 @@ lands.
 | Plant saves never pass an event log, and `world_events` is never written | `main.ts:saveAllPlants`, shutdown path | `event_log`/`world_events` are dead features; `INV-PR-07` — **fixed in 1-C** |
 | **Not a gap:** plant loads are validated (`validatePlantGraph` in `PlantWorld.loadPlant`, with a tested shared validator) and periodic saves already skip while one is in flight | `plantWorld.ts`, `main.ts` | The older audit entries for these are stale |
 | `config/network.json` duplicated the whole protocol block (`tick_rate_hz`, keyframe, bounds, quantization, rate limits) while the client read only two keys | `config/network.json` | A third, editable copy of the tick rate; **fixed in 1-A/1-D** (file reduced to the two client health thresholds) |
-| Consumption triggers return config booleans as world state | `resourceWorld.checkConsumptionTriggers` | `tileMineralTrigger` is a threshold test, dung/fertilizer are constants; `INV-RS-12` |
+| Consumption triggers return config booleans as world state | `resourceWorld.checkConsumptionTriggers` | `tileMineralTrigger` is a threshold test, dung/fertilizer are constants; `INV-RS-12` — **deleted in 2026-11-16**: the function had no call sites |
 | HTTP requests from disallowed origins are still processed; only CORS headers differ from WS close | `main.ts` request path | Cross-origin requests reach handlers; `INV-AU-12` |
 | Access tokens are checked for signature/expiry only, not against a live account/session | `accounts/service.verifyAccessToken` | A deleted/locked account keeps a valid token until expiry; `INV-AU-03` |
 | Client has no payload validation; every message is `as`-cast, and `MESSAGE_TYPE` is duplicated | `apps/client/src/main.ts` | Malformed/older server can crash or corrupt client state; `INV-NET-08/13` — **fixed**: one shared `MESSAGE_TYPE`, and `validateMessage` runs before the dispatch switch |
@@ -233,11 +233,34 @@ Remaining, in order of value:
    flood triggers immersion. Either deepen water bodies (basin/dam model) or add a
    wade/swim camera that lowers the eye below the surface.
 2. **Caustics and god rays** along the sun through the surface onto the soil, and
-   particle motes in the beam (plan §5.4 rendering list) — the two remaining
-   items from Abyssal Garden's underwater look.
+   particle motes in the beam — the two remaining items from Abyssal Garden's
+   underwater look (`abyssal-garden-source-analysis.md` §6.2 and §6.6: both reuse
+   the water texture and the existing shadow map instead of adding a pass).
 3. **Shoreline foam** at the waterline where the sheet meets a bank; the damp-soil
    stain is currently the only shore cue.
 4. Re-check seams and puddle/river overlap at the new quality tiers.
+
+### 3-D Renderer cost and image quality `[ ]`
+
+Three findings from reading the shipped client on 2026-11-16. The reasoning, the
+options and the ranking are in
+[`abyssal-garden-source-analysis.md`](./abyssal-garden-source-analysis.md) Part II;
+this entry is the work item, not a second copy of the analysis.
+
+1. **Draw calls scale with organs, not plants.** `MeshPlantRenderer` adds one
+   `THREE.Mesh` per stem node and one per leaf, and only tube geometry is cached,
+   so every growth rebuild reconstructs a `BufferGeometry` per leaf. First step is
+   the cache; the structural step is per-organ-family merging or instancing.
+   The cache is small enough to pull forward out of this wave: it changes no
+   pixels and removes a per-growth allocation storm.
+2. **No HDR, no tone mapping, no bloom.** `new THREE.WebGLRenderer(...)` is
+   created without `toneMapping`, there is no composer, and the vignette/grain is
+   a DOM overlay. Emissive mutation channels (`config/mutation_visuals.json`) are
+   computed and then clipped.
+3. **Shadows are one map on a timer.** `shadowMap.autoUpdate = false` with a
+   125/250 ms refresh, no cascade, no caster budget and no contact shadow under a
+   near plant. Day/night makes AG's bake-once map inapplicable; the transferable
+   half is a revision key so only dirty regions rebuild.
 
 ## Wave 4 — Security and social
 

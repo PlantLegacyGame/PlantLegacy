@@ -16,6 +16,7 @@ import {
   getSeedBodyHeightRatio,
   NODE_GROWTH_CONSTRAINTS,
   type NodeType,
+  nodeBelongsToPlant,
   nodeRenderRadius,
   resolveAttachFraction,
   resolveDrawnRadius,
@@ -47,6 +48,7 @@ import {
   loadReportsConfig,
   loadResourceTileConfig,
   loadRootSightConfig,
+  loadShopConfig,
   loadTerrainConfig,
   loadUIConfig,
   type PhysicsConfig,
@@ -54,9 +56,10 @@ import {
   type ResourceRates,
   type ResourceTileConfig,
   type RootSightConfig,
+  type ShopConfig,
   type SizeClassConfig,
 } from './config/clientConfig.js';
-import { httpOrigin, isDevMode, wsOrigin } from './config/endpoints.js';
+import { httpOrigin, isDevMode, probeDevTools, wsOrigin } from './config/endpoints.js';
 import { loadGrowthGeometryConfig } from './config/growthGeometryConfig.js';
 import { loadMutationVisualsConfig } from './config/mutationVisuals.js';
 import { loadPlantRendererConfig } from './config/plantRendererConfig.js';
@@ -68,6 +71,7 @@ import {
   type MessageContext,
   missingServerMessageTypes,
 } from './net/dispatch.js';
+import { fetchWorldTime } from './net/worldTime.js';
 import { playerWorldY, spawnPlayer, stepPlayerVertical } from './physics/playerPhysics.js';
 import { plantPhysicsSync, rapierWorld } from './physics/RapierPhysicsManager.js';
 import { clampToCavity } from './player/burrowClamp.ts';
@@ -77,6 +81,7 @@ import { isBelowSoil } from './player/underground.js';
 import { createGpuTimer, type GpuTimer } from './render/GpuTimer.js';
 import { createGrowthAimGizmo, type GrowthAimGizmo } from './render/growthAimGizmo.ts';
 import { interpolationDurationMs, NodeInterpolator } from './render/PlantInterpolation.js';
+import { clientNodeHealth, resolveDrawnProgress } from './render/plantProgress.js';
 import { createQualityController, type QualityController } from './render/QualityController.js';
 import { EnvironmentRenderer } from './renderers/EnvironmentRenderer.js';
 import {
@@ -129,6 +134,15 @@ import { configureTerrain, getTerrainParams } from './renderers/terrain/terrainS
 import { resolveDrawnNodePosition } from './renderers/webgpu/PlantMeshBuilder.js';
 import { isWebGPUSupported, WebGPUDevice } from './renderers/webgpu/WebGPUDevice.js';
 import { WebGPURenderer } from './renderers/webgpu/WebGPURenderer.js';
+import { type LocalProfile, loadProfile, saveProfile } from './state/localProfile.js';
+import { type ActionBarAPI, createActionBar } from './ui/ActionBar.js';
+import { type ContextHintAPI, createContextHint } from './ui/ContextHint.js';
+import {
+  createDeathScreen,
+  createSpectateChip,
+  type DeathScreen,
+  type SpectateChip,
+} from './ui/DeathScreen.js';
 import { createDebugOverlay, type DebugOverlay } from './ui/DebugOverlay.js';
 import { createDevPanel, type DevPanelAPI } from './ui/DevPanel.js';
 import {
@@ -137,6 +151,7 @@ import {
   entryFlowBack,
   entryFlowBeginRequest,
   entryFlowBoot,
+  entryFlowCancelConnect,
   entryFlowChoose,
   entryFlowConnectionFailed,
   entryFlowContinueAsGuest,
@@ -146,7 +161,6 @@ import {
   entryFlowSignedOut,
   entryFlowWorldReady,
 } from './ui/EntryFlowStateMachine.js';
-import { EntryScreen, type EntryScreenCallbacks } from './ui/EntryScreen.js';
 import {
   createGrowthSelectionStateMachine,
   type GrowthSelectionViewData,
@@ -161,11 +175,14 @@ import {
   growthSelectionStateMachineSelectOption,
   growthSelectionStateMachineStartDrawing,
 } from './ui/GrowthSelectionStateMachine.js';
+import { MainMenu, type MainMenuAccount, type MainMenuCallbacks } from './ui/MainMenu.js';
 import {
   createMutationPanel,
   type MutationPanelAPI,
   type MutationStateView,
 } from './ui/MutationPanel.js';
+import { createPauseMenu, type PauseMenuAPI } from './ui/PauseMenu.js';
+import { createPlantHoverTip, type PlantHoverTip, plantHoverText } from './ui/PlantHoverTip.js';
 import {
   createPlantStatusHud,
   formatClock,
@@ -173,6 +190,7 @@ import {
   type PlantStatusHudAPI,
   type RerootDirection,
   structureFraction,
+  weatherLabel,
 } from './ui/PlantStatusHud.js';
 import {
   createPlayerPanels,
@@ -180,10 +198,20 @@ import {
   type PlayerPanelsAPI,
 } from './ui/PlayerPanels.js';
 import type { PlantStatsSummary } from './ui/plantStats.js';
+import {
+  clockChip,
+  DEFAULT_VITAL_THRESHOLDS,
+  type VitalThresholds,
+  vitalRow,
+  weatherChip,
+} from './ui/resourceVitals.js';
 import { waitForServer } from './ui/ServerUnreachableOverlay.js';
 import { createSettingsPanel, type SettingsPanelAPI } from './ui/SettingsPanel.js';
+import { createShopPanel, type ShopPanel } from './ui/ShopPanel.js';
 import { formatSeasonRemaining } from './ui/seasonLabel.js';
+import { touchHintLines } from './ui/touchCopy.js';
 import { createUIShell, type UIShell } from './ui/UIShell.js';
+import { setUiScale, uiScaleForPane } from './ui/uiScale.js';
 import './styles.css';
 
 // Server origins and the dev-mode gate live in `config/endpoints.ts`, so the
@@ -444,9 +472,6 @@ let lastResourceUpdateAt = 0;
 // costs one packet per 36 days rather than one per tick.
 let seasonNumber = 0;
 let seasonEndsAtMs = 0;
-let seasonTickerStarted = false;
-let resSeasonEl: HTMLSpanElement | null = null;
-let resSeasonLabelEl: HTMLSpanElement | null = null;
 
 // Per-node-type emergence delay (ms) for staggered growth animation.
 // Roots/radicles emerge first, then stems, then leaves/cotyledons.
@@ -507,6 +532,8 @@ interface ReconnectData {
   refreshToken?: string;
   /** Shown in the account chip; survives a reload with the session. */
   displayName?: string;
+  /** Account handle, shown as @username next to the display name. */
+  username?: string;
   plantId?: string;
   reconnectToken?: string;
   timestamp?: number;
@@ -684,9 +711,13 @@ function resetPlantMirror(): void {
  */
 function pruneNodesNotFromPlant(): void {
   if (!plantId) return;
-  const tag = `${plantId.replace(/^p_/, '').slice(0, 8)}:`;
+  // The tag length is the server's minting rule, not a number copied here. It was
+  // copied, at eight characters, and INV-GR-05 had already moved the server to
+  // sixteen: `startsWith` then failed for every node the server had made, so the
+  // first growth event pruned the entire mirror - the plant vanished, Root Sight's
+  // cavity emptied with it, and both returned when the next sync arrived.
   for (const id of [...plantNodes.keys()]) {
-    if (!id.startsWith(tag)) plantNodes.delete(id);
+    if (!nodeBelongsToPlant(id, plantId)) plantNodes.delete(id);
   }
   pruneStreamedNodeInterpolation();
 }
@@ -1182,7 +1213,12 @@ function beginGrowthAiming(nodeId: string, optionType: string, optionLabel: stri
   // Only a drag that starts on the part itself turns the arrow.
   applyGrowthAimAngles();
   showGrowthAimControls();
-  setDetail(`${optionLabel}: drag to turn the direction, then Grow.`);
+  contextHint?.show({
+    id: 'grow-aim',
+    text: `${optionLabel}: drag to turn the direction, then Grow.`,
+    touchText: `${optionLabel}: drag the arrow to turn it, then press Grow.`,
+    key: 'Enter',
+  });
   return true;
 }
 
@@ -1276,7 +1312,7 @@ function showGrowthAimControls(): void {
   setGrowthGrowEnabled(true);
 }
 
-// Growth debug readout (F2). Covers every growth-side value that decides how a
+// Growth debug readout (dev panel, Debug tab). Covers every growth-side value that decides how a
 // new part appears: graph position, radius, the model/visual mapping, the aim
 // frame, and how the aim relates to the design's growth bias for that part.
 let growthDebugEl: HTMLDivElement | null = null;
@@ -1653,7 +1689,11 @@ const otherGrowingNodes = new Map<
   { plantId: string; startTime: number; duration: number }
 >();
 let lastGrowthUpdateTime = 0;
-const GROWTH_UPDATE_INTERVAL_MS = 100; // Update plant renderer every 100ms when growing
+// The mesh pass bakes emergent positions into its vertices, so it has to be fed
+// at a cadence the eye reads as motion. 100 ms was ten frames a second: growth
+// visibly stopped and then jumped forward. The SDF pass is repacked every frame
+// below, so only the mesh needs an interval at all.
+const GROWTH_UPDATE_INTERVAL_MS = 33;
 
 // Selection highlight for the growth target (handled by WebGPU renderer).
 
@@ -1723,6 +1763,7 @@ let webgpuDevice: WebGPUDevice | null = null;
 let webgpuCanvas: HTMLCanvasElement | null = null;
 let useWebGPU = false;
 let renderConfig: RenderConfig | null = null;
+let shopConfig: ShopConfig = { enabled: true, title: 'Shop', currencyName: '', sections: [] };
 
 /**
  * Server nodes are laid out on the flat simulation grid. On a planet that grid
@@ -1874,7 +1915,18 @@ function plantFrameDistance(): number {
   const halfHorizontal = Math.atan(Math.tan(halfVertical) * aspect);
   const halfAngle = Math.max(0.05, Math.min(halfVertical, halfHorizontal));
   const fitting = radius / Math.tan(halfAngle);
-  return Math.min(furthest, Math.max(min * 1.5, fitting * 1.6));
+  const fit = fitting * 1.6;
+  // A seed is ten centimetres across, so the geometric fit puts the eye at arm's
+  // length: the frame is soil, the plant is a smudge at the top edge, and the
+  // moment anything grows the new part leaves the picture. The start distance is
+  // where a new plant is meant to be seen from, so it is the floor until the
+  // plant is big enough to fill that view on its own merit.
+  // Half the start distance, not all of it: a seed at 6 m is a speck, at arm's
+  // length it is a screen of soil. Half shows the plant, its pit and the horizon
+  // in one frame, which is what a part has to grow inside to be watchable.
+  const youngFloor = Math.max(min * 1.5, start * 0.5);
+  const floor = fit < youngFloor ? youngFloor : min * 1.5;
+  return Math.min(furthest, Math.max(floor, fit));
 }
 
 // ADR-027: frame the independent camera close to the plant. The plant model
@@ -1890,7 +1942,15 @@ function frameCameraOnPlant(x: number, y: number, z: number): void {
   // seedling, so looking down on it at 40°+ read as a bird's-eye view of a dot;
   // a normal side view shows the whole plant and is what players expect.
   // Elevation is ~15° above the target, azimuth slightly forward and right.
-  tempDirection.set(0.3, 0.27, 0.92).normalize();
+  //
+  // Except for a young plant, where the fit puts the eye under a metre from the
+  // soil: at 15° that eye sat 0.24 m off the ground, the terrain clamp held it
+  // there, and the frame was soil. A sprout is framed from
+  // `camera_young_elevation` (~30°) so it reads against the ground, not in it.
+  const young = distance <= (renderConfig?.cameraYoungMaxDistance ?? 4);
+  tempDirection
+    .set(0.3, young ? (renderConfig?.cameraYoungElevation ?? 0.55) : 0.27, 0.92)
+    .normalize();
   const destination = tempTarget.clone().addScaledVector(tempDirection, distance);
   // Recentring uses the same eased travel as a node focus: a Space press that
   // teleported the view was as disorienting as a node double-click was.
@@ -1991,6 +2051,20 @@ function recenterCamera(): void {
   frameCameraOnPlant(centre.x, centre.y, centre.z);
 }
 
+/**
+ * True once the player has driven the camera themselves. The automatic framing
+ * below must never fight them, and a first-spawn refit is only allowed while
+ * this is false.
+ */
+let cameraUserMoved = false;
+/**
+ * The welcome framing runs before the plant's nodes exist, so it can only use
+ * the configured start distance (6 m). At 6 m a seedling is four pixels wide in
+ * front of a hillside - the first thing a new player saw was dirt. The framing
+ * is redone once, when the first own node arrives and the fit can measure it.
+ */
+let refitFramingOnFirstNodes = false;
+
 // Any deliberate camera input cancels a pending automatic framing, so a
 // double-click focus can never keep dragging the view around afterwards.
 function cancelCameraAutoMove(): void {
@@ -2001,6 +2075,9 @@ function cancelCameraAutoMove(): void {
 // Screen-space pick radius for double-clicking a plant node, in CSS pixels.
 const NODE_DOUBLE_CLICK_PICK_PX = 24;
 const nodePickVector = new THREE.Vector3();
+// Scratch for the hover probe, so a pointer move does not allocate a ray.
+const hoverPick = new THREE.Vector2();
+const hoverRay = new THREE.Raycaster();
 
 /**
  * The orbit floor while Root Sight holds a cavity, in metres.
@@ -2516,7 +2593,11 @@ function noteUndergroundGrowth(type: string | undefined, layer?: string | undefi
   });
   if (!decision.open) return;
   setRootSightEnabled(true, plantId ?? undefined);
-  setDetail('Root Sight: opened - a buried part is growing (R to close)');
+  contextHint?.show({
+    id: 'root-sight-open',
+    text: 'Root sight opened: a buried part is growing.',
+    key: 'R',
+  });
 }
 
 // T02: Root Sight toggle and transition.
@@ -2549,9 +2630,26 @@ function setRootSightEnabled(enabled: boolean, plantId?: string): void {
   }
 
   const isEnabled = rootSightStateMachineIsEnabled(rootSightMachine);
+  syncRootSightAction();
   setDetail(
     isEnabled ? `Root Sight: ${describeRootSightStatus()}` : 'Root Sight: OFF - Surface view',
   );
+}
+
+/**
+ * Tell the action bar which way the cavity is.
+ *
+ * The pill is a finger player's only door into Root Sight, so it has to read as on
+ * while the ground is open. Written where the mode is changed as well as from the
+ * frame loop, because a tab that is not being drawn stops running frames and the
+ * pill would then describe a mode the player had already left.
+ */
+function syncRootSightAction(): void {
+  const machine = rootSightMachine;
+  const open = machine ? rootSightStateMachineIsEnabled(machine) : false;
+  if (open === rootSightActionShown) return;
+  rootSightActionShown = open;
+  actionBar?.setActive('rootsight', open);
 }
 
 /**
@@ -2569,6 +2667,7 @@ function toggleRootSight(): void {
   const machine = rootSightMachine;
   if (!machine) return;
   rootSightStateMachineToggle(machine);
+  syncRootSightAction();
   const state = rootSightStateMachineGetState(machine);
   const opening = state === 'underground' || state === 'transitioning_to_underground';
   controls.maxPolarAngle = opening
@@ -2589,11 +2688,23 @@ function toggleRootSight(): void {
 }
 
 // T00A: Hint card toggle
+/** Last accepted H press, so one physical press cannot toggle twice. */
+let lastHintToggleAt = Number.NEGATIVE_INFINITY;
+
 function toggleHintCard(): void {
-  if (!hintCardElement) return;
-  const isVisible = hintCardElement.style.opacity === '1';
-  hintCardElement.style.opacity = isVisible ? '0' : '1';
-  setDetail(isVisible ? 'Hint card hidden (H to show)' : 'Hint card shown (H to hide)');
+  // One hint surface now: H asks for the key list and turns hints back on if they
+  // were muted. The old card was a permanent overlay that did nothing contextual.
+  //
+  // The guard is not decoration. A key press can reach this more than once (the
+  // keyboard producer and the action it feeds both count as edges), and two
+  // toggles in the same press close the card and open it again: H looked like it
+  // could show the card but never put it away.
+  const now = performance.now();
+  if (now - lastHintToggleAt < 220) return;
+  lastHintToggleAt = now;
+  contextHint?.setEnabled(true);
+  showHintList(true);
+  hintCardElement?.classList.remove('is-visible');
 }
 
 function updateRootSight(deltaTime: number): void {
@@ -2617,6 +2728,10 @@ function updateRootSight(deltaTime: number): void {
 
   const { eased, targetPosition } = rootSightStateMachineUpdate(rootSightMachine, deltaTime);
   rootSightTarget.copy(targetPosition);
+
+  // The pill follows the cavity through its whole transition, including an opening
+  // that a buried part started on its own. Written on change only: this is a frame.
+  syncRootSightAction();
 
   // Where the eye actually is, relative to the soil under it. This one answer
   // decides three things: whether the plant pass may hide roots behind the
@@ -2987,6 +3102,327 @@ function updateRootSight(deltaTime: number): void {
   );
 }
 
+// ---- In-world chrome: action bar, contextual hints, pause menu, mode badge ----
+//
+// Everything a player can do used to be a key they had to already know. The bar
+// names the verbs, the pause menu gives Escape somewhere to land, and the mode
+// badge makes Grow mode visible without a debug readout.
+let actionBar: ActionBarAPI | null = null;
+/** Last Root Sight state the bar was told about; a frame only writes on change. */
+let rootSightActionShown = false;
+let contextHint: ContextHintAPI | null = null;
+/** The PC-only tip that names a plan part and what a click on it does. */
+let plantHoverTip: PlantHoverTip | null = null;
+/** The in-world death card, and the chip that leaves spectating. */
+let deathScreen: DeathScreen | null = null;
+let spectateChip: SpectateChip | null = null;
+/** True while the player stays in the world with no plant after a death. */
+let spectating = false;
+/** What the title card is told when the player finally leaves: one owner. */
+let lostReason: string | null = null;
+let lostStats: { cause: string; stats: PlantStatsSummary } | null = null;
+let pauseMenu: PauseMenuAPI | null = null;
+let growModeBadge: HTMLDivElement | null = null;
+
+const GROW_MODE_CSS = `
+  /* Grow mode has to look different from moving around: a tinted edge, a crosshair
+     and a badge, not one line of text in a readout nobody reads. */
+  #grow-mode-tint {
+    position: fixed;
+    inset: 0;
+    z-index: 140;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 200ms ease;
+    box-shadow:
+      inset 0 0 120px rgba(157, 198, 94, 0.24),
+      inset 0 0 0 2px rgba(200, 255, 128, 0.3);
+  }
+  body.is-grow-mode #grow-mode-tint { opacity: 1; }
+  body.is-grow-mode #app { cursor: crosshair; }
+  /* The mode badge is a row inside the action bar, so it cannot collide with it
+     however the bar wraps. */
+  #grow-mode-badge {
+    order: -1;
+    align-self: stretch;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    margin-bottom: 2px;
+    padding: 3px 10px;
+    border-radius: 999px;
+    border: 1px solid var(--leaf-500);
+    background: rgba(20, 28, 14, 0.92);
+    color: var(--leaf-200);
+    font-size: var(--hud-font-xs);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    pointer-events: none;
+    white-space: nowrap;
+  }
+  #grow-mode-badge.is-visible { display: flex; }
+  #grow-mode-badge i {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--leaf-300);
+    box-shadow: 0 0 8px var(--leaf-300);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    #grow-mode-tint { transition: none; }
+  }
+`;
+
+function installGrowModeChrome(): void {
+  if (document.getElementById('grow-mode-tint')) return;
+  const style = document.createElement('style');
+  style.id = 'pl-grow-mode-style';
+  style.textContent = GROW_MODE_CSS;
+  document.head.appendChild(style);
+
+  const tint = document.createElement('div');
+  tint.id = 'grow-mode-tint';
+  tint.setAttribute('aria-hidden', 'true');
+  document.body.appendChild(tint);
+
+  growModeBadge = document.createElement('div');
+  growModeBadge.id = 'grow-mode-badge';
+  growModeBadge.setAttribute('role', 'status');
+  const dot = document.createElement('i');
+  dot.setAttribute('aria-hidden', 'true');
+  const label = document.createElement('span');
+  label.textContent = 'Grow mode';
+  growModeBadge.append(dot, label);
+  document.body.appendChild(growModeBadge);
+}
+
+/** Grow mode's whole look hangs off one body class and one badge. */
+function setGrowModeChrome(enabled: boolean): void {
+  document.body.classList.toggle('is-grow-mode', enabled);
+  growModeBadge?.classList.toggle('is-visible', enabled);
+  actionBar?.setActive('grow', enabled);
+}
+
+/** A player-facing message: a toast, and the tick card when an operator has it open. */
+function notify(text: string, kind: 'info' | 'state' | 'error' = 'info', durationMs = 2600): void {
+  if (detailVisible) setDetail(text);
+  uiShell?.toast({ message: text, kind, durationMs });
+}
+
+function currentHudMount(): HTMLElement {
+  return uiShell?.getLayer('hud') ?? document.body;
+}
+
+function createWorldChrome(): void {
+  if (actionBar) return;
+  installGrowModeChrome();
+  const mount = currentHudMount();
+  actionBar = createActionBar({
+    mount,
+    actions: [
+      { id: 'grow', label: 'Grow', key: 'G' },
+      // Root Sight used to be the R key and nothing else, which left the whole
+      // underground half of the game unreachable on a phone. It sits next to Grow
+      // because both are modes rather than panels, and it is the same pill on both
+      // devices: a key badge where there is a keyboard, a thumb target where there
+      // is not.
+      { id: 'rootsight', label: 'Root sight', key: 'R' },
+      { id: 'inventory', label: 'Inventory', key: 'I' },
+      { id: 'chat', label: 'Chat', key: 'T' },
+      { id: 'emotes', label: 'Emotes', key: 'E' },
+      { id: 'hints', label: 'Hints', key: 'H' },
+      { id: 'pause', label: 'Menu', key: 'Esc' },
+    ],
+    onAction: (id: string) => handleActionBarAction(id),
+  });
+  actionBar.setVisible(false);
+  // A bar built mid-session inherits the mode it was built in.
+  if (rootSightMachine) {
+    rootSightActionShown = rootSightStateMachineIsEnabled(rootSightMachine);
+    actionBar.setActive('rootsight', rootSightActionShown);
+  }
+  if (growModeBadge) actionBar.element.insertBefore(growModeBadge, actionBar.element.firstChild);
+  // The bar publishes its own height (--pl-bar-offset) and the context hint reads
+  // it, so a wrapped or badge-carrying bar never sits under a hint.
+
+  contextHint = createContextHint({
+    mount,
+    durationMs: resolvedUiConfig?.hintCardDurationMs ?? 5200,
+    reducedMotion: resolvedUiConfig?.reducedMotion ?? false,
+  });
+  // The hover tip lives in the HUD layer so a modal covers it like anything else.
+  plantHoverTip = createPlantHoverTip(uiShell?.getLayer('hud') ?? document.body);
+
+  pauseMenu = createPauseMenu({
+    mount: modalMount(uiShell),
+    onResume: () => {},
+    onSettings: () => settingsPanel?.setOpen(true),
+    onControls: () => openSettingsControls(),
+    onLeaveToTitle: () => leaveWorldToTitle(),
+  });
+}
+
+/**
+ * Bound once: Escape opens the pause menu.
+ *
+ * Nothing else is bound here on purpose. The operator readout used to be F3,
+ * which is the browser's find bar in Chrome and quick-find in Firefox: a player
+ * pressing it got a search box, and a player pressing the old Shift toggle got a
+ * metrics overlay every time they held shift. Both moved to the dev panel.
+ */
+function bindHudChromeKeys(): void {
+  if (hudChromeKeysBound) return;
+  hudChromeKeysBound = true;
+  window.addEventListener('keydown', handleEscapeKey);
+}
+
+/** The operator tick card, switched from the dev panel. */
+function setTickReadoutVisible(visible: boolean): void {
+  detailVisible = visible;
+  if (detailElement) detailElement.style.display = visible ? 'block' : 'none';
+}
+
+let hudChromeKeysBound = false;
+
+function handleActionBarAction(id: string): void {
+  switch (id) {
+    case 'grow':
+      worldActions.grow?.();
+      break;
+    case 'rootsight':
+      toggleRootSight();
+      break;
+    case 'inventory':
+      worldActions.inventory?.();
+      break;
+    case 'chat':
+      toggleChat();
+      break;
+    case 'emotes':
+      worldActions.emotes?.();
+      break;
+    case 'hints':
+      showHintList();
+      break;
+    case 'pause':
+      pauseMenu?.open();
+      break;
+    default:
+      break;
+  }
+}
+
+/** H, and the Hints button: the three core lines, on demand. */
+function showHintList(repeat = true): void {
+  // H is a toggle, not a show button: a hint the player can see is the thing they
+  // are pressing H to get rid of, and waiting for its timeout is not a control.
+  if (contextHint?.isVisible()) {
+    contextHint.hide();
+    return;
+  }
+  // The finger card is written from the same vocabulary the Controls tab lists,
+  // in `ui/touchCopy.ts`; only its closing line - the game's own description of
+  // what the player is - comes from the config that owns it for both layouts.
+  const lines = isFingerLayout()
+    ? touchHintLines(onboardingConfig.hint_card_lines)
+    : onboardingConfig.hint_card_lines;
+  const text = lines.join('\n');
+  contextHint?.show({ id: 'hint-list', text, repeat, durationMs: 7000 });
+}
+
+/** Settings, already on the Controls tab: the pause menu's "Controls" entry. */
+function openSettingsControls(): void {
+  settingsPanel?.setOpen(true);
+  settingsPanel?.showTab('controls');
+}
+
+/** Leave the world on purpose: no reconnect, no retry, back to the title. */
+function leaveWorldToTitle(): void {
+  suppressReconnect = true;
+  const socket = ws;
+  ws = null;
+  if (
+    socket &&
+    (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)
+  ) {
+    socket.close(1000, 'Left to title');
+  }
+  connecting = false;
+  worldActions.setGrow?.(false);
+  worldActions.closePanels?.();
+  toggleChat(false);
+  worldActions.hideEmotes?.();
+  hideGrowthSelection();
+  hideLossReport();
+  plantStatusHud?.setVisible(false);
+  if (resourceReadoutElement) resourceReadoutElement.style.display = 'none';
+  actionBar?.setVisible(false);
+  contextHint?.hide();
+  setStatus('Offline', 'down');
+  entryFlowSignedOut(entryFlow);
+  entryScreen.setAccount(menuAccount());
+  entryScreen.render(entryFlow);
+}
+
+/** Escape: close what is open, otherwise pause. The order matters. */
+function handleEscapeKey(event: KeyboardEvent): void {
+  // The key check comes first, and it is not decoration: this listener is bound
+  // to every keydown in the world, so without it *any* key press closed the chat,
+  // dismissed the emote wheel or opened the pause menu. It only stayed hidden
+  // while a different bug made the emote branch swallow every press.
+  if (event.key !== 'Escape') return;
+  if (entryFlow.step !== 'world') return;
+  if (pauseMenu?.isOpen) return; // the menu handles its own Escape
+  // The death card owns Escape while it is up: opening a pause menu behind a
+  // modal leaves the player pressing keys into a screen they cannot see.
+  if (deathScreen?.isOpen) return;
+  // Chat first, and before the typing guard: the chat input is focused whenever
+  // the chat is open, so a guard on "typing" ahead of this branch meant Escape
+  // could never close the chat at all. A report dialog owns its own Escape.
+  if (chatOpen && !reportDialogEl) {
+    event.preventDefault();
+    toggleChat(false);
+    return;
+  }
+  const typing =
+    document.activeElement instanceof HTMLInputElement ||
+    document.activeElement instanceof HTMLTextAreaElement;
+  if (typing) return;
+  if (growthSelectionStateMachineIsDrawing(growthSelectionMachine)) return;
+  if (growthSelectionStateMachineGetState(growthSelectionMachine) === 'option_selected') return;
+  if (worldActions.emoteOpen?.()) {
+    event.preventDefault();
+    worldActions.hideEmotes?.();
+    return;
+  }
+  if (playerPanels?.isOpen) {
+    event.preventDefault();
+    worldActions.closePanels?.();
+    return;
+  }
+  if (settingsPanel?.isOpen) return; // the panel closes itself on Escape
+  event.preventDefault();
+  pauseMenu?.open();
+}
+
+/**
+ * Handlers the world chrome needs but which only exist inside initC01's scope
+ * (they close over the socket, the panels and the emote wheel). initC01 fills
+ * this in once, and the chrome calls through it.
+ */
+const worldActions: {
+  grow?: () => void;
+  inventory?: () => void;
+  emotes?: () => void;
+  hideEmotes?: () => void;
+  emoteOpen?: () => boolean;
+  setGrow?: (enabled: boolean) => void;
+  closePanels?: () => void;
+} = {};
+
+/** True when this server offers dev tools to this environment and account. */
+let devToolsAllowed = false;
+
 async function initC01(): Promise<void> {
   // Nothing below can boot without the backend: configs come from `/config/*`
   // and the game arrives over `/ws`. Waiting here with an explanation beats the
@@ -3012,6 +3448,7 @@ async function initC01(): Promise<void> {
     loadedResourceTileConfig,
     loadedTerrainConfig,
     loadedPhysicsConfig,
+    loadedShopConfig,
   ] = await Promise.all([
     loadRenderConfig(httpOrigin),
     loadControlsConfig(httpOrigin),
@@ -3026,9 +3463,11 @@ async function initC01(): Promise<void> {
     loadResourceTileConfig(httpOrigin),
     loadTerrainConfig(httpOrigin),
     loadPhysicsConfig(httpOrigin),
+    loadShopConfig(httpOrigin),
   ]);
 
   renderConfig = loadedRenderConfig;
+  shopConfig = loadedShopConfig;
   growthSegmentConfig = loadedGrowthSegmentConfig;
   dayNightConfig = loadedDayNightConfig;
   tileConfig = loadedResourceTileConfig;
@@ -3060,6 +3499,12 @@ async function initC01(): Promise<void> {
 
   // Build UI shell
   uiShell = createUIShell(uiConfig);
+  // The title screen is built after initC01 returns, so the resolved UI config
+  // has to survive the function.
+  resolvedUiConfig = uiConfig;
+  // Type floors come from config, so they are applied as soon as it is known
+  // rather than only when the player nudges the text scale.
+  applyHudFontSizes();
   chatHudZIndex = uiConfig?.layers?.hud ?? 100;
 
   // Create HUD elements early so they're ready when WELCOME arrives
@@ -3099,25 +3544,60 @@ async function initC01(): Promise<void> {
 
   // Debug overlay
   if (renderConfig.debugOverlayEnabled) {
-    debugOverlay = createDebugOverlay(uiShell, renderConfig.debugOverlayKey);
+    debugOverlay = createDebugOverlay(uiShell);
   }
 
-  // Dev Panel (C01 - comprehensive dev controls) - D01: only with ?dev=1
+  // Dev Panel (C01 - comprehensive dev controls) - D01: only with ?dev=1, and
+  // only when this server actually offers dev tools. `?dev=1` is a request, not
+  // a grant: the server refuses DEV_ACTION by environment and account, so a
+  // player who types the parameter would otherwise get a panel whose every
+  // control came back `dev_access_denied`.
   const hudLayer = uiShell.getLayer('hud');
-  if (hudLayer && isDevMode) {
+  const devToolsReachable = await probeDevTools();
+  // The server is the authority: without it, no dev surface and no dev readout.
+  devToolsAllowed = isDevMode && devToolsReachable;
+  if (!devToolsAllowed && detailVisible) setTickReadoutVisible(false);
+  bindHudChromeKeys();
+  if (hudLayer && isDevMode && devToolsReachable) {
+    /** Dev actions go to the server; the panel is not the owner of world state. */
+    const sendDevAction = (action: Record<string, unknown>): void => {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: MESSAGE_TYPE.DEV_ACTION, payload: action }));
+      }
+    };
     devPanel = createDevPanel({
+      diagnostics: {
+        metricsOverlay: {
+          get: () => debugOverlay?.isVisible() ?? false,
+          set: (on) => debugOverlay?.setVisible(on),
+        },
+        growthReadout: {
+          get: () => growthDebugVisible,
+          set: (on) => {
+            if (on !== growthDebugVisible) toggleGrowthDebug();
+          },
+        },
+        tickReadout: {
+          get: () => detailVisible,
+          set: (on) => setTickReadoutVisible(on),
+        },
+      },
       environmentRenderer: {
+        // The clock is world state. A local set was reverted by the next weather
+        // broadcast and no other player ever saw it, so each of these also moves
+        // the server's clock, which re-broadcasts the hour to everyone.
         setTimeOfDay: (t: number) => {
-          if (environmentRenderer) {
-            environmentRenderer.setTimeOfDay(t);
-          }
+          environmentRenderer?.setTimeOfDay(t);
+          sendDevAction({ type: 'dev_set_time', time_of_day: t });
         },
         setTimeFrozen: (frozen: boolean) => {
           environmentRenderer?.setTimeFrozen(frozen);
+          sendDevAction({ type: 'dev_set_time', paused: frozen });
         },
         getTimeFrozen: () => environmentRenderer?.isTimeFrozen() ?? false,
         setTimeScale: (scale: number) => {
           environmentRenderer?.setTimeScale(scale);
+          sendDevAction({ type: 'dev_set_time', scale });
         },
         getTimeScale: () => environmentRenderer?.getTimeScale() ?? 1,
         setWeatherState: (stateName: string) => {
@@ -3254,6 +3734,7 @@ async function initC01(): Promise<void> {
       ui: {
         setTextScale: (scale: number) => {
           document.documentElement.style.setProperty('--text-scale', String(scale));
+          applyHudFontSizes();
         },
       },
       plantState: {
@@ -3292,7 +3773,10 @@ async function initC01(): Promise<void> {
   // Debug overlay toggle (Shift) - works regardless of dev mode
   inputBus.subscribe(
     (actionId, inputState: { pressed: boolean; toggled?: boolean; active?: boolean }) => {
-      if (actionId === 'debug_toggle' && (inputState.pressed || inputState.toggled)) {
+      void inputState;
+      // Toggle bindings fire on both edges; see the note on the gameplay
+      // toggles below. Guarding on `toggled` skipped every second press.
+      if (actionId === 'debug_toggle') {
         if (debugOverlay) debugOverlay.setVisible(!debugOverlay.isVisible());
       }
     },
@@ -3301,7 +3785,8 @@ async function initC01(): Promise<void> {
   // Dev panel toggle (backtick `) - only available in dev mode
   inputBus.subscribe(
     (actionId, inputState: { pressed: boolean; toggled?: boolean; active?: boolean }) => {
-      if (actionId === 'dev_panel_toggle' && (inputState.pressed || inputState.toggled)) {
+      void inputState;
+      if (actionId === 'dev_panel_toggle') {
         if (devPanel) devPanel.toggle();
       }
     },
@@ -3449,16 +3934,23 @@ async function initC01(): Promise<void> {
     setDetail('Physics unavailable');
   }
 
-  // Grow mode functions. Mode and keys are shown in the tick card, not a capsule.
+  // Grow mode is a mode, and it has to look like one: a tinted edge, a crosshair
+  // and a badge, plus the action bar's Grow button held down. It used to be a
+  // line inside the tick card, which was not on screen for players at all.
   function setGrowMode(enabled: boolean): void {
     isGrowMode = enabled;
     growModeHud = enabled;
+    setGrowModeChrome(enabled);
     if (enabled) {
-      setDetail('Grow Mode ON - Click a node to grow');
-      uiShell?.toast({ message: 'Grow Mode enabled', kind: 'info', durationMs: 2000 });
+      uiShell?.toast({ message: 'Grow mode enabled', kind: 'info', durationMs: 1800 });
+      contextHint?.show({
+        id: 'grow-pick-node',
+        text: 'Click a part of your plant to see what it can grow.',
+        touchText: 'Tap a part of your plant to see what it can grow.',
+        key: 'G',
+      });
     } else {
-      setDetail('Grow Mode OFF - Click a node to focus');
-      uiShell?.toast({ message: 'Grow Mode disabled', kind: 'info', durationMs: 2000 });
+      uiShell?.toast({ message: 'Grow mode disabled', kind: 'info', durationMs: 1800 });
       hideGrowthSelection();
     }
   }
@@ -3466,6 +3958,22 @@ async function initC01(): Promise<void> {
   function toggleGrowMode(): void {
     setGrowMode(!isGrowMode);
   }
+
+  worldActions.grow = toggleGrowMode;
+  worldActions.inventory = () => togglePlayerPanels();
+  worldActions.emotes = () => showEmoteWheel();
+  worldActions.hideEmotes = () => hideEmoteWheel();
+  // Whether the wheel is *shown*, not whether its element exists. The wheel is
+  // built at world setup, so the existence test was true from the first frame:
+  // Escape hit this branch on every press and returned, and the pause menu —
+  // now the only route to Settings — could not be opened by keyboard at all.
+  worldActions.emoteOpen = () => emoteWheelOpen;
+  worldActions.setGrow = (enabled: boolean) => setGrowMode(enabled);
+  worldActions.closePanels = () => {
+    if (!playerPanels?.isOpen) return;
+    playerPanels.setOpen(false);
+    restoreOverlappingHud();
+  };
 
   // C04: inspect (left) and inventory (right), opened together with I. The
   // world stays visible between them. Overlapping HUD panels are hidden while
@@ -3478,6 +3986,9 @@ async function initC01(): Promise<void> {
       return;
     }
     playerPanels.setOpen(true);
+    // Opened by the Inventory key or button, so the inventory face comes first on
+    // the phone sheet; Inspect is one tap away in the switch.
+    playerPanels.showInventory();
     hideOverlappingHud();
     requestInventory();
     refreshPlayerPanels();
@@ -3520,31 +4031,21 @@ async function initC01(): Promise<void> {
     onReducedMotion: (enabled) => {
       document.documentElement.dataset.reducedMotion = String(enabled);
     },
+    // While the panel is up the title's H shortcut must not fire behind it.
+    onOpenChange: (open) => entryScreen?.setOverlayOpen(open),
   });
-  document.body.appendChild(settingsPanel.element);
+  // Mount the panel in the modal layer, not on <body>. On the body it stacked at
+  // z-index 380 in the root context, which is *below* the modal layer (400) the
+  // title screen lives in: opening Settings from the title did nothing visible,
+  // and the panel was still open (and therefore visible) when the world loaded -
+  // the click "worked" one screen later. Inside the layer it paints above the
+  // title (380 against auto) and still above the HUD.
+  if (uiShell) uiShell.attachTo('modal', settingsPanel.element);
+  else document.body.appendChild(settingsPanel.element);
 
-  const settingsButton = document.createElement('button');
-  settingsButton.id = 'settings-button';
-  settingsButton.type = 'button';
-  settingsButton.textContent = 'Settings';
-  settingsButton.setAttribute('aria-label', 'Open settings');
-  Object.assign(settingsButton.style, {
-    position: 'fixed',
-    right: 'var(--hud-corner)',
-    bottom: 'calc(var(--hud-corner) + 54px)',
-    zIndex: '210',
-    padding: '5px 10px',
-    borderRadius: '9px',
-    border: '1px solid var(--hud-border)',
-    background: 'linear-gradient(160deg, rgba(54, 66, 34, 0.92), rgba(30, 36, 22, 0.94))',
-    color: 'var(--bone-200)',
-    font: 'inherit',
-    fontSize: 'var(--hud-font-sm)',
-    cursor: 'pointer',
-    pointerEvents: 'auto',
-  });
-  settingsButton.addEventListener('click', () => settingsPanel?.toggle());
-  document.body.appendChild(settingsButton);
+  // Action bar, contextual hints and the pause menu: the world's chrome, built
+  // once the HUD layers and the settings panel exist.
+  createWorldChrome();
 
   // Emote definitions
   const EMOTES = [
@@ -3559,6 +4060,7 @@ async function initC01(): Promise<void> {
   ] as const;
 
   let emoteWheelElement: HTMLDivElement | null = null;
+  let emoteWheelOpen = false;
 
   createEmoteWheel();
 
@@ -3690,24 +4192,21 @@ async function initC01(): Promise<void> {
     const wheel = emoteWheelElement;
     if (!wheel) return;
 
+    emoteWheelOpen = true;
     wheel.style.display = 'block';
     requestAnimationFrame(() => {
       wheel.style.opacity = '1';
       wheel.style.transform = 'translate(-50%, -50%) scale(1)';
     });
-
-    // Close on Escape
-    const handleEscape = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        hideEmoteWheel();
-        window.removeEventListener('keydown', handleEscape);
-      }
-    };
-    window.addEventListener('keydown', handleEscape);
+    // Escape is owned by handleEscapeKey, which closes the wheel first and only
+    // then offers the pause menu. A local Escape listener here had to be removed
+    // by itself to avoid leaking one per open, and closing by clicking outside
+    // never removed it.
   }
 
   function hideEmoteWheel(): void {
     if (!emoteWheelElement) return;
+    emoteWheelOpen = false;
     emoteWheelElement.style.opacity = '0';
     emoteWheelElement.style.transform = 'translate(-50%, -50%) scale(0.8)';
     setTimeout(() => {
@@ -3768,18 +4267,18 @@ async function initC01(): Promise<void> {
         void state;
         toggleRootSight();
       }
-      if (actionId === 'hint_card_toggle' && (state.pressed || state.toggled)) {
-        toggleHintCard();
-      }
-      if (actionId === 'grow_mode_toggle' && (state.pressed || state.toggled)) {
-        toggleGrowMode();
-      }
-      if (actionId === 'inventory_overview_toggle' && (state.pressed || state.toggled)) {
-        togglePlayerPanels();
-      }
-      if (actionId === 'settings_toggle' && (state.pressed || state.toggled)) {
-        settingsPanel?.toggle();
-      }
+      // No `pressed`/`toggled` guard on any of these. A toggle-mode binding
+      // emits on both edges: the on edge arrives as { pressed: false, toggled:
+      // true } and the off edge as { pressed: false, toggled: false }. Guarding
+      // on those flags therefore ran the handler on every other press only - H
+      // could open the hint card but never close it, I opened the panels and
+      // refused to shut them, G armed grow mode and would not disarm it, and O
+      // did the same with settings.
+      void state;
+      if (actionId === 'hint_card_toggle') toggleHintCard();
+      if (actionId === 'grow_mode_toggle') toggleGrowMode();
+      if (actionId === 'inventory_overview_toggle') togglePlayerPanels();
+      if (actionId === 'settings_toggle') settingsPanel?.toggle();
       if (actionId === 'emote_wheel' && state.pressed) {
         showEmoteWheel();
       }
@@ -3831,7 +4330,6 @@ async function initC01(): Promise<void> {
     }
 
     // Don't prevent default for browser shortcuts (Ctrl/Alt/Meta combos)
-    // Shift alone is allowed for debug_toggle
     if (e.ctrlKey || e.altKey || e.metaKey) {
       inputBus?.handleKeyDown(e.code, {
         shift: e.shiftKey,
@@ -3866,7 +4364,6 @@ async function initC01(): Promise<void> {
     }
 
     // Don't prevent default for browser shortcuts (Ctrl/Alt/Meta combos)
-    // Shift alone is allowed for debug_toggle
     if (e.ctrlKey || e.altKey || e.metaKey) {
       inputBus?.handleKeyUp(e.code, {
         shift: e.shiftKey,
@@ -4116,15 +4613,44 @@ async function initC01(): Promise<void> {
     }
 
     const intersects = raycaster.intersectObjects(nodeObjects);
-    if (intersects.length === 0) {
+    let picked: PickTarget | undefined =
+      intersects.length > 0 ? nodeMap.get(intersects[0].object) : undefined;
+
+    if (!picked) {
+      // A click that lands on the drawn plant but on no node sphere - the tube
+      // between two nodes, a leaf, a thorn - still names a node: the one that
+      // owns that surface. Without this, clicking the middle of a branch fell
+      // through the plant and closed the panel, which reads as a dead click.
+      const surfaces = plantRenderer?.pickSurfaces() ?? [];
+      if (surfaces.length > 0) {
+        const surfaceByObject = new Map<THREE.Object3D, (typeof surfaces)[number]>();
+        for (const surface of surfaces) surfaceByObject.set(surface.object, surface);
+        const surfaceHit = raycaster.intersectObjects(
+          surfaces.map((surface) => surface.object),
+          false,
+        )[0];
+        const owned = surfaceHit ? surfaceByObject.get(surfaceHit.object) : undefined;
+        if (owned) {
+          picked = {
+            plantId: owned.plantId ?? plantId ?? 'own',
+            nodeId: owned.nodeId,
+            isOwn: owned.isOwnPlant,
+            nodes: owned.isOwnPlant
+              ? plantNodes
+              : (otherPlayerPlants.get(owned.plantId ?? '') ?? plantNodes),
+          };
+        }
+      }
+    }
+
+    if (!picked) {
       // Clicked off-plant (but not on UI) -> close growth panel
       hideGrowthSelection();
       hidePlantInfoCard();
       return;
     }
 
-    const picked = nodeMap.get(intersects[0].object);
-    const clickedNodeId = picked?.nodeId;
+    const clickedNodeId = picked.nodeId;
 
     // Someone else's plant is inspected, never grown and never framed: a single
     // click is a look, and the growth panel belongs to your own plant. Its
@@ -4139,7 +4665,7 @@ async function initC01(): Promise<void> {
 
     const growthState = growthSelectionStateMachineGetState(growthSelectionMachine);
     const selectedNodeId = growthSelectionMachine.selectedNodeId;
-    const sameNode = clickedNodeId !== undefined && clickedNodeId === selectedNodeId;
+    const sameNode = clickedNodeId === selectedNodeId;
 
     if (growthState === 'option_selected' && sameNode) {
       const optionType =
@@ -4161,7 +4687,7 @@ async function initC01(): Promise<void> {
     if (growthState !== 'hidden' && growthState !== 'options_visible' && !sameNode) {
       hideGrowthSelection();
     }
-    if (clickedNodeId && isGrowMode) {
+    if (isGrowMode) {
       requestGrowthOptions(clickedNodeId);
     }
   });
@@ -4219,7 +4745,17 @@ async function initC01(): Promise<void> {
   });
 
   // Grabbing the camera cancels any automatic framing still in flight.
-  canvas.addEventListener('pointerdown', () => cancelCameraAutoMove());
+  canvas.addEventListener('pointerdown', () => {
+    cameraUserMoved = true;
+    cancelCameraAutoMove();
+  });
+  canvas.addEventListener(
+    'wheel',
+    () => {
+      cameraUserMoved = true;
+    },
+    { passive: true },
+  );
 
   // Dragging turns the aimed direction; it never sends growth and never drags a
   // line across the world (that read as a rope rather than a plant growing).
@@ -4237,6 +4773,67 @@ async function initC01(): Promise<void> {
   };
   canvas.addEventListener('mousemove', handleGrowthDrawMove);
   canvas.addEventListener('pointermove', handleGrowthDrawMove, { capture: true });
+
+  // Hover a part, read what a click there does. Mouse-only by capability, not by
+  // device: a finger has no hover, and the action bar already carries every verb
+  // for it. The tip is taught here because it is the only place the core verb is
+  // explained where it applies.
+  const hoverCapable = window.matchMedia?.('(hover: hover) and (pointer: fine)');
+  let hoverTipAt = 0;
+  let hoverNodeId: string | null = null;
+  let hoverText = null as ReturnType<typeof plantHoverText> | null;
+  const handlePlantHover = (e: PointerEvent): void => {
+    if (!hoverCapable?.matches) return;
+    if (performance.now() - hoverTipAt < 90) return;
+    hoverTipAt = performance.now();
+    if (growthAimDragging || growthSelectionStateMachineIsDrawing(growthSelectionMachine)) {
+      plantHoverTip?.hide();
+      hoverNodeId = null;
+      return;
+    }
+    const rect = canvas.getBoundingClientRect();
+    hoverPick.set(
+      ((e.clientX - rect.left) / rect.width) * 2 - 1,
+      -((e.clientY - rect.top) / rect.height) * 2 + 1,
+    );
+    hoverRay.setFromCamera(hoverPick, camera);
+    const surfaces = plantRenderer?.pickSurfaces() ?? [];
+    const hit =
+      surfaces.length > 0
+        ? hoverRay.intersectObjects(
+            surfaces.map((surface) => surface.object),
+            false,
+          )[0]
+        : undefined;
+    const surface = hit ? surfaces.find((entry) => entry.object === hit.object) : undefined;
+    if (!surface) {
+      hoverNodeId = null;
+      plantHoverTip?.hide();
+      return;
+    }
+    if (surface.nodeId !== hoverNodeId) {
+      hoverNodeId = surface.nodeId;
+      const nodes = surface.isOwnPlant
+        ? plantNodes
+        : (otherPlayerPlants.get(surface.plantId ?? '') ?? plantNodes);
+      const node = nodes.get(surface.nodeId);
+      const rootVisible = rootSightMachine
+        ? rootSightStateMachineIsEnabled(rootSightMachine)
+        : isBelowSoil(camera.position, soilQuery());
+      hoverText = plantHoverText({
+        nodeType: node?.nodeType ?? '',
+        isOwnPlant: surface.isOwnPlant,
+        growMode: isGrowMode,
+        canGrow: !(node?.type === 0 && !node?.isSeed && !rootVisible),
+      });
+    }
+    plantHoverTip?.show(hoverText, e.clientX, e.clientY);
+  };
+  canvas.addEventListener('pointermove', handlePlantHover);
+  canvas.addEventListener('pointerleave', () => {
+    hoverNodeId = null;
+    plantHoverTip?.hide();
+  });
 
   // Releasing the mouse only ends the turn gesture. Growth is committed by the
   // Grow button or Enter, so a slip of the hand never plants a segment.
@@ -4271,7 +4868,7 @@ async function initC01(): Promise<void> {
       controls.enablePan = true;
       const panel = growthSelectionPanel;
       if (panel) panel.style.display = 'none';
-      setDetail('Growth cancelled.');
+      notify('Growth cancelled', 'info', 1600);
     }
   });
 
@@ -4291,14 +4888,6 @@ async function initC01(): Promise<void> {
       if (target && /^(INPUT|TEXTAREA)$/.test(target.tagName)) return;
       e.preventDefault();
       commitGrowthAim();
-    }
-  });
-
-  // F2 toggles the growth debugger (positions, radii, model mapping, aim frame).
-  window.addEventListener('keydown', (e) => {
-    if (e.key === 'F2') {
-      e.preventDefault();
-      toggleGrowthDebug();
     }
   });
 
@@ -4437,8 +5026,14 @@ async function initPlantRenderer(): Promise<void> {
           soilMineralColor: renderConfig.soilMineralTint,
           leafSize: config.leafSize,
           leafCountPerNode: config.leafCountPerNode,
-          tubeSides: config.tubeRingCount,
+          // One owner for a drawn tube's radial detail, shared with the
+          // Three.js path: this used to read `tubeRingCount`, which came from a
+          // `tube_ring_count` key no config file declares, so the shipped pass
+          // drew octagons while `mesh_tube_radial_segments` said 12.
+          tubeSides: config.meshTubeRadialSegments,
           rootSides: config.rootSides,
+          chainRingSpacingM: config.chainRingSpacingM,
+          chainSagittaTolM: config.chainSagittaTolM,
           tierThresholds: [
             renderConfig.webgpuTier0Threshold,
             renderConfig.webgpuTier1Threshold,
@@ -4467,6 +5062,13 @@ async function initPlantRenderer(): Promise<void> {
           rainParticleCount: renderConfig.rainParticleCount,
           rainBoxWidth: renderConfig.rainBoxWidth,
           rainBoxHeight: renderConfig.rainBoxHeight,
+          impostorEnabled: renderConfig.webgpuImpostorEnabled,
+          impostorUpdateIntervalMs: renderConfig.webgpuImpostorUpdateIntervalMs,
+          vramBudgetBytes: renderConfig.webgpuVramBudgetBytes,
+          vramMaxVertexBytes: renderConfig.webgpuVramMaxVertexBytes,
+          vramMaxIndexBytes: renderConfig.webgpuVramMaxIndexBytes,
+          textureArraySize: renderConfig.webgpuTextureArraySize,
+          textureArrayLayers: renderConfig.webgpuTextureArrayLayers,
         });
 
         const rendererReady = await gpuRenderer.initialize();
@@ -4519,7 +5121,7 @@ async function initPlantRenderer(): Promise<void> {
       ...DEFAULT_CONFIG,
       // Override with values from loaded configs
       maxNodesPerPlant: config.maxNodesPerPlant ?? DEFAULT_CONFIG.maxNodesPerPlant,
-      tubeRingCount: config.tubeRingCount ?? DEFAULT_CONFIG.tubeRingCount,
+      tubeRingCount: config.meshTubeRadialSegments ?? DEFAULT_CONFIG.tubeRingCount,
       tubeLengthSegments: config.tubeLengthSegments ?? DEFAULT_CONFIG.tubeLengthSegments,
       leafCountPerNode: config.leafCountPerNode ?? DEFAULT_CONFIG.leafCountPerNode,
       leafSize: config.leafSize ?? DEFAULT_CONFIG.leafSize,
@@ -4643,6 +5245,11 @@ const app = document.getElementById('app');
 if (!app) throw new Error('App element not found');
 const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
 renderer.autoClear = false; // We manage clearing manually for WebGPU compositing
+// Linear tone mapping exists so `toneMappingExposure` does something: with the
+// default NoToneMapping three ignores exposure entirely, which made the hour
+// grade a config knob with no effect. At exposure 1 the output is unchanged.
+renderer.toneMapping = THREE.LinearToneMapping;
+renderer.toneMappingExposure = 1;
 renderer.setSize(app.clientWidth || window.innerWidth, app.clientHeight || window.innerHeight);
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.shadowMap.enabled = true;
@@ -4703,6 +5310,10 @@ detailElement.style.cssText = `
     pointer-events: none;
     display: none;
   `;
+// A debug readout on every player's screen is a dev build, not a game: the tick
+// card is off until an operator asks for it in the dev panel, and the server only
+// offers those tools to a dev-allowed environment and account.
+let detailVisible = false;
 
 const detailBody = document.createElement('div');
 detailBody.style.cssText = `
@@ -4735,7 +5346,7 @@ document.body.appendChild(detailElement);
 
 function setDetail(text: string): void {
   if (!detailElement) return;
-  detailElement.style.display = detailSuppressed ? 'none' : 'block';
+  detailElement.style.display = detailSuppressed || !detailVisible ? 'none' : 'block';
   detailMessage.textContent = text;
   detailMessage.style.marginTop = detailStats.textContent ? '4px' : '0';
 }
@@ -4746,7 +5357,7 @@ function updateTickDetail(text: string): void {
   detailStats.textContent = text;
   detailStats.style.display = text ? 'block' : 'none';
   detailMessage.style.marginTop = text && detailMessage.textContent ? '4px' : '0';
-  detailElement.style.display = detailSuppressed ? 'none' : 'block';
+  detailElement.style.display = detailSuppressed || !detailVisible ? 'none' : 'block';
   positionMutationPanel();
 }
 
@@ -4769,8 +5380,11 @@ function positionMutationPanel(): void {
 let detailSuppressed = false;
 function setGrowthPanelOpen(open: boolean): void {
   detailSuppressed = open;
+  if (open) actionBar?.setVisible(false);
+  else if (entryFlow.step === 'world') actionBar?.setVisible(true);
   if (detailElement) {
-    detailElement.style.display = open ? 'none' : detailBody.textContent ? 'block' : 'none';
+    detailElement.style.display =
+      open || !detailVisible ? 'none' : detailBody.textContent ? 'block' : 'none';
   }
   if (hintCardElement) {
     hintCardElement.style.display = open ? 'none' : '';
@@ -4794,6 +5408,7 @@ hintCardElement.style.cssText = `
       padding: var(--hud-pad-y) var(--hud-pad-x);
     `;
 
+/* eslint-disable-next-line @typescript-eslint/no-unused-vars -- retired element */
 const hintBody = document.createElement('div');
 hintBody.style.cssText = `
     font-size: var(--hud-font-sm);
@@ -4802,129 +5417,311 @@ hintBody.style.cssText = `
     line-height: 1.4;
   `;
 hintCardElement.appendChild(hintBody);
+// Retired: contextual hints replaced this card. Kept in the DOM (hidden) because
+// the growth panel toggles its display while it is open.
+hintCardElement.style.display = 'none';
 document.body.appendChild(hintCardElement);
 
-// T00A: Resource readout element (HUD layer)
+// The vitals card: one home for the resources, the clock and the weather.
+//
+// This replaced three overlapping readouts (a debug card, the middle of the
+// status card, and this one) that each printed the same four numbers at full
+// precision. Bars where a capacity exists, plain numbers where it does not, no
+// "+0.0/s" when nothing is moving, and a weather line that is worth reading.
 let resourceReadoutElement: HTMLDivElement | null = null;
-let resBiomassEl: HTMLSpanElement | null = null;
-let resEnergyEl: HTMLSpanElement | null = null;
-let resLightEl: HTMLSpanElement | null = null;
-let resWaterEl: HTMLSpanElement | null = null;
-let resMineralsEl: HTMLSpanElement | null = null;
+let vitalsRowsEl: HTMLDivElement | null = null;
+let vitalsClockMainEl: HTMLSpanElement | null = null;
+let vitalsClockSubEl: HTMLSpanElement | null = null;
+let vitalsWeatherEl: HTMLDivElement | null = null;
+let vitalsWeatherTextEl: HTMLSpanElement | null = null;
+let vitalsWeatherEtaEl: HTMLSpanElement | null = null;
+let vitalsTickerStarted = false;
+const vitalsRowEls = new Map<
+  string,
+  { row: HTMLDivElement; fill: HTMLDivElement; value: HTMLSpanElement }
+>();
+let vitalsWeather: {
+  state: string;
+  label: string;
+  nextLabel: string;
+  nextState: string;
+  secondsUntilNext: number;
+  atMs: number;
+} | null = null;
+
+const VITALS_CSS = `
+  #resource-readout {
+    position: fixed;
+    /* Top right: the top left corner holds Settings, the bottom holds the action
+       bar and, for operators only, the tick card. */
+    top: var(--hud-readout-top);
+    right: var(--hud-corner);
+    z-index: 200;
+    display: none;
+    flex-direction: column;
+    gap: 6px;
+    padding: 9px 11px 10px;
+    width: clamp(176px, 15vw, 232px);
+    max-width: calc(100vw - 2 * var(--hud-corner));
+    box-sizing: border-box;
+    /* Nothing may paint outside the card: a season name and a weather name are
+       both server text, and one long one used to run out over the panel edge. */
+    overflow: hidden;
+  }
+  .pl-vitals__clock {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 2px 8px;
+    min-width: 0;
+    font-size: var(--hud-font-sm);
+    color: var(--bone-100);
+    letter-spacing: 0.02em;
+    font-variant-numeric: tabular-nums;
+  }
+  .pl-vitals__clock-main { font-weight: 600; white-space: nowrap; }
+  .pl-vitals__clock-sub {
+    color: var(--ink-dim);
+    font-size: var(--hud-font-xs);
+    min-width: 0;
+    overflow-wrap: anywhere;
+    text-align: right;
+  }
+  .pl-vitals__weather {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 2px 6px;
+    min-width: 0;
+    padding: 3px 0 5px;
+    border-bottom: 1px solid var(--hud-border-muted);
+    font-size: var(--hud-font-sm);
+    line-height: 1.35;
+    color: var(--ink-muted);
+  }
+  /* A weather name is server text and can be as long as it likes. It wraps inside
+     the card, and the countdown keeps its own line rather than squeezing the name
+     out of the panel: the two used to share one nowrap line, so a long condition
+     ran straight out of the card. */
+  .pl-vitals__weather-label { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+  .pl-vitals__weather-dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--leaf-500);
+    flex: none;
+    align-self: center;
+  }
+  .pl-vitals__weather[data-tone='notice'] { color: var(--gold-400); }
+  .pl-vitals__weather[data-tone='notice'] .pl-vitals__weather-dot { background: var(--gold-400); }
+  .pl-vitals__weather[data-tone='warning'] { color: var(--ember-400); }
+  .pl-vitals__weather[data-tone='warning'] .pl-vitals__weather-dot {
+    background: var(--ember-500);
+    box-shadow: 0 0 8px var(--ember-500);
+  }
+  .pl-vitals__weather.is-urgent .pl-vitals__weather-dot { animation: pl-vitals-pulse 1.4s ease-in-out infinite; }
+  @keyframes pl-vitals-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+  .pl-vitals__weather-eta {
+    margin-left: auto;
+    color: inherit;
+    opacity: 0.85;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  .pl-vitals__rows { display: flex; flex-direction: column; gap: 5px; }
+  .pl-vitals__row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, auto);
+    align-items: center;
+    gap: 2px 8px;
+    min-width: 0;
+    font-size: var(--hud-font-sm);
+    color: var(--ink-muted);
+  }
+  .pl-vitals__label {
+    color: var(--ink-muted);
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  /* The value is the number the player came for: it never wraps, and it is the
+     label that gives up room first. */
+  .pl-vitals__value {
+    color: var(--bone-100);
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+    white-space: nowrap;
+  }
+  .pl-vitals__track {
+    grid-column: 1 / -1;
+    height: 4px;
+    border-radius: 2px;
+    background: rgba(239, 233, 216, 0.13);
+    overflow: hidden;
+  }
+  .pl-vitals__track[hidden] { display: none; }
+  .pl-vitals__fill {
+    height: 100%;
+    width: 100%;
+    transform-origin: left center;
+    border-radius: 2px;
+    background: linear-gradient(90deg, var(--leaf-700), var(--leaf-300));
+    transition: transform 220ms ease-out;
+  }
+  .pl-vitals__row[data-tone='low'] .pl-vitals__fill { background: linear-gradient(90deg, var(--ember-700), var(--gold-400)); }
+  .pl-vitals__row[data-tone='low'] .pl-vitals__value { color: var(--gold-400); }
+  .pl-vitals__row[data-tone='critical'] .pl-vitals__fill {
+    background: linear-gradient(90deg, var(--ember-800), var(--ember-400));
+    animation: pl-vitals-pulse 1.2s ease-in-out infinite;
+  }
+  .pl-vitals__row[data-tone='critical'] .pl-vitals__value { color: var(--ember-400); }
+  /* On a phone the status card owns the top row, so the vitals sit under it and
+     use the full width instead of squeezing into the corner next to it.
+     A finger layout only. A narrow *desktop* pane keeps the corner card and is
+     scaled by --pl-ui-scale instead - full-width chrome in a small pane is what
+     left the world visible only in the gaps. */
+  @media (max-width: 640px) and (hover: none) and (pointer: coarse) {
+    #resource-readout {
+      top: calc(var(--hud-corner) + env(safe-area-inset-top, 0px) + 104px);
+      left: var(--hud-corner);
+      right: var(--hud-corner);
+      width: auto;
+    }
+    .pl-vitals__rows { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5px 12px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .pl-vitals__row[data-tone='critical'] .pl-vitals__fill,
+    .pl-vitals__weather.is-urgent .pl-vitals__weather-dot { animation: none; }
+  }
+`;
+
+/**
+ * HUD type floors. The stylesheet's clamp bottoms out around 9px, which is
+ * unreadable on a laptop and worse on a phone; the floor is a config value so it
+ * can be raised without touching CSS.
+ */
+function applyHudFontSizes(): void {
+  const small = resolvedUiConfig?.hudFontSmallPx ?? 12;
+  const secondary = resolvedUiConfig?.hudFontSecondaryPx ?? 11;
+  const root = document.documentElement.style;
+  // The clamp is multiplied by --text-scale, not written in rem: the root font
+  // size is already scaled, so a rem floor would be scaled twice, and a bare px
+  // floor would ignore the settings slider entirely.
+  root.setProperty(
+    '--hud-font-sm',
+    `calc(clamp(${small}px, ${small - 4}px + 0.32vw, ${small + 3}px) * var(--text-scale))`,
+  );
+  root.setProperty(
+    '--hud-font-xs',
+    `calc(clamp(${secondary}px, ${secondary - 3}px + 0.2vw, ${secondary + 2}px) * var(--text-scale))`,
+  );
+}
+
+function vitalsThresholds(): VitalThresholds {
+  return {
+    lowFraction: resolvedUiConfig?.vitalsLowFraction ?? DEFAULT_VITAL_THRESHOLDS.lowFraction,
+    criticalFraction:
+      resolvedUiConfig?.vitalsCriticalFraction ?? DEFAULT_VITAL_THRESHOLDS.criticalFraction,
+  };
+}
 
 function createResourceReadout(): void {
   const layer = uiShell?.getLayer('hud');
   if (!layer) return;
 
+  if (!document.getElementById('pl-vitals-style')) {
+    const style = document.createElement('style');
+    style.id = 'pl-vitals-style';
+    style.textContent = VITALS_CSS;
+    document.head.appendChild(style);
+  }
+
   resourceReadoutElement = document.createElement('div');
   resourceReadoutElement.id = 'resource-readout';
   resourceReadoutElement.className = 'hud-panel';
-  resourceReadoutElement.style.cssText = `
-      position: fixed;
-      /* Top right: the chat box owns the top left corner. On phones it drops
-         below the chat instead of sharing the row. */
-      top: var(--hud-readout-top);
-      right: var(--hud-corner);
-      z-index: 200;
-      width: auto;
-      pointer-events: auto;
-      display: none;
-      min-width: clamp(104px, 11vw, 160px);
-    `;
+  resourceReadoutElement.setAttribute('role', 'group');
+  resourceReadoutElement.setAttribute('aria-label', 'Plant vitals');
+  // Position lives in VITALS_CSS, not here: an inline `top` beats the phone
+  // media query, which is how the card ended up overlapping the status card.
+  resourceReadoutElement.style.pointerEvents = 'auto';
 
-  const resourceBody = document.createElement('div');
-  resourceBody.style.cssText = `
-    padding: var(--hud-pad-y) var(--hud-pad-x);
-    font-size: var(--hud-font-sm);
-    line-height: 1.2;
-    color: var(--warm-ink);
-    display: flex;
-    flex-direction: column;
-    gap: var(--hud-gap);
-  `;
-  resourceReadoutElement.appendChild(resourceBody);
+  // One clock, not two: the day and the hour used to live in the status card
+  // while the season countdown lived here.
+  const clock = document.createElement('div');
+  clock.className = 'pl-vitals__clock';
+  vitalsClockMainEl = document.createElement('span');
+  vitalsClockMainEl.className = 'pl-vitals__clock-main';
+  vitalsClockSubEl = document.createElement('span');
+  vitalsClockSubEl.className = 'pl-vitals__clock-sub';
+  clock.append(vitalsClockMainEl, vitalsClockSubEl);
 
-  // Distinct, saturated hues plus a written label: colour alone was ambiguous
-  // (biomass and energy were two nearly identical yellow-greens).
-  const rows = [
-    { label: 'biomass', color: '#4CAF50', id: 'res-biomass' },
-    { label: 'energy', color: '#FFB300', id: 'res-energy' },
-    { label: 'light', color: '#FFE066', id: 'res-light' },
-    { label: 'water', color: '#29B6F6', id: 'res-water' },
-    { label: 'minerals', color: '#BA68C8', id: 'res-minerals' },
+  vitalsWeatherEl = document.createElement('div');
+  vitalsWeatherEl.className = 'pl-vitals__weather';
+  vitalsWeatherEl.dataset.tone = 'calm';
+  const weatherDot = document.createElement('i');
+  weatherDot.className = 'pl-vitals__weather-dot';
+  weatherDot.setAttribute('aria-hidden', 'true');
+  vitalsWeatherTextEl = document.createElement('span');
+  vitalsWeatherTextEl.className = 'pl-vitals__weather-label';
+  vitalsWeatherEtaEl = document.createElement('span');
+  vitalsWeatherEtaEl.className = 'pl-vitals__weather-eta';
+  vitalsWeatherEl.append(weatherDot, vitalsWeatherTextEl, vitalsWeatherEtaEl);
+
+  vitalsRowsEl = document.createElement('div');
+  vitalsRowsEl.className = 'pl-vitals__rows';
+
+  const rows: Array<{ id: string; label: string; title: string }> = [
+    { id: 'biomass', label: 'Biomass', title: onboardingConfig.resource_tooltips.biomass },
+    {
+      id: 'energy',
+      label: 'Energy',
+      title: 'Energy: spendable currency for growth. Produced by photosynthesis (leaves).',
+    },
+    { id: 'light', label: 'Light', title: onboardingConfig.resource_tooltips.light },
+    { id: 'water', label: 'Water', title: onboardingConfig.resource_tooltips.water },
+    { id: 'minerals', label: 'Minerals', title: onboardingConfig.resource_tooltips.minerals },
   ];
-
-  for (const row of rows) {
-    const el = document.createElement('div');
-    el.style.cssText = `
-    display: flex;
-    align-items: baseline;
-    gap: 6px;
-    padding: 2px 0;
-    font-size: 0.72rem;
-  `;
-    el.innerHTML = `
-    <span style="display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: ${row.color}; flex-shrink: 0;"></span>
-    <span style="color: var(--warm-ink); opacity: 0.72; text-transform: capitalize; min-width: 58px;">${row.label}</span>
-    <span id="${row.id}" style="color: var(--bone-100); font-variant-numeric: tabular-nums; display: inline-block; width: 9ch; text-align: right;">0</span>
-  `;
-    resourceBody.appendChild(el);
-    // Scope the lookup to the row: the panel is still detached from the document
-    // here, so document.getElementById would return null for every span and the
-    // readout would sit at its placeholder zeros forever.
-    const valEl = el.querySelector<HTMLSpanElement>(`#${row.id}`);
-    if (valEl) {
-      const key = row.label.toLowerCase();
-      if (key === 'biomass') resBiomassEl = valEl as HTMLSpanElement;
-      if (key === 'energy') resEnergyEl = valEl as HTMLSpanElement;
-      if (key === 'light') resLightEl = valEl as HTMLSpanElement;
-      if (key === 'water') resWaterEl = valEl as HTMLSpanElement;
-      if (key === 'minerals') resMineralsEl = valEl as HTMLSpanElement;
-    }
+  for (const spec of rows) {
+    const row = document.createElement('div');
+    row.className = 'pl-vitals__row';
+    row.dataset.vital = spec.id;
+    row.title = spec.title;
+    const label = document.createElement('span');
+    label.className = 'pl-vitals__label';
+    label.textContent = spec.label;
+    const value = document.createElement('span');
+    value.className = 'pl-vitals__value';
+    value.textContent = '0';
+    const track = document.createElement('div');
+    track.className = 'pl-vitals__track';
+    track.hidden = true;
+    const fill = document.createElement('div');
+    fill.className = 'pl-vitals__fill';
+    track.appendChild(fill);
+    row.append(label, value, track);
+    vitalsRowsEl.appendChild(row);
+    vitalsRowEls.set(spec.id, { row, fill, value });
   }
 
-  // The season is a date, not a resource: it gets its own row under a rule so
-  // the readout's five resource rows keep lining up with each other.
-  const seasonRow = document.createElement('div');
-  // The countdown is a reading, like every resource above it, so it uses the
-  // same three-column row: dot, fixed-width label, right-aligned value. The old
-  // single line put the countdown wherever the season word ended, so the column
-  // of numbers was ragged; a bullet between them added noise to a value that
-  // already has its own label.
-  seasonRow.style.cssText = `
-    display: flex;
-    align-items: baseline;
-    gap: 6px;
-    padding: 5px 0 2px;
-    margin-top: 2px;
-    border-top: 1px solid var(--hud-border, rgba(239,233,216,0.12));
-    font-size: 0.72rem;
-    color: var(--warm-ink);
-    white-space: nowrap;
-  `;
-  seasonRow.innerHTML = `
-    <span style="display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: #8FC7E8; flex-shrink: 0;"></span>
-    <span id="res-season-label" style="color: var(--warm-ink); opacity: 0.72; min-width: 58px;">Season</span>
-    <span id="res-season" style="color: var(--bone-100); font-variant-numeric: tabular-nums; display: inline-block; width: 9ch; text-align: right;">\u2014</span>
-  `;
-  resourceBody.appendChild(seasonRow);
-  resSeasonEl = seasonRow.querySelector<HTMLSpanElement>('#res-season');
-  resSeasonLabelEl = seasonRow.querySelector<HTMLSpanElement>('#res-season-label');
-
-  // Remove last border
-  const last = resourceReadoutElement.lastElementChild;
-  if (last) (last as HTMLElement).style.borderBottom = 'none';
-
+  resourceReadoutElement.append(clock, vitalsWeatherEl, vitalsRowsEl);
   layer.appendChild(resourceReadoutElement);
+  updateVitalsClock();
+}
 
-  // Add hover tooltips
-  if (resBiomassEl) resBiomassEl.title = onboardingConfig.resource_tooltips.biomass;
-  if (resEnergyEl)
-    resEnergyEl.title =
-      'Energy: spendable currency for growth. Produced by photosynthesis (leaves).';
-  if (resLightEl) resLightEl.title = onboardingConfig.resource_tooltips.light;
-  if (resWaterEl) resWaterEl.title = onboardingConfig.resource_tooltips.water;
-  if (resMineralsEl) resMineralsEl.title = onboardingConfig.resource_tooltips.minerals;
+/**
+ * Paints one row from its rules. The bar only exists for a store with a
+ * capacity; rows without one show the number alone rather than a fake full bar.
+ */
+function paintVital(id: string, input: Parameters<typeof vitalRow>[0], title?: string): void {
+  const els = vitalsRowEls.get(id);
+  if (!els) return;
+  const row = vitalRow(input, vitalsThresholds());
+  els.value.textContent = row.valueText;
+  els.row.dataset.tone = row.tone;
+  const track = els.row.querySelector<HTMLDivElement>('.pl-vitals__track');
+  if (track) track.hidden = row.fraction === null;
+  if (row.fraction !== null) els.fill.style.transform = `scaleX(${row.fraction.toFixed(4)})`;
+  els.row.title = title ?? row.title;
 }
 
 function updateResourceReadout(
@@ -4938,38 +5735,99 @@ function updateResourceReadout(
   waterCapacity?: number,
   mineralCapacity?: number,
 ): void {
-  if (!resourceReadoutElement) {
-    createResourceReadout();
-  }
+  if (!resourceReadoutElement) createResourceReadout();
   if (!resourceReadoutElement) return;
   resourceReadoutElement.style.display = 'flex';
-  if (resBiomassEl) resBiomassEl.textContent = biomass.toFixed(1);
-  if (energy !== undefined && resEnergyEl) resEnergyEl.textContent = energy.toFixed(1);
-  if (resLightEl) resLightEl.textContent = light.toFixed(1);
-  // Growth is paid from what the plant itself has captured, so the readout shows
-  // stored amounts against capacity; the ambient tile average stays in the title.
-  if (resWaterEl) {
-    resWaterEl.textContent =
-      storedWater === undefined
-        ? water.toFixed(1)
-        : waterCapacity !== undefined
-          ? `${storedWater.toFixed(1)}/${waterCapacity.toFixed(0)}`
-          : storedWater.toFixed(1);
-    if (storedWater !== undefined) {
-      resWaterEl.title = `Stored: ${storedWater.toFixed(1)}${waterCapacity !== undefined ? `/${waterCapacity.toFixed(0)}` : ''} | Tile avg: ${water.toFixed(1)}`;
-    }
+
+  paintVital('biomass', {
+    id: 'biomass',
+    label: 'Biomass',
+    value: biomass,
+    precision: 1,
+  });
+  if (energy !== undefined) {
+    paintVital('energy', { id: 'energy', label: 'Energy', value: energy, precision: 1 });
   }
-  if (resMineralsEl) {
-    resMineralsEl.textContent =
-      storedMinerals === undefined
-        ? minerals.toFixed(1)
-        : mineralCapacity !== undefined
-          ? `${storedMinerals.toFixed(1)}/${mineralCapacity.toFixed(0)}`
-          : storedMinerals.toFixed(1);
-    if (storedMinerals !== undefined) {
-      resMineralsEl.title = `Stored: ${storedMinerals.toFixed(1)}${mineralCapacity !== undefined ? `/${mineralCapacity.toFixed(0)}` : ''} | Tile avg: ${minerals.toFixed(1)}`;
-    }
-  }
+  // Light is a reading of the sky reaching the leaves, not a store: no bar.
+  paintVital('light', { id: 'light', label: 'Light', value: light, precision: 1 });
+  // Growth is paid from what the plant itself captured, so the store is shown
+  // against its capacity; the ambient tile average stays in the tooltip.
+  paintVital(
+    'water',
+    {
+      id: 'water',
+      label: 'Water',
+      value: storedWater ?? water,
+      capacity: storedWater === undefined ? null : (waterCapacity ?? null),
+    },
+    storedWater === undefined
+      ? undefined
+      : `Water stored: ${storedWater.toFixed(1)}${waterCapacity !== undefined ? `/${Math.round(waterCapacity)}` : ''}. Soil around the roots: ${water.toFixed(1)}.`,
+  );
+  paintVital(
+    'minerals',
+    {
+      id: 'minerals',
+      label: 'Minerals',
+      value: storedMinerals ?? minerals,
+      capacity: storedMinerals === undefined ? null : (mineralCapacity ?? null),
+    },
+    storedMinerals === undefined
+      ? undefined
+      : `Minerals stored: ${storedMinerals.toFixed(1)}${mineralCapacity !== undefined ? `/${Math.round(mineralCapacity)}` : ''}. Soil around the roots: ${minerals.toFixed(1)}.`,
+  );
+}
+
+/** Season, day and hour in one chip; the season countdown rides in the sub-line. */
+function updateVitalsClock(): void {
+  if (!vitalsClockMainEl || !vitalsClockSubEl) return;
+  const remainingS = seasonNumber > 0 ? (seasonEndsAtMs - performance.now()) / 1000 : null;
+  const chip = clockChip(
+    {
+      season: seasonNumber,
+      day: weatherDayNumber,
+      time: weatherClock || '--:--',
+      seasonRemainingS: remainingS,
+    },
+    formatSeasonRemaining,
+  );
+  vitalsClockMainEl.textContent = chip.main;
+  vitalsClockSubEl.textContent = chip.sub;
+  vitalsClockSubEl.style.display = chip.sub ? '' : 'none';
+  if (resourceReadoutElement) resourceReadoutElement.title = chip.title;
+}
+
+/** The weather is the one live change on screen, so it gets its own line. */
+function updateVitalsWeather(): void {
+  if (!vitalsWeatherTextEl || !vitalsWeatherEtaEl || !vitalsWeatherEl || !vitalsWeather) return;
+  const elapsed = (performance.now() - vitalsWeather.atMs) / 1000;
+  const chip = weatherChip({
+    state: vitalsWeather.state,
+    label: vitalsWeather.label,
+    nextLabel: vitalsWeather.nextLabel,
+    nextState: vitalsWeather.nextState,
+    secondsUntilNext: vitalsWeather.secondsUntilNext - elapsed,
+  });
+  vitalsWeatherEl.dataset.tone = chip.tone;
+  vitalsWeatherEl.classList.toggle('is-urgent', chip.urgent);
+  vitalsWeatherTextEl.textContent = chip.label;
+  vitalsWeatherEtaEl.textContent = chip.eta;
+  vitalsWeatherEl.title = chip.eta ? `${chip.label}. ${chip.eta}.` : chip.label;
+}
+
+/**
+ * Clock and weather move on their own; the resources only change when a packet
+ * arrives. One ticker drives both, once a second, instead of each chip owning a
+ * timer that kept running behind a closed panel.
+ */
+function startVitalsTicker(): void {
+  if (vitalsTickerStarted) return;
+  vitalsTickerStarted = true;
+  setInterval(() => {
+    if (!resourceReadoutElement || resourceReadoutElement.style.display === 'none') return;
+    updateVitalsClock();
+    updateVitalsWeather();
+  }, 1000);
 }
 
 // The readout shows the whole plant id: it is the id players need to quote when
@@ -4979,18 +5837,8 @@ function plantIdLabel(): string {
 }
 
 function updateSeasonChip(): void {
-  if (!resSeasonEl || seasonNumber <= 0) return;
-  const remainingSeconds = Math.max(0, (seasonEndsAtMs - performance.now()) / 1000);
-  if (resSeasonLabelEl) resSeasonLabelEl.textContent = `Season ${seasonNumber}`;
-  resSeasonEl.textContent = formatSeasonRemaining(remainingSeconds);
-  resSeasonEl.title = `Season ${seasonNumber}. At the end of the season the calamity takes every plant.`;
-  if (resSeasonLabelEl) {
-    resSeasonLabelEl.title = `Season ${seasonNumber}. Remaining in the season: ${formatSeasonRemaining(remainingSeconds)}.`;
-  }
-
-  if (seasonTickerStarted) return;
-  seasonTickerStarted = true;
-  setInterval(updateSeasonChip, 1000);
+  updateVitalsClock();
+  startVitalsTicker();
 }
 
 // Basic identity of a plant that is not yours, keyed by world plant id. Filled
@@ -5239,7 +6087,7 @@ function renderGrowthOptions(result: GrowthOptionsView): void {
     const reasonText = !opt.available ? describeGrowthReason(opt.reason) : '';
     card.innerHTML = `
       <div class="hud-grow-option__head">
-        <span class="hud-grow-option__chip ${typeChipClass}">${opt.label}</span>
+        <span class="hud-grow-option__chip ${typeChipClass}">${escapeHtml(opt.label)}</span>
       </div>
       <div class="hud-grow-option__cost">
         ${opt.energyCost.toFixed(1)} energy &nbsp;·&nbsp; +${opt.biomassGain.toFixed(1)} biomass &nbsp;·&nbsp; ${opt.expectedSeconds.toFixed(0)} seconds
@@ -5437,7 +6285,26 @@ function noteBiomassSample(value: number): void {
   lastBiomassSample = { value, atMs: now };
 }
 
+/**
+ * One-shot refit for a newly framed plant: the welcome pass cannot measure a
+ * plant it has not received yet, and a 6 m view of a seedling is dirt.
+ */
+function maybeRefitPlantFraming(): void {
+  if (!refitFramingOnFirstNodes) return;
+  if (cameraUserMoved) {
+    refitFramingOnFirstNodes = false;
+    return;
+  }
+  const ownNodes = Array.from(plantNodes.values()).filter((node) => node.isOwnPlant);
+  if (ownNodes.length === 0) return;
+  refitFramingOnFirstNodes = false;
+  // Same eased travel as Space: the view settles onto the seedling instead of
+  // teleporting 4.5 m.
+  recenterCamera();
+}
+
 function updatePlantStatusHud(): void {
+  maybeRefitPlantFraming();
   if (playerPanels?.isOpen && performance.now() - lastPanelRefreshAtMs >= 200) {
     lastPanelRefreshAtMs = performance.now();
     refreshPlayerPanels();
@@ -5584,6 +6451,8 @@ function handleOwnPlantLoss(cause?: string, source?: string): void {
   plantStructure = null;
   rerootKeys.clear();
   plantStatusHud?.setVisible(false);
+  actionBar?.setVisible(false);
+  contextHint?.hide();
   updateResourceReadout(
     tileLight,
     tileWater,
@@ -5596,16 +6465,77 @@ function handleOwnPlantLoss(cause?: string, source?: string): void {
   if (plantRenderer) plantRenderer.updatePlantData([]);
   if (webgpuRenderer) webgpuRenderer.updatePlants([], performance.now());
   setDetail('Your plant died.');
-  entryFlowPlantLost(
-    entryFlow,
-    cause && cause !== 'removed' ? describeDeathCause(cause, source) : null,
-    {
-      // The stats row keeps the machine code but names what did it, so "damage"
-      // is never the whole story the player is given.
-      cause: source ? `${deathCause} · ${source}` : deathCause,
-      stats: deathStats,
-    },
+  const reason = cause && cause !== 'removed' ? describeDeathCause(cause, source) : null;
+  const died = cause !== 'removed';
+  // The stats row keeps the machine code but names what did it, so "damage" is
+  // never the whole story the player is given.
+  lostReason = reason;
+  lostStats = { cause: source ? `${deathCause} · ${source}` : deathCause, stats: deathStats };
+  const leaveToTitle = (): void => {
+    entryFlowPlantLost(entryFlow, lostReason, lostStats ?? undefined);
+    entryScreen.render(entryFlow);
+  };
+
+  // A death that was not a removal gets a card in the world, and the first thing
+  // it offers is to stay: the player who spent an hour on this plant is allowed to
+  // watch the weather over the place it stood instead of being cut to a menu.
+  if (died) {
+    deathScreen?.destroy();
+    deathScreen = createDeathScreen(
+      {
+        cause: deathCause,
+        ...(source ? { source } : {}),
+        stats: deathStats,
+        reason: reason ?? 'It died.',
+      },
+      {
+        mount: uiShell?.getLayer('modal') ?? document.body,
+        onSpectate: () => enterSpectate(),
+        onNewSeed: () => {
+          deathScreen?.destroy();
+          deathScreen = null;
+          leaveToTitle();
+        },
+      },
+    );
+    return;
+  }
+  leaveToTitle();
+}
+
+/**
+ * Stay in the world after the plant is gone.
+ *
+ * Not a separate mode with its own rules: the same world, no plant, a free camera
+ * and one chip that leaves. Everything that needed a plant is already closed by
+ * the time this runs, so what is left is the place.
+ */
+function enterSpectate(): void {
+  deathScreen?.destroy();
+  deathScreen = null;
+  spectating = true;
+  plantStatusHud?.setVisible(false);
+  actionBar?.setVisible(false);
+  setGrowModeChrome(false);
+  hideGrowthSelection();
+  spectateChip?.destroy();
+  spectateChip = createSpectateChip(uiShell?.getLayer('hud') ?? document.body, () =>
+    leaveSpectate(),
   );
+  contextHint?.show({
+    id: 'spectate',
+    text: 'Your plant is gone. The world is still running.',
+    durationMs: 6000,
+  });
+}
+
+/** The one exit from spectating, shared by the chip and the Escape order. */
+function leaveSpectate(): void {
+  if (!spectating) return;
+  spectating = false;
+  spectateChip?.destroy();
+  spectateChip = null;
+  entryFlowPlantLost(entryFlow, lostReason, lostStats ?? undefined);
   entryScreen.render(entryFlow);
 }
 
@@ -5628,6 +6558,8 @@ let chatContainer: HTMLElement | null = null;
 let chatMessages: HTMLElement | null = null;
 let chatInput: HTMLInputElement | null = null;
 let chatOpen = false;
+/** Lines that arrived while the panel was closed; shown on the Chat button. */
+let chatUnread = 0;
 const MAX_CHAT_MESSAGES = 50;
 let chatHudZIndex = 200;
 
@@ -5654,17 +6586,8 @@ function createChatUI(): void {
   chatContainer = document.createElement('div');
   chatContainer.id = 'chat-container';
   chatContainer.style.cssText = `
-    position: fixed;
-    top: var(--hud-top);
-    left: var(--hud-corner);
-    /* Shrinks with the viewport so it never crowds the readout on phones, and
-       keeps a fixed height: messages scroll inside instead of the box growing. */
-    width: var(--hud-chat-w);
-    height: var(--hud-chat-h);
-    max-height: var(--hud-chat-h);
     background: linear-gradient(180deg, rgba(18, 22, 13, 0.9) 0%, rgba(24, 30, 20, 0.85) 100%);
     border: 1px solid var(--hud-border);
-    border-radius: var(--hud-radius);
     display: none;
     flex-direction: column;
     font-family: inherit;
@@ -5836,6 +6759,40 @@ function createChatUI(): void {
   inputWrapper.appendChild(sendBtn);
   chatContainer.appendChild(inputWrapper);
 
+  // Box model lives in one place: desktop is a corner column, a phone gets the
+  // full width above the action bar (a 200px column was unreadable on a phone).
+  if (!document.getElementById('chat-layout-style')) {
+    const chatStyle = document.createElement('style');
+    chatStyle.id = 'chat-layout-style';
+    chatStyle.textContent = `
+      #chat-container {
+        position: fixed;
+        top: var(--hud-top);
+        left: var(--hud-corner);
+        width: var(--hud-chat-w);
+        height: var(--hud-chat-h);
+        max-height: var(--hud-chat-h);
+        border-radius: var(--hud-radius);
+      }
+      /* A finger layout only, like the vitals card and the player panels: a narrow
+         *desktop* pane keeps the corner column and is scaled by --pl-ui-scale
+         instead of being replaced by a sheet over the world. */
+      @media (max-width: 560px) and (hover: none) and (pointer: coarse), (max-width: 480px) {
+        /* Bottom sheet, not a top overlay: the vitals card and the status card own
+           the top of a phone screen, and a chat box over them hid both. */
+        #chat-container {
+          top: auto;
+          bottom: calc(var(--pl-bar-offset, 45px) + 26px + env(safe-area-inset-bottom, 0px));
+          left: var(--hud-corner);
+          right: var(--hud-corner);
+          width: auto;
+          height: min(42vh, 320px);
+          max-height: min(42vh, 320px);
+        }
+      }
+    `;
+    document.head.appendChild(chatStyle);
+  }
   hudLayer.appendChild(chatContainer);
 }
 
@@ -5844,6 +6801,8 @@ function toggleChat(open?: boolean): void {
   chatOpen = open ?? !chatOpen;
   chatContainer.style.display = chatOpen ? 'flex' : 'none';
   if (chatOpen) {
+    chatUnread = 0;
+    actionBar?.setBadge('chat', 0);
     chatInput?.focus();
   }
 }
@@ -5904,12 +6863,12 @@ function addChatMessage(
   // Auto-scroll to bottom
   chatMessages.scrollTop = chatMessages.scrollHeight;
 
-  // Show chat briefly if not open
-  if (!chatOpen && chatContainer) {
-    chatContainer.style.display = 'flex';
-    setTimeout(() => {
-      if (!chatOpen && chatContainer) chatContainer.style.display = 'none';
-    }, 5000);
+  // Do not open the panel. It used to appear for five seconds on every message,
+  // which covered the vitals on a phone and stole the cursor on a desktop. The
+  // action bar's Chat button counts what is waiting instead.
+  if (!chatOpen) {
+    chatUnread += 1;
+    actionBar?.setBadge('chat', chatUnread);
   }
 }
 
@@ -6478,13 +7437,13 @@ function confirmGrowth(
     plantReady,
   });
   if (!ws || ws.readyState !== WebSocket.OPEN) {
-    setDetail(`Growth not sent: WebSocket not open (${ws?.readyState ?? 'none'})`);
+    notify('Not connected: growth not sent', 'error');
     uiShell?.toast({ message: 'Growth not sent: not connected', kind: 'error', durationMs: 3000 });
     hideGrowthSelection();
     return;
   }
   if (!plantId || !plantReady) {
-    setDetail(`Growth not sent: plant not ready (plantId=${String(plantId)}, ready=${plantReady})`);
+    notify('Plant is not ready yet: growth not sent', 'error');
     uiShell?.toast({
       message: 'Growth not sent: plant not ready',
       kind: 'error',
@@ -6840,6 +7799,57 @@ async function handleWelcome(payload: unknown): Promise<void> {
   });
   entryFlowWorldReady(entryFlow);
   entryScreen.render(entryFlow);
+  // Whatever the welcome framing did or skipped (no root node, a plant that
+  // arrived only through the node list, a re-framed reconnect), the first own
+  // node is the first moment the fit can actually measure the plant. Ask for it
+  // here, not inside the framing branch: a session that took the other branch
+  // kept the configured 6 m start or, worse, the neutral rig pose 18 m above the
+  // target, which is a hillside with no plant in it.
+  refitFramingOnFirstNodes = true;
+  // Belt and braces: the node-triggered refit fires on the next state packet,
+  // but a session whose packets arrive before the flag was set would skip it.
+  // One delayed attempt covers that, and stands down if the player has grabbed
+  // the camera or a refit already happened.
+  window.setTimeout(() => {
+    if (!refitFramingOnFirstNodes) return;
+    refitFramingOnFirstNodes = false;
+    if (cameraUserMoved) return;
+    recenterCamera();
+  }, 1200);
+  actionBar?.setVisible(true);
+  // Whatever the title left open belongs to the title. A panel opened from the menu
+  // used to stay open across Play and be the first thing the player saw in the
+  // world, which is how a Settings click that appeared to do nothing "worked" one
+  // screen later.
+  settingsPanel?.setOpen(false);
+  closeShop();
+  // The core verb, said once where it applies. A returning player does not get a
+  // tutorial they already finished, and a new one is told the two facts that are
+  // not discoverable by looking: the plant is clickable, and G arms the click.
+  if (!localProfile.tutorialSeen) {
+    localProfile = saveProfile(window.localStorage, { tutorialSeen: true });
+    contextHint?.show({
+      id: 'first-look',
+      text: 'Drag to orbit. Scroll to zoom.',
+      touchText: 'Drag to orbit. Pinch to zoom.',
+      durationMs: 4200,
+    });
+    window.setTimeout(() => {
+      contextHint?.show({
+        id: 'first-grow',
+        text: 'Press G, then click a part of your plant to see what it can grow.',
+        touchText: 'Tap Grow, then tap a part of your plant to see what it can grow.',
+        key: 'G',
+        durationMs: 7200,
+      });
+    }, 4600);
+  } else {
+    contextHint?.show({
+      id: 'first-look',
+      text: 'Click your plant to see what it can grow. The bar below has the rest.',
+      touchText: 'Tap your plant to see what it can grow. The bar below has the rest.',
+    });
+  }
   updateAccountChip();
   showAwayReport(welcome.away);
   if (welcome.previousPlantDied) {
@@ -6879,8 +7889,7 @@ async function handleWelcome(payload: unknown): Promise<void> {
         const nodeTypeNum = typeMap[node.type] ?? 0;
         // Use server-authoritative radius (Murray's law) if available
         const radius = node.radius ?? nodeRadius(node.biomass, nodeTypeNum, node.y);
-        const health =
-          typeof node.health === 'number' ? node.health : Math.min(1, node.biomass / 10);
+        const health = clientNodeHealth(node);
 
         // Server-authoritative growth timing for nodes that are still growing
         const SERVER_TICK_RATE_HZ = 20;
@@ -7140,9 +8149,8 @@ function handleState(payload: unknown, ctx: MessageContext): void {
       `Biomass: ${plantBiomass.toFixed(1)} | Energy: ${plantEnergy.toFixed(1)}\n` +
       `Water: ${plantWater.toFixed(1)}/${plantWaterCapacity.toFixed(0)} | ` +
       `Minerals: ${plantMinerals.toFixed(1)}/${plantMineralCapacity.toFixed(0)}\n` +
-      `Mode: ${growModeHud ? 'grow - click node, pick part, Grow' : 'view'}\n` +
-      `Keys: G grow mode | H hints\n` +
-      `Plants: ${state.plants?.length ?? 0} | Own plant: ${plantIdLabel()}`,
+      `Mode: ${growModeHud ? 'grow' : 'view'} | Plants: ${state.plants?.length ?? 0}\n` +
+      `Own plant: ${plantIdLabel()}`,
   );
 }
 
@@ -7429,7 +8437,7 @@ function handleSeasonUpdate(payload: unknown): void {
   seasonNumber = season.season;
   seasonEndsAtMs = performance.now() + Math.max(0, season.remainingSeconds) * 1000;
   updateSeasonChip();
-  if (season.calamity) setDetail(`Season ${season.season} begins.`);
+  if (season.calamity) notify(`Season ${season.season} begins.`, 'state', 4000);
 }
 
 function handleMutationState(payload: unknown): void {
@@ -7672,7 +8680,18 @@ function handleWeatherUpdate(payload: unknown, ctx: MessageContext): void {
   environmentRenderer?.handleWeatherUpdate(weather);
   weatherDayNumber = weather.dayNumber ?? weatherDayNumber;
   weatherClock = formatClock(weather.timeOfDay);
-  plantStatusHud?.setWeather(weather);
+  // Weather is displayed in one place: the vitals chip.
+  vitalsWeather = {
+    state: weather.weatherState,
+    label: weatherLabel(weather.weatherState),
+    nextLabel: weatherLabel(weather.forecast.nextWeatherState),
+    nextState: weather.forecast.nextWeatherState,
+    // The packet is a snapshot: keep its arrival time so the chip can count down
+    // between broadcasts instead of freezing until the next one.
+    secondsUntilNext: weather.forecast.timeUntilNextStateS,
+    atMs: performance.now(),
+  };
+  updateVitalsWeather();
   refreshPlayerPanels();
 
   if (debugOverlay) {
@@ -7737,19 +8756,17 @@ function handleGrowthEvent(payload: unknown): void {
     let growthProgress: number;
 
     if (node.growthTimeSeconds !== undefined && node.growthStartTick !== undefined) {
-      // Compute spawnTime from server timeline
-      // elapsed server ticks since growth started
-      const elapsedTicks = Math.max(0, serverTick - node.growthStartTick);
+      // Never derived by hand here: the rule that keeps a packet from un-growing
+      // the whole plant lives in one place (render/plantProgress.ts).
+      growthProgress = resolveDrawnProgress({
+        serverProgress: node.growthProgress,
+        serverTick,
+        growthStartTick: node.growthStartTick,
+        growthTimeSeconds: node.growthTimeSeconds,
+        previousProgress: existing?.growthProgress,
+        tickRateHz: SERVER_TICK_RATE_HZ,
+      });
       const totalMs = node.growthTimeSeconds * 1000;
-      // Server's spawnTime = now - elapsedMs (where now is client's performance.now())
-      // But we need to account for network latency - use client's current time as reference
-      // For new nodes (progress ~0), spawnTime should be in the future from client perspective
-      // For existing growing nodes, we compute based on server progress
-      const serverProgress = Math.min(
-        1,
-        elapsedTicks / (node.growthTimeSeconds * SERVER_TICK_RATE_HZ),
-      );
-      growthProgress = node.growthProgress ?? serverProgress;
 
       // Compute spawnTime so that growthProgress = smoothstep((now - spawnTime) / totalMs)
       // => now - spawnTime = growthProgress * totalMs (approximately, using linear for spawnTime calc)
@@ -7786,7 +8803,7 @@ function handleGrowthEvent(payload: unknown): void {
       parentId: node.parentId,
       children: node.children ?? existing?.children ?? [],
       age: node.age,
-      health: typeof node.health === 'number' ? node.health : Math.min(1, node.biomass / 10),
+      health: clientNodeHealth(node),
       mutationFlags: readServerMutationMask(node),
       biomass: node.biomass,
       isOwnPlant,
@@ -8070,6 +9087,7 @@ function handleError(payload: unknown): void {
   const error = payload as ErrorPayload;
   console.log('[PlantLegacy] ERROR received:', error);
   setDetail(`ERROR: ${error.code} - ${error.message}`);
+  notify(`Server error: ${error.code}`, 'error', 4000);
   if (error.code === 'SESSION_REPLACED') {
     // The same account opened somewhere else and the server kicked this
     // socket. Reconnecting would quietly come back as a guest.
@@ -8260,7 +9278,7 @@ function handlePlantSync(payload: unknown): void {
       const nodeTypeNum = typeMap[node.type] ?? 0;
       // Use server-authoritative radius (Murray's law) if available
       const radius = node.radius ?? nodeRadius(node.biomass, nodeTypeNum, node.y);
-      const health = Math.min(1, node.biomass / 10);
+      const health = clientNodeHealth(node);
       const existing = isOwn ? plantNodes.get(node.id) : undefined;
 
       // Server-authoritative growth timing
@@ -8268,12 +9286,14 @@ function handlePlantSync(payload: unknown): void {
       let growthProgress: number;
 
       if (node.growthTimeSeconds !== undefined && node.growthStartTick !== undefined) {
-        const elapsedTicks = Math.max(0, serverTick - node.growthStartTick);
-        const serverProgress = Math.min(
-          1,
-          elapsedTicks / (node.growthTimeSeconds * SERVER_TICK_RATE_HZ),
-        );
-        growthProgress = node.growthProgress ?? serverProgress;
+        growthProgress = resolveDrawnProgress({
+          serverProgress: node.growthProgress,
+          serverTick,
+          growthStartTick: node.growthStartTick,
+          growthTimeSeconds: node.growthTimeSeconds,
+          previousProgress: existing?.growthProgress,
+          tickRateHz: SERVER_TICK_RATE_HZ,
+        });
         const totalMs = node.growthTimeSeconds * 1000;
         spawnTime = performance.now() - growthProgress * totalMs;
       } else {
@@ -8318,17 +9338,22 @@ function handlePlantSync(payload: unknown): void {
       plantEnergy = plant.totalEnergy;
       // Reset growth sequence on full sync (Phase 1.5)
       resetPlantMirror();
-      // Track growing nodes from sync
+      // Track growing nodes from sync. A sync arriving mid-growth must not
+      // restart a part's clock: the local animation has been running between
+      // packets, so re-deriving the start from the server's quantised progress
+      // made the part stop for a beat and then jump. Keep the clock already
+      // running, and stamp one only for a part we were not animating yet.
+      const priorGrowth = new Map(growingNodes);
       growingNodes.clear();
       const now = performance.now();
       for (const node of target.values()) {
         if ((node.growthProgress ?? 1.0) < 1.0) {
           // Use server-authoritative growthTimeSeconds for duration
-          const durationMs = (node.growthTimeSeconds ?? 5) * 1000;
+          const durationMs = Math.max(1, (node.growthTimeSeconds ?? 5) * 1000);
           const progress = node.growthProgress ?? 0;
-          const elapsed = progress * durationMs;
+          const existingClock = priorGrowth.get(node.id);
           growingNodes.set(node.id, {
-            startTime: now - elapsed,
+            startTime: existingClock?.startTime ?? now - progress * durationMs,
             duration: durationMs,
           });
         }
@@ -8449,7 +9474,7 @@ function handlePlantCreated(payload: unknown): void {
   for (const node of created.plant.nodes) {
     const nodeTypeNum = typeMap[node.type] ?? 0;
     const radius = node.radius ?? nodeRadius(node.biomass, nodeTypeNum);
-    const health = Math.min(1, node.biomass / 10);
+    const health = clientNodeHealth(node);
     otherPlant.set(node.id, {
       id: node.id,
       position: surfacePosition(node.x, node.z, node.y),
@@ -8484,7 +9509,7 @@ function handlePlantCreated(payload: unknown): void {
     const allNodes = [...plantNodes.values(), ...otherNodes];
     webgpuRenderer.updatePlants(allNodes, performance.now());
   }
-  setDetail(`New player joined: ${created.plant.id}`);
+  notify('Another plant has sprouted nearby', 'info', 2200);
 }
 
 function handlePlantRemoved(payload: unknown): void {
@@ -8526,7 +9551,7 @@ function handlePlantRemoved(payload: unknown): void {
       const allNodes = [...plantNodes.values(), ...otherNodes];
       webgpuRenderer.updatePlants(allNodes, performance.now());
     }
-    setDetail(`Player left: ${removed.plantId}`);
+    notify('A player left the world', 'info', 2000);
   }
 }
 
@@ -8659,6 +9684,9 @@ async function connect(): Promise<void> {
         accessToken: reconnectData?.accessToken,
         plantId: reconnectData?.plantId,
         reconnectToken: reconnectData?.reconnectToken,
+        // The name the menu shows. The server sanitizes and caps it; the menu is
+        // the only place a player chooses it.
+        displayName: currentDisplayName(),
       },
     });
     console.log('[PlantLegacy] Sending HELLO:', hello);
@@ -8724,6 +9752,9 @@ async function connect(): Promise<void> {
       if (welcome && (!cameraFramed || plantChanged)) {
         cameraFramed = true;
         framedPlantId = welcome.plantId;
+        // No nodes in the mirror yet: the fit below is a guess at the start
+        // distance, so ask for one refit when the first own node lands.
+        refitFramingOnFirstNodes = true;
         if (welcome.rootNode) {
           // rootNode.y is surface-relative (usually 0); framing on it directly
           // put the initial camera inside the hill. Map it to the drawn surface
@@ -8798,6 +9829,21 @@ async function connect(): Promise<void> {
   };
 }
 
+/**
+ * Whether the pane is being driven by fingers rather than a pointer.
+ *
+ * This is the same query the stylesheet uses to choose its finger layout, read here
+ * because the scale depends on it: a layout that exists to make targets big enough
+ * for a thumb must not be shrunk. It is the *finger* query and not "is there a fine
+ * pointer", because a touchscreen laptop has both and is used with a mouse - it
+ * reports hover, so it scales - while an automation browser that reports no pointer
+ * capability at all is not a phone and must not be treated as one.
+ */
+function isFingerLayout(): boolean {
+  if (typeof window.matchMedia !== 'function') return false;
+  return window.matchMedia('(hover: none) and (pointer: coarse)').matches;
+}
+
 /** The size the game is actually seen at: the element it fills, not the window. */
 function viewportSize(): { width: number; height: number } {
   return {
@@ -8817,6 +9863,12 @@ function viewportSize(): { width: number; height: number } {
  */
 function applyViewportSize(): void {
   const { width, height } = viewportSize();
+  // The overlay scales with the pane, so a small pane shows the whole interface
+  // smaller rather than switching to a sheet that covers the world.
+  setUiScale(
+    document.documentElement.style,
+    uiScaleForPane({ paneW: width, paneH: height, finePointer: !isFingerLayout() }),
+  );
   camera.aspect = width / height;
   camera.updateProjectionMatrix();
   renderer.setSize(width, height);
@@ -8830,11 +9882,25 @@ function applyViewportSize(): void {
 // Resize handler
 window.addEventListener('resize', applyViewportSize);
 
+// Plugging in a mouse changes which layout is right, without resizing anything.
+if (typeof window.matchMedia === 'function') {
+  const pointerQuery = window.matchMedia('(hover: hover) and (pointer: fine)');
+  const onPointerCapability = (): void => applyViewportSize();
+  if (typeof pointerQuery.addEventListener === 'function') {
+    pointerQuery.addEventListener('change', onPointerCapability);
+  } else if (typeof pointerQuery.addListener === 'function') {
+    pointerQuery.addListener(onPointerCapability);
+  }
+}
+
 // A container can change size without the window resizing (a resized panel, a
 // sidebar opening), which left the buffer at the old size. The element is the
 // authority, so watch it directly.
 if (typeof ResizeObserver !== 'undefined' && app) {
   let observerSize = `${app.clientWidth}x${app.clientHeight}`;
+  // The observer's first callback reports the size it already had and returns
+  // early, so the opening frame would keep the stylesheet's default scale.
+  applyViewportSize();
   new ResizeObserver(() => {
     const next = `${app.clientWidth}x${app.clientHeight}`;
     if (next === observerSize) return;
@@ -9195,8 +10261,15 @@ function renderFrame(deltaTime: number): void {
         growingNodes.delete(nodeId);
         continue;
       }
+      // A zero or non-finite duration would divide to NaN, and a NaN progress
+      // poisons the whole plant's drawn bounds: the body leaves the frame until
+      // the server reports the part finished. One bad tick must finish a part,
+      // never blank a plant.
+      const duration =
+        Number.isFinite(growthInfo.duration) && growthInfo.duration > 0 ? growthInfo.duration : 1;
       const elapsed = Math.max(0, growNow - growthInfo.startTime);
-      const progress = Math.min(1.0, elapsed / growthInfo.duration);
+      const raw = Number.isFinite(elapsed) ? elapsed / duration : 1;
+      const progress = Math.min(1.0, Math.max(0, raw));
       if (progress >= 1.0) {
         node.growthProgress = 1.0;
         growingNodes.delete(nodeId);
@@ -9217,8 +10290,11 @@ function renderFrame(deltaTime: number): void {
         otherGrowingNodes.delete(nodeId);
         continue;
       }
+      const duration =
+        Number.isFinite(growthInfo.duration) && growthInfo.duration > 0 ? growthInfo.duration : 1;
       const elapsed = Math.max(0, growNow - growthInfo.startTime);
-      const progress = Math.min(1.0, elapsed / growthInfo.duration);
+      const raw = Number.isFinite(elapsed) ? elapsed / duration : 1;
+      const progress = Math.min(1.0, Math.max(0, raw));
       if (progress >= 1.0) {
         node.growthProgress = 1.0;
         otherGrowingNodes.delete(nodeId);
@@ -9273,6 +10349,9 @@ function renderFrame(deltaTime: number): void {
     updateGrowthDebug();
     // Keep WebGPU plant/ground lighting in sync with the visual sun every frame.
     webgpuRenderer?.setSunDirection(environmentRenderer.getSunDirection());
+    webgpuRenderer?.setSunWarmth(environmentRenderer.getSunWarmth());
+    // Exposure grade: a lift at golden hour, a crush at night, from render.json.
+    renderer.toneMappingExposure = environmentRenderer.getExposureGrade();
     webgpuRenderer?.setSoilMoisture(environmentRenderer.getSoilMoisture());
   }
 
@@ -9301,11 +10380,20 @@ function renderFrame(deltaTime: number): void {
   // rebuild every frame unlike the WebGPU renderer which does joint matrices).
   if (growingNodes.size > 0 || otherGrowingNodes.size > 0) {
     const growNow2 = performance.now();
+    const otherNodes: PlantNodeData[] = [];
+    for (const nodes of otherPlayerPlants.values()) otherNodes.push(...nodes.values());
+    const allNodes = [...plantNodes.values(), ...otherNodes];
+    // Repack the raymarched body every frame: it is a buffer upload, not a
+    // rebuild, and it is the only way the emergent tube moves with the camera
+    // instead of stepping ten times a second.
+    plantRenderer?.updateSdfFrame(allNodes);
     if (growNow2 - lastGrowthUpdateTime >= GROWTH_UPDATE_INTERVAL_MS) {
-      const otherNodes: PlantNodeData[] = [];
-      for (const nodes of otherPlayerPlants.values()) otherNodes.push(...nodes.values());
-      const allNodes = [...plantNodes.values(), ...otherNodes];
       if (plantRenderer) plantRenderer.updatePlantData(allNodes);
+      // The WebGPU pass bakes the emerging positions into its vertices, so it
+      // only moves when it is given the new progress. It used to be fed on state
+      // packets alone - twice a second - while the progress advanced every frame,
+      // which is why growth visibly stalled and then jumped forward in steps.
+      if (webgpuRenderer) webgpuRenderer.updatePlants(allNodes, growNow2);
       lastGrowthUpdateTime = growNow2;
     }
   }
@@ -9461,6 +10549,13 @@ function renderAccountChip(confirming: boolean): void {
     text-overflow: ellipsis; white-space: nowrap;`;
   name.textContent = session.displayName ?? 'Signed in';
   accountChip.append(dot, name);
+  if (session.username) {
+    const handle = document.createElement('span');
+    handle.style.cssText = `font-size: var(--hud-font-sm); color: var(--ink-dim);
+      letter-spacing: 0.02em; max-width: 14ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;`;
+    handle.textContent = `@${session.username}`;
+    accountChip.append(handle);
+  }
 
   if (!confirming) {
     accountChip.append(chipButton('Sign out', () => renderAccountChip(true)));
@@ -9739,6 +10834,7 @@ async function handleSignOut(): Promise<void> {
   }
   connecting = false;
   entryFlowSignedOut(entryFlow);
+  entryScreen.setAccount(null);
   entryScreen.render(entryFlow);
 }
 
@@ -9748,8 +10844,13 @@ async function handleSignOut(): Promise<void> {
 // chooses, and the overlay stays up until the server has welcomed us.
 const entryFlow = createEntryFlowStateMachine();
 
-function saveSession(accessToken: string, refreshToken: string, displayName?: string): void {
-  saveReconnectData({ accessToken, refreshToken, displayName });
+function saveSession(session: {
+  accessToken: string;
+  refreshToken: string;
+  displayName?: string;
+  username?: string;
+}): void {
+  saveReconnectData(session);
 }
 
 /**
@@ -9763,6 +10864,7 @@ function clearPlantIdentity(): void {
     accessToken: stored?.accessToken,
     refreshToken: stored?.refreshToken,
     displayName: stored?.displayName,
+    username: stored?.username,
   });
 }
 
@@ -9771,8 +10873,18 @@ async function handleSignIn(username: string, password: string): Promise<void> {
   entryScreen.render(entryFlow);
   try {
     const session = await signIn(fetch, httpOrigin, { username, password });
-    saveSession(session.accessToken, session.refreshToken, session.displayName ?? username);
+    saveSession({
+      accessToken: session.accessToken,
+      refreshToken: session.refreshToken,
+      displayName: session.displayName ?? username,
+      username: session.username ?? username,
+    });
     entryFlowAuthenticated(entryFlow, session.displayName ?? username);
+    entryScreen.setAccount({
+      displayName: session.displayName ?? username,
+      username: session.username ?? username,
+    });
+    entryScreen.setDisplayName(session.displayName ?? username);
     entryScreen.render(entryFlow);
     void connect();
   } catch (error) {
@@ -9790,8 +10902,18 @@ async function handleSignUp(
   entryScreen.render(entryFlow);
   try {
     const session = await signUp(fetch, httpOrigin, { username, displayName, password });
-    saveSession(session.accessToken, session.refreshToken, session.displayName ?? displayName);
+    saveSession({
+      accessToken: session.accessToken,
+      refreshToken: session.refreshToken,
+      displayName: session.displayName ?? displayName,
+      username: session.username ?? username,
+    });
     entryFlowAuthenticated(entryFlow, session.displayName ?? displayName);
+    entryScreen.setAccount({
+      displayName: session.displayName ?? displayName,
+      username: session.username ?? username,
+    });
+    entryScreen.setDisplayName(session.displayName ?? displayName);
     entryScreen.render(entryFlow);
     void connect();
   } catch (error) {
@@ -9812,12 +10934,18 @@ function modalMount(shell: UIShell | null): HTMLElement {
 // Declared here, built in startEntryFlow(): the shell and its modal layer only
 // exist after initC01(), and an overlay mounted before that lands on <body> with
 // an ad-hoc z-index instead of in the layer stack.
-let entryScreen!: EntryScreen;
+let entryScreen!: MainMenu;
 
-const entryCallbacks: EntryScreenCallbacks = {
-  onContinue: () => {
-    // Keep the stored session: connect() refreshes it if needed.
-    entryFlowAuthenticated(entryFlow, entryFlow.displayName);
+const entryCallbacks: MainMenuCallbacks = {
+  // Play is the only way in now: with a stored session it resumes the account,
+  // without one it starts a guest plant. The name comes from the box.
+  onPlay: (displayName) => {
+    rememberDisplayName(displayName);
+    if (entryFlow.hasSession) {
+      entryFlowAuthenticated(entryFlow, displayName);
+    } else {
+      entryFlowContinueAsGuest(entryFlow);
+    }
     entryScreen.render(entryFlow);
     void connect();
   },
@@ -9835,11 +10963,6 @@ const entryCallbacks: EntryScreenCallbacks = {
   onSignUp: (username, displayName, password) => {
     void handleSignUp(username, displayName, password);
   },
-  onGuest: () => {
-    entryFlowContinueAsGuest(entryFlow);
-    entryScreen.render(entryFlow);
-    void connect();
-  },
   onReseed: () => {
     entryFlowReseed(entryFlow);
     entryScreen.render(entryFlow);
@@ -9851,10 +10974,134 @@ const entryCallbacks: EntryScreenCallbacks = {
     entryFlowBack(entryFlow);
     entryScreen.render(entryFlow);
   },
+  onCancelConnect: () => {
+    entryFlowCancelConnect(entryFlow);
+    entryScreen.render(entryFlow);
+    // A hung handshake has no timeout of its own, so the socket is closed here.
+    // Without this the connection could still complete and drop the player into
+    // the world they just backed out of.
+    const socket = ws;
+    suppressReconnect = true;
+    ws = null;
+    if (
+      socket &&
+      (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)
+    ) {
+      socket.close(1000, 'Cancelled');
+    }
+    connecting = false;
+    setStatus('Offline', 'down');
+  },
+  onSignOut: () => {
+    void handleSignOut();
+  },
+  onSettings: () => {
+    settingsPanel?.setOpen(true);
+  },
+  onShop: () => {
+    openShop();
+  },
 };
 
+/** The name the menu will send with HELLO. */
+function currentDisplayName(): string {
+  return entryFlow.displayName || menuAccount()?.displayName || localProfile.displayName || '';
+}
+
+/** The account, when this tab holds a session. */
+function menuAccount(): MainMenuAccount | null {
+  const stored = loadReconnectData();
+  if (!stored?.accessToken && !stored?.refreshToken) return null;
+  return { displayName: stored.displayName ?? 'Plant Keeper', username: stored.username };
+}
+
+let localProfile: LocalProfile = { displayName: '', avatar: null, tutorialSeen: false };
+/** Set by initC01; the title screen is built after it returns. */
+let resolvedUiConfig: import('./config/clientConfig.js').UIConfig | null = null;
+
+function rememberDisplayName(displayName: string): void {
+  localProfile = saveProfile(window.localStorage, { displayName });
+}
+
+function rememberAvatar(avatar: string | null): void {
+  localProfile = saveProfile(window.localStorage, { avatar });
+}
+
+let shopPanel: ShopPanel | null = null;
+
+function openShop(): void {
+  if (shopPanel) return;
+  const layer = uiShell?.getLayer('modal') ?? document.body;
+  entryScreen?.setOverlayOpen(true);
+  shopPanel = createShopPanel({
+    config: shopConfig,
+    mount: layer,
+    onClose: () => {
+      shopPanel?.destroy();
+      shopPanel = null;
+      entryScreen?.setOverlayOpen(false);
+    },
+  });
+}
+
+/** Close the shop from outside it: entering the world, or leaving the menu. */
+function closeShop(): void {
+  if (!shopPanel) return;
+  shopPanel.destroy();
+  shopPanel = null;
+  entryScreen?.setOverlayOpen(false);
+}
+
 function startEntryFlow(): void {
-  entryScreen = new EntryScreen({ mount: modalMount(uiShell), callbacks: entryCallbacks });
+  localProfile = loadProfile(window.localStorage);
+  // Read the world's hour before the first frame. The menu used to paint its own
+  // cycle start and then snap to the server time a moment later, which read as a
+  // day-to-night flash on every reload.
+  void fetchBootTime().then((timeOfDay) => {
+    if (entryScreen) return;
+    mountMenu(timeOfDay);
+  });
+}
+
+/** The world's hour as of boot, reused by the game world's first frame. */
+let bootWorldTime: number | null = null;
+
+/** The world's time of day at boot, or null if it could not be read in time. */
+async function fetchBootTime(): Promise<number | null> {
+  const request = fetchWorldTime(window.fetch.bind(window), httpOrigin);
+  const budget = new Promise<null>((resolve) => {
+    window.setTimeout(() => resolve(null), 900);
+  });
+  const time = await Promise.race([request, budget]);
+  bootWorldTime = time ? time.timeOfDay : null;
+  // No estimate means no priming: the renderer's own default is no worse than a
+  // guess, and the first broadcast corrects it anyway.
+  if (bootWorldTime !== null) environmentRenderer?.primeTimeOfDay(bootWorldTime);
+  return bootWorldTime;
+}
+
+function mountMenu(initialTimeOfDay: number | null): void {
+  if (entryScreen) return;
+  entryScreen = new MainMenu({
+    mount: modalMount(uiShell),
+    callbacks: entryCallbacks,
+    ui:
+      resolvedUiConfig ??
+      (() => {
+        throw new Error('UI config must load before the title screen');
+      })(),
+    // The menu shows the world's sky, not a sky of its own.
+    initialTimeOfDay,
+    cycleLengthS: dayNightConfig.cycleLengthS,
+    fetchWorldTime: () => fetchWorldTime(window.fetch.bind(window), httpOrigin),
+    account: menuAccount(),
+    displayName: menuAccount()?.displayName ?? localProfile.displayName,
+    avatar: localProfile.avatar,
+    onProfileChange: (profile) => {
+      if (profile.avatar !== undefined) rememberAvatar(profile.avatar);
+      if (profile.displayName !== undefined) rememberDisplayName(profile.displayName);
+    },
+  });
   const stored = loadReconnectData();
   entryFlowBoot(entryFlow, Boolean(stored?.accessToken || stored?.refreshToken));
   entryScreen.render(entryFlow);
@@ -9918,6 +11165,13 @@ interface PlantLegacyDebugHandle {
   readonly mutationLook: MutationLook | null;
   readonly plantLabels: { count(): number } | null;
   readonly environmentRenderer: EnvironmentRenderer | null;
+  /** Why the camera is where it is: automatic framing state. */
+  readonly cameraStatus: () => {
+    userMoved: boolean;
+    refitPending: boolean;
+    easing: boolean;
+    framing: boolean;
+  };
   /** Why Root Sight is open or shut: counts and a one-line summary. */
   readonly rootSightStatus: () => {
     enabled: boolean;
@@ -9982,6 +11236,12 @@ if (import.meta.env.DEV) {
     get controls() {
       return controls;
     },
+    cameraStatus: () => ({
+      userMoved: cameraUserMoved,
+      refitPending: refitFramingOnFirstNodes,
+      easing: targetCameraDistance > 0,
+      framing: cameraFocusTween !== null,
+    }),
     plantNodes,
     otherPlayerPlants,
     get inputBus() {

@@ -44,6 +44,7 @@ const tempCameraDir = new THREE.Vector3();
 export interface PlantRendererConfig {
   // Legacy mesh-based config
   maxNodesPerPlant: number;
+  /** Radial segments around a tube; mirrors `mesh_tube_radial_segments`. */
   tubeRingCount: number;
   tubeLengthSegments: number;
   leafCountPerNode: number;
@@ -103,7 +104,7 @@ export interface PlantRendererConfig {
 export const DEFAULT_CONFIG: PlantRendererConfig = {
   // Legacy mesh-based config
   maxNodesPerPlant: 1000,
-  tubeRingCount: 8,
+  tubeRingCount: 12,
   tubeLengthSegments: 8,
   leafCountPerNode: 1,
   leafSize: 0.25,
@@ -205,7 +206,9 @@ class PlantRenderer {
   private pendingGroundQuery: ((x: number, z: number) => number) | null = null;
   private pendingGroundMesh: THREE.Object3D | null = null;
 
-  constructor(config: PlantRendererConfig) {
+  /** Every field has a default, so a caller that only cares about the mesh pass
+   *  can build one without carrying fifty tunables. */
+  constructor(config: Partial<PlantRendererConfig>) {
     this.config = { ...DEFAULT_CONFIG, ...config };
     this.scene = new THREE.Scene();
   }
@@ -214,6 +217,15 @@ class PlantRenderer {
   setGroundQuery(query: ((x: number, z: number) => number) | null): void {
     this.meshRenderer?.setGroundQuery(query);
     this.pendingGroundQuery = query;
+  }
+
+  /**
+   * The drawn surfaces a click can land on, forwarded to the mesh pass.
+   * Empty when the mesh pass has not been built yet, which is also when the
+   * plant is not on screen.
+   */
+  pickSurfaces(): ReturnType<MeshPlantRenderer['pickSurfaces']> {
+    return this.meshRenderer?.pickSurfaces() ?? [];
   }
 
   /** The drawn ground mesh, forwarded to the mesh pass. */

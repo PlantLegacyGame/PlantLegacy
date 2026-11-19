@@ -190,21 +190,17 @@
             "value": [[0, 0], [0.2, 0.3], [0.5, 0.8], [0.8, 0.95], [1.0, 1.0]],
             "notes": "Piecewise-linear mineral factor curve"
         },
-        "consumption_trigger_tile_mineral_threshold": {
-            "type": "integer",
-            "value": 20,
-            "range": [0, 100],
-            "notes": "Tile mineral threshold for consumption trigger"
+        "light_dirty_threshold": {
+            "type": "number",
+            "value": 0.05,
+            "range": [0, 1],
+            "notes": "Light change below this is not worth a RESOURCE_UPDATE."
         },
-        "consumption_trigger_dung_item": {
-            "type": "boolean",
-            "value": true,
-            "notes": "Enable dung consumption trigger"
-        },
-        "consumption_trigger_fertilizer_item": {
-            "type": "boolean",
-            "value": true,
-            "notes": "Enable fertilizer consumption trigger"
+        "resource_dirty_threshold": {
+            "type": "number",
+            "value": 0.1,
+            "range": [0, 1],
+            "notes": "Moisture or mineral change below this is not worth a RESOURCE_UPDATE."
         },
         "diffusion_rate": {
             "type": "number",

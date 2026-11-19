@@ -1,11 +1,5 @@
 import type { ConfigFile } from '@plant-legacy/shared/config';
-import {
-  readArray,
-  readBoolean,
-  readInteger,
-  readNumber,
-  readNumberArray,
-} from '@plant-legacy/shared/config';
+import { readArray, readInteger, readNumber, readNumberArray } from '@plant-legacy/shared/config';
 import { clamp, lerp } from '@plant-legacy/shared/math';
 import { createTileAddressing, type TileAddressing, type TileBounds } from './tileAddressing.ts';
 
@@ -41,9 +35,10 @@ export interface ResourcesConfig {
   lightFactorCurve: [number, number][];
   moistureFactorCurve: [number, number][];
   mineralFactorCurve: [number, number][];
-  consumptionTriggerTileMineralThreshold: number;
-  consumptionTriggerDungItem: boolean;
-  consumptionTriggerFertilizerItem: boolean;
+  /** A light change at or below this is not worth a broadcast. */
+  lightDirtyThreshold: number;
+  /** A moisture or mineral change at or below this is not worth a broadcast. */
+  resourceDirtyThreshold: number;
   diffusionRate: number;
   maxAbsorptionPerTick: number;
   groundwaterBase: number;
@@ -199,17 +194,8 @@ export function loadResourcesConfig(configs: Map<string, ConfigFile>): Resources
     lightFactorCurve: lightFactorCurveRaw,
     moistureFactorCurve: moistureFactorCurveRaw,
     mineralFactorCurve: mineralFactorCurveRaw,
-    consumptionTriggerTileMineralThreshold: readInteger(
-      configs,
-      'resources',
-      'consumption_trigger_tile_mineral_threshold',
-    ),
-    consumptionTriggerDungItem: readBoolean(configs, 'resources', 'consumption_trigger_dung_item'),
-    consumptionTriggerFertilizerItem: readBoolean(
-      configs,
-      'resources',
-      'consumption_trigger_fertilizer_item',
-    ),
+    lightDirtyThreshold: readNumber(configs, 'resources', 'light_dirty_threshold'),
+    resourceDirtyThreshold: readNumber(configs, 'resources', 'resource_dirty_threshold'),
     diffusionRate: readNumber(configs, 'resources', 'diffusion_rate'),
     maxAbsorptionPerTick: readNumber(configs, 'resources', 'max_absorption_per_tick'),
     groundwaterBase: readInteger(configs, 'resources', 'groundwater_base'),
@@ -285,8 +271,6 @@ export interface PlantForResource {
 // Broadcast a tile to clients only when a resource component has changed by
 // more than this amount since it was last sent. Prevents full-grid rebroadcasts
 // every tick from slow drift (day/night light, diffusion).
-const LIGHT_DIRTY_THRESHOLD = 0.05;
-const RESOURCE_DIRTY_THRESHOLD = 0.1;
 /** How often the whole-grid soil passes run (moisture, minerals, diffusion). */
 const SOIL_STEP_INTERVAL_S = 0.25;
 
@@ -508,9 +492,9 @@ export class ResourceWorld {
           prevLight === undefined ||
           prevMoisture === undefined ||
           prevMinerals === undefined ||
-          Math.abs(t.light - prevLight) > LIGHT_DIRTY_THRESHOLD ||
-          Math.abs(t.moisture - prevMoisture) > RESOURCE_DIRTY_THRESHOLD ||
-          Math.abs(t.minerals - prevMinerals) > RESOURCE_DIRTY_THRESHOLD;
+          Math.abs(t.light - prevLight) > this.config.lightDirtyThreshold ||
+          Math.abs(t.moisture - prevMoisture) > this.config.resourceDirtyThreshold ||
+          Math.abs(t.minerals - prevMinerals) > this.config.resourceDirtyThreshold;
         if (!changed) continue;
 
         seen.add(tile);
@@ -871,7 +855,7 @@ export class ResourceWorld {
       tile.light = light;
       // Day/night drifts light every tick; only rebroadcast tiles whose light
       // actually crossed the dirty threshold since the last broadcast.
-      if (Math.abs(light - oldLight) > LIGHT_DIRTY_THRESHOLD) {
+      if (Math.abs(light - oldLight) > this.config.lightDirtyThreshold) {
         this.markCellDirty(cell);
       }
     }
@@ -1087,9 +1071,9 @@ export class ResourceWorld {
       const after = next[cell];
       const before = this.cells[cell];
       const changed =
-        Math.abs(after.light - before.light) > LIGHT_DIRTY_THRESHOLD ||
-        Math.abs(after.moisture - before.moisture) > RESOURCE_DIRTY_THRESHOLD ||
-        Math.abs(after.minerals - before.minerals) > RESOURCE_DIRTY_THRESHOLD;
+        Math.abs(after.light - before.light) > this.config.lightDirtyThreshold ||
+        Math.abs(after.moisture - before.moisture) > this.config.resourceDirtyThreshold ||
+        Math.abs(after.minerals - before.minerals) > this.config.resourceDirtyThreshold;
       this.cells[cell] = after;
       if (changed) this.markCellDirty(cell);
     }
@@ -1346,29 +1330,6 @@ export class ResourceWorld {
       }
     }
     return curve[curve.length - 1][1];
-  }
-
-  checkConsumptionTriggers(plant: PlantForResource): {
-    tileMineralTrigger: boolean;
-    dungTrigger: boolean;
-    fertilizerTrigger: boolean;
-  } {
-    const rootNode = plant.nodes.get(plant.rootNodeId);
-    if (!rootNode) {
-      return { tileMineralTrigger: false, dungTrigger: false, fertilizerTrigger: false };
-    }
-
-    const tileX = this.worldToTileX(rootNode.x);
-    const tileZ = this.worldToTileZ(rootNode.z);
-    const resources = this.getTileResourcesAt(tileX, tileZ);
-
-    return {
-      tileMineralTrigger:
-        resources !== null &&
-        resources.minerals >= this.config.consumptionTriggerTileMineralThreshold,
-      dungTrigger: this.config.consumptionTriggerDungItem,
-      fertilizerTrigger: this.config.consumptionTriggerFertilizerItem,
-    };
   }
 
   getState(): ResourceWorldState {

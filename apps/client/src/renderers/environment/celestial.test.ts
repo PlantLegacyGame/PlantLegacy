@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-
 import * as THREE from 'three';
 import type { RenderConfig } from '../../config/clientConfig.ts';
 import {
@@ -8,7 +7,12 @@ import {
   applyCelestialLighting,
   type CelestialElevation,
   type CelestialLightingTargets,
+  gradeExposure,
+  gradeSunColor,
+  moonIntensity,
   stepAmbientLighting,
+  sunWarmth,
+  updateCelestialBodies,
 } from './celestial.ts';
 
 const CONFIG: AmbientLightingConfig = {
@@ -168,6 +172,8 @@ describe('applyCelestialLighting', () => {
         uSunColor: { value: new THREE.Color() },
         uMoonDir: { value: new THREE.Vector3() },
         uSunIntensity: { value: 0 },
+        uMoonIntensity: { value: 0 },
+        uSunWarmth: { value: 0 },
       },
     });
     return {
@@ -216,5 +222,113 @@ describe('applyCelestialLighting', () => {
     const night = targets(0.35, NIGHT);
     applyCelestialLighting(night);
     assert.ok(near(night.sunLight.intensity, renderConfig.sunIntensityNight * 0.35));
+  });
+});
+
+describe('sun and moon grading', () => {
+  const cfg = {
+    sunColorDay: '#ffffee',
+    sunColorDusk: '#ffa066',
+    sunIntensityNight: 0.15,
+  } as const;
+
+  it('leaves the sun white when it is high', () => {
+    assert.equal(sunWarmth(0.9), 0);
+    assert.equal(sunWarmth(0.45), 0);
+  });
+
+  it('warms the sun steadily as it drops, without a jump', () => {
+    const samples = [0.4, 0.3, 0.2, 0.1, 0.04].map((elev) => sunWarmth(elev));
+    for (let i = 1; i < samples.length; i += 1) {
+      assert.ok(samples[i]! >= samples[i - 1]!, 'warmth must not go backwards');
+    }
+    assert.ok(samples[0]! < 0.3, 'still fairly white a little above the horizon');
+    assert.ok(samples[samples.length - 1]! > 0.85, 'nearly full sunset on the horizon');
+  });
+
+  it('drops to no warmth below the horizon', () => {
+    assert.equal(sunWarmth(-0.05) < 0.7, true, 'fading as it sets');
+    assert.equal(sunWarmth(-0.2), 0, 'no sunset light once the sun is under');
+    assert.equal(sunWarmth(-0.9), 0, 'and none at midnight');
+  });
+
+  it('grades the colour between the two configured ends', () => {
+    const high = gradeSunColor(0.8, cfg, new THREE.Color()).getHexString();
+    assert.equal(`#${high}`, cfg.sunColorDay.toLowerCase(), 'noon is the day colour');
+
+    const low = gradeSunColor(0.0, cfg, new THREE.Color()).getHexString();
+    const dusk = new THREE.Color(cfg.sunColorDusk).getHexString();
+    // At the horizon it is almost entirely the dusk colour.
+    const lowRgb = new THREE.Color(`#${low}`);
+    const duskRgb = new THREE.Color(`#${dusk}`);
+    assert.ok(Math.abs(lowRgb.r - duskRgb.r) < 0.12);
+    assert.ok(lowRgb.b < 0.55, 'sunset is orange, not blue');
+  });
+
+  it('builds moonlight up from the horizon instead of switching it on', () => {
+    const moonrise = moonIntensity(-0.02, cfg, 1);
+    const higher = moonIntensity(-0.4, cfg, 1);
+    const midnight = moonIntensity(-0.95, cfg, 1);
+    assert.ok(moonrise < higher, 'a low moon is dimmer');
+    assert.ok(higher < midnight, 'the moon keeps strengthening');
+    assert.ok(moonIntensity(-1, cfg, 1) <= cfg.sunIntensityNight + 1e-9);
+    assert.ok(moonIntensity(-0.02, cfg, 1) >= 0.02, 'never fully dark');
+  });
+
+  it('ramps the moon halo in the sky with the moon that casts it', () => {
+    const renderCfg = { sunColorNight: '#7088a8', sunIntensityNight: 0.15 } as const;
+    const night = (sunElev: number) => {
+      const light = new THREE.DirectionalLight();
+      const ambient = new THREE.AmbientLight();
+      const skyMaterial = new THREE.ShaderMaterial({
+        uniforms: {
+          uSunDir: { value: new THREE.Vector3() },
+          uSunColor: { value: new THREE.Color() },
+          uMoonDir: { value: new THREE.Vector3() },
+          uSunIntensity: { value: 0 },
+          uMoonIntensity: { value: 0 },
+          uSunWarmth: { value: 0 },
+        },
+      });
+      const bodies = { sunDir: new THREE.Vector3(), moonDir: new THREE.Vector3() };
+      updateCelestialBodies(bodies, 0.75);
+      applyCelestialLighting({
+        config: renderCfg as unknown as RenderConfig,
+        sunLight: light,
+        ambientLight: ambient,
+        skyMaterial,
+        bodies,
+        elevation: { sunElev, dayFactor: 0, duskFactor: 0 },
+        sunOrbitalDistance: 100,
+        ambientIntensity: 0.2,
+        lightMultiplier: 1,
+      } as unknown as CelestialLightingTargets);
+      return skyMaterial.uniforms.uMoonIntensity.value as number;
+    };
+    assert.ok(night(-0.02) < 0.3, 'a low moon barely glows');
+    assert.ok(night(-0.95) > 0.9, 'an overhead moon glows fully');
+  });
+
+  it('still applies the weather multiplier to moonlight', () => {
+    assert.ok(moonIntensity(-0.9, cfg, 0.4) < moonIntensity(-0.9, cfg, 1));
+  });
+});
+
+describe('exposure grade', () => {
+  const cfg = { exposureDay: 1, exposureHorizon: 1.1, exposureNight: 0.9 } as const;
+
+  it('lifts golden hour and crushes the night', () => {
+    assert.equal(gradeExposure(1, cfg), cfg.exposureDay);
+    // The lift peaks just above the horizon, where the light is warmest.
+    assert.ok(Math.abs(gradeExposure(0.02, cfg) - cfg.exposureHorizon) < 1e-6);
+    assert.ok(Math.abs(gradeExposure(0, cfg) - cfg.exposureHorizon) < 0.03);
+    assert.ok(Math.abs(gradeExposure(-1, cfg) - cfg.exposureNight) < 1e-6);
+  });
+
+  it('moves continuously through sunset, with no step', () => {
+    const samples = [0.5, 0.3, 0.1, 0.0, -0.1, -0.5].map((elev) => gradeExposure(elev, cfg));
+    for (let i = 1; i < samples.length; i += 1) {
+      assert.ok(Math.abs(samples[i]! - samples[i - 1]!) < 0.12, 'no jump between hours');
+    }
   });
 });

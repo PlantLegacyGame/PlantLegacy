@@ -41,13 +41,29 @@ describe('own plant anchor', () => {
   });
 
   it('filters the body to nodes that belong to this plant', () => {
-    const body = [{ id: 'a1b2c3d4:seed' }, { id: 'a1b2c3d4:seed.stem0' }, { id: 'deadbeef:seed' }];
+    // The ids here are the shape the server mints: sixteen characters of the
+    // plant id, then a colon, then the part's own name (INV-GR-05). An earlier
+    // version of this test used eight-character tags, and the client kept that
+    // shorter rule long after minting moved on - see ownBodyNodes.
+    const plantId = 'p_a1b2c3d4-1111-2222-3333-444455556666';
+    const body = [
+      { id: 'a1b2c3d4-1111-22:seed' },
+      { id: 'a1b2c3d4-1111-22:seed.stem0' },
+      { id: 'deadbeef-9999-88:seed' },
+    ];
     assert.deepEqual(
-      ownBodyNodes(body, 'p_a1b2c3d4-1111-2222').map((node) => node.id),
-      ['a1b2c3d4:seed', 'a1b2c3d4:seed.stem0'],
+      ownBodyNodes(body, plantId).map((node) => node.id),
+      ['a1b2c3d4-1111-22:seed', 'a1b2c3d4-1111-22:seed.stem0'],
+    );
+    // The eight-character prefix alone must not be enough: that is the shape the
+    // client accepted for a while, and it also matches a colliding plant.
+    assert.deepEqual(
+      ownBodyNodes([{ id: 'a1b2c3d4:seed' }], plantId).map((node) => node.id),
+      ['a1b2c3d4:seed'],
+      'an id it cannot read is kept, not dropped: an empty body is worse than a stale node',
     );
     // Synthetic ids with no plant tag must not blank the plant.
-    assert.equal(ownBodyNodes([{ id: 'node-1' }, { id: 'node-2' }], 'p_a1b2c3d4').length, 2);
+    assert.equal(ownBodyNodes([{ id: 'node-1' }, { id: 'node-2' }], plantId).length, 2);
     assert.equal(ownBodyNodes(body, null).length, 3);
   });
 });

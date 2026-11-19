@@ -21,9 +21,15 @@ Honest list. No feature promises (T42, RULE_13). Updated at every gate.
   scaling to hold target FPS. **Debug overlay** (`\`` key) shows fps, frame ms,
   triangles, draw calls, memory, network KB/s. **Pause on hidden tab**.
   Config served via `/config/render`, `/config/controls`, `/config/ui`.
-- **Client entry flow (2026-11-13):** title screen with Sign in / Create
-  account / Play as guest, and a reload-free "Plant a new seed" screen after a
-  plant dies. The client now calls `/auth/signup`, `/auth/login` and
+- **Title screen (2026-11-18):** a 2D cutout scene with four parallax layers
+  that drag and follow the pointer, an interactive mascot plant above the
+  logotype, a nickname box with generated defaults, Play / Settings / Shop, and
+  an avatar in the top right for signing in. `H` hides the menu and leaves the
+  scene. Sign-in and the "Plant a new seed" card open over the scene.
+  `GET /world/time` serves the world clock to it, so the menu and the game share
+  one hour. `apps/client/src/ui/MainMenu.ts` owns the DOM; `title/TitleScene.ts`,
+  `title/TitlePlant.ts`, `title/parallax.ts`, `title/plantMotion.ts` and
+  `title/plantName.ts` hold the behaviour. The old entry card is gone. The client now calls `/auth/signup`, `/auth/login` and
   `/auth/refresh`; until this it had no auth UI and never obtained an
   `accessToken`, so accounts were unreachable from the game even though the
   server supported them. An expired access token is refreshed before `HELLO`
@@ -69,7 +75,9 @@ Honest list. No feature promises (T42, RULE_13). Updated at every gate.
 - **T03 multiplayer world:** plants persist across disconnect (binary snapshot +
   event log in Postgres). Offline simulation tiers (Active/Near/Dormant) with
   catch-up integration. Interest management with spatial cells and entity caps.
-  Event bus for decoupled game events. Tick-budget metrics logged per tick.
+  Event bus for decoupled game events. Tick-time window (`TickMetrics`:
+  Active/Near/Dormant/total ms, over-budget ticks, peak Active share) served at
+  `GET /metrics`, with `TICK_BUDGET_WARNING` consumed rather than dropped.
   **Reconnect window (5 min), PLANT_SYNC on join, PLANT_CREATED/PLANT_REMOVED
   broadcasts and PLANT_SYNC_REQUEST on tab visibility are implemented.
   Authenticated and anonymous reclaim restore the full node set, and
@@ -99,9 +107,13 @@ Honest list. No feature promises (T42, RULE_13). Updated at every gate.
   easing, and Root Sight highlight. Renders on a transparent overlay canvas
   while WebGL keeps drawing the C03 environment. Debug readback is exposed via
   `window.__plantLegacy.webgpuRenderer.readRenderData()`.
-  **Root rendering:** simple mesh tubes (4 radial segments, configurable via
-  `root_sides`) with Murray's law tapering and gravitropic curvature — no SDF
-  raymarching issues, no seed visual conflict.   **Mutation appearance (ADR-059):** every render tier paints from
+  **Root rendering:** simple mesh tubes with Murray's law tapering and
+  gravitropic curvature — no SDF raymarching issues, no seed visual conflict.
+  Roots are 8 radial segments (`mesh_root_radial_segments`); this line used to say
+  4, configurable via `root_sides`, which no config file declared, so the client
+  always fell back to its compiled default and the key did nothing. The builder
+  clamps to at least 8 anyway, because fewer reads as a square prism once Root
+  Sight reveals it.   **Mutation appearance (ADR-059):** every render tier paints from
   `config/mutation_visuals.json` composed per organ family. The WebGPU mesh pass
   reads one composed record per plant from a storage buffer, the Three.js mesh
   pass composes per organ in JS, the impostor bake paints with the same records,
@@ -142,10 +154,163 @@ Honest list. No feature promises (T42, RULE_13). Updated at every gate.
   `movement.rerootSpeed` is consumed, and the Dev Panel has T06 buttons. The
   in-browser checklist is still outstanding, T02's substrate multiplier is 1.0,
   and drop pickup belongs to T51/T08A. Record: `docs/tasks/T06.md`.
+- **Title art pass (2026-11-17):** every cloud had a straight line hanging under
+  it. The "flat underside" was a rounded bar drawn under the puffs, so its bottom
+  edge sat five pixels below the lowest puff and three pixels past it at each end,
+  and the hard offset shadow underneath doubled it. The generator
+  (`title/cloudArt.ts`, with `cloudArt.test.ts` pinning it) now cuts the
+  silhouette with a clip path instead of drawing a band, shades the whole cloud
+  with one crown-to-base ramp rather than one ramp per puff, lights only the
+  crown, and keeps the viewBox tight to the underside so two clouds hang at the
+  same distance below their own boxes. The cumulus was rebuilt with a base tier
+  that shares a bottom line, because one wide puff thirty pixels below the rest
+  read as a sausage bolted to the side of the tower. The hills became curved
+  ridges with a sun-lit crest stroke instead of an even sawtooth, and the mascot
+  is now seven generated leaves in three depths with midribs, side veins, a
+  tender top leaf and a bud, rimmed on whichever edge faces the sky (it rimmed the
+  underside of every left-leaning leaf before).
+- **Title art pass, second cut (2026-11-17):** the clouds' undersides were
+  level. Cutting the silhouette was right, but a level cut made every cloud end on
+  the same ruler line, so the cut is now a shallow wave - contacts on the base line
+  with soft lifts between them, amplitude scaled to the cloud - and it still cannot
+  put anything below its own trough (`cloudArt.test.ts` pins both). The sun got a
+  hot core and a three-ring halo instead of one flat disc, and the moon became a
+  body: lit limb, dark far side, soft maria, all coloured from the palette. The
+  ground is read as a cut slice now, not a brown box: a lit lip, a four-stop depth
+  ramp, and soil closing over the stem. And the plant is one object across the soil
+  line - the stem continues into the ground in bark, forks into a taproot and two
+  uneven laterals, and those fork into tips with hairs, every strand drawn twice so
+  a pale root sits in a contact shadow instead of on the dirt. Nothing is cast onto
+  the ground: the stage is a cut slice and has no plane, so the contact shadow and
+  the soil darkening under the plant were removed rather than softened. The roots
+  were then rebuilt from numbers - tapered filled shapes rather than stroked lines,
+  branches starting on their parent's centre line and painted under it, hairs
+  computed on the strands so none of them float free - and `roots.test.ts` pins
+  those properties instead of leaving them to the eye. `--pl-root-band`
+  reserves the band the roots hang in, so the menu stack starts below them on every
+  viewport measured (357, 530 px wide; 15-19 px clearance).
+- **Input and layout pass (2026-11-17):** nothing binds F1–F12 and no bare
+  modifier is a toggle, so the browser keeps its own keys: the metrics overlay,
+  growth readout and tick readout are three switches in the dev panel's Debug tab
+  and `debug_toggle` is unbound (`config/controls.json`, pinned by
+  `keyPolicy.test.ts`). Under 560 px the inspect and inventory panels become one
+  full-width sheet with a tab switch instead of two cramped columns, chat becomes
+  a bottom sheet above the action bar and no longer opens itself for five
+  seconds on a new message (the Chat button carries an unread badge instead), and
+  the standalone top-left Settings corner button is gone — Settings lives in the
+  pause menu. A first spawn now fits the camera to the plant once its first node
+  arrives: the welcome pass can only use `camera_start_distance` (6 m, a
+  seedling four pixels wide in front of a hillside) and a young plant is framed
+  from `camera_young_elevation` so the eye is not left 0.24 m off the soil.
 - **Death reporting (2026-11-15):** a loss names what did it. `PlantDeathRecord.killedBy` carries the damage source (`tool`, `weather`, `herbivore`, `terrain`), the store that ran dry (`thirst`, `minerals`, `no_energy`), or `uprooted` for a plant that bled out after being torn free; `PLANT_REMOVED` and the reconnect report forward it as `source`, and the loss screen reads "It was damaged past saving by another player's tool" instead of stopping at "damage". An ungerminated seed is also sheltered from weather damage: the storm's rate is absolute rather than scaled by size, so a one-biomass seed died in its first storm tick (covered by `damagePipeline.test.ts`), and a failed germination no longer destroys the seed (`germination_failure_kills_seed` is false), so a bad spot costs a sprout attempt, not the plant.
+- **HUD pass (ADR-067):** one vitals card (top right) holds biomass, energy,
+  light, water and minerals with bars where a capacity exists, the single clock
+  ("Season 1 · Day 3 · 11:44", season countdown in the sub-line) and a weather
+  chip that turns amber for an approaching storm and pulses under a minute. The
+  status card keeps the body only and says nothing when the plant is healthy; the
+  old tick card is an operator readout switched from the dev panel, off by
+  default and refused without server-granted dev tools. Grow mode gets an edge tint, a crosshair, a badge and
+  a held-down Grow button instead of a line of text. A bottom action bar names
+  Grow / Inventory / Chat / Emotes / Hints / Menu with key badges, Escape opens a
+  pause menu (Resume, Settings, Controls, Leave to title), hints are contextual
+  and once-per-session, and HUD type has a config floor (`ui.hud_font_small_px`,
+  `ui.hud_font_secondary_px`) instead of bottoming out at 9.3px.
 - **C04 HUD and panels (2026-11-15):** top-centre body-state panel shows health words when rooted (Healthy/Stressed/Withering/Dying) and the phase otherwise, with biomass and its derived rate, health against the uproot ceiling, mutation count and upkeep, and `Day N · clock` with the weather forecast. Damage pulses an edge vignette and writes one factual toast. While uprooted, a D-pad and WASD/arrow keys steer the camera-relative crawl. `I` opens Inspect on the left (body stats, mutations, per-node health) and Inventory on the right, with the world visible between. Settings has Settings/Controls tabs (text size, reduced motion, generated key list). The HUD also shows energy, water and minerals against capacity and node count, keeps mutation energy and biomass bills separate, and Inspect adds mutation kind, share bars, totals and growth-pressure bars. The death screen repeats the detailed stats and the toast stack is cleared. Growth parts start at their minimum radius and thicken with biomass; damage and drought recompute radius so tissue visibly thins, canopy is shed before roots, and unhealed stem damage decays after a delay. Text updates cap at 10 Hz. Server sends `structure` in STATE/KEYFRAME, structural damage with PLANT_DAMAGE and `dayNumber` with WEATHER_UPDATE. Record: `docs/tasks/C04.md`.
 - Staging client on GitHub Pages, with the API served from the local compose
   stack through a tunnel.
+
+### 2026-11-20 — the interface scales with the pane
+
+- **The HUD shrinks instead of taking the pane (ADR-074).** Under 640px the vitals
+  card went full width and under 560px the player panels became one full-width
+  sheet — rules written for a phone, firing on every narrow pane. Measured in a
+  531x653 pane the vitals card took 21% of it and the inventory 87%, so the world was
+  visible only in the gaps. The whole overlay is now scaled by `--pl-ui-scale`
+  (0.72..1, from `ui/uiScale.ts`) with CSS `zoom`, and the two rearrangements are
+  gated on the finger layout instead. At 531x653: vitals 127x144 in the corner,
+  status 158x37, action bar 333x33, two 216px panels, nothing outside the pane.
+  At 1280x800 the scale is 1 and the layout is unchanged. The title screen carries
+  the inverse zoom, because it already fits itself to the pane.
+- **The scale is written on the first frame (ADR-075).** It was only written on
+  resize, and the resize observer's first callback is a no-op, so a freshly loaded
+  small pane stayed at full size until the window was nudged.
+
+### 2026-11-20 — the title plant is a set of things to touch
+
+- **The plant answers per part (ADR-072).** A leaf flicks about its own attachment
+  and alternates direction leaf to leaf, the stem rocks the whole canopy, the bud
+  nods and the roots flex; a double tap rattles everything; a drag from the top
+  bends the stem in two hinges and releasing springs it back through straight. A
+  press is a tap until it moves, so the bud at the top of the drawing is tappable
+  *and* is where a bend starts.
+- **The plant notices, without becoming a control.** It leans up to 3.2 degrees
+  toward a pointer over it, and a breeze passes every 9-21 seconds at most 2.4
+  degrees. No colour change, no outline, no glow: it is a drawing, and the only
+  thing a touch changes is the drawing's own motion.
+- **The background drags (ADR-073).** It never had: `.pl-scene` inherited
+  `pointer-events: none` from the world layer, so the handler could not fire, and
+  `touch-action: pan-y` turned a horizontal touch drag into a page scroll.
+- **The ground line answers to the plant (ADR-071 amendment).** A fixed share of the
+  pane height put the mascot above the top of a short pane (measured: 21px above at
+  1200x300). `horizonForPane` keeps the configured share while the plant fits,
+  pushes the line down when it does not, and stops at the ground band; the media
+  queries that held a second opinion are gone.
+- **A small pane keeps the essentials.** Under 560px tall (or when the column cannot
+  be placed without lifting it) the guest line and the H hint step aside, and the
+  title, the name and the three buttons stay reachable. Measured at 1280x800,
+  531x653, 1200x300 and 320x240: nothing outside the pane, plant included.
+
+### 2026-11-19 — mutations keep their proportions, and the sky loses its halos
+
+- **Mutation proportion (E13, ADR-070).** Growth length was the type's segment
+  length times the product of every size mutation and level card, uncapped: two
+  size mutations produced a side branch several times its own trunk. Both
+  `max_size_multiplier` (2, in `mutations.json`) and `max_child_length_ratio`
+  (1.6, in `growth.json`) are now config keys applied through
+  `clampChildSegmentLength` in the shared geometry module, so a mutation makes a
+  bigger plant instead of a dismembered one.
+- **Sun and moon (bug report: "halo around it and looking blurry").** The disc
+  faded over its own outer 40%, a `box-shadow` added a ring the size of its blur,
+  and a 400%-wide `::before` painted a second ring on top of the sky — the moon
+  the same at 320%. Both bodies are now a filled disc with one edge and no
+  shadow, mask or blur pass, and the light they cast lives where light belongs:
+  the horizon lobe now grades on `--pl-sun-glow` as well as the hour's bloom.
+- **The menu fits the pane it is drawn in (E17, ADR-071).** The title column was
+  laid out for a window: in a 900x420 pane Shop and Settings fell 18px below the
+  bottom, and at 1200x300 the whole menu was outside it. `title/menuFit.ts` scales
+  the column to clear the guest line and lifts what the scale floor cannot, so a
+  short pane overlaps the menu with its own plant rather than losing the buttons.
+  Verified across six pane sizes; 531x653 - this machine's in-app preview - fits
+  at scale 1.
+- **A growth is not re-priced while it runs (E16).** Target mass was re-quoted every
+  tick from the live mutation scale, and a mutation rolls per growth, so a size
+  mutation gained mid-flight finished the part heavier than quoted. The quote is
+  stamped on the node's first growth tick and frozen.
+- **The plant stopped disappearing mid-growth (E15).** A node id is the
+  plant's tag plus the part name; the client deleted any node that did not carry
+  its own tag, and its copy of the tag length was eight characters while the
+  server minted sixteen (INV-GR-05). Every node failed that test, so the first
+  growth event of a session pruned the whole mirror: the plant vanished, and Root
+  Sight's cavity - whose mouth is sized from the roots in that mirror - emptied
+  with it. Both came back when the next sync arrived, which is why it read as a
+  stutter rather than a crash. One owner now, `shared/growth/nodeId.ts`, imported
+  by the server's `nodeName` and by both client readers.
+- **Health reaches the scene (E14).** The inspect panel read health from
+  `nodeHealthStatus`, but nothing painted the 3D plant from it: a part could be
+  labelled Wilted and be drawn in the same green as a healthy one. `nodeHealthLook`
+  now hangs off the *same* bands, `MeshPlantRenderer.materialFor` takes the band
+  into its cache key, and a band change asks for one rebuild. Verified by
+  `plantHealth.test.ts` (*dries a part in the same bands the panel reads*).
+- **HUD measured, not eyeballed.** A harness (deleted afterwards) loaded the real
+  app at 1280×800 and walked title → world → inventory → pause → settings,
+  reporting geometry and every element whose content outgrew its box: no
+  overflow at any of the five surfaces, vitals 192×201 with the weather line
+  wrapping inside 167px, settings 670×198. Pause rows were the one real finding
+  and went from 39px to 44px.
+
+Covered by `pnpm verify` (1,178 tests). The sun/moon change is CSS and was not
+captured as an image: the preview tab cannot screenshot a page that runs a render
+loop, so the removal is verified by reading the computed styles, not by a picture.
 
 ### 2026-11-16 — Root Sight, gizmo, inventory, ledger
 
@@ -229,6 +394,90 @@ is gitignored and is not cited.
   reason line and a disabled **Unavailable** state rather than a button that
   lies. The prose no longer repeats the "Use:" sentence now that
   the panel generates it.
+- **The drawn plant got a second growth pass (2026-11-18).** Two things the
+  junction fix exposed, plus one config drift.
+
+  **Ring density follows the bend, not just the length.** A segment was sampled
+  with a flat `ceil(length / 0.05)` clamped to 4–12, so a 12 cm internode got
+  **four rings** and a strongly bent branch got the same four as a straight stem.
+  Four rings cannot draw a flared neck: the radius rule finishes most of its
+  necking inside the first quarter, which four evenly spaced rings render as
+  three facets. `chainSampleCount(length, bend)` now takes the curve's second
+  difference `|start - 2*control + end|` and solves `bend / (8 n²) ≤ tolerance`
+  against `chain_sagitta_tol_m`, and `chainSampleFractions` warps the ring
+  positions by the same exponent that shapes the radius, so they land where the
+  silhouette changes. The floor is 6 rings, the ceiling 16.
+
+  **The WebGPU pass read two keys nobody serves.** It drew tubes from
+  `tube_ring_count` and roots from `root_sides`; neither is a key in
+  `config/plant_renderer.json`, so the shipped pass silently used its compiled
+  defaults (**8 sides**) while the file declared `mesh_tube_radial_segments: 12`
+  and only the fallback Three.js path read it. Both paths now read the one key,
+  roots have their own (`mesh_root_radial_segments`, 8), and the cost is stated:
+  on a 16-node plant, 12 sides and the new rings take 1658 → 2022 vertices and
+  2470 → 3118 triangles (+22%/+26%).
+
+  Pinned by six new tests in `PlantMeshBuilder.test.ts` (bend raises the count,
+  length raises it, the cap holds, a missing length or bend still answers, the
+  sag stays inside the tolerance, the fractions are dense at the joint and exact
+  at both ends, and an even spacing when the taper is a straight cone).
+- **The UI answers the window instead of a phone's width (2026-11-18).** The
+  title's hero was a flat 380px column and its mascot stopped at 232px, so on a
+  2560 × 1440 monitor the menu was 15% of the screen — a mobile layout on a
+  desktop. The hero is now `--pl-hero: clamp(380px, 30vw, 560px)`, the name box
+  shares it, the mascot caps at 300px, and controls grow at `min-width: 1200px`.
+  Measured in an iframe harness at seven widths: 390 → 360px (92%, unchanged),
+  1280 → 384px (30%), 1440 → 432px, 1920 → 560px, 2560 → 560px (22%). The action
+  bar's finger layout now asks `(hover: none) and (pointer: coarse)`, so a
+  touchscreen laptop keeps its key badges. See ADR-069.
+
+  Also corrected: `docs/tunables.md` had stale key counts for `dev`, `emotes`,
+  `net_proto`, `root_sight` and `water`; every row now equals the number of keys
+  its file declares (checked against the files, not by hand).
+- **The 3D plant is drawn with the same junction rules as the title's roots
+  (2026-11-18).** `jointStartRadius`, `segmentRadiusAt` and `socketInset` live in
+  `packages/shared/src/growth/geometry.ts` and both renderers call them, with
+  three new keys in `config/growth.json` (`joint_flare_ratio` 1.25,
+  `segment_taper_exponent` 2.2, `socket_inset_ratio` 0.15) and three new values
+  on `/config/growth`.
+
+  **What the shipped builder actually drew, measured at growth 1 on a 12 cm
+  internode:** a trunk-to-branch junction came out at **2.65x its own shank**
+  with a **19.4 degree** half angle (0.0450 base / 0.0170 shank), stem-to-vine
+  1.86x, stem-to-branch 1.53x, root-to-lateral 1.54x, radicle-to-root 1.50x, and
+  a leaf or flower 1.00x. At growth 0 the same probes read 10.59x and above. The
+  cause was four separate rules, each the 3D form of the title's flange bug: the
+  branch base *was* the parent's radius, the taper was a straight line across the
+  whole segment, the tube began 0.9 of the parent's radius out (on its surface,
+  not inside it), and every segment's curve was built from its own chord so
+  consecutive segments met at unrelated angles — a kink at every node, with
+  `maxAngleDiscontinuityDeg` already measured and ignored.
+
+  **What it draws now:** the same junctions read **1.25x and 2.0 degrees**, soft
+  organs stay 1.00x, and the parent's radius is taken at the attach *fraction*
+  rather than its base. On a chain that forks twice the worst drawn-tangent kink
+  fell from **44.9 degrees to 5.0**, and a wide fork now turns by about half its
+  fork angle instead of holding the parent's direction and hooking back — the
+  first version of the tangent rule did hold it for a full 0.45 of the span, and
+  a segment dump showed a branch that climbed its trunk and then doubled back,
+  which is why the mix is scaled by alignment.
+
+  **How it is held:** `measureDrawnPlant` gained `maxJointToShankRatio` and
+  `maxTangentKinkDeg`, `packages/shared/src/growth/geometry.test.ts` pins the four
+  rules (knuckle ratio, parent cap, no knuckle on a soft organ, exact endpoints,
+  the neck finishing early, monotone taper, config clamping), and
+  `PlantMeshBuilder.test.ts` pins the drawn plant (junction cap, soft organ,
+  no joint met at the chord angle, a continuation within 3 degrees of its parent,
+  a wide fork under 55% of its fork angle, config honoured over the default).
+  A dead `addCurvedTube` — a second copy of the linear taper that nothing
+  called — was deleted so the rule has one owner. See ADR-068.
+
+  **Not verified visually.** WebGPU does not initialise in the preview browser
+  and the fallback Three.js path needs WebGL, so these numbers come from the
+  bundled builder itself and from tests, not from a screenshot of the shipped
+  pass. A 2D silhouette drawn from the same segments was discarded as evidence:
+  it closes each tube as its own shape, while the real pass stitches consecutive
+  segments through shared rings, so it exaggerates joints into notches.
 - **Rerooting.** The crawl settles after roughly 2-3 m on damp ground, so a
   long move is a series of uproots: driven through `dev_uproot_plant` plus
   `dev_reroot` east, the plant covered 117 m in 47 legs without losing nodes,
@@ -295,7 +544,13 @@ their `notes` in `config/growth.json`.
 
 Economy, item pickup for fragments/remains/dung, the rest of C04 (rebinding
 screen, notification log).
-Touch input not implemented (desktop only).
+
+**Touch is a second producer, not a second interface.** Orbit, pan, pinch zoom,
+tap-to-select, the reroot pad, the action bar and every panel work on a finger
+layout, and C09's remaining gaps are the long-press node menu, a PWA manifest and
+real-device verification: the camera is OrbitControls' own touch handling, so no
+touch producer exists in `@plant-legacy/input` and nothing has been tested on a
+phone.
 
 **Water you can get into.** The medium is modelled (see "Water as a medium"), but
 nothing yet lets the eye reach it: river depth is 0.02–0.6 m and the rain sheet is
@@ -316,7 +571,7 @@ the full deviation list: [`docs/tasks/T08A.md`](./tasks/T08A.md).
 **V5.4 extension program (approved 2026-11-09, not built):** reactive fauna, material
 simulation, volumetric terrain, parametric terrain features, streamed world
 objects, ecological succession, and cloud-native orchestration. See
-[`PlantLegacy-Abyssal-Integration-Plan.md`](./PlantLegacy-Abyssal-Integration-Plan.md) §0.3. Nothing in that list
+`DESIGN.md` Parts 11 and 16. Nothing in that list
 exists in code.
 
 The C02b WebGPU renderer is a v1 slice with impostor baking, VRAM pooling, GPU
@@ -324,7 +579,7 @@ skinning, texture arrays, tier cross-fade, mutation signatures and a planet-body
 occlusion test. It still does not share depth with the WebGL environment pass,
 which no browser exposes across the two canvases.
 
-The renderer has no interpolation between server ticks. Interest management filters `GROWTH_EVENT` and `PLANT_CREATED`; `STATE` and `KEYFRAME` still go to every connected player. Binary protocol not on wire.
+The renderer interpolates node positions between ticks (`render/PlantInterpolation.ts`; the dormant-versus-online cue is still open, tracked as 2-B in [`improvement-plan.md`](./improvement-plan.md)). Interest management filters `GROWTH_EVENT` and `PLANT_CREATED`; `STATE` and `KEYFRAME` are built per player and filtered by the same interest test (`broadcastPlantStates` keeps the owner's own plant unconditionally), and their cadence is gated by `client_send_rate_hz` through `stepCadence` (`broadcastCadence.ts`). Binary protocol not on wire.
 
 ## Next
 
@@ -351,7 +606,7 @@ yet - they look identical to an online player's plant.
 
 ## Documentation reconciliation (2026-11-14)
 
-The Abyssal integration plan was reviewed against this file and `DESIGN.md`. Nine
+The Abyssal material was reviewed against this file and `DESIGN.md`. Nine
 decisions are recorded as ADR-041 to ADR-049 in
 [`decisions.md`](./decisions.md). What they change about the state described above:
 
@@ -369,9 +624,9 @@ decisions are recorded as ADR-041 to ADR-049 in
   the point where local occlusion first matters.
 - **The config count is 79 files**, owned by [`tunables.md`](./tunables.md). Any
   surviving count of 77 is stale.
-- The renderer/terrain/water/fauna programme is
-  [`PlantLegacy-Abyssal-Integration-Plan.md`](./PlantLegacy-Abyssal-Integration-Plan.md);
-  the AG mechanisms behind it are [`abyssal-mechanisms.md`](./abyssal-mechanisms.md).
+- The renderer work is ranked in
+  [`abyssal-garden-source-analysis.md`](./abyssal-garden-source-analysis.md) Part II;
+  the task specs behind it are in `DESIGN.md` Parts 11 and 16.
 
 ## Explicitly not promised
 

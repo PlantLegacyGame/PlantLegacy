@@ -26,7 +26,7 @@ Message format:
 `MUTATION_STATE` (35) and `MUTATION_SHED` (36); v3 adds `MUTATION_LEVEL` (45) and
 carries each mutation's level, level cost and any open card deal in
 `MUTATION_STATE`.
-Client sends `HELLO { clientVersion: 1, accessToken?: string, plantId?: string }` on connect.
+Client sends `HELLO { clientVersion: 1, accessToken?: string, plantId?: string, displayName?: string }` on connect.
 Server rejects with `ERROR { code: "VERSION_MISMATCH", ... }` if mismatch.
 
 ## Message Types
@@ -35,7 +35,7 @@ Server rejects with `ERROR { code: "VERSION_MISMATCH", ... }` if mismatch.
 
 | Type | Name | Payload | Description |
 |------|------|---------|-------------|
-| 1 | `HELLO` | `{ clientVersion: number, accessToken?: string, plantId?: string }` | First message after connect; version handshake + optional auth for reclaim |
+| 1 | `HELLO` | `{ clientVersion: number, accessToken?: string, plantId?: string, reconnectToken?: string, displayName?: string }` | First message after connect; version handshake, optional auth for reclaim, and the menu nickname. `displayName` is sanitized and capped by `ui.display_name_max_length`; a malformed or absent value leaves the player as `Player` |
 | 2 | `INPUT` | `{ input: PlayerInput }` | Player camera/input for a tick |
 | 3 | `PING` | `{}` | Keepalive / latency measurement |
 | 4 | `GROWTH_INTENT` | `{ plantId: string, nodeId: string, direction: {x,y,z}, nodeType: string, isAttack: boolean, tick: number }` | Request to grow a node |
@@ -57,8 +57,8 @@ Server rejects with `ERROR { code: "VERSION_MISMATCH", ... }` if mismatch.
 | Type | Name | Payload | Description |
 |------|------|---------|-------------|
 | 10 | `WELCOME` | `WelcomePayload` | Sent once on connect; assigns playerId, plantId, initial world state, full node set. Optional `away` block (deltas over the offline span: `seconds`, `nodesBefore`, `nodesAfter`, `biomass`, `energy`, `water`, `minerals`) and `previousPlantDied` (`{ cause, secondsAgo }`) |
-| 11 | `STATE` | `StatePayload` | Per-tick delta state (plants changed this tick) |
-| 12 | `KEYFRAME` | `KeyframePayload` | Full state snapshot (every `keyframeIntervalTicks`) |
+| 11 | `STATE` | `StatePayload` | Plant state, sent per player at `client_send_rate_hz` and filtered to the player's interest cells (the owner's own plant is always included) |
+| 12 | `KEYFRAME` | `KeyframePayload` | Full state snapshot (every `keyframeIntervalTicks`); ignores the state cadence gate so a late joiner or reconnect always gets a full snapshot |
 | 13 | `REJECT` | `RejectPayload` | Input rejected; reason + original type |
 | 14 | `PONG` | `{}` | Response to `PING` |
 | 15 | `ERROR` | `ErrorPayload` | Fatal error; the connection closes. Codes include `VERSION_MISMATCH`, `AUTH_FAILED` (bad or expired token; no guest fallback) and `SESSION_REPLACED` (same account opened in another tab) |
@@ -67,7 +67,7 @@ Server rejects with `ERROR { code: "VERSION_MISMATCH", ... }` if mismatch.
 | 18 | `PLANT_SYNC` | `PlantSyncPayload` | Full plant state for reclaim/desync recovery |
 | 19 | `PLANT_CREATED` | `{ plantId: string, ownerId: string, rootNode: ... }` | New plant in world |
 | 20 | `PLANT_REMOVED` | `{ plantId: string, cause?: string }` | Plant removed (death, reconnect expiry or administrative removal). `cause` is optional so an older server's removal still validates; the client uses it to name the loss |
-| 21 | `WEATHER_UPDATE` | `WeatherUpdatePayload` | Weather/day-night state |
+| 21 | `WEATHER_UPDATE` | `WeatherUpdatePayload` | Weather/day-night state, including the world clock's `timePaused`/`timeScale` so every client and dev panel shows the server's clock mode |
 | 22 | `GROWTH_OPTIONS_RESULT` | `GrowthOptionsResultPayload` | Legal options, costs and plain reasons for a node |
 | 23 | `CHAT_BROADCAST` | `ChatBroadcastPayload` | Chat or emote from another player |
 | 27 | `INVENTORY_SYNC` | `{ slots: Array<{ itemId: string \| null, count: number \| null }>, maxSlots: number, definitions: Array<{ id, name, description, category, stackLimit, use }> }` | Full inventory plus the definitions behind it: the panel's name, prose and "Use:" line are the server's own text and numbers, never invented by the client |
@@ -330,7 +330,7 @@ Client                          Server
   |--- PING --------------------->|
   |<-- PONG ----------------------|
   |                               |
-  |<-- WEATHER_UPDATE -----------| (every tick)
+  |<-- WEATHER_UPDATE -----------| (at `weather_send_rate_hz`, default 2 Hz — not every tick)
   |                               |
   |--- PLANT_SYNC_REQUEST ------>| (on desync / tab visible)
   |<-- PLANT_SYNC ---------------| (full plant state)
@@ -367,7 +367,7 @@ All tunables in extended-1 format:
 - [x] Click on plant nodes to select for growth
 - [x] Server validates growth intents (energy, biomass, gene gates, bounds)
 - [x] Server broadcasts `GROWTH_EVENT` on successful growth
-- [x] `KEYFRAME` every 10 ticks, `STATE` otherwise (plant updates)
+- [x] `KEYFRAME` every 10 ticks, `STATE` otherwise (plant updates), both rate-gated by `client_send_rate_hz` and interest-filtered per player (`broadcastCadence.ts`, `tick/stateBroadcast.ts`)
 - [x] `RESOURCE_QUERY` / `RESOURCE_UPDATE` with coordinate addressing (ADR-024)
 - [x] Authenticated + anonymous reclaim via HELLO (ADR-021)
 - [x] `PLANT_SYNC` / `PLANT_SYNC_REQUEST` for desync recovery

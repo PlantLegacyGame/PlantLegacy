@@ -57,6 +57,16 @@ export interface DevPanelConfig {
     getGridWidth: () => number;
     getGridHeight: () => number;
   };
+  /**
+   * View-only diagnostics. These were global hotkeys (Shift for the metrics
+   * overlay, F2 for the growth readout, F3 for the tick card); those keys fight
+   * the browser and the keyboard, so they live here instead.
+   */
+  diagnostics?: {
+    metricsOverlay: { get: () => boolean; set: (on: boolean) => void };
+    growthReadout: { get: () => boolean; set: (on: boolean) => void };
+    tickReadout: { get: () => boolean; set: (on: boolean) => void };
+  };
   plantRenderer: {
     setLODDistances: (l0: number, l1: number, l2: number) => void;
     setQuality: (quality: 'low' | 'medium' | 'high' | 'ultra') => void;
@@ -1052,6 +1062,26 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
             },
           ]),
         ]);
+        if (cfg.diagnostics) {
+          const diag = cfg.diagnostics;
+          addSection(container, 'Readouts', [
+            createToggle(
+              'Metrics overlay',
+              () => diag.metricsOverlay.get(),
+              (v) => diag.metricsOverlay.set(v),
+            ),
+            createToggle(
+              'Growth readout',
+              () => diag.growthReadout.get(),
+              (v) => diag.growthReadout.set(v),
+            ),
+            createToggle(
+              'Tick readout',
+              () => diag.tickReadout.get(),
+              (v) => diag.tickReadout.set(v),
+            ),
+          ]);
+        }
         addSection(container, 'Renderer', [
           createButtonGroup('GPU', [
             { label: 'Toggle WebGPU', action: () => send(8, { type: 'dev_toggle_webgpu' }) },

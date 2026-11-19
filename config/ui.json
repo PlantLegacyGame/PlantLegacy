@@ -10,8 +10,11 @@
   "values": {
     "text_scale": {
       "type": "number",
-      "value": 1.0,
-      "range": [0.8, 1.5],
+      "value": 1,
+      "range": [
+        0.8,
+        1.5
+      ],
       "notes": "Global UI text scale applied as a CSS variable."
     },
     "layers": {
@@ -46,37 +49,55 @@
     "toast_duration_ms": {
       "type": "integer",
       "value": 4000,
-      "range": [1000, 15000],
+      "range": [
+        1000,
+        15000
+      ],
       "notes": "Default time a toast notification stays visible."
     },
     "toast_max_stack": {
       "type": "integer",
       "value": 5,
-      "range": [1, 20],
+      "range": [
+        1,
+        20
+      ],
       "notes": "Maximum toasts stacked before older ones are dropped."
     },
     "hint_card_duration_ms": {
       "type": "integer",
       "value": 10000,
-      "range": [2000, 60000],
+      "range": [
+        2000,
+        60000
+      ],
       "notes": "First-spawn hint card display time."
     },
     "hint_card_max_lines": {
       "type": "integer",
       "value": 3,
-      "range": [1, 6],
+      "range": [
+        1,
+        6
+      ],
       "notes": "Maximum hint card lines (RULE_13)."
     },
     "panel_default_width_px": {
       "type": "integer",
       "value": 320,
-      "range": [200, 640],
+      "range": [
+        200,
+        640
+      ],
       "notes": "Default width for collapsible side panels."
     },
     "panel_animation_ms": {
       "type": "integer",
       "value": 200,
-      "range": [0, 600],
+      "range": [
+        0,
+        600
+      ],
       "notes": "Panel open/close animation duration."
     },
     "reduced_motion": {
@@ -87,38 +108,242 @@
     "safe_area_padding_px": {
       "type": "integer",
       "value": 8,
-      "range": [0, 32],
+      "range": [
+        0,
+        32
+      ],
       "notes": "HUD padding from the device safe-area edge."
     },
     "hud_update_interval_ms": {
       "type": "integer",
       "value": 100,
-      "range": [50, 1000],
+      "range": [
+        50,
+        1000
+      ],
       "notes": "Minimum time between plant-status HUD text updates (DESIGN 18.2 caps HUD at 10 Hz)."
     },
     "damage_vignette_ms": {
       "type": "integer",
       "value": 420,
-      "range": [100, 2000],
+      "range": [
+        100,
+        2000
+      ],
       "notes": "Length of the edge vignette shown when the plant takes damage."
     },
     "health_healthy_fraction": {
       "type": "number",
       "value": 0.75,
-      "range": [0.1, 1],
+      "range": [
+        0.1,
+        1
+      ],
       "notes": "Structural fraction at or above which the plant reads Healthy."
     },
     "health_stressed_fraction": {
       "type": "number",
       "value": 0.5,
-      "range": [0.05, 0.95],
+      "range": [
+        0.05,
+        0.95
+      ],
       "notes": "Structural fraction at or above which the plant reads Stressed."
     },
     "health_withering_fraction": {
       "type": "number",
       "value": 0.25,
-      "range": [0.01, 0.9],
+      "range": [
+        0.01,
+        0.9
+      ],
       "notes": "Structural fraction at or above which the plant reads Withering; below it reads Dying."
+    },
+    "display_name_max_length": {
+      "type": "integer",
+      "value": 32,
+      "notes": "Longest accepted display name in characters. Enforced by the client form and by the server on HELLO.",
+      "range": [
+        3,
+        32
+      ]
+    },
+    "title_parallax_enabled": {
+      "type": "boolean",
+      "value": true,
+      "notes": "Pointer and drag parallax on the title screen. Off leaves a still scene."
+    },
+    "title_parallax_drag_px": {
+      "type": "number",
+      "value": 90,
+      "notes": "How far the background may be dragged from centre, in CSS pixels, before it stops. Title screen only.",
+      "range": [
+        0,
+        240
+      ]
+    },
+    "title_parallax_hover": {
+      "type": "number",
+      "value": 0.35,
+      "notes": "Share of the pointer offset the background follows when not dragging. Title screen only.",
+      "range": [
+        0,
+        1
+      ]
+    },
+    "title_parallax_depth": {
+      "type": "object",
+      "value": {
+        "sky": 0.15,
+        "far": 0.35,
+        "mid": 0.6,
+        "near": 1
+      },
+      "notes": "Per-layer parallax multipliers. Lower numbers move less, so distant art reads as distant."
+    },
+    "title_parallax_settle_ms": {
+      "type": "integer",
+      "value": 420,
+      "notes": "Spring-back time after a drag ends. Title screen only.",
+      "range": [
+        0,
+        2000
+      ]
+    },
+    "title_plant_sway_ms": {
+      "type": "integer",
+      "value": 5200,
+      "notes": "One full idle sway of the title plant, in milliseconds.",
+      "range": [
+        1000,
+        20000
+      ]
+    },
+    "title_plant_react_ms": {
+      "type": "integer",
+      "value": 700,
+      "notes": "How long the title plant reacts to a click or tap.",
+      "range": [
+        120,
+        4000
+      ]
+    },
+    "title_plant_react_cooldown_ms": {
+      "type": "integer",
+      "value": 600,
+      "notes": "Shortest gap between two title-plant reactions, so rapid taps do not stack.",
+      "range": [
+        0,
+        5000
+      ]
+    },
+    "title_plant_name_prefixes": {
+      "type": "array",
+      "value": [
+        "Mossy",
+        "Dewy",
+        "Ferny",
+        "Tender",
+        "Sunlit",
+        "Shaded",
+        "River",
+        "Wandering",
+        "Amber",
+        "Quiet",
+        "Little",
+        "Night"
+      ],
+      "notes": "First word of an auto-generated display name. Holiday art may want its own list."
+    },
+    "title_plant_name_nouns": {
+      "type": "array",
+      "value": [
+        "Sprout",
+        "Fern",
+        "Vine",
+        "Moss",
+        "Clover",
+        "Reed",
+        "Bloom",
+        "Root",
+        "Thistle",
+        "Sapling",
+        "Petal",
+        "Thorn"
+      ],
+      "notes": "Second word of an auto-generated display name."
+    },
+    "title_hint_fade_ms": {
+      "type": "integer",
+      "value": 6000,
+      "notes": "How long the hide-UI hint stays bright before it fades to the edge of readable. Title screen only.",
+      "range": [
+        0,
+        60000
+      ]
+    },
+    "title_day_night_seconds": {
+      "type": "number",
+      "value": 3600,
+      "notes": "One full day and night on the title screen. The menu runs before a connection exists, so it keeps its own clock; 3600 is an hour.",
+      "range": [
+        60,
+        86400
+      ]
+    },
+    "title_day_night_start_fraction": {
+      "type": "number",
+      "value": 0.4,
+      "notes": "Where in the cycle the title screen starts. 0 is midnight, 0.25 dawn, 0.5 noon, 0.75 dusk; 0.4 opens in late morning.",
+      "range": [
+        0,
+        0.99
+      ]
+    },
+    "title_horizon_fraction": {
+      "type": "number",
+      "value": 0.54,
+      "notes": "Height of the ground line as a share of the screen. The plant, the hills and the treeline all stand on it, and the menu hangs under it.",
+      "range": [
+        0.2,
+        0.8
+      ]
+    },
+    "vitals_low_fraction": {
+      "type": "number",
+      "value": 0.25,
+      "range": [
+        0.01,
+        0.9
+      ],
+      "notes": "A store at or below this fraction of its capacity is drawn low (amber bar and value). The single vitals readout grades instead of printing numbers only."
+    },
+    "vitals_critical_fraction": {
+      "type": "number",
+      "value": 0.1,
+      "range": [
+        0.005,
+        0.5
+      ],
+      "notes": "A store at or below this fraction is drawn critical (red, pulsing). Must stay at or below vitals_low_fraction."
+    },
+    "hud_font_small_px": {
+      "type": "integer",
+      "value": 12,
+      "range": [
+        10,
+        20
+      ],
+      "notes": "Smallest HUD type in CSS pixels at text scale 1. Below 12px the resource labels and weather line were unreadable on a laptop."
+    },
+    "hud_font_secondary_px": {
+      "type": "integer",
+      "value": 11,
+      "range": [
+        9,
+        18
+      ],
+      "notes": "Secondary HUD type (clock sub-line, key badges) in CSS pixels at text scale 1."
     }
   }
 }

@@ -41,9 +41,25 @@ const config: AccountsConfig = {
   sessionMaxPerAccount: 5,
 };
 
-function createService(): AccountsService {
-  // verifyAccessToken only reads config and the environment; it never queries.
-  const pool = {} as unknown as Pool;
+const ACCOUNT_ROW: Record<string, unknown> = {
+  id: 'acct_1',
+  username: 'grower',
+  display_name: 'Grower',
+  password_hash: 'x',
+  role: 'player',
+  created_at: new Date('2026-01-01T00:00:00Z'),
+  updated_at: new Date('2026-01-01T00:00:00Z'),
+  last_login_at: null,
+  failed_login_attempts: 0,
+  locked_until: null,
+};
+
+function createService(row: Record<string, unknown> | null = ACCOUNT_ROW): AccountsService {
+  // verifyAccessToken loads the account (INV-AU-03), so the stub answers the one
+  // query it makes. `null` means "no such account": a valid signature for an
+  // account that has since been deleted.
+  const rows = row === null ? [] : [row];
+  const pool = { query: async () => ({ rows }) } as unknown as Pool;
   return new AccountsService(pool, config);
 }
 
@@ -90,5 +106,38 @@ describe('AccountsService - access token type binding', () => {
     const result = await service.verifyAccessToken(token);
 
     assert.ok('error' in result, 'untyped token must not verify as an access token');
+  });
+
+  it('rejects a token for an account that no longer exists', async () => {
+    process.env.JWT_SECRET = SECRET;
+    const service = createService(null);
+    const token = sign({ sub: 'acct_1', role: 'player', type: 'access' }, '15m');
+
+    const result = await service.verifyAccessToken(token);
+
+    assert.ok('error' in result, 'a token outliving its account must not verify');
+  });
+
+  it('rejects a token for an account locked after the token was issued', async () => {
+    process.env.JWT_SECRET = SECRET;
+    const service = createService({
+      ...ACCOUNT_ROW,
+      locked_until: new Date(Date.now() + 60_000),
+    });
+    const token = sign({ sub: 'acct_1', role: 'player', type: 'access' }, '15m');
+
+    const result = await service.verifyAccessToken(token);
+
+    assert.ok('error' in result, 'lockout must apply to tokens already minted');
+  });
+
+  it('rejects a token whose role no longer matches the account', async () => {
+    process.env.JWT_SECRET = SECRET;
+    const service = createService({ ...ACCOUNT_ROW, role: 'admin' });
+    const token = sign({ sub: 'acct_1', role: 'player', type: 'access' }, '15m');
+
+    const result = await service.verifyAccessToken(token);
+
+    assert.ok('error' in result, 'a demoted account must not keep admin claims');
   });
 });

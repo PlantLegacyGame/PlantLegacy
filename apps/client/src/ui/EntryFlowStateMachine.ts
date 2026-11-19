@@ -76,6 +76,18 @@ export function entryFlowBack(machine: EntryFlowStateMachine): void {
   machine.busy = false;
 }
 
+/**
+ * The player gave up waiting for the connection. Only the connecting step can be
+ * cancelled; the socket is closed by the caller, because a hung handshake has no
+ * timeout of its own.
+ */
+export function entryFlowCancelConnect(machine: EntryFlowStateMachine): void {
+  if (machine.step !== 'connecting') return;
+  machine.step = 'title';
+  machine.busy = false;
+  machine.error = null;
+}
+
 /** A form was submitted: only the auth steps can start a request. */
 export function entryFlowBeginRequest(machine: EntryFlowStateMachine): boolean {
   if (machine.step !== 'sign_in' && machine.step !== 'sign_up') return false;

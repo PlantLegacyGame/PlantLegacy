@@ -117,6 +117,8 @@ export interface PlayerPanelsAPI {
    */
   setDefinitions(definitions: ReadonlyArray<ItemDefinitionView>): void;
   setOpen(open: boolean): void;
+  /** Bring the inventory face of the phone sheet forward (no-op on desktop). */
+  showInventory(): void;
   selectSlot(index: number): void;
   toggle(): void;
   dispose(): void;
@@ -151,8 +153,9 @@ const STYLE = `
   #pl-inventory-panel { right: var(--hud-corner, 12px); }
 
   .pl-panel__head {
+    position: relative;
     display: flex; align-items: center; justify-content: space-between;
-    gap: 8px; padding: 9px 12px 8px;
+    gap: 8px; padding: 10px 42px 9px 12px;
     border-bottom: 1px solid rgba(126, 154, 74, 0.26);
     background: rgba(22, 27, 16, 0.72);
   }
@@ -161,13 +164,19 @@ const STYLE = `
     text-transform: uppercase; color: var(--leaf-300, #c8ff80);
   }
   .pl-panel__sub { color: var(--ink-dim, #9a937a); font-size: 0.66rem; }
+  /* Corner close: 28px target in the panel's top right, like every other panel. */
   .pl-panel__close {
-    width: 22px; height: 22px; border-radius: 7px; cursor: pointer;
+    position: absolute; top: 6px; right: 6px;
+    width: 28px; height: 28px; display: grid; place-items: center;
+    border-radius: 8px; cursor: pointer; font-size: 1rem; line-height: 1;
     border: 1px solid rgba(126, 154, 74, 0.35);
     background: rgba(44, 52, 30, 0.8); color: var(--bone-200, #efe9d8);
-    font: inherit; line-height: 1;
+    font: inherit;
+    transition: background 140ms ease, border-color 140ms ease, transform 140ms ease;
   }
   .pl-panel__close:hover { background: rgba(90, 144, 46, 0.28); border-color: var(--leaf-400, #9ed95c); }
+  .pl-panel__close:active { transform: scale(0.94); }
+  .pl-panel__close:focus-visible { outline: 2px solid var(--leaf-300, #c8ff80); outline-offset: 2px; }
   .pl-panel__body {
     flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain;
     padding: 10px 12px 14px; display: flex; flex-direction: column; gap: 10px;
@@ -180,8 +189,14 @@ const STYLE = `
   .pl-health__value { color: var(--bone-100, #f7f4ed); font-variant-numeric: tabular-nums; }
   .pl-health__track { position: relative; height: 6px; border-radius: 4px; overflow: hidden;
     background: rgba(12, 16, 9, 0.7); }
+  /* The fill is one colour band, not a red-to-green ramp: at full health a ramp
+     left a red third sitting in the bar, which read as damage on a plant that
+     had none. The band's colour is the status; its length is the fraction. */
   .pl-health__fill { position: absolute; inset: 0; transform-origin: left center;
-    background: linear-gradient(90deg, #7a3020, #9ed95c 55%, #c8ff80); transition: transform 160ms ease-out; }
+    background: linear-gradient(90deg, #4e7a24, #9ed95c 62%, #c8ff80);
+    transition: transform 160ms ease-out, background-color 200ms ease; }
+  .pl-health__fill[data-tone='warn'] { background: linear-gradient(90deg, #8a6a1e, #f0c05b); }
+  .pl-health__fill[data-tone='critical'] { background: linear-gradient(90deg, #7a2a18, #ff8c5f); }
 
   .pl-section { display: grid; gap: 4px; }
   .pl-section__title {
@@ -225,6 +240,8 @@ const STYLE = `
   .pl-card b { display: block; color: #dff3a0; font-weight: 600; }
   .pl-card span { display: block; font-size: 0.62rem; color: var(--ink-dim, #9a937a); }
 
+  /* The empty message is not a column: it used to wrap inside the 64px label cell. */
+  .pl-pressure > .pl-empty { grid-column: 1 / -1; }
   .pl-pressure { display: grid; grid-template-columns: 64px 1fr 48px; gap: 3px 6px;
     margin-top: 6px; padding-top: 5px; border-top: 1px dashed rgba(126, 154, 74, 0.16); }
   .pl-pressure__label { color: var(--ink-dim, #9a937a); font-size: 0.62rem; text-transform: capitalize; }
@@ -242,7 +259,9 @@ const STYLE = `
   .pl-node__bar { grid-column: 1 / -1; height: 3px; margin-top: 1px; border-radius: 2px;
     overflow: hidden; background: rgba(12, 16, 9, 0.72); }
   .pl-node__bar > i { display: block; height: 100%; transform-origin: left center;
-    background: linear-gradient(90deg, #7a3020, #9ed95c 58%, #c8ff80); }
+    background: linear-gradient(90deg, #4e7a24, #9ed95c 62%, #c8ff80); }
+  .pl-node__bar > i[data-tone='warn'] { background: linear-gradient(90deg, #8a6a1e, #f0c05b); }
+  .pl-node__bar > i[data-tone='critical'] { background: linear-gradient(90deg, #7a2a18, #ff8c5f); }
   .pl-node__name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .pl-node__type { color: var(--ink-muted, #c9c2ad); text-transform: capitalize; }
   .pl-node__bio { color: var(--bone-100, #f7f4ed); font-variant-numeric: tabular-nums; }
@@ -285,9 +304,70 @@ const STYLE = `
   .pl-action:disabled { opacity: 0.45; cursor: default; }
   .pl-empty { color: var(--ink-dim, #9a937a); padding: 4px 0; }
 
+  .pl-sheet-tabs {
+    position: fixed;
+    display: none;
+    top: calc(var(--hud-corner, 8px) + 56px);
+    left: calc(var(--hud-corner, 8px) + env(safe-area-inset-left, 0px));
+    right: calc(var(--hud-corner, 8px) + env(safe-area-inset-right, 0px));
+    z-index: 341;
+    gap: 6px;
+    padding: 5px;
+    border-radius: 12px;
+    border: 1px solid var(--hud-border, rgba(126, 154, 74, 0.4));
+    background: linear-gradient(180deg, rgba(20, 26, 16, 0.94), rgba(11, 15, 9, 0.96));
+    backdrop-filter: blur(8px);
+    pointer-events: auto;
+  }
+  .pl-sheet-tabs__btn {
+    flex: 1;
+    min-height: 36px;
+    padding: 6px 10px;
+    border: 1px solid transparent;
+    border-radius: 9px;
+    background: transparent;
+    color: var(--ink-muted, #c9c2ad);
+    font: inherit;
+    font-size: var(--hud-font-sm, 0.8rem);
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    cursor: pointer;
+  }
+  .pl-sheet-tabs__btn[aria-selected='true'] {
+    background: rgba(90, 144, 46, 0.3);
+    border-color: var(--leaf-500, #7db83d);
+    color: var(--bone-100, #f7f4ed);
+  }
+  .pl-sheet-tabs__btn:focus-visible { outline: 2px solid var(--leaf-300, #c8ff80); outline-offset: 2px; }
+
   @keyframes pl-panel-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
   @media (max-width: 900px) {
-    .pl-side-panel { width: min(44vw, 300px); top: calc(var(--hud-corner, 12px) + 58px); }
+    /* A share of the pane, in the overlay's own units: inside the zoomed layer a
+       length is multiplied by the zoom, so the share is divided by it to keep the
+       panel the size it should be on screen. */
+    .pl-side-panel {
+      width: min(calc(44vw / var(--pl-ui-scale, 1)), 300px);
+      top: calc(var(--hud-corner, 12px) + 58px);
+    }
+  }
+  /* Phone: two 171px columns side by side was unreadable, so the panels become
+     one full-width sheet with a switch at the top. The second condition is the
+     narrow pane itself: under 480px two panels cannot fit however they are sized,
+     so the sheet is the answer there even with a mouse. Above it, a narrow browser
+     pane has the room for two panels and needs to keep seeing the game, so it
+     scales them with the rest of the overlay instead (styles.css,
+     --pl-ui-scale). */
+  @media (max-width: 560px) and (hover: none) and (pointer: coarse), (max-width: 480px) {
+    .pl-sheet-tabs.is-visible { display: flex; }
+    .pl-side-panel {
+      left: calc(var(--hud-corner, 8px) + env(safe-area-inset-left, 0px));
+      right: calc(var(--hud-corner, 8px) + env(safe-area-inset-right, 0px));
+      width: auto;
+      top: calc(var(--hud-corner, 8px) + 100px);
+      bottom: calc(var(--pl-bar-offset, 62px) + 26px);
+      border-radius: 14px;
+    }
+    .pl-side-panel.is-open:not(.is-sheet-active) { display: none; }
   }
   @media (prefers-reduced-motion: reduce) { .pl-side-panel.is-open { animation: none; } }
 `;
@@ -345,9 +425,50 @@ export function createPlayerPanels(options: PlayerPanelsOptions = {}): PlayerPan
       <div class="pl-panel__sub">Click a slot \u00B7 Use \u00B7 I closes both panels</div>
     </div>`;
 
+  // Phone switch: one sheet, two faces. On a wide screen both panels show and
+  // this stays hidden, so the same component serves both layouts.
+  const sheetTabs = document.createElement('nav');
+  sheetTabs.className = 'pl-sheet-tabs';
+  sheetTabs.setAttribute('role', 'tablist');
+  sheetTabs.setAttribute('aria-label', 'Plant panels');
+  const tabButton = (id: 'inspect' | 'inventory', label: string): HTMLButtonElement => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'pl-sheet-tabs__btn';
+    btn.setAttribute('role', 'tab');
+    btn.dataset.sheet = id;
+    btn.textContent = label;
+    btn.addEventListener('click', () => setSheetTab(id));
+    return btn;
+  };
+  const inspectTab = tabButton('inspect', 'Inspect');
+  const inventoryTab = tabButton('inventory', 'Inventory');
+  sheetTabs.append(inspectTab, inventoryTab);
+  document.body.appendChild(sheetTabs);
+
+  let sheetTab: 'inspect' | 'inventory' = 'inspect';
+
+  /** Which face of the sheet is showing; a no-op on a wide screen. */
+  function setSheetTab(next: 'inspect' | 'inventory'): void {
+    sheetTab = next;
+    inspect.classList.toggle('is-sheet-active', next === 'inspect');
+    inventory.classList.toggle('is-sheet-active', next === 'inventory');
+    inspectTab.setAttribute('aria-selected', String(next === 'inspect'));
+    inventoryTab.setAttribute('aria-selected', String(next === 'inventory'));
+    // Selecting an item lives in the inventory; switching to Inspect must not
+    // leave a stale Use button armed.
+    if (next === 'inspect') selectedSlot = null;
+  }
+  setSheetTab('inspect');
+
   const close = (): void => setOpen(false);
-  inspect.querySelector('[data-close="inspect"]')?.addEventListener('click', close);
-  inventory.querySelector('[data-close="inventory"]')?.addEventListener('click', close);
+  // Delegated on the panel, not bound to the button: a re-render that replaced the
+  // header used to leave the visible close button without a handler.
+  for (const panel of [inspect, inventory]) {
+    panel.addEventListener('click', (event) => {
+      if ((event.target as HTMLElement | null)?.closest('[data-close]')) close();
+    });
+  }
 
   const onKeyDown = (event: KeyboardEvent): void => {
     if (event.key === 'Escape' && open) {
@@ -363,6 +484,8 @@ export function createPlayerPanels(options: PlayerPanelsOptions = {}): PlayerPan
     open = next;
     inspect.classList.toggle('is-open', next);
     inventory.classList.toggle('is-open', next);
+    sheetTabs.classList.toggle('is-visible', next);
+    if (next) setSheetTab(sheetTab);
     if (next) {
       render();
       if (!timer) timer = setInterval(render, 250);
@@ -388,7 +511,10 @@ export function createPlayerPanels(options: PlayerPanelsOptions = {}): PlayerPan
     text('#pl-health-label', plantHealthLabel(health));
     text('#pl-health-value', `${Math.round(fraction * 100)}%`);
     const fill = inspect.querySelector<HTMLElement>('#pl-health-fill');
-    if (fill) fill.style.transform = `scaleX(${Math.max(0, Math.min(1, fraction)).toFixed(4)})`;
+    if (fill) {
+      fill.style.transform = `scaleX(${Math.max(0, Math.min(1, fraction)).toFixed(4)})`;
+      fill.dataset.tone = health === 'healthy' ? 'ok' : health === 'stressed' ? 'warn' : 'critical';
+    }
     text('#pl-inspect-sub', view.phase === 'rooted' ? 'Rooted' : view.phase);
     text('#pl-phase', view.phase === 'rooted' ? '' : `State: ${view.phase}`);
     text(
@@ -575,8 +701,11 @@ export function createPlayerPanels(options: PlayerPanelsOptions = {}): PlayerPan
         statusEl.dataset.status = status;
         const bar = row.querySelector<HTMLElement>('.pl-node__bar > i');
         if (bar) {
+          // The bar says the same thing as the word beside it, in colour: a
+          // healthy part is green, a damaged one gold, a dying one ember.
           const health = Math.max(0, Math.min(1, node.health));
           bar.style.transform = `scaleX(${health.toFixed(3)})`;
+          bar.dataset.tone = health >= 0.85 ? 'ok' : health >= 0.5 ? 'warn' : 'critical';
         }
         nodeBox.appendChild(row);
       }
@@ -668,6 +797,9 @@ export function createPlayerPanels(options: PlayerPanelsOptions = {}): PlayerPan
       definitionsLoaded = true;
       if (open) renderInventory();
     },
+    showInventory() {
+      setSheetTab('inventory');
+    },
     setInventory(slots, maxSlots) {
       if (!view) {
         view = {
@@ -718,6 +850,7 @@ export function createPlayerPanels(options: PlayerPanelsOptions = {}): PlayerPan
       timer = null;
       document.removeEventListener('keydown', onKeyDown);
       inspect.remove();
+      sheetTabs.remove();
       inventory.remove();
     },
   };

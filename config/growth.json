@@ -107,6 +107,33 @@
       ],
       "notes": "Where lateral roots, branches and vines leave their parent: a fraction along the parent's own segment measured from its attachment point. 1.0 makes them continue from the parent's end instead."
     },
+    "joint_flare_ratio": {
+      "type": "number",
+      "value": 1.25,
+      "range": [
+        1,
+        2
+      ],
+      "notes": "How much fatter than its own shank a part may be drawn where it leaves its parent: the knuckle at a junction. The drawn base used to be the parent's full radius, which made a branch off a trunk a cone 2.65x its own thickness with a 19 degree half-angle. Capped by the parent's radius at the attach point, so a child can never be wider than what carries it, and soft organs (leaves, flowers) are capped at their own radius instead."
+    },
+    "segment_taper_exponent": {
+      "type": "number",
+      "value": 2.2,
+      "range": [
+        1,
+        4
+      ],
+      "notes": "Shape of the neck along a segment: radius(t) = lerp(junction belly, shank, 1 - (1 - t)^p). 1 is a straight cone from base to tip, which drew every internode as a funnel; 2.2 finishes the neck inside the first quarter and holds a near-constant shank, so a branch is a branch and not a spike socket."
+    },
+    "socket_inset_ratio": {
+      "type": "number",
+      "value": 0.15,
+      "range": [
+        0,
+        0.9
+      ],
+      "notes": "How far along its own direction a child's tube starts, as a fraction of the parent's radius at that point. Small values start the child inside the parent body so the parent's own surface hides the base disc, the way a branch leaves a trunk; large values push the base out onto the parent's surface, where its rim shows as a crease."
+    },
     "node_radius_profiles": {
       "type": "object",
       "value": {
@@ -604,13 +631,19 @@
     "stem_damage_wither_delay_s": {
       "type": "number",
       "value": 30,
-      "range": [0, 600],
+      "range": [
+        0,
+        600
+      ],
       "notes": "Seconds a stem may sit under its tissue quota before the damage starts thinning it. A stem damaged but repaired inside this window does not wither."
     },
     "stem_damage_wither_per_s": {
       "type": "number",
       "value": 0.01,
-      "range": [0, 0.2],
+      "range": [
+        0,
+        0.2
+      ],
       "notes": "Fraction of a stem's tissue quota lost per second once unhealed damage has outlasted the delay. Repair outpaces it while the plant is fed."
     },
     "floating_leaf_min_groundwater": {
@@ -825,6 +858,15 @@
         "segment_length": 0.18
       },
       "description": "Swollen storage stem at the tip of a rhizome (potato-style): thick, short, starch- and water-holding, and its eyes are buds that can raise a shoot. Unlocks with clonal_rhizome."
+    },
+    "max_child_length_ratio": {
+      "type": "number",
+      "value": 1.6,
+      "range": [
+        1,
+        4
+      ],
+      "notes": "Longest a new segment may be relative to the part it grows out of. A size mutation scales the new part, and without a ceiling a side branch came out several times the length of its trunk: nothing is attached to anything when the proportions are not a plant. Applies to roots and canopy alike."
     }
   }
 }

@@ -22,6 +22,15 @@ export interface RuntimeConfig {
   corsOrigins: string[];
   healthPath: string;
   readinessPath: string;
+  /** Empty disables the tick metrics route. */
+  metricsPath: string;
+  /** Environments where dev tools may exist (ops.dev_allowed_environments). */
+  devAllowedEnvironments: string[];
+  /** Accounts allowed to use dev tools outside a local run. */
+  devAdminAccounts: string[];
+  metricsWindowTicks: number;
+  /** Longest accepted display name (ui.display_name_max_length). */
+  displayNameMaxLength: number;
   readinessRequiresDb: boolean;
   trustProxy: boolean;
   dbPoolMax: number;
@@ -125,6 +134,11 @@ export async function loadRuntimeConfig(
       : readStringArray(configs, 'ops', 'cors_origins'),
     healthPath: readString(configs, 'ops', 'health_path'),
     readinessPath: readString(configs, 'ops', 'readiness_path'),
+    metricsPath: readString(configs, 'ops', 'metrics_path'),
+    devAllowedEnvironments: readStringArray(configs, 'ops', 'dev_allowed_environments'),
+    devAdminAccounts: readStringArray(configs, 'ops', 'dev_admin_accounts'),
+    metricsWindowTicks: readNumber(configs, 'ops', 'metrics_window_ticks'),
+    displayNameMaxLength: readNumber(configs, 'ui', 'display_name_max_length'),
     readinessRequiresDb: parseBoolean(
       env.READINESS_REQUIRES_DB,
       readBoolean(configs, 'ops', 'readiness_requires_db'),

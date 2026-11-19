@@ -247,13 +247,7 @@
     "debug_overlay_enabled": {
       "type": "boolean",
       "value": true,
-      "notes": "Toggle the C01 debug overlay (fps, triangles, draw calls, memory, network)."
-    },
-    "debug_overlay_key": {
-      "type": "string",
-      "value": "`",
-      "max_length": 8,
-      "notes": "Keyboard code that toggles the debug overlay."
+      "notes": "Toggle the C01 debug overlay (fps, triangles, draw calls, memory, network). Its key lives in controls.json as the debug_toggle action."
     },
     "pause_on_hidden": {
       "type": "boolean",
@@ -293,13 +287,19 @@
     "sky_night_min_light": {
       "type": "number",
       "value": 0.12,
-      "range": [0, 1],
+      "range": [
+        0,
+        1
+      ],
       "notes": "Floor on the weather light that scales the night sky palette: a stormy night is darker than a clear one, but never so dark the palette disappears."
     },
     "skylight_desaturation": {
       "type": "number",
       "value": 0.55,
-      "range": [0, 1],
+      "range": [
+        0,
+        1
+      ],
       "notes": "How far the fill light's sky colour is pulled to neutral. At 0 every upward-facing surface (the inside of the Root Sight pit included) is tinted the sky's full blue; at 1 the skylight is grey."
     },
     "sky_zenith_rain": {
@@ -754,6 +754,65 @@
       ],
       "notes": "Minimum dwell time in seconds before tier change."
     },
+    "webgpu_impostor_enabled": {
+      "type": "boolean",
+      "value": true,
+      "notes": "Bake impostor atlases for far plants instead of drawing their geometry every frame."
+    },
+    "webgpu_impostor_update_interval_ms": {
+      "type": "integer",
+      "value": 5000,
+      "range": [
+        250,
+        60000
+      ],
+      "notes": "Minimum gap between impostor re-bakes of the same plant, in milliseconds."
+    },
+    "webgpu_vram_budget_bytes": {
+      "type": "integer",
+      "value": 268435456,
+      "range": [
+        33554432,
+        1073741824
+      ],
+      "notes": "Total vertex and index bytes the WebGPU buffer pool may hold before it evicts."
+    },
+    "webgpu_vram_max_vertex_bytes": {
+      "type": "integer",
+      "value": 67108864,
+      "range": [
+        8388608,
+        536870912
+      ],
+      "notes": "Per-buffer vertex ceiling; a plant whose vertex buffer would exceed it is not uploaded."
+    },
+    "webgpu_vram_max_index_bytes": {
+      "type": "integer",
+      "value": 16777216,
+      "range": [
+        2097152,
+        268435456
+      ],
+      "notes": "Per-buffer index ceiling, same rule as the vertex ceiling."
+    },
+    "webgpu_texture_array_size": {
+      "type": "integer",
+      "value": 256,
+      "range": [
+        64,
+        1024
+      ],
+      "notes": "Edge length of each plant-variation texture array layer, in texels."
+    },
+    "webgpu_texture_array_layers": {
+      "type": "integer",
+      "value": 16,
+      "range": [
+        1,
+        64
+      ],
+      "notes": "Variation layers in the plant texture array; getVariationIndex must stay below this."
+    },
     "node_pick_radius": {
       "type": "number",
       "value": 0.35,
@@ -1031,6 +1090,64 @@
         }
       ],
       "notes": "ADR-027: organism size class is presentation. A giant is framed from further away and may hold more detailed plants, because LOD assigns tiers by projected pixel size."
+    },
+    "fog_horizon_mist_scale": {
+      "type": "number",
+      "value": 0.62,
+      "range": [
+        0.1,
+        1
+      ],
+      "unit": "ratio",
+      "notes": "Fog distance multiplier when the sun is on the horizon: low sun thickens the air, so dawn and dusk carry mist instead of looking like a neutral bright hour."
+    },
+    "exposure_day": {
+      "type": "number",
+      "value": 1,
+      "range": [
+        0.5,
+        1.5
+      ],
+      "unit": "multiplier",
+      "notes": "Renderer exposure with the sun high. Applied through the renderer's LinearToneMapping, which is enabled for exactly this reason: with no tone mapping three ignores exposure, so the grade would be a knob with no effect. At 1.0 the output is unchanged."
+    },
+    "exposure_horizon": {
+      "type": "number",
+      "value": 1.07,
+      "range": [
+        0.5,
+        1.6
+      ],
+      "unit": "multiplier",
+      "notes": "Renderer exposure when the sun is on the horizon: a slight lift for golden hour."
+    },
+    "exposure_night": {
+      "type": "number",
+      "value": 0.92,
+      "range": [
+        0.4,
+        1.4
+      ],
+      "unit": "multiplier",
+      "notes": "Renderer exposure at night: a slight crush so moonlight reads as dark, not grey."
+    },
+    "camera_young_max_distance": {
+      "type": "number",
+      "value": 4,
+      "range": [
+        1,
+        20
+      ],
+      "notes": "A fitted plant closer than this (a seed or a sprout) is framed from the young-plant elevation: at 1.5 m a 15-degree eye sits 0.4 m up and the soil fills the frame."
+    },
+    "camera_young_elevation": {
+      "type": "number",
+      "value": 0.55,
+      "range": [
+        0.1,
+        1.5
+      ],
+      "notes": "Vertical part of the framing direction for a young plant, before normalisation (mature plants use the shallow side view). 0.55 is roughly 30 degrees above the target."
     }
   }
 }

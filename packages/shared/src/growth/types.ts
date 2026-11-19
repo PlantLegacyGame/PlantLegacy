@@ -126,6 +126,12 @@ export interface GrowthConfig {
   tissueRepairPerSecond?: number;
   /** Energy spent per unit of biomass regrown. */
   tissueRepairEnergyPerBiomass?: number;
+  /**
+   * Longest a new segment may be relative to the part it grows out of.
+   * Optional so configs and fixtures that predate it keep working; absent means
+   * the type's own segment length is used unclamped.
+   */
+  maxChildLengthRatio?: number;
   growthIntentCooldown: number;
   germinationMinMoisture: number;
   germinationMinLight: number;
@@ -214,6 +220,12 @@ export interface PlantNode {
   // Server-authoritative growth timing for client sync
   growthTimeSeconds?: number;
   growthStartTick?: number;
+  /**
+   * Mass this part's growth was quoted at, stamped on its first growth tick.
+   * Frozen for the life of the growth so a mutation gained mid-flight cannot
+   * re-price a part the player is already paying for.
+   */
+  growthTargetMass?: number;
   // Server-authoritative radius (Murray's law) for client sync
   radius?: number;
   // Parent attachment position for client sync
@@ -437,6 +449,12 @@ export interface GrowthGeometryTunables {
   seedBodyHeightRatio?: number;
   nodeRadiusProfiles?: Record<string, NodeRadiusProfile>;
   branchAttachFraction?: number;
+  /** Belly width at a junction, as a multiple of the child's own shank radius. */
+  jointFlareRatio?: number;
+  /** How fast a segment necks from its junction belly down to its shank. */
+  segmentTaperExponent?: number;
+  /** Where a child's tube starts, as a fraction of the parent's radius. */
+  socketInsetRatio?: number;
 }
 
 /** Where a growth step starts and ends: the parent's surface and the child's spot. */

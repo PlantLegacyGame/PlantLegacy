@@ -4,6 +4,9 @@ import { type NodeRadiusProfile, setGrowthGeometryTunables } from '@plant-legacy
 export interface GrowthGeometryPayload {
   seed_body_height_ratio?: number;
   branch_attach_fraction?: number;
+  joint_flare_ratio?: number;
+  segment_taper_exponent?: number;
+  socket_inset_ratio?: number;
   node_radius_profiles?: Record<string, NodeRadiusProfile>;
 }
 
@@ -20,6 +23,9 @@ export function applyGrowthGeometry(payload: GrowthGeometryPayload): void {
     seedBodyHeightRatio: payload.seed_body_height_ratio,
     nodeRadiusProfiles: payload.node_radius_profiles,
     branchAttachFraction: payload.branch_attach_fraction,
+    jointFlareRatio: payload.joint_flare_ratio,
+    segmentTaperExponent: payload.segment_taper_exponent,
+    socketInsetRatio: payload.socket_inset_ratio,
   });
 }
 

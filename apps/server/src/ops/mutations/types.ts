@@ -248,6 +248,11 @@ export interface MutationsConfig {
   adaptivePressureEnabled: boolean;
   decayHalfLifeTicks: number;
   maxPressureMultiplier: number;
+  /**
+   * Ceiling on the product of every size multiplier (see config notes).
+   * Optional so a fixture that predates it keeps working; absent means no ceiling.
+   */
+  maxSizeMultiplier?: number;
   defaultShedCooldownS: number;
   /** Applied to every mutation's energy maintenance (mutations cost more). */
   maintenanceScale: number;

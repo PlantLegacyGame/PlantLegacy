@@ -2,9 +2,10 @@
  * C01 debug overlay.
  *
  * Live metrics drawn over the world: fps, frame ms, triangles, draw calls,
- * renderer memory, WebSocket KB/s in, KB/s out. Toggled by `config/render.json`
- * `debug_overlay_key` (default `` ` ``). No per-frame allocations: the DOM
- * nodes are reused, only their text content changes.
+ * renderer memory, WebSocket KB/s in, KB/s out. Toggled by the `debug_toggle`
+ * input action (`config/controls.json`, `Shift`), so the key is owned there and
+ * not duplicated here. No per-frame allocations: the DOM nodes are reused, only
+ * their text content changes.
  *
  * DESIGN.md C01 acceptance: "Debug overlay shows live metrics."
  */
@@ -44,7 +45,7 @@ export class DebugOverlay {
   private bytesOut = 0;
   private lastByteSample = performance.now();
 
-  constructor(shell: UIShell, _toggleKey: string) {
+  constructor(shell: UIShell) {
     this.el = document.createElement('div');
     this.el.style.cssText = `
       position: absolute;
@@ -133,6 +134,6 @@ export class DebugOverlay {
   }
 }
 
-export function createDebugOverlay(shell: UIShell, toggleKey: string): DebugOverlay {
-  return new DebugOverlay(shell, toggleKey);
+export function createDebugOverlay(shell: UIShell): DebugOverlay {
+  return new DebugOverlay(shell);
 }

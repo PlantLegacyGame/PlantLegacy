@@ -13,12 +13,22 @@
  */
 import {
   getSeedBodyHeightRatio,
+  getSegmentTaperExponent,
+  jointStartRadius,
   resolveDrawnRadius,
   seedBodyCentreY,
   seedBodyHalfHeight,
+  segmentRadiusAt,
+  socketInset,
 } from '@plant-legacy/shared/growth';
 import { hash01 } from '@plant-legacy/shared/math';
 import * as THREE from 'three';
+import {
+  type NodeHealthLook,
+  type NodeHealthStatus,
+  nodeHealthLook,
+  nodeHealthStatus,
+} from '../ui/plantHealth.ts';
 import { type AtmosphereParams, DEFAULT_ATMOSPHERE } from './environment/atmosphere.js';
 import { applyAtmosphereToStandardMaterial } from './environment/standardAtmosphere.js';
 import {
@@ -84,6 +94,8 @@ interface MeshSegmentData {
   spineMeshes: THREE.Mesh[];
   /** Geometry revision this segment was built for (bark/spine changes rebuild). */
   lookRevision: number;
+  /** Health band the material was built from; a change rebuilds the materials. */
+  healthBand: NodeHealthStatus;
   ornament: THREE.Group | null;
   parentPosition: THREE.Vector3;
   targetPosition: THREE.Vector3;
@@ -136,6 +148,24 @@ export const DEFAULT_MESH_QUALITY: MeshQualityConfig = {
 };
 
 // Scratch colour for mutation tinting, so the per-organ base colour is kept.
+/**
+ * Dry tissue is pale, dull and less glossy. This is the scene's half of the health
+ * bands the inspect panel prints: same bands, same owner, so "Wilted" on the panel
+ * and a straw-coloured part in the world cannot happen at different times.
+ */
+function applyNodeHealthLook(material: THREE.MeshStandardMaterial, health: NodeHealthStatus): void {
+  const look: NodeHealthLook = nodeHealthLook(health);
+  if (look.straw <= 0 && look.desaturate <= 0) return;
+  const hsl = { h: 0, s: 0, l: 0 };
+  material.color.getHSL(hsl);
+  // Straw is hue 0.12 (about 43 degrees): the yellow a leaf goes before it browns.
+  material.color.setHSL(
+    hsl.h + (0.12 - hsl.h) * look.straw,
+    Math.max(0, hsl.s * (1 - look.desaturate)),
+    Math.min(1, hsl.l + 0.07 * look.straw),
+  );
+  material.roughness = Math.min(1, material.roughness + look.roughness);
+}
 const TMP_TINT = new THREE.Color();
 
 // AL-04: the mesh plants use the shared atmosphere, like the ground and the SDF
@@ -271,7 +301,37 @@ function tubeGeometryCacheKey(
   length: number,
   quality: MeshQualityConfig,
 ): string {
-  return `${r0.toFixed(3)},${r1.toFixed(3)},${length.toFixed(3)},${quality.tubeRadialSegments}x${quality.tubeLengthSegments}`;
+  // The taper exponent is part of the shape: a cached tube built with a
+  // different exponent is the wrong silhouette, not just a different number.
+  return `${r0.toFixed(3)},${r1.toFixed(3)},${length.toFixed(3)},${quality.tubeRadialSegments}x${quality.tubeLengthSegments},${getSegmentTaperExponent().toFixed(2)}`;
+}
+
+/**
+ * Bend a cylinder's rings onto the shared segment profile.
+ *
+ * CylinderGeometry interpolates radius linearly from base to tip, which draws
+ * every internode as a funnel. The neck belongs at the junction: rescale each
+ * ring by `segmentRadiusAt / linear`, so the belly is at the joint and the shank
+ * holds for the rest of the segment. The tube's own ends keep the radii it was
+ * built with, so joints and tips are unchanged.
+ */
+function applySegmentProfile(
+  geometry: THREE.BufferGeometry,
+  r0: number,
+  r1: number,
+  length: number,
+): void {
+  const position = geometry.getAttribute('position');
+  const span = Math.max(length, 1e-4);
+  for (let i = 0; i < position.count; i += 1) {
+    const t = THREE.MathUtils.clamp(position.getY(i) / span, 0, 1);
+    const linear = r0 + (r1 - r0) * t;
+    if (linear <= 1e-6) continue;
+    const scale = segmentRadiusAt(r0, r1, t) / linear;
+    position.setX(i, position.getX(i) * scale);
+    position.setZ(i, position.getZ(i) * scale);
+  }
+  position.needsUpdate = true;
 }
 
 function buildTubeGeometry(
@@ -296,6 +356,7 @@ function buildTubeGeometry(
     // and keep +Y as the growth axis; the old rotateX made the geometry run
     // along Z while the mesh was aligned from +X, so every tube was off-axis.
     geo.translate(0, length / 2, 0);
+    applySegmentProfile(geo, r0, r1, length);
     if (Math.abs(bend) > 1e-5) {
       const position = geo.getAttribute('position');
       for (let i = 0; i < position.count; i += 1) {
@@ -530,7 +591,16 @@ export class MeshPlantRenderer {
   }
 
   /** Tinted material for one organ and one pigment; cached per variant. */
-  private materialFor(nodeType: string, look: MutationLook): THREE.MeshStandardMaterial {
+  /** The health band a drawn part is in, from the panel's own thresholds. */
+  private healthBandOf(node: MeshNode): NodeHealthStatus {
+    return nodeHealthStatus(node.health, node.growthProgress);
+  }
+
+  private materialFor(
+    nodeType: string,
+    look: MutationLook,
+    health: NodeHealthStatus = 'intact',
+  ): THREE.MeshStandardMaterial {
     const tint = look.tint.map((v) => v.toFixed(2)).join(',');
     const key = [
       nodeType,
@@ -543,10 +613,14 @@ export class MeshPlantRenderer {
       look.glowColor.map((v) => v.toFixed(2)).join(','),
       look.barkDarken.toFixed(2),
       look.pattern,
+      // Health is part of the material, so it is part of the cache key: a plant
+      // that loses tissue must not keep the healthy variant's material.
+      health,
     ].join(':');
     const cached = this.materialVariants.get(key);
     if (cached) return cached;
     const material = baseMaterialFor(nodeType).clone();
+    applyNodeHealthLook(material, health);
     // `.clone()` does not carry the fog patch across, so each new variant is
     // attached to the shared atmosphere as it is created.
     applyAtmosphereToStandardMaterial(material, atmosphereParams, atmosphereSunDir);
@@ -593,7 +667,10 @@ export class MeshPlantRenderer {
         parentId: n.parentId,
         children: n.children ?? [],
         biomass: n.biomass ?? 0,
-        health: n.health ?? 0.5,
+        // A missing health field is not damage (the same rule the panels use): a
+        // default of 0.5 drew every part it could not vouch for in the dry tint,
+        // which is a claim the payload never made.
+        health: n.health ?? 1,
         isOwnPlant: n.isOwnPlant ?? true,
         growthProgress: n.growthProgress ?? 1.0,
         attachFraction: n.attachFraction,
@@ -694,7 +771,11 @@ export class MeshPlantRenderer {
       if (existingSeed) {
         // Seeds are created once and kept; a later mutation still has to
         // repaint the coat, or the seed keeps the material it was born with.
-        existingSeed.material = this.materialFor('seed', this.lookFor(node));
+        existingSeed.material = this.materialFor(
+          'seed',
+          this.lookFor(node),
+          this.healthBandOf(node),
+        );
         // The seed has to follow its node. It was positioned once at birth, so
         // after a reroot crawl the body crawled away and left its seed standing
         // on the old ground - the plant looked like it had not moved at all.
@@ -709,7 +790,7 @@ export class MeshPlantRenderer {
       }
       const radius = resolveDrawnRadius('seed', node.radius, node.biomass);
       const geo = new THREE.SphereGeometry(radius, 20, 14);
-      const mat = this.materialFor('seed', this.lookFor(node));
+      const mat = this.materialFor('seed', this.lookFor(node), this.healthBandOf(node));
       const mesh = new THREE.Mesh(geo, mat);
       // Slightly ovoid: a little taller than wide and flattened front-to-back.
       // The vertical scale is the shared seed aspect, so this ovoid is the same
@@ -785,14 +866,29 @@ export class MeshPlantRenderer {
       const segmentEnd = node.targetPosition ?? node.position.clone();
 
       const parentVisualRadius = resolveDrawnRadius(parent.nodeType, parent.radius, parent.biomass);
-      let tubeStartRadius = parentVisualRadius;
       let tubeEndRadius = resolveDrawnRadius(node.nodeType, node.radius, node.biomass);
       const softPart =
         node.nodeType === 'leaf' ||
         node.nodeType === 'cotyledon' ||
         node.nodeType === 'flower' ||
         node.nodeType === 'spore_sac';
-      if (softPart) tubeStartRadius = Math.min(tubeStartRadius, tubeEndRadius);
+      // The parent's radius *where this part leaves it*: a lateral takes a
+      // fraction of its parent's segment, and the segment necks down along
+      // itself, so the parent's nominal radius sized a bud near its tip as if it
+      // sat at the base. The parent's drawn start radius comes from its own
+      // segment when it has been built; the first frame falls back to nominal.
+      const parentSegment = this.segments.get(parent.id);
+      const localFraction =
+        typeof node.attachFraction === 'number' && node.attachFraction < 1
+          ? Math.min(1, Math.max(0, node.attachFraction))
+          : 1;
+      const parentRadiusAtAttach = parentSegment
+        ? segmentRadiusAt(parentSegment.r0, parentSegment.r1, localFraction)
+        : parentVisualRadius;
+      // A junction is a knuckle: wider than the child's shank, never wider than
+      // the parent carrying it. This used to be the parent's full radius, which
+      // drew a branch off a trunk as a cone 2.65x its own thickness.
+      let tubeStartRadius = jointStartRadius(parentRadiusAtAttach, tubeEndRadius, softPart);
 
       // Anything emerging from a seed starts thin so the seed never turns into
       // a cone with a giant base.
@@ -836,11 +932,11 @@ export class MeshPlantRenderer {
       let length = dir.length();
       if (length < 0.001) continue;
 
-      // Leave the parent's centre line on its surface. The tube still overlaps
-      // the parent by more than half its radius, so the joint reads as grown
-      // tissue instead of a pin pushed through the middle.
+      // Start inside the parent and let its own surface hide the base disc.
+      // Pushing the base out to the surface leaves its rim tangent to it, which
+      // reads as a crease rather than grown tissue.
       if (parentType !== 'seed') {
-        const socket = Math.min(parentVisualRadius * 0.9, length * 0.4);
+        const socket = Math.min(socketInset(parentRadiusAtAttach), length * 0.4);
         segmentStart.addScaledVector(dir.clone().normalize(), socket);
         dir = new THREE.Vector3().subVectors(segmentEnd, segmentStart);
         length = dir.length();
@@ -860,8 +956,8 @@ export class MeshPlantRenderer {
       const geo = buildTubeGeometry(tubeStartRadius, tubeEndRadius, length, this.quality, bend);
       const mat =
         node.nodeType === 'flower' || node.nodeType === 'spore_sac'
-          ? this.materialFor('stem', this.lookFor(node))
-          : this.materialFor(node.nodeType, this.lookFor(node));
+          ? this.materialFor('stem', this.lookFor(node), this.healthBandOf(node))
+          : this.materialFor(node.nodeType, this.lookFor(node), this.healthBandOf(node));
       const mesh = new THREE.Mesh(geo, mat);
       mesh.position.copy(segmentStart);
       if (length > 0.001) {
@@ -881,7 +977,7 @@ export class MeshPlantRenderer {
           organLookNow.spines,
         );
         if (spineGeo) {
-          const spineMat = this.materialFor('stem', organLookNow);
+          const spineMat = this.materialFor('stem', organLookNow, this.healthBandOf(node));
           const spines = new THREE.Mesh(spineGeo, spineMat);
           spines.position.copy(mesh.position);
           spines.quaternion.copy(mesh.quaternion);
@@ -932,7 +1028,10 @@ export class MeshPlantRenderer {
             this.quality.leafSegments,
             isCotyledon,
           );
-          const leaf = new THREE.Mesh(leafGeo, this.materialFor(node.nodeType, this.lookFor(node)));
+          const leaf = new THREE.Mesh(
+            leafGeo,
+            this.materialFor(node.nodeType, this.lookFor(node), this.healthBandOf(node)),
+          );
           const angle = (i / Math.max(1, leafCount)) * Math.PI * 2;
           this.placeLeaf(leaf, segmentEnd, axis, angle, isCotyledon);
           this.meshGroup.add(leaf);
@@ -964,6 +1063,7 @@ export class MeshPlantRenderer {
         leafMeshes,
         spineMeshes,
         lookRevision: this.geometryRevision,
+        healthBand: this.healthBandOf(node),
         ornament,
         parentPosition: segmentStart.clone(),
         targetPosition: segmentEnd.clone(),
@@ -1032,7 +1132,10 @@ export class MeshPlantRenderer {
     const petalCount = Math.max(3, Math.min(16, Math.round(this.appearanceFor(node).petalCount)));
     for (let i = 0; i < petalCount; i += 1) {
       const angle = (i / petalCount) * Math.PI * 2;
-      const petal = new THREE.Mesh(petalGeo, this.materialFor('flower', this.lookFor(node)));
+      const petal = new THREE.Mesh(
+        petalGeo,
+        this.materialFor('flower', this.lookFor(node), this.healthBandOf(node)),
+      );
       petal.position.set(Math.cos(angle) * r * 0.62, 0, Math.sin(angle) * r * 0.62);
       petal.rotation.y = -angle;
       petal.scale.set(r * 0.62, r * 0.1, r * 0.3);
@@ -1040,7 +1143,7 @@ export class MeshPlantRenderer {
     }
     const centre = new THREE.Mesh(
       new THREE.SphereGeometry(1, 12, 8),
-      this.materialFor('flower_centre', this.lookFor(node)),
+      this.materialFor('flower_centre', this.lookFor(node), this.healthBandOf(node)),
     );
     centre.scale.set(r * 0.28, r * 0.16, r * 0.28);
     group.add(centre);
@@ -1074,6 +1177,15 @@ export class MeshPlantRenderer {
     for (const [id, seg] of this.segments) {
       const node = this.nodeMap.get(id);
       if (!node) continue;
+
+      // Health is part of a part's material, so a plant that loses tissue has to
+      // be rebuilt to show it. Band changes are rare (a damage event, not a tick),
+      // so this asks for one rebuild per change rather than a per-frame re-tint.
+      const band = this.healthBandOf(node);
+      if (seg.healthBand !== band) {
+        seg.healthBand = band;
+        this.structureDirty = true;
+      }
 
       // Follow the live skeleton. Everything above this point was placed once, at
       // build time, so a body that moved afterwards - an uproot crawl, a plant
@@ -1187,6 +1299,42 @@ export class MeshPlantRenderer {
 
   setLOD(): void {
     // LOD handled by tier selection in caller; mesh renderer always renders full detail
+  }
+
+  /**
+   * Every drawn surface, mapped to the node that owns it.
+   *
+   * Clicking the plant must land on the plant. The pick spheres the caller casts
+   * are sized from the node radius, so a click between two nodes - on the tube,
+   * on a leaf, on a thorn - used to fall through the plant and hit nothing, which
+   * read as "clicking the middle of my plant does nothing". The tubes, joints,
+   * leaves, spines and ornaments here are the same meshes the player sees, so a
+   * hit on any of them names the node to grow from.
+   */
+  pickSurfaces(): Array<{
+    nodeId: string;
+    plantId: string | undefined;
+    isOwnPlant: boolean;
+    object: THREE.Object3D;
+  }> {
+    const out: Array<{
+      nodeId: string;
+      plantId: string | undefined;
+      isOwnPlant: boolean;
+      object: THREE.Object3D;
+    }> = [];
+    for (const [nodeId, seg] of this.segments) {
+      const plantId = this.nodeMap.get(nodeId)?.plantId;
+      const push = (object: THREE.Object3D | null): void => {
+        if (object) out.push({ nodeId, plantId, isOwnPlant: seg.isOwnPlant, object });
+      };
+      push(seg.mesh);
+      push(seg.jointMesh);
+      for (const leaf of seg.leafMeshes) push(leaf);
+      for (const spine of seg.spineMeshes) push(spine);
+      push(seg.ornament);
+    }
+    return out;
   }
 
   dispose(): void {

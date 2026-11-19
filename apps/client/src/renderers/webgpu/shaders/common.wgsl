@@ -51,6 +51,8 @@ struct FrameUniforms {
   // Only this bubble is exempt from the soil test while the eye is under the
   // surface; the rest of the world still hides what the earth stands in front of.
   rootSightEyeWindow: f32,
+  // Golden-hour warmth, 0..1. Lit leaves facing away from the sun glow through.
+  sunWarmth: f32,
 }
 
 // C02b: Per-vertex emergence data for GPU skinning

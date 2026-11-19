@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
+  growthTargetMass,
   healthPhotosynthesisMultiplier,
   nodeHealth,
   plantHealth,
@@ -124,6 +125,28 @@ describe('tissue health', () => {
       node({ id: 'seed', type: 'seed', layer: 'root', isSeed: true, biomass: 1 }),
     ]);
     assert.equal(plantHealth(seedOnly, config), 1);
+  });
+
+  it('quotes a growth once, so a mutation cannot re-price a part mid-flight', () => {
+    // Growth takes seconds and a mutation rolls per growth, so a size mutation
+    // could be gained while a part was half built. The target mass was re-quoted
+    // every tick from the plant's current scale: the part then accrued at the new
+    // rate and finished heavier than the menu promised.
+    const node = { type: 'stem', biomass: 0.2, growthProgress: 0.4 } as unknown as Parameters<
+      typeof growthTargetMass
+    >[0];
+    const quoted = growthTargetMass(node, 0.36);
+    assert.equal(quoted, 0.36);
+    // The plant grows a size mutation; the same growth is asked again.
+    assert.equal(growthTargetMass(node, 4), 0.36);
+    assert.equal(growthTargetMass(node, 4), 0.36);
+    // The next part quotes at the new scale.
+    const next = { type: 'stem', biomass: 0 } as unknown as Parameters<typeof growthTargetMass>[0];
+    assert.equal(growthTargetMass(next, 4), 4);
+    // A nonsense quote is not a quote: it becomes nothing rather than NaN mass.
+    const odd = { type: 'stem', biomass: 0 } as unknown as Parameters<typeof growthTargetMass>[0];
+    assert.equal(growthTargetMass(odd, Number.NaN), 0);
+    assert.equal(growthTargetMass(odd, -3), 0);
   });
 
   it('keeps a photosynthesis floor at zero health', () => {

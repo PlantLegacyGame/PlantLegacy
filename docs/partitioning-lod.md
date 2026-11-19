@@ -7,8 +7,9 @@ by DESIGN.md Part 14.2.0 (v5.3.2) and is not restated here (ADR-042, ADR-049).
 ## Overview
 
 The system uses a **dual rendering path**:
-1. **C02 (Three.js + SDF Raymarched)**: Primary renderer for plants, uses Raymarched Signed Distance Fields with polynomial smooth minimum (`smin`) organic fusion inside local bounding volumes. All primitives (tapered capsules, joint spheres, root crowns, parametric leaf blades) fuse into a single continuous anatomical membrane.
-2. **C02b (WebGPU Compute-Driven)**: GPU-driven plant rendering path with compute culling/LOD, merged mesh for tiers 0/1, ellipsoid SDF impostor at L2, colour-only atlas billboards at L3, coloured point at T4, WebGL2 fallback.
+1. **C02 mesh (Three.js, shipped default)**: the close plant is drawn as real mesh geometry per organ in `MeshPlantRenderer.ts`. It sits in the scene graph, so terrain, the Root Sight cavity and the plant sort in one depth buffer. This is the path `PlantRenderer` uses by default (`useMeshL0L1 = true`).
+2. **C02 SDF raymarched (fallback)**: Raymarched Signed Distance Fields with polynomial smooth minimum (`smin`) organic fusion inside local bounding volumes, drawn as a fullscreen quad. Used when the mesh pass is disabled or for the far tier.
+3. **C02b (WebGPU Compute-Driven)**: GPU-driven plant rendering path with compute culling/LOD, merged mesh for tiers 0/1, ellipsoid SDF impostor at L2, colour-only atlas billboards at L3, coloured point at T4, WebGL2 fallback. Off by default.
 
 ## Architecture
 
@@ -21,6 +22,13 @@ The system uses a **dual rendering path**:
 
 ### Client - C02 SDF Raymarched Renderer (`apps/client/src/renderers/PlantRenderer.ts`)
 
+**Depth behaviour:** the raymarch is a fullscreen quad with `depthTest: false`
+and `depthWrite: false`, because a missed ray has to output alpha 0 and blend
+over the sky rather than write depth across the whole screen. The consequence is
+that an SDF-drawn plant cannot be occluded by nearby relief: it composites over
+the terrain. That is why the mesh path above, not this one, is the default for
+close plants.
+
 **Unified Organism SDF:**
 - Bounding box execution: raymarching only inside plant's active node graph + blend padding
 - Tapered Capsule SDF (`sdCapsule`): swept tapered segments between parent/child nodes with biomass-derived radii
@@ -30,7 +38,6 @@ The system uses a **dual rendering path**:
 - Procedural Wind Displacement: coherent 3D wind field, sway amplitude scales with height
 - Translucent Foliage & PBR-Lite: subsurface transmission, directional + ambient + rim lighting
 - Three Mutation Visual Signatures: bioluminescent, thickened bark, variegated foliage
-- Screen Depth Integration: writes `gl_FragDepth` for accurate occlusion
 
 ### Client - C02b WebGPU Compute-Driven Renderer (`apps/client/src/renderers/webgpu/`)
 
@@ -77,6 +84,15 @@ an ellipsoid SDF (no atlas, relit live) and restricts the atlas billboard to L3
 - Rebuild throttled (100ms interval) during active growth
 - 10k plants = ~2M vertices at L0 (fits in single buffer)
 
+#### Cost of the shipped mesh path
+
+`MeshPlantRenderer` (above) is a mesh per organ, not a merged buffer: it adds one
+`THREE.Mesh` per stem node and one per leaf, caches tube geometry but rebuilds
+leaf geometry on every growth rebuild, and leaves three.js nothing it can batch.
+Draw calls therefore scale with organs rather than plants. What to do about it is
+ranked, with effort, in
+[`abyssal-garden-source-analysis.md`](./abyssal-garden-source-analysis.md) Part II.
+
 ## Config Tunables
 
 | Config | Default | Notes |
@@ -114,7 +130,8 @@ an ellipsoid SDF (no atlas, relit live) and restricts the atlas billboard to L3
 
 | File | Purpose |
 |------|---------|
-| `apps/client/src/renderers/PlantRenderer.ts` | C02 SDF raymarched plant renderer |
+| `apps/client/src/renderers/PlantRenderer.ts` | C02 SDF raymarched plant renderer (fallback) and the LOD/tier switch between paths |
+| `apps/client/src/renderers/MeshPlantRenderer.ts` | C02 mesh plant renderer: the shipped close-plant path, one `THREE.Mesh` per organ |
 | `apps/client/src/renderers/EnvironmentRenderer.ts` | C03 environment (sky, fog, rain, terrain) |
 | `apps/client/src/renderers/webgpu/WebGPURenderer.ts` | C02b main renderer, compute/render pipelines |
 | `apps/client/src/renderers/webgpu/PlantMeshBuilder.ts` | C02b mesh generation, Murray's law, growth |

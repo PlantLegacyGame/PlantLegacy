@@ -13,6 +13,8 @@ import type { RenderConfig } from '../../config/clientConfig.js';
 // not allocate two THREE.Color objects every tick. The value is copied into the
 // light and the sky uniform before the next call, so sharing it is safe.
 const scratchSunColor = new THREE.Color();
+/** Scratch colour for the dusk end of the grade, reused per frame. */
+const scratchDusk = new THREE.Color();
 
 /** Live directions, updated in place so shader uniforms keep their reference. */
 export interface CelestialBodies {
@@ -67,6 +69,71 @@ export interface CelestialLightingTargets {
    * parts that number does not reach: the direct beam and its sky disk.
    */
   lightMultiplier: number;
+}
+
+/**
+ * How warm the direct light is, from 0 (noon white) to 1 (full sunset orange).
+ *
+ * The old code switched colour at `duskFactor > 0.2`, so the light jumped from
+ * noon-white to sunset-orange in one frame. Golden hour is the best-looking part
+ * of a day cycle, and it needs a ramp: the sun only turns warm once it is low,
+ * and it keeps warming until it is on the horizon.
+ */
+export function sunWarmth(sunElev: number): number {
+  // Warm as the sun drops to the horizon, and back to nothing once it is under
+  // it: at night the light is moonlight, not a very late sunset. Without the
+  // second ramp, warmth was 1 all night, which put golden-hour mist in, and a
+  // warm backlight on, every dark hour.
+  const low = 1 - THREE.MathUtils.smoothstep(sunElev, 0.02, 0.45);
+  const above = THREE.MathUtils.smoothstep(sunElev, -0.16, 0.02);
+  return THREE.MathUtils.clamp(low * above, 0, 1);
+}
+
+/** Grades the direct beam between the configured day and dusk colours. */
+export function gradeSunColor(
+  sunElev: number,
+  cfg: Pick<RenderConfig, 'sunColorDay' | 'sunColorDusk'>,
+  out: THREE.Color,
+): THREE.Color {
+  const warmth = sunWarmth(sunElev);
+  return out.set(cfg.sunColorDay).lerp(scratchDusk.set(cfg.sunColorDusk), warmth);
+}
+
+/**
+ * Moonlight strength for this frame.
+ *
+ * It used to be a constant `sun_intensity_night` the moment the sun crossed the
+ * horizon, so the world was as moonlit at moonrise as at midnight. Scaling by the
+ * moon's own elevation gives the slow build people actually notice.
+ */
+export function moonStrength(sunElev: number): number {
+  // The moon is opposite the sun, so its elevation is the negated sine.
+  return THREE.MathUtils.clamp(-sunElev, 0, 1) ** 0.6;
+}
+
+export function moonIntensity(
+  sunElev: number,
+  cfg: Pick<RenderConfig, 'sunIntensityNight'>,
+  weatherLight: number,
+): number {
+  return Math.max(0.02, cfg.sunIntensityNight * moonStrength(sunElev) * weatherLight);
+}
+
+/**
+ * Renderer exposure for the hour: a slight lift at golden hour and a slight crush
+ * at night. Exposure cannot tint, but it is what makes a dusk `sunset` read as
+ * brighter *air* and a night as actual darkness rather than flat grey.
+ */
+export function gradeExposure(
+  sunElev: number,
+  cfg: Pick<RenderConfig, 'exposureDay' | 'exposureHorizon' | 'exposureNight'>,
+): number {
+  const warmth = sunWarmth(sunElev);
+  const night = THREE.MathUtils.clamp(-sunElev, 0, 1);
+  // Warmth first (dawn/dusk lift), then the night crush, so the two never fight
+  // over the same hour: they are disjoint at the horizon.
+  const day = THREE.MathUtils.lerp(cfg.exposureDay, cfg.exposureHorizon, warmth);
+  return THREE.MathUtils.lerp(day, cfg.exposureNight, night);
 }
 
 /** The ambient fields `stepAmbientLighting` needs from `render.json`. */
@@ -143,8 +210,9 @@ export function applyCelestialLighting(targets: CelestialLightingTargets): void 
     // A DirectionalLight shines from its position toward its target (the
     // origin), so the position must sit on the same side as the visual sun.
     sunLight.position.set(sunDir.x * orbit, Math.max(8, sunDir.y * orbit), sunDir.z * orbit);
-    const duskFactor = (1.0 - Math.abs(sunElev * 3.0)) * 0.5;
-    const sunBaseColor = scratchSunColor.set(duskFactor > 0.2 ? cfg.sunColorDusk : cfg.sunColorDay);
+    // Warm, continuous grade: white at noon, orange as the sun approaches the
+    // horizon. Not a threshold switch, so dusk actually fades.
+    const sunBaseColor = gradeSunColor(sunElev, cfg, scratchSunColor);
     sunLight.color.copy(sunBaseColor);
     sunLight.intensity = Math.max(
       0.05,
@@ -153,13 +221,19 @@ export function applyCelestialLighting(targets: CelestialLightingTargets): void 
     skyMaterial.uniforms.uSunDir.value.copy(sunDir);
     skyMaterial.uniforms.uSunColor.value.copy(sunBaseColor);
     skyMaterial.uniforms.uSunIntensity.value = sunLight.intensity;
+    // The sky's warm scattering follows the same ramp as the beam's colour.
+    skyMaterial.uniforms.uSunWarmth.value = sunWarmth(sunElev) * weatherLight;
     skyMaterial.uniforms.uMoonDir.value.set(0, -1, 0);
+    skyMaterial.uniforms.uMoonIntensity.value = 0;
+    skyMaterial.uniforms.uSunWarmth.value = 0;
   } else {
     sunLight.position.set(moonDir.x * orbit, Math.max(12, moonDir.y * orbit), moonDir.z * orbit);
     sunLight.color.set(cfg.sunColorNight);
-    sunLight.intensity = Math.max(0.02, cfg.sunIntensityNight * weatherLight);
+    sunLight.intensity = moonIntensity(sunElev, cfg, weatherLight);
     skyMaterial.uniforms.uSunDir.value.set(0, -1, 0);
     skyMaterial.uniforms.uMoonDir.value.copy(moonDir);
+    // The halo follows the same ramp as the light it casts.
+    skyMaterial.uniforms.uMoonIntensity.value = moonStrength(sunElev) * weatherLight;
     skyMaterial.uniforms.uSunColor.value.set(cfg.sunColorNight);
     skyMaterial.uniforms.uSunIntensity.value = sunLight.intensity;
   }

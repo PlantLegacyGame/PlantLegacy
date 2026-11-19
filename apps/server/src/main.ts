@@ -3,6 +3,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { createServer } from 'node:http';
 import process from 'node:process';
 import { readNumber } from '@plant-legacy/shared/config';
+import { validateDisplayName } from '@plant-legacy/shared/displayName';
 import type { Plant } from '@plant-legacy/shared/growth';
 import { validateMessage } from '@plant-legacy/shared/protocol/messageSchemas';
 import { loadDayNightConfig, loadWeatherConfig, WeatherSystem } from '@plant-legacy/weather';
@@ -42,8 +43,10 @@ import {
 import { loadDamageConfig, loadTumblingConfig, loadUprootConfig } from './ops/damage/config.ts';
 import { DamagePipeline } from './ops/damage/damagePipeline.ts';
 import { DatabaseProbe } from './ops/db.ts';
-import { devToolsAllowed, handleGetDevConfig, handlePostDevConfig } from './ops/dev.ts';
+import { handleGetDevConfig, handlePostDevConfig } from './ops/dev.ts';
+import { resolveDevAccess } from './ops/devAccess.ts';
 import { resolveDevWeatherCommand } from './ops/devCommands.ts';
+import { eventBus, GAME_EVENTS } from './ops/eventBus.ts';
 import { loadGrowthConfig } from './ops/growth.ts';
 import {
   createGrowthIntentStateMachine,
@@ -77,6 +80,7 @@ import {
   type SeasonUpdatePayload,
   type WelcomePayload,
 } from './ops/net.ts';
+import { isAllowedOrigin } from './ops/originPolicy.ts';
 import { type PlantEvent, PlantPersistence } from './ops/persistence/plantPersistence.ts';
 import { TerrainPersistence } from './ops/persistence/terrainPersistence.ts';
 import { computePlantCapacity } from './ops/plantCapacity.ts';
@@ -106,6 +110,11 @@ import {
 } from './ops/seasonClock.ts';
 import { TerrainService } from './ops/terrain.ts';
 import { createTickClock, type TickClock, tickClockStart, tickClockStop } from './ops/tickClock.ts';
+import {
+  type TickBudgetWarning,
+  TickMetrics,
+  type TickMetricsSnapshot,
+} from './ops/tickMetrics.ts';
 import { buildWelcomePayload } from './ops/welcomePayload.ts';
 import { loadWorldConfig } from './ops/world.ts';
 import { broadcastResourceDeltas, type ResourceBroadcastPorts } from './tick/resourceBroadcast.ts';
@@ -168,26 +177,6 @@ function sendJson(response: ServerResponse, status: number, body: unknown): void
     'cache-control': 'no-store',
   });
   response.end(payload);
-}
-
-function isAllowedOrigin(
-  origin: string | undefined,
-  allowedOrigins: readonly string[],
-  nodeEnv = 'local',
-): boolean {
-  if (!origin) return true;
-  if (allowedOrigins.includes(origin)) return true;
-  if (nodeEnv === 'local') {
-    try {
-      const u = new URL(origin);
-      if (u.hostname === 'localhost' || u.hostname === '127.0.0.1') {
-        return true;
-      }
-    } catch {
-      return false;
-    }
-  }
-  return false;
 }
 
 function applyCors(
@@ -329,6 +318,13 @@ class World {
   private damagePipeline: DamagePipeline | null = null;
   /** Bounded per-plant audit history, written with every save (INV-PR-07). */
   private readonly plantEventLog: PlantEventLog;
+  /** Deployment environment; the dev-access gate reads this, not process.env. */
+  private readonly runtimeEnvironment: string;
+  private readonly devAllowedEnvironments: string[];
+  private readonly devAdminAccounts: string[];
+  /** Per-tier tick timings and budget warnings; read by the metrics route. */
+  private readonly tickMetrics: TickMetrics;
+  private budgetSubscription: { unsubscribe(): void } | null = null;
   private itemsConfig: ReturnType<typeof loadItemsConfig>;
   private chatConfig: ChatConfig;
   private reportConfig: ReportConfig;
@@ -834,6 +830,11 @@ class World {
     terrain: TerrainService | null = null,
     eventLogCompactionThreshold = 10000,
     initialEvents: Map<string, PlantEvent[]> = new Map(),
+    metricsWindowTicks = 300,
+    tickBudgetWarnThresholdMs = 40,
+    runtimeEnvironment = 'local',
+    devAllowedEnvironments: string[] = ['local'],
+    devAdminAccounts: string[] = [],
   ) {
     this.config = config;
     this.log = log;
@@ -857,6 +858,10 @@ class World {
     this.seasonLengthDays = seasonLengthDays;
     this.seasonClock = createSeasonClock(seasonLengthDays, config.tickRateHz);
     this.reconnectMachine = createReconnectStateMachine(reconnectWindowMs, persistenceEnabled);
+    this.tickMetrics = new TickMetrics(metricsWindowTicks, tickBudgetWarnThresholdMs);
+    this.runtimeEnvironment = runtimeEnvironment;
+    this.devAllowedEnvironments = devAllowedEnvironments;
+    this.devAdminAccounts = devAdminAccounts;
     this.growthIntentMachine = createGrowthIntentStateMachine(100);
     this.connectionRegistry = createConnectionRegistry(config.helloTimeoutMs);
     this.tickClock = createTickClock({
@@ -1830,11 +1835,31 @@ class World {
           break;
         }
         case MESSAGE_TYPE.DEV_ACTION: {
-          // D01: Handle dev panel actions (local runs only)
-          if (!devToolsAllowed()) {
-            this.log.warn('Dev action rejected outside a local run', {
+          // D01: dev tools are for this deployment's developers, not for whoever
+          // connected. The environment check alone was not enough - a public
+          // server that left `NODE_ENV` unset reported `local` - so a non-local
+          // run also requires an admin account or an allowlisted one.
+          const devPlayer = this.players.get(playerId);
+          const devSocket = devPlayer?.ws as (WebSocket & { accountRole?: string }) | undefined;
+          const devAccess = resolveDevAccess({
+            environment: this.runtimeEnvironment,
+            allowedEnvironments: this.devAllowedEnvironments,
+            adminAccounts: this.devAdminAccounts,
+            accountId: devPlayer?.accountId,
+            role: devSocket?.accountRole,
+          });
+          if (!devAccess.allowed) {
+            this.log.warn('Dev action rejected', {
               type: (payload as Record<string, unknown>)?.type,
+              reason: devAccess.reason,
             });
+            if (devPlayer?.ws) {
+              this.sendDevResponse(
+                devPlayer.ws,
+                String((payload as Record<string, unknown>)?.type ?? 'unknown'),
+                { ok: false, error: `dev_access_denied:${devAccess.reason}` },
+              );
+            }
             break;
           }
           const devAction = payload as { type: string; [key: string]: unknown };
@@ -2073,7 +2098,9 @@ class World {
       this.resourceWorld.getTileResources(x, z),
     );
 
-    this.plantWorld.step(dt, onlinePlantIds, tick);
+    // The per-tier timings are the only signal that tells an overloaded tick from
+    // a healthy one, so they are recorded rather than discarded.
+    this.tickMetrics.record(this.plantWorld.step(dt, onlinePlantIds, tick));
     for (const transition of this.plantWorld.drainTierTransitions()) {
       this.plantEventLog.append(transition.plantId, {
         type: 'tier_change',
@@ -2770,13 +2797,25 @@ class World {
       setTileResources: (tileX, tileZ, resources) =>
         this.resourceWorld.setTileResources(tileX, tileZ, resources),
       setTimeOfDay: (fraction) => this.weatherSystem.setTimeOfDay(fraction),
+      setTimePaused: (paused) => this.weatherSystem.setTimePaused(paused),
+      setTimeScale: (scale) => this.weatherSystem.setTimeScale(scale),
       weatherBroadcast: () => {
         const forced = this.weatherSystem.getBroadcast();
         return {
           timeOfDay: forced.timeOfDay,
           isDay: forced.isDay,
           sunIntensity: forced.sunIntensity,
+          timePaused: forced.timePaused,
+          timeScale: forced.timeScale,
         };
+      },
+      // The clock is world state: push it to everyone at once so a dev change is
+      // not something only the calling panel sees.
+      broadcastWeather: () => {
+        this.broadcast(MESSAGE_TYPE.WEATHER_UPDATE, {
+          tick: this.getTick(),
+          ...this.weatherSystem.getBroadcast(),
+        });
       },
       respond: (actionType, payload) => this.sendDevResponse(ws, actionType, payload),
     };
@@ -2946,12 +2985,25 @@ class World {
   }
 
   start(): void {
+    // The warning had no subscriber, so an overloaded server looked identical to a
+    // healthy one. The window counts both branches of checkTickBudget.
+    this.budgetSubscription = eventBus.subscribe<TickBudgetWarning>(
+      GAME_EVENTS.TICK_BUDGET_WARNING,
+      (warning) => this.tickMetrics.recordWarning(warning),
+    );
     tickClockStart(this.tickClock);
     this.log.info('world simulation started', { tickRateHz: this.config.tickRateHz });
   }
 
   stop(): void {
+    this.budgetSubscription?.unsubscribe();
+    this.budgetSubscription = null;
     tickClockStop(this.tickClock);
+  }
+
+  /** The tick timing window, served by the metrics route and asserted in tests. */
+  getMetrics(): TickMetricsSnapshot {
+    return this.tickMetrics.snapshot();
   }
 
   /** The resource-facing view of a plant, carrying its current capacities. */
@@ -3032,6 +3084,20 @@ class World {
 
   getTick(): number {
     return this.tickClock.tick;
+  }
+
+  /**
+   * The world clock, as the game itself runs it. The title screen is outside the
+   * game loop, so it asks for this instead of keeping a second day.
+   */
+  getWorldTime(): { timeOfDay: number; isDay: boolean; paused: boolean; scale: number } {
+    const broadcast = this.weatherSystem.getBroadcast();
+    return {
+      timeOfDay: broadcast.timeOfDay,
+      isDay: broadcast.isDay,
+      paused: broadcast.timePaused,
+      scale: broadcast.timeScale,
+    };
   }
 
   getPlayerCount(): number {
@@ -3413,6 +3479,11 @@ async function main(): Promise<void> {
     terrainService,
     worldConfig.eventLogCompactionThreshold,
     loadedPlantEvents,
+    runtime.metricsWindowTicks,
+    worldConfig.tickBudgetWarnThresholdMs,
+    runtime.nodeEnv,
+    runtime.devAllowedEnvironments,
+    runtime.devAdminAccounts,
   );
   if (terrainService) {
     plantWorld.setGrowthResistanceProvider((x, y, z) => terrainService.growthResistanceAt(x, y, z));
@@ -3507,6 +3578,21 @@ async function main(): Promise<void> {
     applyCors(request, response, runtime.corsOrigins, runtime.nodeEnv);
     const method = request.method ?? 'GET';
 
+    // INV-AU-12: the WebSocket refused a disallowed origin while HTTP executed
+    // the request and only omitted the CORS header. Same policy, same answer.
+    const requestOrigin = request.headers.origin;
+    if (
+      typeof requestOrigin === 'string' &&
+      !isAllowedOrigin(requestOrigin, runtime.corsOrigins, runtime.nodeEnv)
+    ) {
+      log.warn('refused request from disallowed origin', {
+        origin: requestOrigin,
+        path: request.url,
+      });
+      sendJson(response, 403, { error: 'origin_not_allowed' });
+      return;
+    }
+
     if (method === 'OPTIONS') {
       response.writeHead(204, {
         'access-control-allow-methods': 'GET, HEAD, POST, OPTIONS',
@@ -3591,6 +3677,13 @@ async function main(): Promise<void> {
       return;
     }
 
+    // The title screen runs before a connection, so it reads the clock over HTTP
+    // rather than inventing one. Read-only and cheap: no player data.
+    if (url.pathname === '/world/time' && request.method === 'GET') {
+      sendJson(response, 200, world.getWorldTime());
+      return;
+    }
+
     if (url.pathname === '/') {
       sendJson(response, 200, {
         name: 'plant-legacy-server',
@@ -3610,12 +3703,22 @@ async function main(): Promise<void> {
     }
 
     // D01: Dev config endpoints (non-production only)
+    if (runtime.metricsPath && url.pathname === runtime.metricsPath) {
+      sendJson(response, 200, world.getMetrics());
+      return;
+    }
+
     if (url.pathname === '/dev/config' && request.method === 'GET') {
-      await handleGetDevConfig(request, response);
+      await handleGetDevConfig(request, response, runtime.nodeEnv, runtime.devAllowedEnvironments);
       return;
     }
     if (url.pathname === '/dev/config' && request.method === 'POST') {
-      const applied = await handlePostDevConfig(request, response);
+      const applied = await handlePostDevConfig(
+        request,
+        response,
+        runtime.nodeEnv,
+        runtime.devAllowedEnvironments,
+      );
       // Push accepted switches into the live simulation, not just the config map.
       for (const change of applied ?? []) {
         world.applyDevConfig(change.key, change.value);
@@ -3845,6 +3948,16 @@ async function main(): Promise<void> {
           const added = world.addPlayer(ws, playerId, undefined);
           welcome = added.welcome;
         }
+      }
+
+      // The menu's nickname travels on HELLO. Other players already saw 'Player'
+      // for everyone, including signed-in accounts, because nothing carried the
+      // name over the socket. Sanitized and capped by the same validator the
+      // client form uses, so a hand-written client cannot put markup in chat.
+      if (typeof hello.displayName === 'string') {
+        const name = validateDisplayName(hello.displayName, runtime.displayNameMaxLength);
+        const player = world.getPlayer(playerId);
+        if (name.ok && player) player.displayName = name.value;
       }
 
       // A guest's owner id dies with the connection, so the plant id they asked
