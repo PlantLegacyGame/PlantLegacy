@@ -130,6 +130,24 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
     currentTile: null as { x: number; z: number } | null,
   };
 
+  // Focus rings are the one thing an inline style cannot express (`:focus-visible`
+  // is a selector, and `outline` set inline would always paint). Without this the
+  // search field and the panel's buttons fell back to the browser's own accent
+  // ring, which was the last unthemed colour in the panel.
+  if (!document.getElementById('pl-dev-panel-style')) {
+    const style = document.createElement('style');
+    style.id = 'pl-dev-panel-style';
+    style.textContent = `
+      #dev-panel .dp-search:focus-visible,
+      #dev-panel button:focus-visible {
+        outline: 2px solid var(--hud-border-focus);
+        outline-offset: 1px;
+      }
+      #dev-panel .dp-search { caret-color: var(--leaf-300); }
+    `;
+    document.head.appendChild(style);
+  }
+
   // Create panel element
   const panel = document.createElement('div');
   panel.id = 'dev-panel';
@@ -170,8 +188,8 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
     ">
       <span style="font-weight:600;color:var(--leaf-300);font-size:11px;text-transform:uppercase;letter-spacing:0.5px">Dev Panel</span>
       <div style="display:flex;gap:4px">
-        <button class="dp-min-btn" title="Minimize" style="width:24px;height:24px;border-radius:4px;background:var(--bark-700);border:1px solid var(--bark-500);color:var(--bark-300);cursor:pointer;display:flex;align-items:center;justify-content:center">-</button>
-        <button class="dp-close-btn" title="Close (Backtick)" style="width:24px;height:24px;border-radius:4px;background:var(--bark-700);border:1px solid var(--bark-500);color:var(--bark-300);cursor:pointer;display:flex;align-items:center;justify-content:center">x</button>
+        <button class="dp-min-btn" title="Minimize" style="width:24px;height:24px;border-radius:4px;background:var(--bark-700);border:1px solid var(--bark-500);color:var(--bark-100);cursor:pointer;display:flex;align-items:center;justify-content:center">-</button>
+        <button class="dp-close-btn" title="Close (Backtick)" style="width:24px;height:24px;border-radius:4px;background:var(--bark-700);border:1px solid var(--bark-500);color:var(--bark-100);cursor:pointer;display:flex;align-items:center;justify-content:center">x</button>
       </div>
     </div>
     <div class="dp-tabs" style="
@@ -1162,7 +1180,7 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
     const titleEl = document.createElement('div');
     titleEl.textContent = title;
     titleEl.style.cssText =
-      'font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--leaf-500);margin-bottom:8px;padding-bottom:4px;border-bottom:1px solid var(--bark-700)';
+      'font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--leaf-400);margin-bottom:8px;padding-bottom:4px;border-bottom:1px solid var(--bark-700)';
     section.appendChild(titleEl);
     const wrapper = document.createElement('div');
     wrapper.style.display = 'flex';
@@ -1334,20 +1352,20 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
       const btn = document.createElement('button');
       btn.textContent = b.label;
       btn.style.cssText = `
-        background:${b.primary ? 'var(--leaf-600)' : b.danger ? '#8b3a3a' : 'var(--bark-800)'};
-        border:1px solid ${b.primary ? 'var(--leaf-500)' : b.danger ? '#a84a4a' : 'var(--bark-600)'};
-        color:${b.primary ? 'var(--bark-900)' : b.danger ? '#ffd0d0' : 'var(--bone-100)'};
+        background:${b.primary ? 'var(--leaf-400)' : b.danger ? 'var(--palette-ember-700)' : 'var(--bark-800)'};
+        border:1px solid ${b.primary ? 'var(--leaf-500)' : b.danger ? 'var(--palette-ember-500)' : 'var(--bark-600)'};
+        color:${b.primary ? 'var(--bark-900)' : b.danger ? 'var(--palette-ember-100)' : 'var(--bone-100)'};
         padding:6px 12px;border-radius:4px;cursor:pointer;font-family:inherit;font-size:11px;
         transition:all 0.1s;${b.primary ? 'font-weight:600' : ''}
       `;
       btn.onmouseenter = () => {
-        if (b.primary) btn.style.background = 'var(--leaf-500)';
-        else if (b.danger) btn.style.background = '#a84a4a';
+        if (b.primary) btn.style.background = 'var(--leaf-300)';
+        else if (b.danger) btn.style.background = 'var(--palette-ember-500)';
         else btn.style.background = 'var(--bark-700)';
       };
       btn.onmouseleave = () => {
-        if (b.primary) btn.style.background = 'var(--leaf-600)';
-        else if (b.danger) btn.style.background = '#8b3a3a';
+        if (b.primary) btn.style.background = 'var(--leaf-400)';
+        else if (b.danger) btn.style.background = 'var(--palette-ember-700)';
         else btn.style.background = 'var(--bark-800)';
       };
       btn.onclick = b.action;
@@ -1367,7 +1385,7 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
       btn.style.cssText = `
         padding:8px 14px;
         cursor:pointer;
-        color:var(--bark-300);
+        color:${tab.id === activeTab ? 'var(--leaf-300)' : 'var(--bark-100)'};
         border-radius:6px;
         white-space:nowrap;
         font-size:10px;
@@ -1377,8 +1395,8 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
         display:flex;
         align-items:center;
         gap:6px;
-        background:transparent;
-        border:1px solid transparent;
+        background:${tab.id === activeTab ? 'var(--bark-700)' : 'transparent'};
+        border:1px solid ${tab.id === activeTab ? 'var(--bark-500)' : 'transparent'};
       `;
       btn.onmouseenter = () => {
         if (tab.id !== activeTab) {
@@ -1390,7 +1408,7 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
       btn.onmouseleave = () => {
         if (tab.id !== activeTab) {
           btn.style.background = 'transparent';
-          btn.style.color = 'var(--bark-300)';
+          btn.style.color = 'var(--bark-100)';
           btn.style.borderColor = 'transparent';
         }
       };

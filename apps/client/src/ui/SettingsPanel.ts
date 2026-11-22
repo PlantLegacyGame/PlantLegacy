@@ -50,18 +50,18 @@ const STYLE = `
   .pl-settings-backdrop {
     position: fixed; inset: 0; z-index: 380; display: none;
     place-items: center; padding: 18px;
-    background: radial-gradient(circle at 50% 42%, rgba(10, 14, 8, 0.66), rgba(5, 7, 4, 0.88));
+    background: radial-gradient(circle at 50% 42%, color-mix(in srgb, var(--palette-foliage-900) 66%, transparent), color-mix(in srgb, var(--palette-ink-900) 88%, transparent));
     pointer-events: auto;
   }
   .pl-settings {
     position: relative;
     width: min(760px, 94vw); max-height: min(74vh, 620px); display: flex; flex-direction: column;
-    border-radius: 16px; overflow: hidden; color: var(--bone-200, #efe9d8);
-    border: 1px solid rgba(126, 154, 74, 0.44); border-top-color: rgba(200, 232, 108, 0.4);
+    border-radius: 16px; overflow: hidden; color: var(--bone-200);
+    border: 1px solid color-mix(in srgb, var(--palette-foliage-700) 44%, transparent); border-top-color: color-mix(in srgb, var(--palette-foliage-300) 40%, transparent);
     background:
-      radial-gradient(100% 60% at 0% 0%, rgba(90, 144, 46, 0.17), transparent 60%),
-      linear-gradient(168deg, rgba(33, 39, 23, 0.98), rgba(20, 23, 15, 0.99) 60%, rgba(16, 15, 10, 1));
-    box-shadow: 0 30px 80px rgba(0, 0, 0, 0.64), inset 0 1px 0 rgba(220, 240, 160, 0.09);
+      radial-gradient(100% 60% at 0% 0%, color-mix(in srgb, var(--palette-foliage-500) 17%, transparent), transparent 60%),
+      linear-gradient(168deg, color-mix(in srgb, var(--palette-foliage-900) 98%, transparent), color-mix(in srgb, var(--palette-foliage-900) 99%, transparent) 60%, color-mix(in srgb, var(--palette-ink-900) 100%, transparent));
+    box-shadow: 0 30px 80px rgba(0, 0, 0, 0.64), inset 0 1px 0 color-mix(in srgb, var(--palette-foliage-100) 9%, transparent);
     font-family: "Inter", system-ui, sans-serif; font-size: 0.78rem;
   }
   @keyframes pl-settings-in {
@@ -74,37 +74,40 @@ const STYLE = `
   @media (prefers-reduced-motion: reduce) {
     .pl-settings-backdrop.is-open .pl-settings { animation: none; }
   }
+  /* A01: the open state had no display rule at all, so a panel that setOpen
+     reported as visible stayed at display:none. */
+  .pl-settings-backdrop.is-open { display: grid; }
   .pl-settings__head { display: flex; align-items: baseline; gap: 10px;
-    padding: 14px 56px 12px 16px; border-bottom: 1px solid rgba(126, 154, 74, 0.28); }
-  .pl-settings__title { margin: 0; color: var(--leaf-300, #c8ff80); font-size: 0.82rem;
+    padding: 14px 56px 12px 16px; border-bottom: 1px solid color-mix(in srgb, var(--palette-foliage-700) 28%, transparent); }
+  .pl-settings__title { margin: 0; color: var(--leaf-300); font-size: 0.82rem;
     letter-spacing: 0.16em; text-transform: uppercase; }
-  .pl-settings__sub { color: var(--ink-dim, #9a937a); font-size: 0.7rem; }
+  .pl-settings__sub { color: var(--ink-dim); font-size: 0.7rem; }
   /* Standard corner close: pinned to the panel's top right, a 30px target, and it
      reads as a button on hover instead of a glyph floating in the header. */
   .pl-settings__close {
     position: absolute; top: 10px; right: 10px;
     width: 30px; height: 30px; display: grid; place-items: center;
     border-radius: 9px; cursor: pointer; font-size: 1.05rem; line-height: 1;
-    border: 1px solid rgba(126, 154, 74, 0.35); background: rgba(44, 52, 30, 0.8);
-    color: var(--bone-200, #efe9d8);
+    border: 1px solid color-mix(in srgb, var(--palette-foliage-700) 35%, transparent); background: color-mix(in srgb, var(--palette-foliage-900) 80%, transparent);
+    color: var(--bone-200);
     transition: background 140ms ease, border-color 140ms ease, transform 140ms ease;
   }
   .pl-settings__close:hover {
-    background: rgba(90, 144, 46, 0.32);
-    border-color: var(--leaf-400, #9ed95c);
+    background: color-mix(in srgb, var(--palette-foliage-500) 32%, transparent);
+    border-color: var(--leaf-400);
   }
   .pl-settings__close:active { transform: scale(0.94); }
   .pl-settings__close:focus-visible {
-    outline: 2px solid var(--leaf-300, #c8ff80); outline-offset: 2px;
+    outline: 2px solid var(--leaf-300); outline-offset: 2px;
   }
   .pl-settings__tabs { display: flex; gap: 4px; padding: 8px 14px 0; }
   .pl-settings__tab { padding: 6px 14px; border-radius: 8px 8px 0 0; cursor: pointer;
     border: 1px solid transparent; border-bottom: none; background: transparent;
-    color: var(--ink-muted, #c9c2ad); font: inherit; font-weight: 600; }
-  .pl-settings__tab[aria-selected="true"] { color: var(--bone-100, #f7f4ed);
-    background: rgba(54, 66, 34, 0.55); border-color: rgba(126, 154, 74, 0.34); }
+    color: var(--ink-muted); font: inherit; font-weight: 600; }
+  .pl-settings__tab[aria-selected="true"] { color: var(--bone-100);
+    background: color-mix(in srgb, var(--palette-foliage-900) 55%, transparent); border-color: color-mix(in srgb, var(--palette-foliage-700) 34%, transparent); }
   .pl-settings__body { flex: 1; min-height: 0; overflow-y: auto; padding: 14px 16px 18px;
-    border-top: 1px solid rgba(126, 154, 74, 0.26); }
+    border-top: 1px solid color-mix(in srgb, var(--palette-foliage-700) 26%, transparent); }
   .pl-settings__section { display: grid; gap: 10px; }
   /* Settings, dense:
      Two rows of full-width label/hint lines was most of the panel's height for two
@@ -116,18 +119,18 @@ const STYLE = `
   .pl-settings__chip {
     display: inline-flex; align-items: baseline; gap: 5px;
     padding: 3px 9px; border-radius: 999px; font-size: 0.68rem;
-    border: 1px solid rgba(126, 154, 74, 0.26);
-    background: rgba(8, 11, 8, 0.42); color: var(--ink-dim, #9a937a);
+    border: 1px solid color-mix(in srgb, var(--palette-foliage-700) 26%, transparent);
+    background: color-mix(in srgb, var(--palette-ink-900) 42%, transparent); color: var(--ink-dim);
   }
-  .pl-settings__chip b { color: var(--leaf-200, #dfee8e); font-weight: 600; }
+  .pl-settings__chip b { color: var(--leaf-200); font-weight: 600; }
   .pl-settings__grid { display: grid; gap: 8px; }
   @media (min-width: 560px) { .pl-settings__grid { grid-template-columns: 1fr 1fr; } }
   .pl-settings__card {
     display: grid; grid-template-columns: 1fr auto; grid-template-rows: auto auto;
     gap: 2px 12px; align-items: center;
     padding: 8px 10px; border-radius: 10px;
-    border: 1px solid rgba(126, 154, 74, 0.18);
-    background: rgba(8, 11, 8, 0.34);
+    border: 1px solid color-mix(in srgb, var(--palette-foliage-700) 18%, transparent);
+    background: color-mix(in srgb, var(--palette-ink-900) 34%, transparent);
   }
   .pl-settings__card > .pl-settings__label { grid-column: 1; grid-row: 1; }
   .pl-settings__card > .pl-settings__hint { grid-column: 1 / -1; grid-row: 2; }
@@ -135,53 +138,53 @@ const STYLE = `
     grid-column: 2; grid-row: 1 / span 2;
   }
   .pl-settings__row { display: flex; align-items: center; justify-content: space-between;
-    gap: 16px; padding: 8px 0; border-bottom: 1px solid rgba(126, 154, 74, 0.12); }
+    gap: 16px; padding: 8px 0; border-bottom: 1px solid color-mix(in srgb, var(--palette-foliage-700) 12%, transparent); }
   .pl-settings__row:last-child { border-bottom: none; }
-  .pl-settings__label { color: var(--bone-100, #f7f4ed); font-weight: 600; }
-  .pl-settings__hint { color: var(--ink-dim, #9a937a); font-size: 0.7rem; line-height: 1.3; }
-  .pl-settings input[type="range"] { width: 132px; accent-color: #9ed95c; }
-  .pl-settings input[type="checkbox"] { width: 16px; height: 16px; accent-color: #9ed95c; }
+  .pl-settings__label { color: var(--bone-100); font-weight: 600; }
+  .pl-settings__hint { color: var(--ink-dim); font-size: 0.7rem; line-height: 1.3; }
+  .pl-settings input[type="range"] { width: 132px; accent-color: var(--leaf-400); }
+  .pl-settings input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--leaf-400); }
   /* The pane's own numbers. They are here because they are the ones that explain a
      layout the player does not expect: a zoomed browser is reported as a bigger
      pane at the same pixel ratio, which is what the interface is sizing against. */
   .pl-settings__facts {
     display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 2px 16px;
-    margin-top: 2px; padding-top: 8px; border-top: 1px dashed rgba(126, 154, 74, 0.18);
+    margin-top: 2px; padding-top: 8px; border-top: 1px dashed color-mix(in srgb, var(--palette-foliage-700) 18%, transparent);
   }
   .pl-settings__fact { display: flex; align-items: baseline; justify-content: space-between;
     gap: 10px; font-size: 0.68rem; }
-  .pl-settings__fact span { color: var(--ink-dim, #9a937a); }
-  .pl-settings__fact b { color: var(--bone-100, #f7f4ed); font-weight: 600;
+  .pl-settings__fact span { color: var(--ink-dim); }
+  .pl-settings__fact b { color: var(--bone-100); font-weight: 600;
     font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis;
     white-space: nowrap; }
   @media (max-width: 480px) { .pl-settings__facts { grid-template-columns: 1fr; } }
-  .pl-settings__value { min-width: 46px; text-align: right; color: var(--leaf-200, #dfee8e);
+  .pl-settings__value { min-width: 46px; text-align: right; color: var(--leaf-200);
     font-variant-numeric: tabular-nums; }
   .pl-controls { width: 100%; border-collapse: collapse; }
-  .pl-controls th { text-align: left; padding: 6px 8px; color: var(--sprout-300, #c8e86c);
+  .pl-controls th { text-align: left; padding: 6px 8px; color: var(--sprout-300);
     font-size: 0.64rem; letter-spacing: 0.12em; text-transform: uppercase;
-    border-bottom: 1px solid rgba(126, 154, 74, 0.3); }
-  .pl-controls td { padding: 5px 8px; border-bottom: 1px solid rgba(126, 154, 74, 0.1);
+    border-bottom: 1px solid color-mix(in srgb, var(--palette-foliage-700) 30%, transparent); }
+  .pl-controls td { padding: 5px 8px; border-bottom: 1px solid color-mix(in srgb, var(--palette-foliage-700) 10%, transparent);
     vertical-align: top; }
-  .pl-controls tr:hover td { background: rgba(90, 144, 46, 0.12); }
+  .pl-controls tr:hover td { background: color-mix(in srgb, var(--palette-foliage-500) 12%, transparent); }
   /* A group heading: a rule and a name, so the table reads as sections rather
      than one list of thirty rows. */
   .pl-controls__section th {
-    padding-top: 12px; color: var(--ink-dim, #9a937a); font-size: 0.6rem;
-    border-bottom: 1px solid rgba(126, 154, 74, 0.22);
+    padding-top: 12px; color: var(--ink-dim); font-size: 0.6rem;
+    border-bottom: 1px solid color-mix(in srgb, var(--palette-foliage-700) 22%, transparent);
   }
-  .pl-controls__action { color: var(--bone-100, #f7f4ed); }
-  .pl-controls__key { color: var(--leaf-200, #dfee8e); font-family: ui-monospace, monospace; }
-  .pl-controls__context { color: var(--ink-dim, #9a937a); }
+  .pl-controls__action { color: var(--bone-100); }
+  .pl-controls__key { color: var(--leaf-200); font-family: ui-monospace, monospace; }
+  .pl-controls__context { color: var(--ink-dim); }
   /* The touch layout of the same controls. A phone reading a table of keys is
      reading a manual for a device it is not holding. */
   .pl-controls-touch { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
   .pl-controls-touch li {
     display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
     padding: 8px 10px; border-radius: 9px;
-    border: 1px solid rgba(126, 154, 74, 0.18); background: rgba(8, 11, 8, 0.4);
+    border: 1px solid color-mix(in srgb, var(--palette-foliage-700) 18%, transparent); background: color-mix(in srgb, var(--palette-ink-900) 40%, transparent);
   }
-  .pl-controls-touch__gesture { color: var(--leaf-200, #dfee8e); text-align: right; }
+  .pl-controls-touch__gesture { color: var(--leaf-200); text-align: right; }
 
   html[data-reduced-motion="true"] *,
   html[data-reduced-motion="true"] *::before,
