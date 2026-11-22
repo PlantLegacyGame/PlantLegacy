@@ -5,7 +5,7 @@
     "schema": "extended-1",
     "owner_task": "C05",
     "status": "active",
-    "notes": "Main-menu and in-game shop. The catalogue is the six items the game already defines (config/items.json), so nothing is sold that the inventory cannot hold. Prices are stated in biomass, which the plant produces and the HUD already shows; the purchase itself is not open yet, and the panel says so instead of offering a Buy that does nothing."
+    "notes": "Main-menu and in-game shop. The catalogue is the six items the game already defines (config/items.json), so nothing is sold that the inventory cannot hold. Prices are in spores (config/spores.json), the earned currency: the server checks the balance, grants the item into the pouch and answers with a fresh INVENTORY_SYNC. Biomass is the plant's growth budget, not money; quoting prices in it made a purchase either starve the plant or change nothing."
   },
   "values": {
     "shop_enabled": {
@@ -20,8 +20,8 @@
     },
     "shop_currency_name": {
       "type": "string",
-      "value": "biomass",
-      "notes": "What a price is paid in. Biomass is already produced, spent and shown, so a price in it is a number the player can read."
+      "value": "spores",
+      "notes": "What a price is paid in. Spores are earned (dung, mutations, kill credit) and shown by the HUD chip and the shop's own balance row."
     },
     "shop_sections": {
       "type": "array",

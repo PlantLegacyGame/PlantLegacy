@@ -15,7 +15,7 @@
 
 import type { TerrainFieldParams } from '@plant-legacy/shared/world';
 import * as THREE from 'three';
-import { patchSurfaceY } from './planetSurface.ts';
+import { patchLocalSurfaceY } from './planetSurface.ts';
 
 export interface SoilSlabOptions {
   radius: number;
@@ -54,8 +54,11 @@ export function createSoilSlab(options: SoilSlabOptions): THREE.Mesh {
   const steps = Math.max(8, Math.round(options.segments));
   const depth = Math.max(0.05, options.depthM);
 
+  // The same patch-local metres the patch above it stores, and the same placement:
+  // a slab written at the planet's radius instead would sit a planet away from the
+  // surface it is supposed to line, and every vertex would quantise at the radius.
   const topY = (x: number, z: number): number =>
-    patchSurfaceY(options.radius, x, z, options.field, options.skinM);
+    patchLocalSurfaceY(options.radius, x, z, options.field, options.skinM);
 
   // One closed loop around the square, counter-clockwise from above.
   const loop: { x: number; z: number }[] = [];
@@ -136,6 +139,7 @@ export function createSoilSlab(options: SoilSlabOptions): THREE.Mesh {
 
   const mesh = new THREE.Mesh(geometry, options.material);
   mesh.name = 'planet-soil-slab';
+  mesh.position.y = options.radius;
   mesh.receiveShadow = true;
   mesh.castShadow = false;
   return mesh;

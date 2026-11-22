@@ -4,8 +4,45 @@
     "version": "0.1.0",
     "schema": "extended-1",
     "owner_task": "T13",
-    "status": "stub",
-    "notes": "Declared by T00. Populated by T13 per DESIGN.md Part 5."
+    "status": "active",
+    "notes": "Spores: the earned currency the shop prices in. Earned by consuming dung (a world drop), by acquiring a mutation, and by being credited with a kill. Spent in the shop; the server checks the balance, so the client can never spend more than it has. Persistence of the purse across restarts is still T08A."
   },
-  "values": {}
+  "values": {
+    "starting_balance": {
+      "type": "integer",
+      "value": 120,
+      "range": [0, 100000],
+      "notes": "Spores a new plant starts with. Enough for the cheapest two items, so the shop can be tried on the first session without a grind."
+    },
+    "earn_dung": {
+      "type": "integer",
+      "value": 5,
+      "range": [0, 1000],
+      "notes": "Spores for consuming one dung item. Dung is a death/fauna drop, so this is the reward for using what the world leaves behind."
+    },
+    "earn_fragment": {
+      "type": "integer",
+      "value": 3,
+      "range": [0, 1000],
+      "notes": "Spores for picking up one fragment drop. Fragments have no item definition, so the reward is currency: the plant broke, and the pieces are worth something."
+    },
+    "earn_mutation": {
+      "type": "integer",
+      "value": 15,
+      "range": [0, 1000],
+      "notes": "Spores for acquiring a mutation. Mutations are the plant's own luck; the currency pays for the moments it happens."
+    },
+    "earn_kill": {
+      "type": "integer",
+      "value": 30,
+      "range": [0, 1000],
+      "notes": "Spores credited to the killer when another plant dies inside the kill-credit window."
+    },
+    "max_balance": {
+      "type": "integer",
+      "value": 1000000,
+      "range": [1, 100000000],
+      "notes": "Ceiling on a balance. One bug cannot produce a runaway purse."
+    }
+  }
 }

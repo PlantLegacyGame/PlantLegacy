@@ -452,6 +452,17 @@ class PlantRenderer {
     this.uniforms.uSunIntensity.value = intensity;
   }
 
+  /**
+   * The light blades are lit from behind by (`dir` points towards it).
+   *
+   * Passed separately from `setSunLight` because the two are not the same body: the
+   * sun's own intensity is zero at night while the *celestial* light is the moon, so
+   * feeding transmission the sun's number left every leaf at zero after sunset.
+   */
+  setLeafBacklight(dir: THREE.Vector3, color: THREE.Color, intensity: number): void {
+    this.meshRenderer?.setSunLight(dir, color, intensity);
+  }
+
   /** Advance animation state. */
   update(deltaTime: number): void {
     this.deltaTimeAccumulator += deltaTime;

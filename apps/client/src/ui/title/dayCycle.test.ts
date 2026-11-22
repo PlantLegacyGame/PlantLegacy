@@ -4,13 +4,65 @@ import { describe, it } from 'node:test';
 import {
   cyclePhase,
   isNight,
+  leafThroughLight,
   lerpHex,
   lightMood,
+  moonBrightness,
   moonPosition,
   paletteAt,
   sunPosition,
+  sunWashGate,
   titleLighting,
 } from './dayCycle.ts';
+
+describe('light through the leaves', () => {
+  const hidden = { x: 0, y: 0, visible: false };
+
+  it('is only a trace with a disc overhead', () => {
+    // Thin leaves always hold a little of the sky; nothing here is a glow.
+    const overhead = leafThroughLight(paletteAt(0.5), { x: 0.5, y: 1, visible: true }, hidden);
+    assert.ok(overhead.amount < 0.1, `sun overhead lit the leaves: ${overhead.amount}`);
+    const night = leafThroughLight(paletteAt(0), hidden, { x: 0.5, y: 1, visible: true });
+    assert.ok(night.amount < 0.25, `a moon overhead lit the leaves: ${night.amount}`);
+    // A disc low on the horizon is the case that must light them: grazing light.
+    const grazing = leafThroughLight(paletteAt(0.5), { x: 0.02, y: 0.05, visible: true }, hidden);
+    assert.ok(
+      grazing.amount > 0.15,
+      `a disc on the horizon did not light the leaves: ${grazing.amount}`,
+    );
+  });
+
+  it('lights the leaves at the hours the bodies are really low', () => {
+    // The arcs are the ones the title draws: moonrise and sunset are the grazing
+    // hours, and the old gate (centred *and* low) matched neither of them.
+    for (const [phase, want] of [
+      [0.78, 0.2],
+      [0.72, 0.12],
+    ] as const) {
+      const light = leafThroughLight(paletteAt(phase), sunPosition(phase), moonPosition(phase));
+      assert.ok(light.amount > want, `phase ${phase} left the canopy flat: ${light.amount}`);
+    }
+  });
+
+  it('runs one version for the moon and one for the sun', () => {
+    const moon = leafThroughLight(paletteAt(0), hidden, { x: 0.5, y: 0.05, visible: true });
+    const sun = leafThroughLight(paletteAt(0.75), { x: 0.5, y: 0.05, visible: true }, hidden);
+    assert.ok(moon.amount > 0.2, `moon through the leaves is ${moon.amount}`);
+    assert.ok(sun.amount > 0.1, `sun through the leaves is ${sun.amount}`);
+    // Cold for the moon, warm for the sun: the point of having two versions.
+    const rgb = (hex: string): number[] => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
+    const [mr, , mb] = rgb(moon.colour);
+    const [sr, , sb] = rgb(sun.colour);
+    assert.ok((mb ?? 0) > (mr ?? 0), `the moon's light is not cold: ${moon.colour}`);
+    assert.ok((sr ?? 0) > (sb ?? 0), `the sun's light is not warm: ${sun.colour}`);
+  });
+
+  it('fades as the disc climbs away from the crown', () => {
+    const low = leafThroughLight(paletteAt(0), hidden, { x: 0.5, y: 0.04, visible: true });
+    const high = leafThroughLight(paletteAt(0), hidden, { x: 0.5, y: 0.3, visible: true });
+    assert.ok(low.amount > high.amount, 'a high moon lit the canopy as much as a low one');
+  });
+});
 
 describe('title day cycle', () => {
   it('wraps the phase over one cycle', () => {
@@ -58,6 +110,14 @@ describe('title day cycle', () => {
     assert.ok(Math.abs(dusk.x - 1) < 1e-9);
     assert.equal(sunPosition(0.0).visible, false);
     assert.equal(sunPosition(0.9).visible, false);
+  });
+
+  it('gates the sun wash on the disc, not on the palette glow', () => {
+    // Sunset: the palette is still warm, but there is no sun left to wash the scene.
+    assert.equal(sunWashGate(sunPosition(0.9)), 0);
+    assert.equal(sunWashGate({ x: 0, y: 0, visible: false }), 0);
+    assert.equal(sunWashGate({ x: 0.5, y: 1, visible: true }), 1);
+    assert.ok(sunWashGate({ x: 0.2, y: 0.11, visible: true }) < 0.6, 'low sun washes less');
   });
 
   it('never shows the sun and the moon at once', () => {
@@ -129,5 +189,32 @@ describe('title lighting', () => {
     assert.ok(titleLighting(paletteAt(0.75)).plantHue > 0, 'golden hour is warm');
     assert.ok(titleLighting(paletteAt(0)).plantHue < 0, 'moonlight is cool');
     assert.ok(titleLighting(paletteAt(0.5)).plantSepia < 0.02, 'noon is neutral');
+  });
+});
+
+describe('moon brightness', () => {
+  it('is out in daylight and whole at night', () => {
+    assert.equal(moonBrightness(0), 0);
+    assert.equal(moonBrightness(0.2), 0);
+    assert.equal(moonBrightness(0.26), 0);
+    assert.ok(moonBrightness(0.6) > 0.99);
+    assert.equal(moonBrightness(1), 1);
+  });
+
+  it('rises through dusk instead of switching at an hour', () => {
+    let previous = -1;
+    for (let star = 0; star <= 1.0001; star += 0.05) {
+      const value = moonBrightness(star);
+      assert.ok(value >= previous - 1e-9, `fell at star ${star}`);
+      assert.ok(value >= 0 && value <= 1);
+      previous = value;
+    }
+    // Half the way through the ramp it is half drawn - that band of bright sky the
+    // clock still called night is where the full moon used to hang.
+    assert.ok(Math.abs(moonBrightness(0.43) - 0.5) < 0.06);
+  });
+
+  it('never draws a moon for a missing number', () => {
+    assert.equal(moonBrightness(Number.NaN), 0);
   });
 });

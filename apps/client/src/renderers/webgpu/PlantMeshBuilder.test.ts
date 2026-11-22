@@ -279,13 +279,21 @@ describe('plant mesh builder junction geometry', () => {
     );
   });
 
-  it('leaves a soft organ the width of its own shank', () => {
+  it('never widens a soft organ towards its blade', () => {
+    // A leaf's drawn radius is the blade's, not a shank. Used as the tube's end
+    // radius it made every petiole an upside-down cone - a point at the seed and
+    // its widest end at the leaf - so the blade's end may only ever be the thinner
+    // one. (This started as an equality: the stalk was drawn as a cylinder, which
+    // hid the reversal instead of fixing it.)
     const nodes = forkedPlant();
     const twig = nodes.find((n) => n.id === 'twig');
     const leaf = nodes.find((n) => n.id === 'leaf');
     assert.ok(twig && leaf);
     const frame = resolveSegmentFrame(leaf, twig, nodes);
-    assert.equal(frame.startRadius, frame.endRadius);
+    assert.ok(
+      frame.endRadius <= frame.startRadius + 1e-9,
+      `petiole ${frame.startRadius} -> ${frame.endRadius} widens at the blade`,
+    );
   });
 
   it('never meets a joint at the angle of the straight chords it joins', () => {

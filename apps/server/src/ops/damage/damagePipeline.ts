@@ -449,6 +449,46 @@ export class DamagePipeline {
     return Array.from(this.drops.values());
   }
 
+  /**
+   * Put a drop in the world at a chosen point.
+   *
+   * The dev panel spawns one to walk the whole spawn -> collect -> chip path in a
+   * browser, and the pickup tests spawn through here so the drop they collect
+   * lives in this store rather than in a fixture that imitates it. Lifetime, the
+   * drop event and expiry are the same as any drop a swarm or a death leaves, so a
+   * spawned drop cannot behave differently from an earned one.
+   *
+   * `y` is measured from the soil line under (x, z), like a node's height, and the
+   * client adds the terrain height: a drop at y = -1 is a metre down and stays
+   * there, which is what makes a buried drop reachable in Root Sight instead of
+   * jumping to the surface.
+   */
+  spawnWorldDrop(
+    kind: DropKind,
+    x: number,
+    y: number,
+    z: number,
+    sourcePlantId: string | null = null,
+  ): WorldDrop {
+    return this.spawnDrop(kind, x, y, z, sourcePlantId);
+  }
+
+  /**
+   * Take a drop out of the world, if it is still there.
+   *
+   * The caller owns the reward; this only settles the world object. Removing it
+   * here and queueing the same `drop_expired` event a decay uses means every
+   * client clears its marker the same way, whether the drop was collected or
+   * timed out.
+   */
+  collectDrop(id: string): WorldDrop | null {
+    const drop = this.drops.get(id);
+    if (!drop) return null;
+    this.drops.delete(id);
+    this.events.push({ kind: 'drop_expired', id });
+    return drop;
+  }
+
   getDamageMemory(plantId: string): number {
     return this.damageMemory.get(plantId) ?? 0;
   }
@@ -924,19 +964,33 @@ export class DamagePipeline {
     const target = plants[Math.min(plants.length - 1, Math.floor(this.random() * plants.length))];
     const root = target.rootNodeId ? target.nodes.get(target.rootNodeId) : undefined;
     if (!root) return;
+    // Where inside the storm cell the bolt lands. It always used to land on the
+    // plant's own root, so every storm struck the player and nowhere else and the
+    // hit was never in question: the same spot, the same damage, every time. A
+    // bolt now falls somewhere within a couple of damage radii of the plant, so
+    // it lands nearby, sometimes on the plant and sometimes in the field beside
+    // it - and everything inside the radius of *where it landed* takes the hit.
+    const strikeRadius = this.options.lightningRadiusM;
+    const strikeAngle = this.random() * Math.PI * 2;
+    // Five damage radii of storm cell, squared so most bolts still fall near the
+    // plant without the hit being a certainty: roughly two strikes in five land
+    // close enough to hurt it, and the rest are weather in the field.
+    const strikeDistance = strikeRadius * (0.15 + 5 * this.random() ** 2);
+    const strikeX = root.x + Math.cos(strikeAngle) * strikeDistance;
+    const strikeZ = root.z + Math.sin(strikeAngle) * strikeDistance;
     // Announce the bolt at its landing point. The client used to roll its own
     // flashes on a 3.5-9 s timer while this rolled damage on another, so the
     // flash and the hit were unrelated; now the flash is the strike.
     this.events.push({
       kind: 'strike',
-      x: root.x,
-      z: root.z,
-      radiusM: this.options.lightningRadiusM,
+      x: strikeX,
+      z: strikeZ,
+      radiusM: strikeRadius,
     });
     for (const plant of plants) {
       const plantRoot = plant.rootNodeId ? plant.nodes.get(plant.rootNodeId) : undefined;
       if (!plantRoot) continue;
-      if (Math.hypot(plantRoot.x - root.x, plantRoot.z - root.z) > this.options.lightningRadiusM) {
+      if (Math.hypot(plantRoot.x - strikeX, plantRoot.z - strikeZ) > strikeRadius) {
         continue;
       }
       // A strike is one fixed amount, so it killed a one-biomass seed outright.

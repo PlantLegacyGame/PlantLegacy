@@ -52,7 +52,6 @@ const STYLE = `
     border-radius: 14px;
     background: linear-gradient(180deg, rgba(18, 23, 14, 0.9), rgba(10, 13, 8, 0.94));
     box-shadow: var(--hud-shadow-sm);
-    backdrop-filter: blur(8px);
     pointer-events: auto;
     transition: opacity 160ms ease;
   }
@@ -248,7 +247,10 @@ export function createActionBar(options: ActionBarOptions): ActionBarAPI {
       const button = buttons.get(id);
       if (button) {
         const label = button.getAttribute('aria-label') ?? '';
-        const base = label.replace(/ (d+ new)$/, '');
+        // The old pattern was `/ (d+ new)$/`: `d` is a letter, so it never
+        // matched and every update appended another "(N new)" to the label the
+        // screen reader announced.
+        const base = label.replace(/ \(\d+ new\)$/, '');
         button.setAttribute('aria-label', shown > 0 ? `${base} (${shown} new)` : base);
       }
     },

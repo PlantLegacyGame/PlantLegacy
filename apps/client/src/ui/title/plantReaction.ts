@@ -62,8 +62,18 @@ export function leafSwingSign(index: number): number {
   return index % 2 === 1 ? 1 : -1;
 }
 
-/** Largest bend a drag may produce, in degrees. Past this the plant reads broken. */
-export const MAX_BEND_DEG = 15;
+/**
+ * Largest bend a drag may produce, in degrees.
+ *
+ * 15 was a nod, 34 was a lean. With the stem drawn as an arc that bends mostly
+ * above its stiff base (title/plantBend.ts), the gesture can carry a real pull:
+ * 168 degrees folds the canopy right over until the top of the plant hangs beside
+ * its own base, which is the limit of what reads as a stem bending rather than
+ * snapping. The drawing has a gutter on each side (TitlePlant's viewBox) so
+ * nothing is cut off on the way there, in either direction; the leaves keep their
+ * own rotations bounded so the canopy stays attached to the spine as it folds.
+ */
+export const MAX_BEND_DEG = 168;
 
 /**
  * Bend from a horizontal drag, in degrees, positive to the right.
@@ -86,7 +96,7 @@ export function bendDegrees(dxPx: number, spanPx: number, maxDeg: number = MAX_B
  * way, and comes back smaller, which is what "springs back and forth until it
  * settles" means. Exactly 0 at the end, so nothing is left holding a transform.
  */
-export function releaseAngle(tMs: number, fromDeg: number, settleMs = 1600): number {
+export function releaseAngle(tMs: number, fromDeg: number, settleMs = 1900): number {
   if (!Number.isFinite(fromDeg) || fromDeg === 0) return 0;
   if (!(tMs > 0)) return fromDeg;
   if (tMs >= settleMs || settleMs <= 0) return 0;
@@ -97,10 +107,6 @@ export function releaseAngle(tMs: number, fromDeg: number, settleMs = 1600): num
   const phase = (tMs / 470) * Math.PI * 2;
   return fromDeg * decay * Math.cos(phase);
 }
-
-/** How much of the bend the lower half takes; the tip takes the rest. */
-export const BEND_LOWER_SHARE = 0.32;
-export const BEND_TIP_SHARE = 0.72;
 
 /**
  * Which part of the drawing a pointer landed on, from the SVG's own annotations.

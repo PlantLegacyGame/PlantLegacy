@@ -1,5 +1,10 @@
 <!doctype html>
-<html lang="en">
+<!-- The entry step starts at the title, before any script has run: the stylesheet
+     hides the 3D canvas for every step but the world, and without a value from the
+     very first paint the game's environment showed for the second between the
+     canvas appearing and the entry screen mounting. main.ts overwrites this on
+     every render. -->
+<html lang="en" data-pl-entry-step="title">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover, shrink-to-fit=no" />

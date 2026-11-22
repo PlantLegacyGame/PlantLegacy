@@ -14,6 +14,7 @@ import { hash32, mulberry32 } from '@plant-legacy/shared/math';
 export type WeatherStateName =
   | 'clear'
   | 'rain'
+  | 'snow'
   | 'thunderstorm_telegraph'
   | 'thunderstorm_active'
   | 'thunderstorm_aftermath';
@@ -73,6 +74,7 @@ export interface WeatherStateConfig {
   nextStates: Readonly<{
     clear?: number;
     rain?: number;
+    snow?: number;
     thunderstorm_telegraph?: number;
     thunderstorm_active?: number;
     thunderstorm_aftermath?: number;
@@ -84,7 +86,8 @@ export const WEATHER_STATE_MACHINE: ReadonlyMap<WeatherStateName, WeatherStateCo
     'clear',
     {
       name: 'clear',
-      nextStates: { rain: 0.5, thunderstorm_telegraph: 0.5 },
+      // Cold snaps come out of clear weather and melt back into it.
+      nextStates: { rain: 0.42, snow: 0.13, thunderstorm_telegraph: 0.45 },
     } as const,
   ],
   [
@@ -92,6 +95,14 @@ export const WEATHER_STATE_MACHINE: ReadonlyMap<WeatherStateName, WeatherStateCo
     {
       name: 'rain',
       nextStates: { clear: 0.65, thunderstorm_telegraph: 0.35 },
+    } as const,
+  ],
+  [
+    'snow',
+    {
+      name: 'snow',
+      // Snow either clears up or turns to rain as the air warms.
+      nextStates: { clear: 0.75, rain: 0.25 },
     } as const,
   ],
   [
@@ -180,6 +191,9 @@ function getRandomDuration(
       return randomBetween(rng, config.clearDurationMinS, config.clearDurationMaxS);
     case 'rain':
       return randomBetween(rng, config.rainDurationMinS, config.rainDurationMaxS);
+    case 'snow':
+      // A snow shower settles in and lasts longer than a rain shower.
+      return randomBetween(rng, config.rainDurationMinS * 1.2, config.rainDurationMaxS * 1.5);
     case 'thunderstorm_telegraph':
       return config.stormTelegraphDurationS;
     case 'thunderstorm_active':
@@ -292,6 +306,9 @@ export function weatherStateMachineGetLightMultiplier(machine: WeatherStateMachi
       return machine.config.clearLightMultiplier;
     case 'rain':
       return machine.config.rainLightMultiplier;
+    case 'snow':
+      // Snow is a bright overcast: dimmer than clear, brighter than a storm.
+      return (machine.config.rainLightMultiplier + machine.config.clearLightMultiplier) * 0.5;
     default:
       return machine.config.stormLightMultiplier;
   }
@@ -301,6 +318,9 @@ export function weatherStateMachineGetMoistureGainPerS(machine: WeatherStateMach
   switch (machine.currentState) {
     case 'rain':
       return machine.config.rainMoistureGainPerS * machine.config.biomeWeatherModifier;
+    case 'snow':
+      // Snow reaches the groundwater slowly, as meltwater.
+      return machine.config.rainMoistureGainPerS * 0.4 * machine.config.biomeWeatherModifier;
     case 'thunderstorm_active':
       return machine.config.stormMoistureGainPerS * machine.config.biomeWeatherModifier;
     default:
@@ -335,7 +355,12 @@ export function weatherStateMachineGetBroadcast(machine: WeatherStateMachine): {
   // still bright.
   const sunElev = Math.sin(machine.timeOfDay * Math.PI * 2 - Math.PI / 2);
   const isDayTime = sunElev > 0;
-  const condition = machine.conditionMapping[machine.currentState] ?? 'sun';
+  // Snow has no mapping entry in the authored table, and falling through to
+  // 'sun' would draw a sunny icon over a snowstorm.
+  const condition =
+    machine.currentState === 'snow'
+      ? 'snow'
+      : (machine.conditionMapping[machine.currentState] ?? 'sun');
   const remainingS = Math.max(0, machine.currentDurationS - machine.stateTimerS);
   const sunIntensity = Math.max(0, sunElev) * weatherStateMachineGetLightMultiplier(machine);
 

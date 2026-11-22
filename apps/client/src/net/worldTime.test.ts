@@ -5,12 +5,22 @@ import { fetchWorldTime, parseWorldTime } from './worldTime.ts';
 
 describe('world time', () => {
   it('reads the server clock', () => {
-    assert.deepEqual(parseWorldTime({ timeOfDay: 0.25, isDay: true, paused: false, scale: 1 }), {
-      timeOfDay: 0.25,
-      isDay: true,
-      paused: false,
-      scale: 1,
-    });
+    assert.deepEqual(
+      parseWorldTime({ timeOfDay: 0.25, isDay: true, paused: false, scale: 1, weather: 'rain' }),
+      {
+        timeOfDay: 0.25,
+        isDay: true,
+        paused: false,
+        scale: 1,
+        weather: 'rain',
+      },
+    );
+  });
+
+  it('carries the world weather token so the title can match the game', () => {
+    assert.equal(parseWorldTime({ timeOfDay: 0.5, weather: 'storm' })?.weather, 'storm');
+    assert.equal(parseWorldTime({ timeOfDay: 0.5, weather: 7 })?.weather, null);
+    assert.equal(parseWorldTime({ timeOfDay: 0.5, weather: '  ' })?.weather, null);
   });
 
   it('wraps a fraction that arrived out of range', () => {
@@ -31,6 +41,7 @@ describe('world time', () => {
       isDay: false,
       paused: false,
       scale: 1,
+      weather: null,
     });
   });
 
@@ -62,6 +73,7 @@ describe('world time', () => {
       isDay: false,
       paused: true,
       scale: 4,
+      weather: null,
     });
   });
 });

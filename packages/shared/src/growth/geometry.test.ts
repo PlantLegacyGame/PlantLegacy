@@ -82,6 +82,24 @@ describe('joint geometry', () => {
     );
   });
 
+  it('takes a per-organ exponent, and holds the body longer below 1', () => {
+    // The title plate draws its laterals at 0.95 and its taproot at 1.0 with the
+    // same formula, so the exponent has to be a per-call number, not only a
+    // global tunable.
+    setGrowthGeometryTunables({ segmentTaperExponent: 1 });
+    const r0 = 0.04;
+    const r1 = 0.02;
+    // Above 1 an organ necks down just under its parent; below 1 it keeps its
+    // body further along instead of thinning like a spike.
+    assert.ok(segmentRadiusAt(r0, r1, 0.5, 1.15) < segmentRadiusAt(r0, r1, 0.5, 1));
+    assert.ok(segmentRadiusAt(r0, r1, 0.5, 0.9) > segmentRadiusAt(r0, r1, 0.5, 1));
+    // Both ends stay exact whatever the exponent.
+    for (const exponent of [0.9, 0.95, 1, 1.15]) {
+      assert.equal(segmentRadiusAt(r0, r1, 0, exponent), r0);
+      assert.equal(segmentRadiusAt(r0, r1, 1, exponent), r1);
+    }
+  });
+
   it('stays monotone along the whole segment', () => {
     let previous = segmentRadiusAt(0.03, 0.01, 0);
     for (let t = 0.05; t <= 1.0001; t += 0.05) {

@@ -1,13 +1,17 @@
 /**
  * Cloud silhouettes.
  *
- * Three families, because a single generator with one size parameter makes every
- * cloud look like the same cloud scaled: a low bank, a tall cumulus, and a thin
- * wisp. Each is built from ellipses whose extents are computed, so the viewBox
- * always contains the whole shape - the first version let puffs run past the
- * right edge and the sky cropped them into straight cuts.
+ * Six families, because a single generator with one size parameter makes every
+ * cloud look like the same cloud scaled: a low bank, a tall cumulus, a thin wisp,
+ * a building tower, a flat veil and a small puff. Each is built from ellipses
+ * whose extents are computed, so the viewBox always contains the whole shape - the
+ * first version let puffs run past the right edge and the sky cropped them into
+ * straight cuts.
+ *
+ * A family can be asked for by name (`skyLayout` does, so the table decides what
+ * the sky looks like) or left to the seed, which is what the old sky did.
  */
-export type CloudFamily = 'bank' | 'cumulus' | 'wisp';
+export type CloudFamily = 'bank' | 'cumulus' | 'wisp' | 'tower' | 'veil' | 'puff';
 
 export interface Puff {
   cx: number;
@@ -37,6 +41,54 @@ export function buildPuffs(family: CloudFamily, rng: () => number): Puff[] {
         cy: 56 - middle * (10 + rng() * 6),
         rx: 20 + middle * 12 + rng() * 5,
         ry: 13 + middle * 9 + rng() * 4,
+      });
+    }
+    return puffs;
+  }
+
+  if (family === 'tower') {
+    // A cumulus that kept building: a low base, a shoulder, and two crown tiers
+    // narrowing to a cap. The tiers are what make it read as height rather than as
+    // a larger cumulus.
+    puffs.push({ cx: 40, cy: 62, rx: 26 + rng() * 4, ry: 15 });
+    puffs.push({ cx: 74, cy: 61, rx: 24, ry: 16 });
+    puffs.push({ cx: 58, cy: 48, rx: 26 + rng() * 3, ry: 17 });
+    puffs.push({ cx: 86, cy: 44, rx: 16, ry: 13 });
+    puffs.push({ cx: 62, cy: 30, rx: 18, ry: 14 + rng() * 3 });
+    puffs.push({ cx: 50, cy: 22, rx: 11, ry: 9 });
+    puffs.push({ cx: 78, cy: 18, rx: 10, ry: 9 + rng() * 3 });
+    return puffs;
+  }
+
+  if (family === 'veil') {
+    // A sheet of high cloud: wide, flat, a row of overlapping long ellipses with
+    // tiny height, so it reads as air rather than as a body. Nothing here is a
+    // sausage: the lumps are what keep a flat sheet from ruling a line across the
+    // sky.
+    const layers = 5 + Math.floor(rng() * 2);
+    for (let i = 0; i < layers; i += 1) {
+      const t = layers === 1 ? 0.5 : i / (layers - 1);
+      puffs.push({
+        cx: 44 + t * 118 + (rng() - 0.5) * 10,
+        cy: 50 + Math.sin(t * Math.PI) * -4 + (rng() - 0.5) * 4,
+        rx: 32 + rng() * 12,
+        ry: 5 + rng() * 3,
+      });
+    }
+    return puffs;
+  }
+
+  if (family === 'puff') {
+    // Three or four round puffs close together: a fair-weather cumulus, the sort
+    // that sits alone in a blue sky.
+    const count = 3 + Math.floor(rng() * 2);
+    for (let i = 0; i < count; i += 1) {
+      const t = count === 1 ? 0.5 : i / (count - 1);
+      puffs.push({
+        cx: 42 + t * 58 + (rng() - 0.5) * 6,
+        cy: 48 - Math.sin(t * Math.PI) * 9,
+        rx: 15 + rng() * 6,
+        ry: 12 + rng() * 5,
       });
     }
     return puffs;
@@ -80,19 +132,29 @@ export function buildPuffs(family: CloudFamily, rng: () => number): Puff[] {
  * a straight line hanging under it; the hard drop shadow underneath doubled it.
  * Three rules replace that, and any one of them alone would be enough:
  *
- * 1. A clip path at the base height: nothing is drawn below it, so a shape bug
- *    cannot put a line under a cloud again.
- * 2. The base band's width is measured from the puff union at the band's own top
- *    edge, so it fills the scalloped gaps between puffs and cannot overhang.
+ * 1. No clipping, at all. The base was a clip path for two passes, and every
+ *    version of it put a light rectangle over the element box: the clip region is
+ *    a shape in the sky, and the browser blended it as one - a box the size of the
+ *    SVG, visible where the cloud was thin. The puffs are trimmed by geometry
+ *    instead (their radii are shortened to the base line below), so there is no
+ *    clip region to leak and the base is a row of soft scallops.
+ * 2. No drawn band under the puffs: a bar has corners of its own, and those
+ *    corners hung past the silhouette.
  * 3. No drop shadow. A cloud has no cast shadow in the sky, and the soft copy of
  *    the silhouette was the line's other half. The body is shaded instead: one
  *    user-space gradient ramps crown to base, so the cloud is lit as a single
  *    mass rather than each puff being shaded as its own egg.
  */
-export function cloudArt(seed: number, layer: 'bank' | 'high' = 'bank'): string {
+export function cloudArt(seed: number, kind: CloudFamily | 'high' | null = null): string {
   const rng = makeRng(seed);
+  // No family asked for is the old behaviour: the seed picks from the three the
+  // sky used to have, so a caller that only has a seed still gets variety.
   const family: CloudFamily =
-    layer === 'high' ? 'wisp' : ((['bank', 'cumulus', 'wisp'] as const)[seed % 3] ?? 'bank');
+    kind === null
+      ? ((['bank', 'cumulus', 'wisp'] as const)[seed % 3] ?? 'bank')
+      : kind === 'high'
+        ? 'wisp'
+        : kind;
   const puffs = buildPuffs(family, rng);
 
   // Bounds from the geometry itself, then a margin: nothing can be cropped.
@@ -127,65 +189,89 @@ export function cloudArt(seed: number, layer: 'bank' | 'high' = 'bank'): string 
   // cutting it slices that puff into a slab that sticks out past the puffs above
   // it. Its own billows are the right bottom, and a wisp is a streak with soft
   // ends.
-  const cutFraction = family === 'bank' ? 0.85 : family === 'cumulus' ? 0.93 : 1;
+  const cutFraction =
+    family === 'bank'
+      ? 0.85
+      : family === 'cumulus'
+        ? 0.93
+        : family === 'tower'
+          ? 0.95
+          : family === 'puff'
+            ? 0.9
+            : family === 'veil'
+              ? 0.92
+              : 1;
   const baseY = crownY + (lowestPuffY - crownY) * cutFraction;
   const height = baseY;
 
-  // The underside, as a wave: contacts on the base line with soft lifts between
-  // them. Amplitude scales with the cloud so a low bank does not get a cirrus-sized
-  // ripple, and each segment draws its own lift so the rhythm is not a metronome.
-  const underside = ((): string => {
-    if (family === 'wisp') return `M0 0 H${width.toFixed(1)} V${baseY.toFixed(1)} H0 Z`;
-    const span = Math.max(24, width / Math.max(3, Math.round(width / 46)));
-    const segments = Math.max(3, Math.round(width / span));
-    const amp = Math.min(4.2, Math.max(1.4, (baseY - crownY) * 0.07));
-    let d = `M0 0 H${width.toFixed(1)} V${baseY.toFixed(1)}`;
-    for (let i = segments; i > 0; i -= 1) {
-      const right = (width * i) / segments;
-      const left = (width * (i - 1)) / segments;
-      const lift = amp * (0.5 + rng() * 0.9);
-      d += ` Q${((left + right) / 2).toFixed(1)} ${(baseY - lift).toFixed(1)} ${left.toFixed(1)} ${baseY.toFixed(1)}`;
-    }
-    return `${d} Z`;
-  })();
+  // The base, trimmed by geometry: a puff that would hang below the base line keeps
+  // its centre and has its radius shortened until its bottom sits on the line. The
+  // union of the shortened puffs is the silhouette, so the underside is a row of
+  // scallops with nothing drawn under it and nothing to clip.
+  const placed = puffs.map((p) => {
+    const rawCy = p.cy + shiftY;
+    const cy = Math.min(rawCy, baseY - 2);
+    const ry = Math.min(p.ry, Math.max(2, baseY - cy));
+    return { cx: p.cx + shiftX, cy, rx: p.rx, ry };
+  });
 
-  const puffsMarkup = puffs
+  // Rounded down, not to nearest: rounding a trimmed puff up by a tenth puts it
+  // back below the base line, which is the thing the trim exists to prevent.
+  const floor1 = (value: number): string => (Math.floor(value * 10) / 10).toFixed(1);
+  const puffsMarkup = placed
     .map(
       (p) =>
-        `<ellipse cx="${(p.cx + shiftX).toFixed(1)}" cy="${(p.cy + shiftY).toFixed(1)}" rx="${p.rx.toFixed(1)}" ry="${p.ry.toFixed(1)}"/>`,
+        `<ellipse cx="${floor1(p.cx)}" cy="${floor1(p.cy)}" rx="${floor1(p.rx)}" ry="${floor1(p.ry)}"/>`,
     )
     .join('');
 
   // Lit tops: the crown only. Lighting the low puffs too turned the base of a
   // cumulus into a pale sausage bolted to the side of the tower.
   const crownLine = crownY + (lowestPuffY - crownY) * 0.55;
-  const highlights = puffs
-    .filter((p) => p.cy + shiftY < crownLine)
+  const highlights = placed
+    .filter((p) => p.cy < crownLine)
     .map(
       (p) =>
-        `<ellipse cx="${(p.cx + shiftX - 2).toFixed(1)}" cy="${(p.cy + shiftY - p.ry * 0.46).toFixed(1)}" ` +
+        `<ellipse cx="${(p.cx - 2).toFixed(1)}" cy="${(p.cy - p.ry * 0.46).toFixed(1)}" ` +
         `rx="${(p.rx * 0.56).toFixed(1)}" ry="${(p.ry * 0.44).toFixed(1)}"/>`,
     )
     .join('');
 
-  const clipId = `${id}k`;
+  // And a tighter core on the sun side of each of those puffs. A lit top is a sheen;
+  // a smaller, brighter spot inside it is what makes a cumulus look like it is
+  // holding light rather than painted with it. Same rule as the crown: high puffs
+  // only, so the base of a tower does not get a white belly.
+  const cores = placed
+    .filter((p) => p.cy < crownLine && p.ry > 8)
+    .map(
+      (p) =>
+        `<ellipse cx="${(p.cx - p.rx * 0.22).toFixed(1)}" cy="${(p.cy - p.ry * 0.58).toFixed(1)}" ` +
+        `rx="${(p.rx * 0.3).toFixed(1)}" ry="${(p.ry * 0.24).toFixed(1)}"/>`,
+    )
+    .join('');
+
   return (
     `<svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMidYMax meet" aria-hidden="true">` +
     '<defs>' +
-    `<clipPath id="${clipId}"><path d="${underside}"/></clipPath>` +
     // userSpaceOnUse: one ramp across the whole cloud, not one per puff.
     `<linearGradient id="${id}b" gradientUnits="userSpaceOnUse" x1="0" y1="${crownY.toFixed(1)}" x2="0" y2="${baseY.toFixed(1)}">` +
     '<stop offset="0" stop-color="var(--pl-cloud-light)"/>' +
-    '<stop offset="0.52" stop-color="var(--pl-cloud)"/>' +
+    // The underside is the darkest part of a cloud. It is the bottom of the same
+    // ramp, not a band drawn on top of it: a band has its own edges, and every edge
+    // it had was a rectangle showing through the sky where the cloud was thinner.
+    '<stop offset="0.46" stop-color="var(--pl-cloud)"/>' +
+    '<stop offset="0.9" stop-color="var(--pl-cloud-shade)"/>' +
     '<stop offset="1" stop-color="var(--pl-cloud-shade)"/>' +
     '</linearGradient>' +
     '</defs>' +
-    `<g clip-path="url(#${clipId})">` +
     `<g fill="url(#${id}b)">${puffsMarkup}</g>` +
     '<g fill="var(--pl-cloud-light)" opacity="0.28" ' +
     'style="transform: translate(var(--pl-cloud-lit-x, 0px), 0)">' +
     highlights +
     '</g>' +
+    '<g fill="var(--pl-cloud-light)" opacity="0.34" ' +
+    'style="transform: translate(var(--pl-cloud-lit-x, 0px), 0)">' +
+    cores +
     '</g>' +
     '</svg>'
   );

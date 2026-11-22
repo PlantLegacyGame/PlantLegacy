@@ -27,6 +27,10 @@ function createPorts(overrides: Partial<DamageCommandPorts> = {}) {
     forceCollapse: (x, z) => calls.push(`collapse:${x},${z}`),
     processDamageEvents: () => calls.push('events'),
     processPlantDeaths: () => calls.push('deaths'),
+    spawnDrop: (kind, x, y, z) => {
+      calls.push(`drop:${kind}@${x},${y},${z}`);
+      return { id: `drop_${calls.length}` };
+    },
     respond: (action, payload) => responses.push({ action, payload }),
     ...overrides,
   };
@@ -49,11 +53,12 @@ describe('handleDamageCommand', () => {
       'dev_reroot',
       'dev_herbivore_swarm',
       'dev_terrain_collapse',
+      'dev_spawn_drop',
     ]) {
       handleDamageCommand(ports, { type }, undefined);
     }
     assert.deepEqual(calls, []);
-    assert.equal(responses.length, 6);
+    assert.equal(responses.length, 7);
     assert.deepEqual(responses[0]?.payload, { ok: false, error: 'no_plant' });
   });
 
@@ -108,6 +113,17 @@ describe('handleDamageCommand', () => {
       'deaths',
       'events',
     ]);
+  });
+
+  it('spawns a drop beside the crown and settles it before answering', () => {
+    const { ports, calls, responses } = createPorts();
+    handleDamageCommand(ports, { type: 'dev_spawn_drop' }, target);
+    assert.deepEqual(calls, ['drop:dung@4.4,0,-4', 'events']);
+    assert.equal(responses[0]?.payload.ok, true);
+    assert.equal(responses[0]?.payload.kind, 'dung');
+
+    handleDamageCommand(ports, { type: 'dev_spawn_drop', kind: 'remains', offset_m: 2 }, target);
+    assert.ok(calls.includes('drop:remains@5,0,-4'));
   });
 
   it('starts at the origin when the plant has no crown', () => {

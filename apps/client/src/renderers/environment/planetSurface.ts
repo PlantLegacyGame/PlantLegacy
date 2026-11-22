@@ -98,14 +98,23 @@ export function planetTerrainY(
 }
 
 /**
- * Height of a ground patch's own surface at a position: the sphere under it, the
- * relief on it and the skin it is raised by.
+ * Height of a ground patch's own surface, in metres above the pole's tangent
+ * plane: the curvature drop, the relief on it and the skin it is raised by.
+ *
+ * This is the number a patch vertex stores, and it is deliberately small. A vertex
+ * height written as `sqrt(radius² - r²)` is about the radius itself - 100,000 m
+ * today - and float32 spaces values that size by `radius × 2⁻²³`: 7.8 mm at 100 km,
+ * 0.5 m at Earth radius, paid by every vertex and growing with the planet. Written
+ * as the drop instead, the stored number is a couple of metres of curvature plus
+ * the relief, and the radius lives in the mesh's placement (`+radius` inside the
+ * body at `-radius`), where it cancels exactly.
  *
  * Exported so the soil slab can hang its walls off exactly this number: the walls
- * and the patch they line share an edge, and a slab built from a different
- * height would leave a step along that edge.
+ * and the patch they line share an edge, and a slab built from a different height
+ * would leave a step along that edge. Both meshes carry the same `+radius`
+ * placement, so both store patch-local metres.
  */
-export function patchSurfaceY(
+export function patchLocalSurfaceY(
   radius: number,
   x: number,
   z: number,
@@ -113,8 +122,8 @@ export function patchSurfaceY(
   skinM: number,
 ): number {
   const horizontal = Math.min(Math.hypot(x, z), radius * 0.99);
-  const sphereY = Math.sqrt(Math.max(radius * radius - horizontal * horizontal, 0));
-  return sphereY + terrainRelief(x, z, field) + skinM;
+  const drop = radius - Math.sqrt(Math.max(radius * radius - horizontal * horizontal, 0));
+  return -drop + terrainRelief(x, z, field) + skinM;
 }
 
 /**
@@ -135,9 +144,9 @@ export function createPlanetBody(radius: number, material: THREE.Material): THRE
 
 /**
  * One metre-scale ground patch that follows the sphere and carries the relief,
- * in the planet mesh's own local space. Same material as the planet so the soil
- * shader, the Root Sight cavity and the lighting apply identically; it only
- * adds geometry where the player can see it.
+ * in patch-local metres, placed at the planet's radius. Same material as the
+ * planet so the soil shader, the Root Sight cavity and the lighting apply
+ * identically; it only adds geometry where the player can see it.
  *
  * `extentM` is the full width of the square, so a 620 m patch covers the whole
  * authored play area. `holeExtentM` removes the centre of the square, turning a
@@ -158,15 +167,15 @@ export function createTerrainPatch(
   const geometry = new THREE.PlaneGeometry(extent, extent, divisions, divisions);
   geometry.rotateX(-Math.PI / 2);
   const positions = geometry.getAttribute('position');
+  // One surface function for both patches. The heights used to be written by the
+  // position loop and the normals by `computeVertexNormals`, which only sees the
+  // patch it is called on: the inner patch and the coarse ring therefore gave the
+  // same seam vertex two different normals, and the light jumped across the last
+  // ring of the near field. Heights and normals both read this, with a fixed
+  // world-space step, so a shared point agrees at any tessellation.
+  const heightAt = (x: number, z: number): number => patchLocalSurfaceY(radius, x, z, field, skinM);
   for (let i = 0; i < positions.count; i += 1) {
-    const x = positions.getX(i);
-    const z = positions.getZ(i);
-    const horizontal = Math.min(Math.hypot(x, z), radius * 0.99);
-    // Sphere surface in local space (the planet mesh sits at -radius) plus the
-    // relief, which is zero past the patch radius, so the rim matches the
-    // sphere exactly.
-    const sphereY = Math.sqrt(Math.max(radius * radius - horizontal * horizontal, 0));
-    positions.setY(i, sphereY + terrainRelief(x, z, field) + skinM);
+    positions.setY(i, heightAt(positions.getX(i), positions.getZ(i)));
   }
   positions.needsUpdate = true;
 
@@ -188,9 +197,28 @@ export function createTerrainPatch(
     geometry.setIndex(kept);
   }
 
-  geometry.computeVertexNormals();
+  // Normals from the same height function, with one fixed step. The step is in
+  // metres, not in cells, so the coarse ring and the fine patch answer with the
+  // same normal at the same point; the seam stops being a lighting edge even
+  // though the two meshes have different vertex spacing.
+  const normals = geometry.getAttribute('normal');
+  const step = 0.5;
+  for (let i = 0; i < positions.count; i += 1) {
+    const x = positions.getX(i);
+    const z = positions.getZ(i);
+    const dx = heightAt(x - step, z) - heightAt(x + step, z);
+    const dz = heightAt(x, z - step) - heightAt(x, z + step);
+    const length = Math.hypot(dx, 2 * step, dz) || 1;
+    normals.setXYZ(i, dx / length, (2 * step) / length, dz / length);
+  }
+  normals.needsUpdate = true;
   const mesh = new THREE.Mesh(geometry, material);
   mesh.name = 'planet-terrain';
+  // The vertices are metres above the pole's tangent plane; the radius lives in
+  // this placement. The patch is added as a child of the planet body (which sits
+  // at `y = -radius`), so the two cancel in world space and nothing large is ever
+  // stored in a vertex attribute.
+  mesh.position.y = radius;
   mesh.receiveShadow = true;
   mesh.castShadow = false;
   return mesh;
@@ -220,14 +248,21 @@ export function createTerrainPatches(
     TERRAIN_SKIN_M,
   );
   inner.name = 'planet-terrain-detail';
+  // Same skin as the inner patch, and a hole two metres *under* the inner edge.
+  // Two different skins (0.02 and 0.004 m) put the two surfaces 16 mm apart in
+  // the overlap, which is a z-fight with sliver triangles at every grazing angle;
+  // a smaller hole (98%) spread those slivers over three metres of the near
+  // field, where they read as stretched cliffs. The overlap is now a covered
+  // joint: the fine patch is always the surface at the seam, and the coarse ring
+  // only shows beyond it.
   const outer = createTerrainPatch(
     radius,
     field,
     material,
     Math.max(24, Math.round(innerSegments * 0.6)),
     patchRadius * 2,
-    0.004,
-    innerExtent * 0.98,
+    TERRAIN_SKIN_M,
+    Math.max(0, innerExtent - 2),
   );
   outer.name = 'planet-terrain-far';
   return { inner, outer };

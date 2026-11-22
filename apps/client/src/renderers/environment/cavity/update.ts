@@ -164,4 +164,21 @@ export function updateCavityBowl(
   }
   position.needsUpdate = true;
   geometry.computeVertexNormals();
+  // The lip ring is a cut edge, not a surface. Each rim vertex has just been
+  // moved onto its own ground, so the ring is no longer flat and its computed
+  // normals turn to face the sky - which lit it as an unbroken bright line round
+  // the mouth. That line is the seam the player saw whenever the cavity grew: the
+  // growth changes the scale, this refit changes the rim heights, and the normals
+  // were rebuilt with them. Borrowing the top course's normals shades the lip as
+  // part of the wall it belongs to.
+  const normals = geometry.getAttribute('normal') as THREE.BufferAttribute | undefined;
+  const cols = geometry.userData.cols as number | undefined;
+  if (normals && cols) {
+    for (const index of rim) {
+      const below = index + cols;
+      if (below >= normals.count) continue;
+      normals.setXYZ(index, normals.getX(below), normals.getY(below), normals.getZ(below));
+    }
+    normals.needsUpdate = true;
+  }
 }

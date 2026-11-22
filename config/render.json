@@ -358,12 +358,12 @@
     },
     "sun_intensity_night": {
       "type": "number",
-      "value": 0.15,
+      "value": 0.6,
       "range": [
         0.01,
         0.8
       ],
-      "notes": "Direct celestial light intensity at midnight."
+      "notes": "Direct celestial light intensity at midnight. Lifted from 0.15 so night is dark, not blind: the ground keeps its texture and a plant reads as a silhouette. At 0.6 it is twice the night ambient, so the moon is the brightest light there is: a surface facing it is moonlit, one facing away falls back on the ambient instead of both sitting at the same value."
     },
     "ambient_intensity_day": {
       "type": "number",
@@ -376,12 +376,12 @@
     },
     "ambient_intensity_night": {
       "type": "number",
-      "value": 0.15,
+      "value": 0.28,
       "range": [
         0.01,
         0.8
       ],
-      "notes": "Ambient light intensity during night."
+      "notes": "Ambient light intensity during night. Lifted from 0.15 with the moonlight: below that, night on the young-plant framing was indistinguishable from a black screen."
     },
     "ambient_fade_tau_s": {
       "type": "number",
@@ -640,6 +640,33 @@
         8
       ],
       "notes": "Depth of the topsoil layer below the surface; below it is subsoil, then bedrock."
+    },
+    "camera_pivot_height_m": {
+      "type": "number",
+      "value": 1.6,
+      "range": [
+        0,
+        3
+      ],
+      "notes": "Height of the orbit pivot above the player's feet. A pivot on the ground cannot look up: every angle that points above the horizon puts the eye underground, so the ground clamp pulls it back. Orbiting at head height lets the eye stand on the terrain and look at the sky."
+    },
+    "node_pick_tie_m": {
+      "type": "number",
+      "value": 0.02,
+      "range": [
+        0,
+        0.2
+      ],
+      "notes": "Two pick spheres the ray meets within this distance are the same point on screen, so the deeper node wins. A parent's sphere contains its child; without the tie rule a click on the child selected the parent."
+    },
+    "drop_pick_distance_m": {
+      "type": "number",
+      "value": 6,
+      "range": [
+        0.5,
+        40
+      ],
+      "notes": "How far the pointer may reach to pick up a world drop. Drops are small markers; without a reach limit a click on the horizon would collect one across the field."
     },
     "camera_ground_touch_m": {
       "type": "number",
@@ -1123,13 +1150,13 @@
     },
     "exposure_night": {
       "type": "number",
-      "value": 0.92,
+      "value": 1,
       "range": [
         0.4,
         1.4
       ],
       "unit": "multiplier",
-      "notes": "Renderer exposure at night: a slight crush so moonlight reads as dark, not grey."
+      "notes": "Renderer exposure at night. 0.92 crushed the night so hard that the young-plant framing - 3 m away, 30 degrees down - was a frame of unlit soil and read as a black screen; the cup is now only a tint, not a blackout."
     },
     "camera_young_max_distance": {
       "type": "number",

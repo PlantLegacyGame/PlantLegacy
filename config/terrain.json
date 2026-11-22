@@ -62,24 +62,6 @@
       "range": [0.02, 0.9],
       "notes": "Fraction of the patch radius over which relief fades out at the rim."
     },
-    "tile_size_m": {
-      "type": "number",
-      "value": 16.0,
-      "range": [4, 64],
-      "notes": "L0 terrain tile edge. Renders tile holes as chunks; physics collides per tile."
-    },
-    "tile_vertices": {
-      "type": "integer",
-      "value": 17,
-      "range": [5, 65],
-      "notes": "Vertices per tile edge at L0 (17 = 1 m spacing on a 16 m tile)."
-    },
-    "lod_distances_m": {
-      "type": "array",
-      "item_type": "number",
-      "value": [48, 120, 280, 620],
-      "notes": "Outer radius of each LOD ring. Ring 0 is the near field; the last ring is the patch rim."
-    },
     "cell_size_m": {
       "type": "number",
       "value": 0.5,

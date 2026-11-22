@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import * as THREE from 'three';
 import type { PlantNodeData } from '../plant/plantNodeData.js';
-import { plantExtent, resolveCutawayRadius } from './rootSightCutaway.ts';
+import { plantExtent, plantLateralExtent, resolveCutawayRadius } from './rootSightCutaway.ts';
 
 function node(
   id: string,
@@ -39,6 +39,16 @@ describe('root sight cutaway sizing', () => {
     const withCanopy = plantExtent([seed, ...roots, ...canopy]);
     assert.ok(Math.abs(withCanopy - rootOnly) < 1e-9);
     assert.ok(withCanopy < 3, `canopy widened the root extent to ${withCanopy}`);
+  });
+
+  it('measures the mouth from lateral spread, not from root depth', () => {
+    // A taproot 1.7 m down and 0.1 m across: the cavity wants the 3D reach, but
+    // the hole in the ground is a circle in plan and must hug the spread.
+    const seed = node('seed', 4, { x: 0, y: 0, z: 0 });
+    const deep = node('r1', 0, { x: 0.1, y: -1.7, z: 0 }, { parentId: 'seed' });
+    const lateral = plantLateralExtent([seed, deep]);
+    assert.ok(Math.abs(lateral - (0.1 + 0.1)) < 1e-9, `lateral ${lateral}`);
+    assert.ok(plantExtent([seed, deep]) > 1.7, 'the cavity still gets the 3D reach');
   });
 
   it('reports the seed only when there are no underground parts yet', () => {

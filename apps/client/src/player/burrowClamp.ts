@@ -56,6 +56,35 @@ export function isInsideCavityColumn(
 }
 
 /**
+ * Lift a buried eye out through the opening when the player asks to leave.
+ *
+ * The clamps could put an eye in the cavity but only Space could take it out:
+ * sliding along the wall had no upward exit, so the view felt caught. Looking up
+ * is the request - the same gesture that lifts a first-person camera - and the
+ * eye rises at a configured rate until it is above the surface, after which the
+ * ground clamp and the orbit are free again.
+ *
+ * Returns the new eye height. It never overshoots the surface, and it does
+ * nothing when the player is not looking up.
+ */
+export function cavityEscapeLiftY(
+  eyeY: number,
+  groundY: number,
+  lookUpY: number,
+  dtSeconds: number,
+  liftMps: number,
+  lookUpThreshold = 0.35,
+): number {
+  if (!Number.isFinite(eyeY) || !Number.isFinite(groundY)) return eyeY;
+  if (!(eyeY < groundY)) return eyeY;
+  if (!(lookUpY >= lookUpThreshold)) return eyeY;
+  const rate = Number.isFinite(liftMps) ? Math.max(0, liftMps) : 0;
+  const dt = Number.isFinite(dtSeconds) ? Math.max(0, dtSeconds) : 0;
+  if (rate <= 0 || dt <= 0) return eyeY;
+  return Math.min(groundY, eyeY + rate * dt);
+}
+
+/**
  * Pull a point inside the aperture, keeping the clearance the config asks for.
  *
  * Returns `null` when the point is already inside: the caller then leaves the

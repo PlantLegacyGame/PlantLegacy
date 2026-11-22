@@ -31,8 +31,7 @@ const STYLE = `
     display: none;
     place-items: center;
     padding: 18px;
-    background: radial-gradient(circle at 50% 42%, rgba(8, 11, 6, 0.55), rgba(4, 6, 3, 0.82));
-    backdrop-filter: blur(3px);
+    background: radial-gradient(circle at 50% 42%, rgba(8, 11, 6, 0.66), rgba(4, 6, 3, 0.88));
     pointer-events: auto;
   }
   .pl-pause-backdrop.is-open { display: grid; }

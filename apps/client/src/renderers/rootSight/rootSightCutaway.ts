@@ -71,9 +71,10 @@ function underground(node: PlantNodeData): boolean {
  * not widen the root cavity by five metres. The seed itself is the anchor even
  * though it sits on the surface.
  */
-export function plantExtent(
+function ownRootExtent(
   nodes: Iterable<PlantNodeData>,
-  sizing: RootSightSizing = DEFAULT_ROOT_SIGHT_SIZING,
+  sizing: RootSightSizing,
+  horizontalOnly: boolean,
 ): number {
   const minExtent = Math.max(0.001, sizing.minExtentM);
   const own: PlantNodeData[] = [];
@@ -95,15 +96,38 @@ export function plantExtent(
     // so both reach and thickness wait for the node to grow.
     const grown = Math.min(1, Math.max(0, node.growthProgress ?? 1));
     if (grown <= 0) continue;
+    const dx = node.position.x - root.position.x;
+    const dz = node.position.z - root.position.z;
     const reach =
-      Math.hypot(
-        node.position.x - root.position.x,
-        node.position.y - root.position.y,
-        node.position.z - root.position.z,
-      ) * grown;
+      (horizontalOnly
+        ? Math.hypot(dx, dz)
+        : Math.hypot(dx, node.position.y - root.position.y, dz)) * grown;
     extent = Math.max(extent, reach + Math.max(0, node.radius || 0) * grown);
   }
   return extent;
+}
+
+export function plantExtent(
+  nodes: Iterable<PlantNodeData>,
+  sizing: RootSightSizing = DEFAULT_ROOT_SIGHT_SIZING,
+): number {
+  return ownRootExtent(nodes, sizing, false);
+}
+
+/**
+ * The same reach as `plantExtent`, measured horizontally.
+ *
+ * The cavity is a sphere and wants the 3D reach. The mouth is a circle in plan,
+ * and sizing it from the 3D reach counted a taproot's depth as spread: a root
+ * 1.7 m down with a 0.7 m spread opened a hole 2 m in radius, so the plant stood
+ * at the edge of a crater instead of in a hole around its roots. Horizontal
+ * reach, plus each part's own radius, is what the opening has to contain.
+ */
+export function plantLateralExtent(
+  nodes: Iterable<PlantNodeData>,
+  sizing: RootSightSizing = DEFAULT_ROOT_SIGHT_SIZING,
+): number {
+  return ownRootExtent(nodes, sizing, true);
 }
 
 /**

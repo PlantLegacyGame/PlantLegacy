@@ -11,6 +11,7 @@ describe('resolveDevWeatherCommand', () => {
     for (const state of [
       'clear',
       'rain',
+      'snow',
       'thunderstorm_telegraph',
       'thunderstorm_active',
       'thunderstorm_aftermath',
@@ -21,7 +22,7 @@ describe('resolveDevWeatherCommand', () => {
   });
 
   it('refuses an unknown or missing state instead of forcing the default sky', () => {
-    assert.deepEqual(resolveDevWeatherCommand({ state: 'snow' }), {
+    assert.deepEqual(resolveDevWeatherCommand({ state: 'hail' }), {
       ok: false,
       error: 'unknown_weather_state',
     });

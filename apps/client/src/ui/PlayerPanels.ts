@@ -76,6 +76,24 @@ export interface ItemDefinitionView {
   use: ItemUseSummary;
 }
 
+/**
+ * Someone else's plant, looked at through the same panel.
+ *
+ * Low detail on purpose: the server streams a rival's parts and their biomass
+ * for the mirror, and nothing else. There are no stored resources, no mutation
+ * list and no level-up here, because none of it is ours to see - and a rival's
+ * panel is not a place to invent numbers we were never sent.
+ */
+export interface InspectOtherView {
+  owner?: string;
+  /** World id, so two rivals with no owner streamed can still be told apart. */
+  plantId: string;
+  parts: Array<{ type: string; count: number; biomass: number }>;
+  totalBiomass: number;
+  /** Nodes the mirror holds for this plant, filtered to what may be picked. */
+  partCount: number;
+}
+
 export interface PlayerPanelsView {
   stats: PlantStatsSummary;
   phase: PlantPhase;
@@ -104,11 +122,25 @@ export interface PlayerPanelsOptions {
   onClose?: () => void;
 }
 
+export type PlayerPanelId = 'inspect' | 'inventory';
+
 export interface PlayerPanelsAPI {
   readonly inspect: HTMLElement;
   readonly inventory: HTMLElement;
+  /** True while either panel is up. */
   readonly isOpen: boolean;
   update(view: PlayerPanelsView): void;
+  /**
+   * One panel at a time. The two are siblings on screen, not one dialog: closing
+   * Inspect leaves the inventory where it was, and the other way round.
+   */
+  setPanelOpen(panel: PlayerPanelId, open: boolean): void;
+  isPanelOpen(panel: PlayerPanelId): boolean;
+  /**
+   * Point Inspect at another player's plant (low detail), or back at yours with
+   * null. Independent of the periodic own-plant refresh.
+   */
+  inspectOther(other: InspectOtherView | null): void;
   setInventory(slots: Array<InventorySlotView | null>, maxSlots: number): void;
   /**
    * Item definitions from the server, keyed by id. Until they arrive the panel
@@ -199,6 +231,23 @@ const STYLE = `
   .pl-health__fill[data-tone='critical'] { background: linear-gradient(90deg, #7a2a18, #ff8c5f); }
 
   .pl-section { display: grid; gap: 4px; }
+  /* Inspect shows one plant at a time: the player's own body, or a rival's parts
+     in low detail. The sections that only exist for your own plant are hidden
+     rather than emptied, so the panel never shows a rival a blank Mutations
+     heading and an empty level-up row. */
+  .pl-section--other { display: none; }
+  #pl-inspect-panel[data-other='true'] .pl-health,
+  #pl-inspect-panel[data-other='true'] .pl-section--own {
+    display: none;
+  }
+  #pl-inspect-panel[data-other='true'] .pl-section--other { display: grid; }
+  .pl-other__row { display: grid; grid-template-columns: 1fr auto auto; gap: 8px;
+    align-items: baseline; padding: 3px 0;
+    border-bottom: 1px solid rgba(126, 154, 74, 0.12); }
+  .pl-other__row:last-child { border-bottom: none; }
+  .pl-other__type { color: var(--ink-muted, #c9c2ad); text-transform: capitalize; }
+  .pl-other__count { color: var(--ink-dim, #9a937a); font-variant-numeric: tabular-nums; }
+  .pl-other__biomass { color: var(--bone-100, #f7f4ed); font-variant-numeric: tabular-nums; }
   .pl-section__title {
     margin: 0; font-size: 0.64rem; font-weight: 700; letter-spacing: 0.14em;
     text-transform: uppercase; color: var(--sprout-300, #c8e86c); opacity: 0.9;
@@ -316,7 +365,6 @@ const STYLE = `
     border-radius: 12px;
     border: 1px solid var(--hud-border, rgba(126, 154, 74, 0.4));
     background: linear-gradient(180deg, rgba(20, 26, 16, 0.94), rgba(11, 15, 9, 0.96));
-    backdrop-filter: blur(8px);
     pointer-events: auto;
   }
   .pl-sheet-tabs__btn {
@@ -385,7 +433,11 @@ export function createPlayerPanels(options: PlayerPanelsOptions = {}): PlayerPan
   const thresholds = options.healthThresholds;
   let view: PlayerPanelsView | null = null;
   let selectedSlot: number | null = null;
-  let open = false;
+  // Two panels, two states. They share a ticker and a stylesheet, not a lifespan.
+  let openInspect = false;
+  let openInventory = false;
+  /** Set while Inspect is pointed at someone else's plant. */
+  let otherView: InspectOtherView | null = null;
   let definitions = new Map<string, ItemDefinitionView>();
   let definitionsLoaded = false;
   let timer: ReturnType<typeof setInterval> | null = null;
@@ -405,9 +457,14 @@ export function createPlayerPanels(options: PlayerPanelsOptions = {}): PlayerPan
         <div class="pl-health__track"><div class="pl-health__fill" id="pl-health-fill"></div></div>
         <div class="pl-health__row"><span id="pl-phase" class="pl-panel__sub"></span><span id="pl-reroot" class="pl-panel__sub"></span></div>
       </section>
-      <section class="pl-section"><h3 class="pl-section__title">Body</h3><div id="pl-stat-body"></div></section>
-      <section class="pl-section"><h3 class="pl-section__title">Mutations</h3><div id="pl-mutation-summary" class="pl-panel__sub"></div><div id="pl-mutations"></div><div id="pl-pressure" class="pl-pressure"></div></section>
-      <section class="pl-section"><h3 class="pl-section__title">Growth nodes</h3><div id="pl-nodes" class="pl-node-list"></div></section>
+      <section class="pl-section pl-section--own"><h3 class="pl-section__title">Body</h3><div id="pl-stat-body"></div></section>
+      <section class="pl-section pl-section--own"><h3 class="pl-section__title">Mutations</h3><div id="pl-mutation-summary" class="pl-panel__sub"></div><div id="pl-mutations"></div><div id="pl-pressure" class="pl-pressure"></div></section>
+      <section class="pl-section pl-section--own"><h3 class="pl-section__title">Growth nodes</h3><div id="pl-nodes" class="pl-node-list"></div></section>
+      <section class="pl-section pl-section--other">
+        <h3 class="pl-section__title">Parts seen</h3>
+        <div id="pl-other-rows" class="pl-other"></div>
+        <div id="pl-other-summary" class="pl-panel__sub"></div>
+      </section>
     </div>`;
 
   const inventory = document.createElement('section');
@@ -422,7 +479,7 @@ export function createPlayerPanels(options: PlayerPanelsOptions = {}): PlayerPan
     <div class="pl-panel__body">
       <div id="pl-inventory-grid" class="pl-inventory-grid"></div>
       <div id="pl-item-detail" class="pl-item-detail"></div>
-      <div class="pl-panel__sub">Click a slot \u00B7 Use \u00B7 I closes both panels</div>
+      <div class="pl-panel__sub">Click a slot \u00B7 Use \u00B7 Esc closes panels</div>
     </div>`;
 
   // Phone switch: one sheet, two faces. On a wide screen both panels show and
@@ -461,17 +518,20 @@ export function createPlayerPanels(options: PlayerPanelsOptions = {}): PlayerPan
   }
   setSheetTab('inspect');
 
-  const close = (): void => setOpen(false);
-  // Delegated on the panel, not bound to the button: a re-render that replaced the
-  // header used to leave the visible close button without a handler.
+  // Delegated on each panel, not bound to the button: a re-render that replaced
+  // the header used to leave the visible close button without a handler. Each
+  // close button closes its own panel - they used to share one close path, so
+  // shutting the inventory also took the plant you were reading with it.
   for (const panel of [inspect, inventory]) {
     panel.addEventListener('click', (event) => {
-      if ((event.target as HTMLElement | null)?.closest('[data-close]')) close();
+      const target = (event.target as HTMLElement | null)?.closest<HTMLElement>('[data-close]');
+      if (!target) return;
+      setPanelOpen(target.dataset.close === 'inventory' ? 'inventory' : 'inspect', false);
     });
   }
 
   const onKeyDown = (event: KeyboardEvent): void => {
-    if (event.key === 'Escape' && open) {
+    if (event.key === 'Escape' && (openInspect || openInventory)) {
       event.preventDefault();
       event.stopPropagation();
       setOpen(false);
@@ -479,27 +539,99 @@ export function createPlayerPanels(options: PlayerPanelsOptions = {}): PlayerPan
   };
   document.addEventListener('keydown', onKeyDown);
 
-  function setOpen(next: boolean): void {
-    const wasOpen = open;
-    open = next;
-    inspect.classList.toggle('is-open', next);
-    inventory.classList.toggle('is-open', next);
-    sheetTabs.classList.toggle('is-visible', next);
-    if (next) setSheetTab(sheetTab);
-    if (next) {
-      render();
+  const anyOpen = (): boolean => openInspect || openInventory;
+
+  function syncTicker(): void {
+    if (anyOpen()) {
       if (!timer) timer = setInterval(render, 250);
-    } else if (timer) {
+      return;
+    }
+    if (timer) {
       clearInterval(timer);
       timer = null;
     }
-    if (!next) {
-      if (wasOpen) options.onClose?.();
+  }
+
+  /** One panel up or down, leaving the other exactly as it was. */
+  function setPanelOpen(panel: PlayerPanelId, next: boolean): void {
+    const wasOpen = anyOpen();
+    if (panel === 'inspect') openInspect = next;
+    else openInventory = next;
+    // Closing Inspect drops the rival it was pointed at: a stale snapshot of
+    // someone else's plant is worse than none when it reopens later.
+    if (panel === 'inspect' && !next && otherView) {
+      otherView = null;
+      inspect.removeAttribute('data-other');
     }
+    inspect.classList.toggle('is-open', openInspect);
+    inventory.classList.toggle('is-open', openInventory);
+    sheetTabs.classList.toggle('is-visible', anyOpen());
+    if (next) {
+      // On a phone the sheet shows one face at a time: opening a panel makes it
+      // the face you are looking at, or it would open behind the other one.
+      if (panel === 'inventory' && !openInspect) setSheetTab('inventory');
+      if (panel === 'inspect' && !openInventory) setSheetTab('inspect');
+      render();
+    }
+    syncTicker();
+    if (wasOpen && !anyOpen()) options.onClose?.();
+  }
+
+  function setOpen(next: boolean): void {
+    const wasOpen = anyOpen();
+    openInspect = next;
+    openInventory = next;
+    inspect.classList.toggle('is-open', next);
+    inventory.classList.toggle('is-open', next);
+    sheetTabs.classList.toggle('is-visible', next);
+    if (next) {
+      setSheetTab(sheetTab);
+      render();
+    } else {
+      otherView = null;
+      inspect.removeAttribute('data-other');
+    }
+    syncTicker();
+    if (wasOpen && !next) options.onClose?.();
   }
 
   function render(): void {
-    if (!open) return;
+    if (!anyOpen()) return;
+
+    // Someone else's plant: the same panel, the low-detail face.
+    if (otherView) {
+      inspect.dataset.other = 'true';
+      text('#pl-inspect-sub', 'Another plant');
+      const box = must<HTMLElement>(inspect, '#pl-other-rows');
+      box.innerHTML = '';
+      const parts = [...otherView.parts].sort((a, b) => b.biomass - a.biomass);
+      if (parts.length === 0) {
+        box.innerHTML = '<div class="pl-empty">No parts streamed yet.</div>';
+      } else {
+        for (const part of parts) {
+          const row = document.createElement('div');
+          row.className = 'pl-other__row';
+          row.innerHTML =
+            '<span class="pl-other__type"></span>' +
+            '<span class="pl-other__count"></span>' +
+            '<span class="pl-other__biomass"></span>';
+          (row.children[0] as HTMLElement).textContent = part.type.replace(/_/g, ' ');
+          (row.children[1] as HTMLElement).textContent = `\u00D7${part.count}`;
+          (row.children[2] as HTMLElement).textContent = part.biomass.toFixed(1);
+          box.appendChild(row);
+        }
+      }
+      text(
+        '#pl-other-summary',
+        `${otherView.partCount} part${otherView.partCount === 1 ? '' : 's'} \u00B7 ` +
+          `${otherView.totalBiomass.toFixed(1)} biomass \u00B7 ` +
+          `${otherView.owner ? `owner ${otherView.owner.slice(0, 12)}` : otherView.plantId.slice(0, 12)}`,
+      );
+      renderInventory();
+      return;
+    }
+    inspect.removeAttribute('data-other');
+
     if (!view) {
       must<HTMLElement>(inspect, '#pl-stat-body').innerHTML =
         '<div class="pl-empty">Waiting for the server.</div>';
@@ -785,20 +917,32 @@ export function createPlayerPanels(options: PlayerPanelsOptions = {}): PlayerPan
     inspect,
     inventory,
     get isOpen() {
-      return open;
+      return anyOpen();
     },
     update(next) {
       view = next;
       selectedSlot = selectedSlot !== null && selectedSlot < next.maxSlots ? selectedSlot : null;
-      if (open) render();
+      if (anyOpen()) render();
+    },
+    setPanelOpen,
+    isPanelOpen(panel) {
+      return panel === 'inspect' ? openInspect : openInventory;
+    },
+    inspectOther(other) {
+      otherView = other;
+      if (!other) inspect.removeAttribute('data-other');
+      if (anyOpen()) render();
     },
     setDefinitions(next) {
       definitions = new Map(next.map((definition) => [definition.id, definition]));
       definitionsLoaded = true;
-      if (open) renderInventory();
+      if (openInventory) renderInventory();
     },
     showInventory() {
       setSheetTab('inventory');
+      // Pressing Inventory two panels in should bring that face forward rather
+      // than do nothing.
+      if (!openInventory) setPanelOpen('inventory', true);
     },
     setInventory(slots, maxSlots) {
       if (!view) {
@@ -833,17 +977,17 @@ export function createPlayerPanels(options: PlayerPanelsOptions = {}): PlayerPan
         view.inventory = slots;
         view.maxSlots = maxSlots;
       }
-      if (open) renderInventory();
+      if (openInventory) renderInventory();
     },
     setOpen,
     selectSlot(index) {
       const max = view?.maxSlots ?? 0;
-      if (!open || index < 0 || index >= max) return;
+      if (!openInventory || index < 0 || index >= max) return;
       selectedSlot = index;
       renderInventory();
     },
     toggle() {
-      setOpen(!open);
+      setOpen(!anyOpen());
     },
     dispose() {
       if (timer) clearInterval(timer);

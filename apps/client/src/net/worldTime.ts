@@ -15,6 +15,8 @@ export interface WorldTime {
   isDay: boolean;
   paused: boolean;
   scale: number;
+  /** The world's weather token, so the title can show the sky the game is under. */
+  weather: string | null;
 }
 
 export type WorldTimeFetch = (
@@ -37,6 +39,7 @@ export function parseWorldTime(payload: unknown): WorldTime | null {
     isDay: record.isDay === true,
     paused: record.paused === true,
     scale: readNumber(record.scale, 1),
+    weather: typeof record.weather === 'string' && record.weather.trim() ? record.weather : null,
   };
 }
 

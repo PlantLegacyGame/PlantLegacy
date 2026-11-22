@@ -88,6 +88,17 @@ export function createCavityBowl(
   geometry.setIndex(new THREE.BufferAttribute(shell.indices, 1));
   geometry.setAttribute('position', new THREE.BufferAttribute(shell.positions, 3));
   geometry.computeVertexNormals();
+  // The lip ring is a cut edge, not a surface: left with its own computed normals
+  // it faced the sky and caught the light as an unbroken bright line round the
+  // mouth - the seam the player saw as soon as the cavity grew. Borrowing the top
+  // course's normals shades it as part of the wall, and the ground above it stops
+  // looking like something the pit is pushed through.
+  const normals = geometry.getAttribute('normal');
+  for (let c = 0; c < shell.cols; c += 1) {
+    const below = shell.cols + c;
+    normals.setXYZ(c, normals.getX(below), normals.getY(below), normals.getZ(below));
+  }
+  normals.needsUpdate = true;
 
   // Lit, not painted. The old unlit material was the reason the wall had no
   // shading of its own: every shape cue had to be faked in the fragment shader,

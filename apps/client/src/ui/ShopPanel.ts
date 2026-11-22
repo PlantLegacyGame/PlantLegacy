@@ -6,9 +6,10 @@
  * from `config/shop.json`; nothing here knows a price or an item name, so adding
  * stock is a config edit.
  *
- * There is no currency yet: `shop_currency_name` is empty, so the balance row is
- * hidden rather than showing a number the game cannot back. Buying is refused
- * until a caller supplies `onBuy`, which keeps the button honest.
+ * The balance is the server's spore purse (`INVENTORY_SYNC.sporeBalance`); this
+ * panel only displays it. Buying is refused until a caller supplies `onBuy`, and
+ * a purchase the player cannot afford is refused by the server, not here: the
+ * check and the price are one authority.
  */
 
 import { escapeHtml } from './escape.ts';
@@ -47,6 +48,8 @@ export interface ShopPanelOptions {
 
 export interface ShopPanel {
   element: HTMLElement;
+  /** Update the displayed purse after a purchase or an earn. */
+  setBalance(balance: number): void;
   destroy(): void;
 }
 
@@ -56,8 +59,7 @@ const STYLE = `
   .pl-shop-scrim {
     position: absolute;
     inset: 0;
-    background: rgba(6, 9, 6, 0.6);
-    backdrop-filter: blur(2px);
+    background: rgba(6, 9, 6, 0.7);
     display: grid;
     place-items: center;
     padding: 16px;
@@ -215,11 +217,13 @@ export function createShopPanel(options: ShopPanelOptions): ShopPanel {
   heading.textContent = options.config.title;
   head.appendChild(heading);
 
-  if (options.config.currencyName && typeof options.balance === 'number') {
-    const balance = document.createElement('div');
-    balance.className = 'pl-shop__balance';
-    balance.textContent = `${options.balance} ${options.config.currencyName}`;
-    head.appendChild(balance);
+  let balanceEl: HTMLElement | null = null;
+  let balanceValue = typeof options.balance === 'number' ? options.balance : 0;
+  if (options.config.currencyName) {
+    balanceEl = document.createElement('div');
+    balanceEl.className = 'pl-shop__balance';
+    balanceEl.textContent = `${balanceValue} ${options.config.currencyName}`;
+    head.appendChild(balanceEl);
   }
 
   const close = document.createElement('button');
@@ -307,6 +311,10 @@ export function createShopPanel(options: ShopPanelOptions): ShopPanel {
 
   return {
     element: scrim,
+    setBalance(next: number): void {
+      balanceValue = Number.isFinite(next) ? Math.max(0, Math.round(next)) : 0;
+      if (balanceEl) balanceEl.textContent = `${balanceValue} ${options.config.currencyName}`;
+    },
     destroy(): void {
       window.removeEventListener('keydown', onKey, true);
       scrim.remove();

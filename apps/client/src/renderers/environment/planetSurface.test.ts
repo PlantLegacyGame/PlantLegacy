@@ -6,6 +6,7 @@ import {
   createPlanetBody,
   createTerrainPatch,
   createTerrainPatches,
+  patchLocalSurfaceY,
   planetGravity,
   planetSurfaceDrop,
   planetSurfaceFrame,
@@ -127,14 +128,15 @@ describe('planet surface', () => {
     );
     const cellSize = extent / segments;
     assert.ok(cellSize < 3, `terrain cells are ${cellSize.toFixed(1)} m across`);
+    // The radius is a placement, not part of the vertex data.
+    assert.equal(patch.position.y, RADIUS);
 
     const positions = patch.geometry.getAttribute('position');
     let spread = 0;
     for (let i = 0; i < positions.count; i += 1) {
       const x = positions.getX(i);
       const z = positions.getZ(i);
-      const relief =
-        positions.getY(i) - Math.sqrt(Math.max(RADIUS ** 2 - (x * x + z * z), 0)) - 0.02; // the patch skin
+      const relief = positions.getY(i) - planetSurfaceY(RADIUS, x, z) - 0.02; // the patch skin
       // Raise-only: the sphere stays the physics floor, so no vertex may dip
       // below it, and none may exceed the configured amplitude.
       assert.ok(relief >= -1e-3, `terrain dips ${relief.toFixed(3)} m below the sphere`);
@@ -164,6 +166,8 @@ describe('planet surface', () => {
     const outerVerts = outer.geometry.getAttribute('position').count;
     assert.ok(innerVerts > 0 && outerVerts > 0);
     assert.ok(inner.name !== outer.name);
+    assert.equal(inner.position.y, RADIUS);
+    assert.equal(outer.position.y, RADIUS);
     // The outer patch reaches the configured play radius in each direction.
     outer.geometry.computeBoundingBox();
     const box = outer.geometry.boundingBox;
@@ -197,6 +201,35 @@ describe('planet surface', () => {
       }
     }
     assert.equal(centreTriangles, 0, 'outer patch still covers the detailed patch');
+  });
+
+  it('stores patch heights in patch-local metres, not in planet radii', () => {
+    // What a vertex pays for is the size of the number stored in it: float32
+    // spaces values near the radius by `radius × 2⁻²³`, which is 7.8 mm at the
+    // world's 100 km radius and grows with the planet. A vertex holds the
+    // curvature drop and the relief; the radius is a placement.
+    const radius = 100000;
+    const field = { ...DEFAULT_TERRAIN_FIELD, amplitudeM: 26, patchRadiusM: 620 };
+    const patch = createTerrainPatch(radius, field, new THREE.MeshBasicMaterial(), 24, 1240);
+    assert.equal(patch.position.y, radius);
+
+    const positions = patch.geometry.getAttribute('position');
+    let largest = 0;
+    for (let i = 0; i < positions.count; i += 1) {
+      largest = Math.max(largest, Math.abs(positions.getY(i)));
+    }
+    // 620 m across a 100 km sphere drops 1.92 m, plus at most the 26 m relief.
+    assert.ok(largest < 30, `a patch vertex is ${largest.toFixed(1)} m from the tangent plane`);
+
+    // Vertex plus placement is still the world height every other reader uses.
+    const x = 40;
+    const z = -20;
+    assert.ok(
+      Math.abs(
+        patchLocalSurfaceY(radius, x, z, field, TERRAIN_SKIN_M) -
+          planetTerrainY(radius, x, z, field),
+      ) < 1e-9,
+    );
   });
 
   it('uses one sphere as the whole ground, with its pole on the play plane', () => {

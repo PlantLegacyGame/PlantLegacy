@@ -4,12 +4,21 @@ import { type Inventory, setSlot, swapSlots } from './inventory.ts';
 import type { ItemsConfig } from './items.ts';
 import { MESSAGE_TYPE, type RejectPayload } from './net.ts';
 import { clampPlantStorage } from './plantCapacity.ts';
+import { earnSpores, type SporeConfig } from './spores.ts';
 
 export interface InventoryPlayer {
   ws: WebSocket;
   playerId: string;
   plantId: string | null;
   inventory: Inventory;
+  /** The purse, in spores. Server-owned; the client only reads it. */
+  spores: number;
+}
+
+/** The part of the ports the sync needs, so a caller can send one without a world. */
+export interface InventorySyncPorts {
+  itemsConfig: ItemsConfig;
+  send(ws: WebSocket, type: number, payload: unknown): void;
 }
 
 export interface InventoryLog {
@@ -23,9 +32,9 @@ export interface InventoryLog {
  * Listed rather than taken from `World` so these handlers can be exercised
  * without a socket, a tick loop or a config directory.
  */
-export interface InventoryPorts {
-  itemsConfig: ItemsConfig;
-  send(ws: WebSocket, type: number, payload: unknown): void;
+export interface InventoryPorts extends InventorySyncPorts {
+  /** Earn rates for spores; absent means this world has no purse (tests). */
+  sporeConfig?: SporeConfig;
   getPlant(plantId: string): Plant | undefined;
   growthConfig(): GrowthConfig;
   depositFertilizer(worldX: number, worldZ: number): void;
@@ -34,8 +43,8 @@ export interface InventoryPorts {
 }
 
 export function sendInventorySync(
-  ports: InventoryPorts,
-  player: Pick<InventoryPlayer, 'ws' | 'inventory'>,
+  ports: InventorySyncPorts,
+  player: Pick<InventoryPlayer, 'ws' | 'inventory' | 'spores'>,
 ): void {
   const slots = player.inventory.slots.map((slot) =>
     slot ? { itemId: slot.itemId, count: slot.count } : { itemId: null, count: null },
@@ -43,6 +52,9 @@ export function sendInventorySync(
   ports.send(player.ws, MESSAGE_TYPE.INVENTORY_SYNC, {
     slots,
     maxSlots: player.inventory.maxSlots,
+    // The purse travels with the pouch. The shop's balance, the HUD chip and the
+    // inventory read one number, and it is this one.
+    sporeBalance: player.spores,
     // The definitions travel with the slots. The client used to have only an
     // item id, so it drew "Starter Dung" from a table it invented and had no
     // description to show at all. Sending the server's own definition means
@@ -129,6 +141,19 @@ export function useInventorySlot(
     slot.count > 1 ? { itemId: slot.itemId, count: slot.count - 1 } : null,
   );
   sendInventorySlotUpdate(ports, player, slotIndex);
+
+  // Dung is the world's own reward: consuming it pays spores, which is one of the
+  // listed ways to earn them (DESIGN T13). Paying it here means the number the
+  // shop checks is the number the HUD shows.
+  if (itemDef.category === 'dung' && ports.sporeConfig) {
+    const before = player.spores;
+    player.spores = earnSpores(
+      player.spores,
+      ports.sporeConfig.earnDung,
+      ports.sporeConfig.maxBalance,
+    );
+    if (player.spores !== before) sendInventorySync(ports, player);
+  }
 
   ports.log.info('Item used', {
     playerId: player.playerId,

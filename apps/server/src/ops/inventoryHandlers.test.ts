@@ -126,6 +126,7 @@ function makeHarness(defs: ItemDefinition[] = [makeDef()]) {
     playerId: 'player_1',
     plantId: plant.id,
     inventory: createInventory(itemsConfig.inventorySlots),
+    spores: 0,
   };
 
   return { ports, player, plant, sent, warnings, deposits };

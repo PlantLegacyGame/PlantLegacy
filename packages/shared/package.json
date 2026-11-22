@@ -19,7 +19,8 @@
     "./physics": "./src/physics/index.ts",
     "./protocol": "./src/protocol/index.ts",
     "./protocol/messageSchemas": "./src/protocol/messageSchemas.ts",
-    "./world": "./src/world/index.ts"
+    "./world": "./src/world/index.ts",
+    "./weather": "./src/weather/index.ts"
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json",

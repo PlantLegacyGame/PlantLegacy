@@ -12,3 +12,4 @@ export * from './physics/index.ts';
 export * from './plantGraphValidator.ts';
 export * from './protocol/index.ts';
 export * from './schemas/index.ts';
+export * from './weather/index.ts';

@@ -232,7 +232,10 @@ fn applyRootSight(
   // roots only need a slight lift in brightness to separate from the dirt.
   let isRoot = nodeType < 0.5;
   if (frame.rootSightEnabled != 0u && isRoot && frame.rootSightProgress > 0.01) {
-    return vec4f(color * 1.15 + vec3f(0.02, 0.015, 0.01), 1.0);
+    // A neutral lift, not a warm one: the old +0.02 red bias tinted every root
+    // maroon under Root Sight, so the bark read as a different material from
+    // the same bark above ground.
+    return vec4f(color * 1.18 + vec3f(0.02, 0.018, 0.016), 1.0);
   }
   return vec4f(color, 1.0);
 }

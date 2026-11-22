@@ -42,6 +42,20 @@ export interface QualityConfig {
   warmupMs: number;
   /** EMA weight for a new sample, 0.01..1. Lower is steadier and slower. */
   smoothing: number;
+  /**
+   * The display's own device pixel ratio: the highest ratio that is not
+   * supersampling. The estimated-timing ceiling is this, not 1: on a 150%
+   * display a ratio of 1 renders at two thirds of native in each direction and
+   * half the pixels, which is a permanently soft picture rather than a
+   * conservative one. Absent (tests, odd hosts) it falls back to 1.
+   */
+  nativePixelRatio?: number;
+}
+
+/** The device's own ratio, or 1 when it is unknown. */
+function nativeRatio(config: QualityConfig): number {
+  const native = config.nativePixelRatio;
+  return typeof native === 'number' && Number.isFinite(native) && native > 0 ? native : 1;
 }
 
 export interface QualitySample {
@@ -108,7 +122,9 @@ export function effectivePixelRatio(state: QualityState, config: QualityConfig):
   const tiers = config.qualityTiers.length > 0 ? config.qualityTiers : DEFAULT_TIERS;
   const tier = tiers[Math.min(Math.max(0, state.tier), tiers.length - 1)];
   const base = Math.max(0.01, tier.pixelRatio);
-  const ceiling = state.gpuTimingSeen ? config.maxPixelRatio : Math.min(config.maxPixelRatio, 1);
+  const ceiling = state.gpuTimingSeen
+    ? config.maxPixelRatio
+    : Math.min(config.maxPixelRatio, nativeRatio(config));
   return clamp(base * state.pixelScale, config.resolutionFloor, ceiling);
 }
 
@@ -224,7 +240,7 @@ export function nextQualityState(
   // at 1.0, or the effective ratio would still be above native.
   const recoveryCeiling = gpuMeasured
     ? maxScale
-    : Math.min(maxScale, Math.min(config.maxPixelRatio, 1) / tierBase);
+    : Math.min(maxScale, Math.min(config.maxPixelRatio, nativeRatio(config)) / tierBase);
 
   // Keep the state honest when the ceiling drops (a tier change or the first
   // estimated sample after a measured one).

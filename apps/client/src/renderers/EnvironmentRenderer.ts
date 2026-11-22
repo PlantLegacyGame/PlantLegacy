@@ -256,7 +256,15 @@ export class EnvironmentRenderer {
   // day/night cycle smooths to; the strike is a separate per-frame addition so
   // it can never be lerped into the baseline and outlive the flash.
   private ambientBaseline = 0;
+  /** Scratch colour for the drops, reused so a storm allocates nothing per frame. */
+  private readonly rainTint = new THREE.Color();
+  /** Eye below the drawn terrain: no rain is drawn inside the earth. */
+  private eyeUnderSoil = false;
+  /** The rain field samples the real terrain once the planet radius is known. */
+  private terrainSamplerBound = false;
   private lightningIntensity = 0;
+  /** How much of a strike's light reaches the eye, from its distance. */
+  private lightningAttenuation = 1;
 
   // Time of day and sun intensity (client-side interpolation)
   private timeOfDay = 0.3;
@@ -485,6 +493,16 @@ export class EnvironmentRenderer {
    * see nothing" is otherwise indistinguishable from "the field is hidden" and
    * from "the streaks are too small to see", and the three need different fixes.
    */
+  /**
+   * Dev diagnostic: what the weather has left lying on the ground, 0..1 each.
+   *
+   * The patches are drawn by a shader, so "the ground never gets wet" cannot be
+   * told from the outside by looking: the rules' own state is the number to read.
+   */
+  public groundCover(): { water: number; snow: number } {
+    return this.rain.groundCover();
+  }
+
   public getRainDebug(): Record<string, number | boolean> {
     const geometry = this.rain.mesh.geometry as THREE.InstancedBufferGeometry;
     const lengths = geometry.getAttribute('aLength') as THREE.InstancedBufferAttribute | undefined;
@@ -746,7 +764,12 @@ export class EnvironmentRenderer {
     if (!Number.isFinite(x) || !Number.isFinite(z)) return;
     const y =
       this.planetRadiusM > 0 ? planetTerrainY(this.planetRadiusM, x, z, getTerrainParams()) : 0;
-    this.bolt.strike(x, y, z, radiusM);
+    this.bolt.strike(x, y, z, radiusM, this.camera.position);
+    // Lightning lights the air it falls through, so a bolt a hundred metres away
+    // cannot turn the sky beside this player white. The bolt and its light share
+    // the same attenuation, so a distant strike is a distant flash.
+    const distance = Math.hypot(x - this.camera.position.x, z - this.camera.position.z);
+    this.lightningAttenuation = THREE.MathUtils.clamp(1.15 - distance / 70, 0.25, 1);
     this.weatherMachine.triggerLightning();
   }
 
@@ -837,6 +860,18 @@ export class EnvironmentRenderer {
   }
 
   /** Per-frame render loop update. */
+  /**
+   * Anchor the water and snow on the ground to the player's feet.
+   *
+   * The weather field follows the camera, but the cover it leaves behind must not:
+   * zooming out moves the camera metres away, and the cover used to be rebuilt at
+   * every such step, so the puddles slid along the slope. The caller passes the
+   * orbit target, which stands still while the camera zooms.
+   */
+  public setGroundAnchor(x: number, z: number): void {
+    this.rain.setGroundAnchor(x, z);
+  }
+
   public update(dt: number, devOverrideUntil = 0): void {
     const lerpRate = Math.min(1.0, dt * 2.5);
     this.sampleUnderwaterView();
@@ -863,12 +898,23 @@ export class EnvironmentRenderer {
     // The strike lives on the machine, not in the interpolated targets: the
     // targets' own field was initialised to zero and never written, so the
     // flash read as clear skies.
-    this.lightningIntensity = Math.max(0, this.weatherMachine.getLightningIntensity());
+    this.lightningIntensity = Math.max(
+      0,
+      this.weatherMachine.getLightningIntensity() * this.lightningAttenuation,
+    );
     this.bolt.update(this.lightningIntensity);
     this.updateSunPosition(dt);
 
     // The sky dome is camera-centred, so it never warps as the camera moves.
     this.sky.mesh.position.copy(this.camera.position);
+    // Cloud drift is a clock; the overcast follows the weather's own light
+    // multiplier, which is already smoothed by the state machine's cross-fade, so
+    // the ceiling thickens exactly as fast as the sky darkens.
+    const cloudUniforms = this.sky.material.uniforms;
+    if (cloudUniforms.uCloudTime) cloudUniforms.uCloudTime.value = this.elapsedSeconds;
+    if (cloudUniforms.uStorm) {
+      cloudUniforms.uStorm.value = THREE.MathUtils.clamp(1 - this.lightMultiplier, 0, 1);
+    }
 
     // Root Sight is entirely a soil-shader effect: no backdrop sphere, no
     // separate cavity mesh, nothing to draw behind the terrain. The sky stays
@@ -879,6 +925,7 @@ export class EnvironmentRenderer {
     // Only the sky grade needs to know the eye went under the surface; the
     // ground and cavity bowl are the surrounding dirt. Measuring radially from
     // the planet centre keeps it correct anywhere on the planet.
+    this.eyeUnderSoil = false;
     if (this.planetRadiusM > 0) {
       // Compare with the drawn terrain height, not the bare sphere. The relief
       // can be metres above the sphere, so a camera below a hill was still
@@ -892,6 +939,7 @@ export class EnvironmentRenderer {
         terrain,
       );
       const eyeUnder = this.camera.position.y < surfaceY - 0.02;
+      this.eyeUnderSoil = eyeUnder;
       // An eye standing in the open pit is below the ground's sheet but not
       // inside the earth: the mouth above it is real sky, and the ground around
       // it is lit hillside. Treated as buried, the sky dome paints its earth
@@ -1088,7 +1136,10 @@ export class EnvironmentRenderer {
     );
     // AL-04: distance fog comes from one model, shared with the plant shader.
     setGroundAtmosphere(this.groundMaterial, this.atmosphere);
-    setGroundMoisture(this.groundMaterial, this.soilMoisture);
+    // The soil keeps its warm colour in every weather. Rain used to be blended
+    // into the ground at 0.85, which greyed the whole hillside into flat mud;
+    // what actually gets wet is drawn as water lying on top of the soil instead.
+    setGroundMoisture(this.groundMaterial, Math.min(this.soilMoisture, 0.06));
     updateGroundSun(
       this.groundMaterial,
       this.bodies.sunDir,
@@ -1107,10 +1158,57 @@ export class EnvironmentRenderer {
 
     // 5. Rain: instance positions come from the vertex shader, so the CPU only
     //    advances the clock and keeps the field around the viewer.
-    if (weatherTargets.isRaining) {
-      this.rain.setVisible(true);
+    // What is already lying on the ground keeps filling or drying whether or not
+    // anything is still falling.
+    this.rain.advance(dt);
+    const precipitating = weatherTargets.isRaining || weatherTargets.isSnowing;
+    if (precipitating) {
+      // Weather does not fall inside the earth. A shower drawn over the cavity and
+      // through the soil face was the one thing that made Root Sight read as an
+      // outdoor scene with a brown filter on it.
+      this.rain.setVisible(!this.eyeUnderSoil);
+      this.rain.setMode(weatherTargets.isSnowing ? 'snow' : 'rain');
+      // Every drop stops on the terrain under its own column, sampled from the
+      // same height field the ground is drawn from.
+      if (this.planetRadiusM > 0 && !this.terrainSamplerBound) {
+        this.terrainSamplerBound = true;
+        this.rain.setTerrainSampler((x, z) =>
+          planetTerrainY(this.planetRadiusM, x, z, getTerrainParams()),
+        );
+      }
       this.rain.follow(this.camera.position);
-      this.rain.advance(dt);
+      // The rings land on the drawn surface under the eye, not on a plane at zero.
+      this.rain.setGround(
+        this.planetRadiusM > 0
+          ? planetTerrainY(
+              this.planetRadiusM,
+              this.camera.position.x,
+              this.camera.position.z,
+              getTerrainParams(),
+            )
+          : this.camera.position.y - 1.7,
+        this.camera.position,
+      );
+      // Rain does not fall into the cavity: the opening is air, and a streak over
+      // it was the one thing that made the cut look like a decal on a solid plane.
+      const aperture = this.soilUniforms.uRootSightApertureRadius.value;
+      const apertureCentre = this.soilUniforms.uRootSightApertureCenter.value;
+      this.rain.setCutaway(apertureCentre.x, apertureCentre.z, aperture);
+      // Drops carry the light of the hour they fall through: sun or moon colour,
+      // dimmed to the ambient level, so a night shower is a grey curtain in
+      // moonlight rather than a glowing cyan sheet.
+      // Sky, not sun: a drop reflects the air it falls through. Tinting with the
+      // sun turned golden hour into amber rain and a noon storm warm, which is
+      // exactly the "weird colour" rain had.
+      this.rainTint.copy(this.sunLight.color).lerp(this.sky.horizonColor, 0.7);
+      this.rain.setLight(
+        this.rainTint,
+        THREE.MathUtils.clamp(
+          0.25 + this.ambientLight.intensity * 1.6 + this.sunLight.intensity * 0.25,
+          0.2,
+          1,
+        ),
+      );
     } else {
       this.rain.setVisible(false);
     }

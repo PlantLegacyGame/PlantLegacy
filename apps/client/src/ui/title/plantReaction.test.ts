@@ -1,8 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
-  BEND_LOWER_SHARE,
-  BEND_TIP_SHARE,
   bendDegrees,
   GUST_DURATION_MS,
   GUST_MAX_MS,
@@ -72,7 +70,6 @@ describe('title plant reactions', () => {
     // A zero-width span is a divide-by-zero, not an infinite bend.
     assert.equal(bendDegrees(30, 0), MAX_BEND_DEG);
     assert.equal(bendDegrees(Number.NaN, 60), 0);
-    assert.ok(BEND_LOWER_SHARE > 0 && BEND_LOWER_SHARE < BEND_TIP_SHARE);
   });
 
   it('springs back past straight, then settles', () => {
@@ -80,15 +77,18 @@ describe('title plant reactions', () => {
     assert.equal(releaseAngle(0, from), from);
     // It crosses zero on the way through, so the plant passes straight and
     // overshoots the other way before it rests.
+    // The settle is longer than it was when the bend was a 15-degree nod: a stem
+    // pulled to nearly a right angle takes longer to stop moving.
+    const settleMs = 1900;
     const samples: number[] = [];
-    for (let t = 0; t < 1600; t += 16) samples.push(releaseAngle(t, from));
+    for (let t = 0; t < settleMs; t += 16) samples.push(releaseAngle(t, from));
     const firstSign = Math.sign(samples[0]);
     assert.ok(
       samples.some((v) => Math.sign(v) === -firstSign && Math.abs(v) > 0.5),
       'must overshoot to the other side',
     );
     assert.ok(Math.abs(samples[samples.length - 1]) < 0.2, 'and come back to nearly straight');
-    assert.equal(releaseAngle(1600, from), 0);
+    assert.equal(releaseAngle(settleMs, from), 0);
     assert.equal(releaseAngle(5000, from), 0);
     // Letting go when already straight does nothing.
     assert.equal(releaseAngle(100, 0), 0);

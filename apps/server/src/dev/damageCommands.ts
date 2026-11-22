@@ -2,6 +2,9 @@ import type { DevAction } from './devAction.ts';
 
 export type UprootCause = 'saturation' | 'gust' | 'collapse' | 'structural_damage';
 
+/** The three things the world drops; the dev command spawns any of them. */
+export type DevDropKind = 'dung' | 'fragment' | 'remains';
+
 /**
  * The plant a dev command acts on, or `undefined` when the caller has none
  * (dead plant, or no damage pipeline). The caller resolves this once, so the
@@ -24,6 +27,8 @@ export interface DamageCommandPorts {
   forceCollapse(x: number, z: number): void;
   processDamageEvents(): void;
   processPlantDeaths(): void;
+  /** Spawn a world drop; null when the world has no drop store. */
+  spawnDrop(kind: DevDropKind, x: number, y: number, z: number): { id: string } | null;
   respond(actionType: string, payload: Record<string, unknown>): void;
 }
 
@@ -48,6 +53,7 @@ export function handleDamageCommand(
     case 'dev_reroot':
     case 'dev_herbivore_swarm':
     case 'dev_terrain_collapse':
+    case 'dev_spawn_drop':
       break;
     default:
       return false;
@@ -114,6 +120,28 @@ export function handleDamageCommand(
       ports.processPlantDeaths();
       ports.processDamageEvents();
       ports.respond(action.type, { ok: true });
+      return true;
+    }
+    case 'dev_spawn_drop': {
+      const requested = action.kind;
+      const kind: DevDropKind =
+        requested === 'fragment' || requested === 'remains' ? requested : 'dung';
+      // Beside the crown, not on it: a drop inside the trunk is a marker nobody
+      // can click, and "near the player" is what this command promises.
+      const offsetM =
+        typeof action.offset_m === 'number' && Number.isFinite(action.offset_m)
+          ? action.offset_m
+          : 1.4;
+      const x = (target.root?.x ?? 0) + offsetM;
+      const z = target.root?.z ?? 0;
+      const drop = ports.spawnDrop(kind, x, 0, z);
+      // The spawn event normally leaves on the next tick; with the simulation
+      // paused that would be never, so settle it now and answer with the id.
+      ports.processDamageEvents();
+      ports.respond(
+        action.type,
+        drop ? { ok: true, id: drop.id, kind, x, z } : { ok: false, error: 'no_drop_store' },
+      );
       return true;
     }
     default:

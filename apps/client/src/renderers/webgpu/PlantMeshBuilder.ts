@@ -18,6 +18,7 @@ import {
   nodeMutationMask,
   organLook,
 } from '../plant/mutations.ts';
+import { nubSwell } from '../plant/nubBulge.ts';
 import type { PlantNodeData } from '../plant/plantNodeData.js';
 
 /** C02b: GPU skinning configuration */
@@ -61,6 +62,8 @@ interface DrawnSegment {
   growthEase: number;
   /** `spined_epidermis` density, 0 when the plant bristles nowhere. */
   spines: number;
+  /** Radius multiplier where this node carries a primed nub (1 = none). */
+  nub: number;
 }
 
 export interface PlantMeshBuildOptions {
@@ -1172,7 +1175,16 @@ export function resolveSegmentFrame(
   if (parent.nodeType === 'seed') {
     startRadius = Math.min(parentRadius, nodeRadius, isRootNodeType(node.nodeType) ? 0.03 : 0.028);
   }
-  const endRadius = Math.max(0.004, nodeRadius * Math.max(0.25, growthEase));
+  // A stalk only ever narrows towards its blade.
+  //
+  // `nodeRadius` for a leaf or a cotyledon is the *blade's* radius, not a shank -
+  // the blade is drawn from it and the tube under it is the petiole. Used as the
+  // tube's end radius it drew every stalk as an upside-down cone: a point at the
+  // seed and its widest end at the leaf, which is backwards. The clamp is on the
+  // tube only; the blade still takes its own full radius.
+  const endRadius = softPart
+    ? Math.max(0.004, Math.min(nodeRadius, startRadius * 0.85))
+    : Math.max(0.004, nodeRadius * Math.max(0.25, growthEase));
 
   return { start, target, animated, branch, startRadius, endRadius, growthEase };
 }
@@ -1346,6 +1358,33 @@ export function measureDrawnPlant(nodes: PlantNodeData[]): PlantGeometryMetrics 
   return metrics;
 }
 
+/**
+ * Widen a chain smoothly where a primed node sits.
+ *
+ * One ring 10% fatter is a step in the silhouette, not a nub. The swell is a
+ * gaussian in metres around the node's own point, over roughly two radii either
+ * side, so the belly rises and falls on the same tube and the surface, the
+ * texture coordinates and the material all stay exactly what they were.
+ */
+function applyNubBulges(
+  points: ChainPoint[],
+  marks: ReadonlyArray<{ index: number; swell: number }>,
+): void {
+  for (const mark of marks) {
+    if (!(mark.swell > 1.0001)) continue;
+    const node = points[mark.index];
+    if (!node) continue;
+    const centre = node.position;
+    const width = Math.max(0.018, node.radius * 2.4);
+    for (const point of points) {
+      const distance = point.position.distanceTo(centre);
+      if (distance > width * 3) continue;
+      const falloff = Math.exp(-(distance * distance) / (width * width));
+      point.radius *= 1 + (mark.swell - 1) * falloff;
+    }
+  }
+}
+
 export function buildPlantMesh(
   nodes: PlantNodeData[],
   options: PlantMeshBuildOptions,
@@ -1499,8 +1538,17 @@ export function buildPlantMesh(
       const organLookNow = organLook(stack, node.nodeType ?? 'stem');
       const spineDensity = organLookNow.spines;
       const barkScale = organLookNow.barkScale;
-      const rA = frame.startRadius * barkScale;
-      const rB = frame.endRadius * barkScale;
+      // A lateral root ships at 8 mm. At arm's length that is two pixels, with
+      // no faces to light and no shape to read: the underground organ gets a
+      // drawn floor, while the model keeps the real radius, so growth, damage
+      // and physics are untouched. Above ground nothing changes.
+      const rootOrgan = isRootNodeType(node.nodeType);
+      const rA = rootOrgan
+        ? Math.max(frame.startRadius * barkScale, 0.022)
+        : frame.startRadius * barkScale;
+      const rB = rootOrgan
+        ? Math.max(frame.endRadius * barkScale, 0.011)
+        : frame.endRadius * barkScale;
 
       box.expandByPoint(animatedPosition);
 
@@ -1542,6 +1590,7 @@ export function buildPlantMesh(
           spawnTime,
           growthEase,
           spines: spineDensity,
+          nub: nubSwell(node),
         });
       }
 
@@ -1684,6 +1733,9 @@ export function buildPlantMesh(
       if (startId === undefined || consumed.has(startId)) continue;
 
       const points: ChainPoint[] = [];
+      // Where a primed node sits on this chain. Applied after the walk, as a
+      // smooth swell rather than a fat ring: see applyNubBulges.
+      const nubMarks: Array<{ index: number; swell: number }> = [];
       let cursor: string | null = startId;
       let chainEnd: string | null = null;
       let first = true;
@@ -1722,6 +1774,8 @@ export function buildPlantMesh(
             spines: info.spines,
           });
         }
+        // The segment's last ring is the node itself: that is where a nub sits.
+        if (info.nub > 1) nubMarks.push({ index: points.length - 1, swell: info.nub });
         first = false;
 
         const nextNodes: PlantNodeData[] = childrenMap.get(cursor) ?? [];
@@ -1734,6 +1788,7 @@ export function buildPlantMesh(
       }
 
       if (points.length >= 2) {
+        applyNubBulges(points, nubMarks);
         const sidesForChain = drawnSegments.get(startId)?.sides ?? sides;
         mesh.addChainTube(points, sidesForChain);
         addChainSpines(mesh, points);

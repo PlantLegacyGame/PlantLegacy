@@ -74,7 +74,7 @@ import {
 import { fetchWorldTime } from './net/worldTime.js';
 import { playerWorldY, spawnPlayer, stepPlayerVertical } from './physics/playerPhysics.js';
 import { plantPhysicsSync, rapierWorld } from './physics/RapierPhysicsManager.js';
-import { clampToCavity } from './player/burrowClamp.ts';
+import { cavityEscapeLiftY, clampToCavity } from './player/burrowClamp.ts';
 import { ownBodyNodes, resolveOwnAnchor } from './player/ownPlantAnchor.js';
 import { decideAutoOpenRootSight } from './player/rootSightAutoOpen.js';
 import { isBelowSoil } from './player/underground.js';
@@ -91,8 +91,10 @@ import {
 } from './renderers/environment/cavity/apertureVolume.ts';
 import { cavityDepthM } from './renderers/environment/cavity/profile.ts';
 import {
+  mouthRadiusFor,
   ROOT_CAVITY_SEED_PIT_RADII,
   ROOT_SIGHT_APERTURE_EYE_CLEARANCE,
+  rimModeFor,
   rootCavityShape,
 } from './renderers/environment/cavity/shape.ts';
 import { planetTerrainY, planetUp } from './renderers/environment/planetSurface.js';
@@ -117,6 +119,7 @@ import {
   type MutationLook,
   readServerMutationMask,
 } from './renderers/plant/mutations.js';
+import { type NubReport, nubReport } from './renderers/plant/nubBulge.ts';
 import { PlantColliderManager } from './renderers/plant/PlantColliders.js';
 import type { PlantNodeData } from './renderers/plant/plantNodeData.js';
 import {
@@ -129,14 +132,25 @@ import {
   rootSightStateMachineToggle,
   rootSightStateMachineUpdate,
 } from './renderers/RootSightStateMachine.js';
-import { plantExtent, resolveCutawayRadius } from './renderers/rootSight/rootSightCutaway.js';
+import {
+  plantExtent,
+  plantLateralExtent,
+  resolveCutawayRadius,
+} from './renderers/rootSight/rootSightCutaway.js';
 import { configureTerrain, getTerrainParams } from './renderers/terrain/terrainState.js';
+import { WorldDrops } from './renderers/WorldDrops.js';
 import { resolveDrawnNodePosition } from './renderers/webgpu/PlantMeshBuilder.js';
 import { isWebGPUSupported, WebGPUDevice } from './renderers/webgpu/WebGPUDevice.js';
 import { WebGPURenderer } from './renderers/webgpu/WebGPURenderer.js';
 import { type LocalProfile, loadProfile, saveProfile } from './state/localProfile.js';
 import { type ActionBarAPI, createActionBar } from './ui/ActionBar.js';
 import { type ContextHintAPI, createContextHint } from './ui/ContextHint.js';
+import {
+  applyCursorTheme,
+  plantCursorsEnabled,
+  readCursorTheme,
+  setCursorTheme,
+} from './ui/cursors.js';
 import {
   createDeathScreen,
   createSpectateChip,
@@ -175,14 +189,22 @@ import {
   growthSelectionStateMachineSelectOption,
   growthSelectionStateMachineStartDrawing,
 } from './ui/GrowthSelectionStateMachine.js';
+import { createHotbar, type HotbarAPI } from './ui/Hotbar.js';
 import { MainMenu, type MainMenuAccount, type MainMenuCallbacks } from './ui/MainMenu.js';
 import {
   createMutationPanel,
   type MutationPanelAPI,
   type MutationStateView,
 } from './ui/MutationPanel.js';
+import { pickNodeHit } from './ui/nodePick.js';
 import { createPauseMenu, type PauseMenuAPI } from './ui/PauseMenu.js';
-import { createPlantHoverTip, type PlantHoverTip, plantHoverText } from './ui/PlantHoverTip.js';
+import {
+  createPlantHoverTip,
+  type HoverText,
+  type PlantHoverTip,
+  plantHoverText,
+} from './ui/PlantHoverTip.js';
+import { plantNodeInfo } from './ui/PlantNodeInfo.js';
 import {
   createPlantStatusHud,
   formatClock,
@@ -208,7 +230,9 @@ import {
 import { waitForServer } from './ui/ServerUnreachableOverlay.js';
 import { createSettingsPanel, type SettingsPanelAPI } from './ui/SettingsPanel.js';
 import { createShopPanel, type ShopPanel } from './ui/ShopPanel.js';
+import { createSporeChip, type SporeChipAPI } from './ui/SporeChip.js';
 import { formatSeasonRemaining } from './ui/seasonLabel.js';
+import { isPlantSoundEnabled, setPlantSoundEnabled } from './ui/title/plantSound.js';
 import { touchHintLines } from './ui/touchCopy.js';
 import { createUIShell, type UIShell } from './ui/UIShell.js';
 import { setUiScale, uiScaleForPane } from './ui/uiScale.js';
@@ -578,6 +602,39 @@ function clearReconnectData(): void {
 
 // Background render loop timer (for hidden tabs)
 let backgroundLoopTimer: number | null = null;
+/** When the last frame was drawn, whatever drew it. */
+let lastFrameAtMs = 0;
+/** The renderer is constructed and a frame has been drawn at least once. */
+let renderLoopReady = false;
+/** `animate()` is re-arming itself. Parked while the title is on screen. */
+let renderLoopRunning = false;
+
+/** Start the frame loop after the title hands over to the world. */
+function wakeRenderLoop(): void {
+  if (renderLoopRunning) return;
+  lastFrameAtMs = performance.now();
+  animate();
+}
+
+/**
+ * Draw for a tab that is not receiving animation frames.
+ *
+ * `requestAnimationFrame` stops completely while the page is hidden, so a hidden
+ * tab has to paint from a timer. One frame is drawn immediately as well: entering
+ * the world resizes the canvas, and a resize clears the drawing buffer, so waiting
+ * for the first timer tick left a cleared - black - buffer on screen.
+ */
+function startBackgroundLoop(): void {
+  if (backgroundLoopTimer) return;
+  backgroundLoopTimer = window.setInterval(() => renderFrame(0.1), 100);
+  renderFrame(0.1);
+}
+
+function stopBackgroundLoop(): void {
+  if (!backgroundLoopTimer) return;
+  window.clearInterval(backgroundLoopTimer);
+  backgroundLoopTimer = null;
+}
 
 // Dev panel and state
 let devPanel: DevPanelAPI | null = null;
@@ -1039,11 +1096,17 @@ function branchAttachAnchor(position: THREE.Vector3, nodeId: string): THREE.Vect
     // visible tip, which looked like the gizmo had jumped onto another stem.
     anchor.copy(segmentStart.lerp(drawnNodePosition(node), fraction));
   }
-  // A wrong attachment point (a stale mirror, a node from an old session) would
-  // carry the ring to another part of the plant. Keep it on the part the player
-  // selected: one segment plus a margin is all an attach point can ever be from
-  // that part's drawn centre.
-  return clampAnchorToNode(anchor, drawnNodePosition(node), 1.6);
+  // Keep the ring on the part the player selected, and on its own surface. The
+  // old clamp allowed a metre and a half of drift, which is several segments of a
+  // seedling: a child root whose attach point was stale, or whose attach fraction
+  // was small because it had only just sprouted, had its gizmo parked on the
+  // parent it grew out of instead of on itself. The allowance is the node's own
+  // drawn size, so the ring can slide over its surface but never onto a sibling.
+  return clampAnchorToNode(
+    anchor,
+    drawnNodePosition(node),
+    Math.max(0.1, resolveDrawnRadius(node.nodeType, node.radius ?? 0.05, node.biomass) * 1.25),
+  );
 }
 
 /**
@@ -1096,9 +1159,23 @@ function pickGrowthAimNodePoint(clientX: number, clientY: number): THREE.Vector3
     camera,
   );
   const hit = new THREE.Vector3();
-  return raycaster.ray.intersectSphere(new THREE.Sphere(growthAimNodeDrawCentre(node), radius), hit)
-    ? hit
-    : null;
+  if (
+    !raycaster.ray.intersectSphere(new THREE.Sphere(growthAimNodeDrawCentre(node), radius), hit)
+  ) {
+    return null;
+  }
+  // A pick is 3D, not a projection: a ray through the front of the plant must not
+  // reach a node on its far side. If the drawn plant is hit before the node's own
+  // sphere, the pointer is on some other part and this node is behind it.
+  const surfaces = plantRenderer?.pickSurfaces() ?? [];
+  if (surfaces.length > 0) {
+    const surfaceHit = raycaster.intersectObjects(
+      surfaces.map((surface) => surface.object),
+      false,
+    )[0];
+    if (surfaceHit && surfaceHit.distance < hit.distanceTo(camera.position) - 0.02) return null;
+  }
+  return hit;
 }
 
 /** Put the aim ring at the point under the pointer on the selected node. */
@@ -1604,18 +1681,23 @@ function focusCameraOnNode(
   horizontal.y = 0;
   if (horizontal.lengthSq() < 1e-6) horizontal.set(0.8, 0, 0.6);
   horizontal.normalize();
-  // Side elevation: a seedling is read best from the side, roots from slightly
-  // below the surface they grow in.
-  horizontal.y = underground ? -0.3 : 0.3;
+  // The elevation the player is already at, not a scripted one. Focusing a part
+  // is a pan and a zoom, and the view keeps its tilt: only a root focus is
+  // allowed to drop the eye, and only as far as it already is if it is below.
+  const currentRise = camera.position.y - controls.target.y;
+  const currentDistance = Math.max(0.001, camera.position.distanceTo(controls.target));
+  const riseRatio = currentRise / currentDistance;
+  horizontal.y = underground
+    ? Math.max(-0.55, Math.min(0.25, riseRatio))
+    : Math.max(0.06, Math.min(0.9, riseRatio));
   horizontal.normalize();
 
   // Allow camera to go below the horizon for underground nodes,
   // but do NOT auto-enable Root Sight - that is a manual player toggle (R key).
-  if (underground) {
-    controls.maxPolarAngle = Math.PI - 0.05;
-  } else {
-    controls.maxPolarAngle = renderConfig?.cameraMaxPolarAngle ?? Math.PI / 2 - 0.05;
-  }
+  // A refit while Root Sight is open must not restore the surface limit: this is
+  // the pass that ran when the plant's first nodes arrived or a part finished
+  // growing, and it threw the eye back above the ground mid-cavity.
+  controls.maxPolarAngle = underground ? Math.PI - 0.05 : rootSightPolarLimit();
 
   // Ease into the framing instead of teleporting. A jump straight to the new
   // position leaves no cue about which way the view turned, especially between
@@ -1931,7 +2013,18 @@ function plantFrameDistance(): number {
 
 // ADR-027: frame the independent camera close to the plant. The plant model
 // keeps its normal size; only the camera distance changes.
-function frameCameraOnPlant(x: number, y: number, z: number): void {
+function frameCameraOnPlant(
+  x: number,
+  y: number,
+  z: number,
+  /**
+   * Only the automatic framings (spawn, plant switch, the first-node refit) correct
+   * a young plant's pitch. A player who asks for a recenter mid-plant - Space, or a
+   * double-click on empty ground - is told "same angle, centred on the plant", so
+   * their view must not tilt itself upright under them.
+   */
+  fitYoungPitch = true,
+): void {
   // A whole-plant recenter wins over any node focus still animating, otherwise
   // the leftover framing distance would drag the camera back in.
   cancelCameraAutoMove();
@@ -1948,9 +2041,41 @@ function frameCameraOnPlant(x: number, y: number, z: number): void {
   // there, and the frame was soil. A sprout is framed from
   // `camera_young_elevation` (~30°) so it reads against the ground, not in it.
   const young = distance <= (renderConfig?.cameraYoungMaxDistance ?? 4);
-  tempDirection
-    .set(0.3, young ? (renderConfig?.cameraYoungElevation ?? 0.55) : 0.27, 0.92)
-    .normalize();
+  // Keep the angle the player is already looking from. A fixed azimuth here is
+  // what made Space spin the view: the camera kept its distance but travelled
+  // around the plant to a scripted side, which reads as the world turning. The
+  // recenter is a pan and a zoom along the current line of sight, so the horizon
+  // stays where it was and only the subject moves to the middle.
+  tempDirection.copy(camera.position).sub(controls.target);
+  if (tempDirection.lengthSq() < 1e-6) {
+    tempDirection.set(0.3, young ? (renderConfig?.cameraYoungElevation ?? 0.55) : 0.27, 0.92);
+  }
+  tempDirection.normalize();
+  // Never recenter from under the soil on a plant that stands on it: the eye may
+  // be burrowed after a root inspection, and framing the whole plant from below
+  // shows the underside of the ground.
+  const minRise = young ? 0.16 : 0.12;
+  if (tempDirection.y < minRise) {
+    tempDirection.y = minRise;
+    tempDirection.normalize();
+  }
+  // And a young plant may not be framed steeply from above. A seedling is framed
+  // from three metres (half the start distance); at the welcome view's 35 degrees
+  // that eye is 1.7 m up and looking down 35 degrees, so the ground line sits
+  // above the top of the frame and the plant is a dot in a wall of soil - which is
+  // exactly what "the camera is not on the plant" looked like. Cap the pitch to a
+  // fraction of the vertical field of view so the horizon stays in the picture.
+  if (young && fitYoungPitch) {
+    // The side view the framing is written around (`y = 0.27`, about 15 degrees),
+    // tightened to the frame: keep the azimuth the player has, but never look down
+    // on a seedling harder than this.
+    const halfVertical = (camera.fov * Math.PI) / 360;
+    const maxRise = Math.min(0.2, Math.sin(halfVertical * 0.6));
+    if (tempDirection.y > maxRise) {
+      tempDirection.y = maxRise;
+      tempDirection.normalize();
+    }
+  }
   const destination = tempTarget.clone().addScaledVector(tempDirection, distance);
   // Recentring uses the same eased travel as a node focus: a Space press that
   // teleported the view was as disorienting as a node double-click was.
@@ -2021,7 +2146,7 @@ function rebuildControls(): void {
 }
 
 // Recenter on the whole plant. Space uses this path.
-function recenterCamera(): void {
+function recenterCamera(fitYoungPitch = true): void {
   // Only the player's own plant. plantNodes also holds rival and wild plants, so
   // taking the first parentless node in the map framed whichever plant happened
   // to be inserted first: Space jumped the view to a seed metres away from the
@@ -2035,10 +2160,10 @@ function recenterCamera(): void {
     // crown is still the truth, and it is better than leaving the view where a
     // previous plant stood.
     if (lastOwnAnchorValid) {
-      frameCameraOnPlant(lastOwnAnchor.x, lastOwnAnchor.y, lastOwnAnchor.z);
+      frameCameraOnPlant(lastOwnAnchor.x, lastOwnAnchor.y, lastOwnAnchor.z, fitYoungPitch);
       return;
     }
-    frameCameraOnPlant(controls.target.x, controls.target.y, controls.target.z);
+    frameCameraOnPlant(controls.target.x, controls.target.y, controls.target.z, fitYoungPitch);
     return;
   }
   // Aim at the middle of the plant rather than its seed: the seed is the lowest
@@ -2048,7 +2173,7 @@ function recenterCamera(): void {
     bounds.expandByPoint(tempTarget.set(node.position.x, node.position.y, node.position.z));
   }
   const centre = bounds.getCenter(tempTarget);
-  frameCameraOnPlant(centre.x, centre.y, centre.z);
+  frameCameraOnPlant(centre.x, centre.y, centre.z, fitYoungPitch);
 }
 
 /**
@@ -2222,6 +2347,21 @@ function respawnPlayer(): void {
  * and out of the surface every frame - the up/down shake. The eye only crosses
  * the soil when there is a cavity to be in.
  */
+/**
+ * The orbit's polar ceiling for the current view mode.
+ *
+ * Root Sight owns it while the ground is open: the eye has to be able to drop
+ * below the surface, or the cavity is seen edge-on from above and reads as shut.
+ * Three separate passes used to restore the surface limit (the node refit, the
+ * ground floor and the toggle), so any of them could drag the eye back up while
+ * the cavity was open - which is why Root Sight appeared to close by itself, most
+ * often right after a part finished growing and the camera refit ran.
+ */
+function rootSightPolarLimit(): number {
+  const open = rootSightMachine ? rootSightStateMachineIsEnabled(rootSightMachine) : false;
+  return open ? Math.PI - 0.05 : (renderConfig?.cameraMaxPolarAngle ?? Math.PI / 2 - 0.05);
+}
+
 function rootSightHoldsACavity(): boolean {
   return (rootSightMachine?.progress ?? 0) > 0.001 && cavityApertureM > 0.001;
 }
@@ -2252,9 +2392,30 @@ function rootSightHoldsACavity(): boolean {
  * back to, and it has to be caught there instead of being handed to the ground
  * clamp on the way.
  */
+/**
+ * The widest mouth seen since the cavity opened.
+ *
+ * Growing a root rebuilds the cavity: the mouth can be narrower for a moment, or
+ * its centre can shift by a few centimetres, and an eye that was inside it then
+ * tested as "outside" - so the ground clamp lifted it to the surface and the
+ * player watched Root Sight close on them mid-growth. The mouth only remembers
+ * being wide while the cavity stays open; closing it forgets.
+ */
+let apertureHoldM = 0;
+
 function eyeOverAperture(): boolean {
-  if (!rootSightHoldsACavity()) return false;
-  const radius = soilCutawayUniforms.uRootSightApertureRadius.value;
+  if (!rootSightHoldsACavity()) {
+    apertureHoldM = 0;
+    return false;
+  }
+  const live = soilCutawayUniforms.uRootSightApertureRadius.value;
+  // Widen at once, narrow slowly. A rebuild that loses a root (or moves the mouth
+  // a few centimetres) must not lift an eye that was standing in the opening, but
+  // the memory cannot be kept until the cavity closes or the eye stays exempt
+  // inside solid dirt for as long as the mode is open. It decays towards the live
+  // radius instead: about half a second to close most of a gap at 60 Hz.
+  apertureHoldM = live > apertureHoldM ? live : apertureHoldM + (live - apertureHoldM) * 0.08;
+  const radius = Math.max(live, apertureHoldM);
   if (!(radius > 0.05)) return false;
   const centre = soilCutawayUniforms.uRootSightApertureCenter.value;
   const clearance = rootSightConfig?.cavityClearanceM ?? 0.2;
@@ -2262,6 +2423,13 @@ function eyeOverAperture(): boolean {
     Math.hypot(camera.position.x - centre.x, camera.position.z - centre.z) <= radius + clearance
   );
 }
+
+/**
+ * The pivot height the last frame stood at, so the camera can follow the ground
+ * by the amount it moved. `null` until the first settle: the first frame has no
+ * previous height, and framing that happened before it owns the target then.
+ */
+let lastPivotY: number | null = null;
 
 function settlePlayerOnGround(deltaTime: number): void {
   const planetRadius = renderConfig?.planetRadiusM ?? 0;
@@ -2279,10 +2447,42 @@ function settlePlayerOnGround(deltaTime: number): void {
     deltaTime,
     renderConfig?.playerGravityMps2 ?? 0,
   );
-  const wantedY = playerWorldY(groundY, playerVertical);
-  const delta = wantedY - controls.target.y;
-  controls.target.y = wantedY;
-  camera.position.y += delta;
+  const feetY = playerWorldY(groundY, playerVertical);
+  // The orbit pivot is the head, not the feet. A pivot on the ground made
+  // looking up geometrically impossible: any angle whose eye is below the pivot
+  // is also below the surface, so `clampEyeToGround` shortened the arm back and
+  // the pitch stopped at horizontal. With the pivot at eye height the eye can
+  // drop to the dirt and still look at the sky, which is what standing on the
+  // terrain and tilting up is.
+  const pivotY = feetY + (renderConfig?.cameraPivotHeightM ?? 1.6);
+  // The camera follows the ground, it is not pinned to it. Writing the pivot onto
+  // the orbit target every frame forced the target back to head height whatever
+  // the player did with it: a pan downwards was undone on the next frame, and the
+  // framed plant sat a pivot-height *below* the middle of the screen with no way
+  // to bring it up. The follow is now a delta - when the terrain under the player
+  // moves, the eye and the target move with it by the same amount, which keeps
+  // the view identical while letting a pan stay where the player put it.
+  const followY = lastPivotY === null ? 0 : pivotY - lastPivotY;
+  lastPivotY = pivotY;
+  if (followY !== 0) {
+    controls.target.y += followY;
+    camera.position.y += followY;
+  }
+  // The target may be panned down to the soil, not through it. `clampEyeToGround`
+  // gives up when the target itself is buried (it has nothing clear to slide
+  // towards), so a free downward pan used to leave both the target and the eye
+  // under the surface with an empty black frame. The floor is the ground under the
+  // target - or the floor of the open cutaway while Root Sight holds one, which is
+  // the only case where looking at the target means looking at something below the
+  // soil.
+  const targetGroundY = planetTerrainY(planetRadius, controls.target.x, controls.target.z, field);
+  const targetFloorY =
+    rootSightHoldsACavity() && eyeOverAperture() ? Math.min(targetGroundY, feetY) : targetGroundY;
+  if (controls.target.y < targetFloorY + 0.15) {
+    const lift = targetFloorY + 0.15 - controls.target.y;
+    controls.target.y += lift;
+    camera.position.y += lift;
+  }
 
   const eyeGroundY = planetTerrainY(planetRadius, camera.position.x, camera.position.z, field);
   // Root Sight is the one mode that may put the eye underground. The floor
@@ -2342,29 +2542,72 @@ function settlePlayerOnGround(deltaTime: number): void {
   offset.y = 0;
   if (offset.lengthSq() < 1e-8) offset.set(0, 0, 1);
   offset.normalize();
-  // The limit is the horizon of the ground *plane* under the player, not a
-  // sample of the ground under the eye. Sampling the eye's own ground made the
-  // limit depend on where the eye already was: lifting the eye brought its
-  // horizontal sample closer to the player, which changed the limit, which moved
-  // the eye again. That limit cycle is the up-and-down the camera did when
-  // zoomed in over terrain - the closer the orbit, the larger each step, because
-  // the eye's horizontal was a larger share of the distance. A plane has one
-  // horizon per orbit direction and it does not depend on distance or on how
-  // high the eye already is, so there is nothing left to feed back.
-  const gradientStep = 0.5;
-  const gradientX =
-    (planetTerrainY(planetRadius, controls.target.x + gradientStep, controls.target.z, field) -
-      planetTerrainY(planetRadius, controls.target.x - gradientStep, controls.target.z, field)) /
-    (2 * gradientStep);
-  const gradientZ =
-    (planetTerrainY(planetRadius, controls.target.x, controls.target.z + gradientStep, field) -
-      planetTerrainY(planetRadius, controls.target.x, controls.target.z - gradientStep, field)) /
-    (2 * gradientStep);
-  // How fast the ground rises per horizontal metre in the direction the eye is
-  // orbiting towards. Downhill is simply no limit; the configured one applies.
-  const uphill = Math.max(0, gradientX * offset.x + gradientZ * offset.z);
-  const groundLimit = uphill > 1e-6 ? Math.PI / 2 - Math.atan(uphill) : Math.PI / 2;
-  const configuredLimit = renderConfig?.cameraMaxPolarAngle ?? Math.PI / 2 - 0.05;
+  // The limit comes from the ground the eye is orbiting *over*, sampled where the
+  // eye would stand at this azimuth and orbit radius. It used to come from the
+  // ground *plane under the player*, which capped the orbit at the player's own
+  // elevation: on flat ground the maximum polar angle was exactly horizontal, so
+  // the camera could never come down to the soil and look up from it.
+  //
+  // Sampling the eye's own ground is only unstable when the sample moves with the
+  // eye's height. This one cannot: the point is the target plus the horizontal
+  // direction times the orbit radius, both fixed while orbiting. One horizon per
+  // direction, nothing to feed back, no limit cycle.
+  const reach = Math.max(camera.position.distanceTo(controls.target), 1e-4);
+  const touch = renderConfig?.cameraGroundTouchM ?? 0.02;
+  // The eye stands where its orbit puts it, not at the full radius: at a steep
+  // angle its horizontal is radius * sin(polar). Sampling the ground at the full
+  // radius instead placed the eye on the height of ground that was further out,
+  // which on a slope falling away from the player put it under the surface it
+  // was actually standing at. Two passes settle it, because the angle only moves
+  // the sample a little once it is close.
+  const groundAt = (horizontal: number): number =>
+    planetTerrainY(
+      planetRadius,
+      controls.target.x + offset.x * horizontal,
+      controls.target.z + offset.z * horizontal,
+      field,
+    );
+  // The whole orbit ray has to clear the ground, not only its far end: an eye
+  // resting on the surface at the far end can still have a hill under the middle
+  // of its ray. Each probe asks "what is the steepest angle that keeps this point
+  // on the ray above the soil?", and the limit is the strictest answer. A probe
+  // depends on the angle and the point's own terrain, never on where the eye
+  // currently is, so iterating it settles on one horizon per direction instead of
+  // chasing itself. cos(polar) is the height over the target in orbit radii, so
+  // uphill of the player the limit is above horizontal and downhill it is below,
+  // which is what lets the eye come down to the soil on the low side of a slope.
+  // While the ground is open the orbit is not capped at the surface: the player
+  // has to be able to drop the eye into the pit, and the cavity-depth rules above
+  // are what keep it out of solid earth. Capping it here meant a stray floor pass
+  // could pin the eye at the surface with Root Sight still "on".
+  const configuredLimit =
+    rootSightMachine && rootSightStateMachineIsEnabled(rootSightMachine)
+      ? Math.PI - 0.05
+      : (renderConfig?.cameraMaxPolarAngle ?? Math.PI - 0.05);
+  const probes = [0.3, 0.55, 0.8, 1];
+  // Start from the configured limit, not from "horizontal". Seeding the solve at
+  // PI/2 capped every result at horizontal, and a polar angle of exactly horizontal
+  // means the eye can never drop below the target's height - which is precisely the
+  // "I can't look up" bug: with the eye on the terrain there was no angle left that
+  // pointed at the sky. The probes below are the real constraint (the eye must clear
+  // the ground at its own position), and they are allowed to answer with an angle
+  // past horizontal, which is what looking up from the soil needs.
+  let groundLimit = configuredLimit;
+  for (let pass = 0; pass < 4; pass += 1) {
+    let next = configuredLimit;
+    for (const fraction of probes) {
+      const horizontal = fraction * reach * Math.sin(groundLimit);
+      const ground = groundAt(horizontal);
+      // The limit stops the orbit a little short of the dirt (two and a half
+      // contact margins) so the spring arm below never has to act. Parking exactly
+      // on the margin meant a centimetre of terrain noise put the arm to work, and
+      // because the arm shortens the orbit radius it did so permanently: the
+      // camera crept in towards the plant a little on every drag.
+      const cosPolar = (ground + touch * 2.5 - controls.target.y) / (fraction * reach);
+      next = Math.min(next, Math.acos(Math.max(-1, Math.min(1, cosPolar))));
+    }
+    groundLimit = next;
+  }
   // Keep the limit above the pole floor. The old post-hoc position clamp fought
   // OrbitControls every frame at the terrain edge: it moved the eye without
   // moving the orbit target, which changed the orbit again on the next frame.
@@ -2398,7 +2641,10 @@ function settlePlayerOnGround(deltaTime: number): void {
  * jumping, and OrbitControls re-derives its sphere from the corrected position
  * on the next frame (the same rule as the ground clamp).
  */
-function clampEyeToCavity(): void {
+/** Scratch for the cavity exit check; allocated once, not per frame. */
+const cavityLookDirection = new THREE.Vector3();
+
+function clampEyeToCavity(deltaTime: number): void {
   if (!rootSightHoldsACavity()) return;
   if (!(rootSightConfig?.cameraBurrowEnabled ?? false)) return;
   const radius = soilCutawayUniforms.uRootSightApertureRadius.value;
@@ -2422,6 +2668,25 @@ function clampEyeToCavity(): void {
   // a hole in the ground the player may circle at any distance they like.
   if (camera.position.y >= groundY - 0.02) return;
   const centre = soilCutawayUniforms.uRootSightApertureCenter.value;
+  // A look up is the way out: the wall stops sideways travel, not the rise.
+  //
+  // This runs before the wall clamp, not after it. `clampToCavity` returns null
+  // when the eye is already inside, and the clamp used to `return` on that - so
+  // the lift was skipped in exactly the normal case (an eye standing in the
+  // cavity), and looking up did nothing. Browser check caught it: 0.24 m below
+  // the surface, looking straight up, still buried.
+  const lookUpY = camera.getWorldDirection(cavityLookDirection).y;
+  const lifted = cavityEscapeLiftY(
+    camera.position.y,
+    groundY,
+    lookUpY,
+    deltaTime,
+    rootSightConfig?.cavityEscapeLiftMps ?? 0,
+    // How far up the player has to look before the climb starts is config, not a
+    // literal: a glance should not lift the eye, a look at the sky should.
+    rootSightConfig?.cavityEscapeLookUp ?? 0.35,
+  );
+  if (lifted !== camera.position.y) camera.position.y = lifted;
   const clamped = clampToCavity(
     { x: camera.position.x, z: camera.position.z },
     { x: centre.x, z: centre.z, radius },
@@ -2456,20 +2721,38 @@ function clampEyeToGround(): void {
   // answer is a point on the ray the player is looking along, so the next frame
   // starts from the same ray and reaches the same point. Nothing accumulates and
   // nothing oscillates - the view simply stops at the dirt and moves in.
-  let travel = reach;
-  for (let step = 0; step < 12; step++) {
+  // Bisect instead of stepping in 30% jumps. The jump size decided where the arm
+  // stopped, so a smoothly varying ground height still produced a travel that
+  // hopped between those steps, and the camera shivered as it skated along a
+  // slope. A bisection lands on the crossing itself: a small change in terrain
+  // moves the arm by a small amount.
+  // The clearance is the gap between the eye and the soil at its own point on the
+  // ray. It is not applied at the target end: the player stands *on* the ground,
+  // so `target.y >= ground` there is an equality, and demanding 2 cm of air at
+  // travel 0 made this clamp give up before it started - which is how the eye
+  // ended up inside the hill at the bottom of a drag.
+  const clearAt = (travel: number): boolean => {
     const ground = planetTerrainY(
       planetRadius,
       controls.target.x + dir.x * travel,
       controls.target.z + dir.z * travel,
       field,
     );
-    if (controls.target.y + dir.y * travel >= ground + touch) break;
-    travel *= 0.7;
+    const margin = travel <= 0.05 ? 0 : touch;
+    return controls.target.y + dir.y * travel >= ground + margin;
+  };
+  if (clearAt(reach)) return;
+  // Nothing along the ray is clear: the player's own spot is buried, which another
+  // clamp owns. Leave the eye alone rather than collapsing it onto the target.
+  if (!clearAt(0)) return;
+  let near = 0;
+  let far = reach;
+  for (let step = 0; step < 20; step += 1) {
+    const middle = (near + far) / 2;
+    if (clearAt(middle)) near = middle;
+    else far = middle;
   }
-  if (travel < reach) {
-    camera.position.copy(controls.target).addScaledVector(dir, travel);
-  }
+  camera.position.copy(controls.target).addScaledVector(dir, near);
 }
 
 // T01: Plant Renderer
@@ -2622,12 +2905,9 @@ function setRootSightEnabled(enabled: boolean, plantId?: string): void {
   }
 
   // Adjust polar angle limits so underground nodes are reachable, but do NOT
-  // move the camera - the player orbits freely at all times.
-  if (enabled) {
-    controls.maxPolarAngle = Math.PI - 0.05;
-  } else {
-    controls.maxPolarAngle = renderConfig?.cameraMaxPolarAngle ?? Math.PI / 2 - 0.05;
-  }
+  // move the camera - the player orbits freely at all times. One owner for the
+  // ceiling, read from the machine that was just driven.
+  controls.maxPolarAngle = rootSightPolarLimit();
 
   const isEnabled = rootSightStateMachineIsEnabled(rootSightMachine);
   syncRootSightAction();
@@ -2670,9 +2950,7 @@ function toggleRootSight(): void {
   syncRootSightAction();
   const state = rootSightStateMachineGetState(machine);
   const opening = state === 'underground' || state === 'transitioning_to_underground';
-  controls.maxPolarAngle = opening
-    ? Math.PI - 0.05
-    : (renderConfig?.cameraMaxPolarAngle ?? Math.PI / 2 - 0.05);
+  controls.maxPolarAngle = rootSightPolarLimit();
   setDetail(
     opening ? `Root Sight: ${describeRootSightStatus()}` : 'Root Sight: OFF - Surface view',
   );
@@ -2770,6 +3048,18 @@ function updateRootSight(deltaTime: number): void {
   // crown and sized from its own underground reach; a nearby rival root or an
   // old tunnel must not drag the whole cavity off the player.
   const sightRadius = cutawayRadius;
+  // The mouth is a circle in plan, so it is sized from the lateral spread. The
+  // 3D extent above sizes the cavity, and it counts a deep root's depth as
+  // reach: a taproot 1.7 m down under a 0.7 m spread opened a hole 2 m in radius,
+  // which put the plant at the edge of a crater instead of in a pit around its
+  // roots. Root depth still deepens the cavity, it just no longer widens the
+  // opening.
+  const lateralRadius = resolveCutawayRadius(
+    plantLateralExtent(plantNodes.values(), rootSightConfig),
+    eased,
+    rootSightConfig.cutawayRadius,
+    rootSightConfig,
+  );
 
   // T02 organic envelope: one cavity field feeds the soil cut, plant occlusion
   // and the camera's idea of "inside the opening". Clustering caps the uniform
@@ -2797,7 +3087,11 @@ function updateRootSight(deltaTime: number): void {
         // shut for the whole first growth the player paid for, so it looked as
         // if growing a root did nothing. The floor keeps the opening small but
         // real from the first frame of growth.
-        radius: Math.max(0.02, node.radius || 0) * Math.max(0.25, grown),
+        // The floor goes on the result, not on the radius. Applied before the
+        // multiplier it came out at 5 mm, and clustering then rounded that to
+        // its own 0.12 m floor: the "small but real from the first frame"
+        // opening was whatever the merge decided, not a floor this file set.
+        radius: Math.max(0.02, (node.radius || 0) * Math.max(0.25, grown)),
       };
     };
     // A node only excavates soil it is actually inside. The node type says a
@@ -2846,7 +3140,20 @@ function updateRootSight(deltaTime: number): void {
     // a ceiling - the plant pass exposes roots under `uRootSightApertureRadius`,
     // so a mouth narrower than that cylinder would leave roots hanging outside
     // the opening (INV-RS-14).
-    const configuredApertureM = apertureRadiusFor(sightRadius, rootSightConfig);
+    const configuredApertureM = apertureRadiusFor(
+      Math.min(sightRadius, lateralRadius),
+      rootSightConfig,
+    );
+    // The mouth has to contain the bubbles it cuts; the envelope loop below
+    // rejects anything outside it, and a rejected own bubble used to leave the
+    // cavity with zero bubbles and shut the soil mid-growth.
+    const ownBubbleFloorM = mouthRadiusFor(
+      configuredApertureM,
+      own,
+      rootSightTarget.x,
+      rootSightTarget.z,
+      rootSightConfig.bubblePaddingM,
+    );
     // `clientSurfaceY` takes a *surface-relative* height and adds the ground, so
     // it must be asked for height 0. Passing the crown's own client-space Y (or
     // the previous answer) added the planet radius a second time: the aperture
@@ -2886,27 +3193,32 @@ function updateRootSight(deltaTime: number): void {
         ]
       : own;
     const apertureCapM = seedOnly ? seedPitRadiusM : Number.POSITIVE_INFINITY;
-    const effectiveApertureM = Math.min(configuredApertureM, apertureCapM);
+    const effectiveApertureM = Math.min(ownBubbleFloorM, apertureCapM);
     // Sample the whole column, not just its rim: the highest soil inside the
     // opening is what the cut has to clear. Sampling only the rim let an uphill
     // rise inside the circle sit above the cut's top, so it stayed as a ceiling
     // over the back of the pit while the aperture's plan circle was cut - the
     // "pit below the rim, see through the ground" view.
-    const groundSamples: number[] = [clientSurfaceY(rootSightTarget.x, rootSightTarget.z, 0)];
-    for (const ringFraction of [0.5, 1]) {
-      for (let i = 0; i < 8; i += 1) {
-        const angle = (i / 8) * Math.PI * 2;
-        const radius = configuredApertureM * ringFraction;
-        groundSamples.push(
-          clientSurfaceY(
-            rootSightTarget.x + Math.cos(angle) * radius,
-            rootSightTarget.z + Math.sin(angle) * radius,
-            0,
-          ),
-        );
+    const sampleGround = (radiusM: number): number[] => {
+      const samples: number[] = [clientSurfaceY(rootSightTarget.x, rootSightTarget.z, 0)];
+      for (const ringFraction of [0.5, 1]) {
+        for (let i = 0; i < 8; i += 1) {
+          const angle = (i / 8) * Math.PI * 2;
+          const radius = radiusM * ringFraction;
+          samples.push(
+            clientSurfaceY(
+              rootSightTarget.x + Math.cos(angle) * radius,
+              rootSightTarget.z + Math.sin(angle) * radius,
+              0,
+            ),
+          );
+        }
       }
-    }
-    const ownShape = rootCavityShape({
+      return samples;
+    };
+    // Sampled at the mouth the hole will actually have, not at the config floor.
+    let groundSamples = sampleGround(effectiveApertureM);
+    let ownShape = rootCavityShape({
       bubbles: cavityBubbles,
       crownX: rootSightTarget.x,
       crownZ: rootSightTarget.z,
@@ -2916,6 +3228,16 @@ function updateRootSight(deltaTime: number): void {
       crownRadiusM,
       groundHeights: groundSamples,
     });
+    // The mouth can still end up wider than the config floor - the root spread
+    // and the crown clearance both size it. A ring sampled at the floor misses
+    // the uphill ground inside the wider hole, that ground stays above the
+    // cut's top, and on a slope the opening comes out as a crescent with a lid
+    // over its uphill half until the plant grows the floor wide enough to
+    // catch up (seconds, on a seedling's first roots).
+    if (ownShape.apertureM > effectiveApertureM * 1.001) {
+      groundSamples = sampleGround(ownShape.apertureM);
+      ownShape = { ...ownShape, rimMode: rimModeFor(groundSamples, ownShape.apertureM) };
+    }
     cavityApertureM = ownShape.apertureM;
     cavityRimMode = ownShape.rimMode;
     // The cut is a volume: its top is the highest ground under the rim, and its
@@ -3108,11 +3430,29 @@ function updateRootSight(deltaTime: number): void {
 // names the verbs, the pause menu gives Escape somewhere to land, and the mode
 // badge makes Grow mode visible without a debug readout.
 let actionBar: ActionBarAPI | null = null;
+let hotbar: HotbarAPI | null = null;
+let sporeChip: SporeChipAPI | null = null;
+/** The purse, as the last INVENTORY_SYNC reported it. Never written locally. */
+let sporeBalance = 0;
 /** Last Root Sight state the bar was told about; a frame only writes on change. */
 let rootSightActionShown = false;
 let contextHint: ContextHintAPI | null = null;
 /** The PC-only tip that names a plan part and what a click on it does. */
 let plantHoverTip: PlantHoverTip | null = null;
+/** The part the pointer is resting on, so a late growth count can re-name it. */
+let hoveredNodeId: string | null = null;
+let refreshPlantHoverTip: (() => void) | null = null;
+/**
+ * Available growth options per node, filled by every GROWTH_OPTIONS_RESULT.
+ *
+ * The panel only ever asked for the node the player clicked, so the tip had no way
+ * to know whether a click would find anything and promised growth on every part.
+ * A hover now asks once and the answer is kept for the tip and the panel alike.
+ */
+const growableCounts = new Map<string, number>();
+/** When a node's count was last asked for, so a hover cannot spam the server. */
+const growableAskedAt = new Map<string, number>();
+const GROWABLE_ASK_INTERVAL_MS = 4000;
 /** The in-world death card, and the chip that leaves spectating. */
 let deathScreen: DeathScreen | null = null;
 let spectateChip: SpectateChip | null = null;
@@ -3236,6 +3576,24 @@ function createWorldChrome(): void {
     onAction: (id: string) => handleActionBarAction(id),
   });
   actionBar.setVisible(false);
+  // The hotbar is the other half of `1`-`0`: the keys address these slots, and
+  // before this there was nothing on screen for them to address during play.
+  hotbar = createHotbar({
+    mount,
+    // The hotbar owns its own selection. It used to forward every pick to the
+    // inventory panel, so tapping a hotbar slot also moved the inventory's
+    // highlight and the two surfaces disagreed about what was selected. The
+    // number keys choose a hotbar slot; the inventory panel chooses its own.
+    onUse: (index) => useInventorySlot(index),
+  });
+  hotbar.setVisible(false);
+  // The purse, and the way to spend it. The chip is the always-on half of the
+  // shop: a currency the player never sees is not one they can plan around.
+  sporeChip = createSporeChip({
+    mount,
+    onOpenShop: () => openShop(),
+  });
+  sporeChip.setVisible(false);
   // A bar built mid-session inherits the mode it was built in.
   if (rootSightMachine) {
     rootSightActionShown = rootSightStateMachineIsEnabled(rootSightMachine);
@@ -3356,7 +3714,11 @@ function leaveWorldToTitle(): void {
   hideLossReport();
   plantStatusHud?.setVisible(false);
   if (resourceReadoutElement) resourceReadoutElement.style.display = 'none';
+  // The drops belonged to that session; the next welcome brings its own.
+  worldDrops.clear();
   actionBar?.setVisible(false);
+  hotbar?.setVisible(false);
+  sporeChip?.setVisible(false);
   contextHint?.hide();
   setStatus('Offline', 'down');
   entryFlowSignedOut(entryFlow);
@@ -3433,6 +3795,11 @@ async function initC01(): Promise<void> {
       console.warn(`[PlantLegacy] server unreachable (${reason}), retry ${attempt}`),
   });
 
+  // Start the sky's hour request now. It used to be the last round-trip before
+  // the menu could mount, which added a few hundred milliseconds of blank screen
+  // to every load; from here it overlaps the config fetches instead.
+  const bootTime = fetchBootTime();
+
   // Load C01 configs
   const [
     loadedRenderConfig,
@@ -3502,6 +3869,10 @@ async function initC01(): Promise<void> {
   // The title screen is built after initC01 returns, so the resolved UI config
   // has to survive the function.
   resolvedUiConfig = uiConfig;
+  // The title does not need the rest of this function (environment renderer,
+  // physics, HUD, dev panel): mount it now, over a world that finishes building
+  // behind it. `bootEntryFlow` at the tail enables Play.
+  void startEntryFlow(bootTime);
   // Type floors come from config, so they are applied as soon as it is known
   // rather than only when the player nudges the text scale.
   applyHudFontSizes();
@@ -3808,6 +4179,10 @@ async function initC01(): Promise<void> {
     drawDistanceFloor: renderConfig.drawDistanceFloor,
     warmupMs: renderConfig.qualityWarmupMs,
     smoothing: renderConfig.qualitySmoothing,
+    // Native, not 1: the band used to clamp estimated mode to a ratio of 1,
+    // which on a scaled display is below the screen's own density, so the 3D
+    // world - plants included - was drawn permanently soft.
+    nativePixelRatio: window.devicePixelRatio || 1,
   });
 
   // AL-01: the six fixed poses and the size class live in config/dev.json.
@@ -3872,6 +4247,10 @@ async function initC01(): Promise<void> {
     },
   );
 
+  // The boot hour was fetched while this renderer did not exist; prime it now
+  // so the first world frame is the right hour instead of the default.
+  if (bootWorldTime !== null) environmentRenderer.primeTimeOfDay(bootWorldTime);
+
   // Initialize Rapier physics world (client-side cosmetic simulation)
   try {
     await rapierWorld.init({ x: 0, y: -(physicsConfig?.gravityMps2 ?? 9.81), z: 0 });
@@ -3906,6 +4285,11 @@ async function initC01(): Promise<void> {
       const geometry = terrainPatch.geometry;
       const positions = geometry.getAttribute('position');
       const vertices = new Float32Array(positions.count * 3);
+      // Patch geometry is authored in patch-local metres and placed by its own
+      // transform (it sits at `+radius` inside the planet body). The collider takes
+      // the same placement rather than having it baked into its vertices: the
+      // trimesh stays patch-local, so its float32 storage does not pay the radius
+      // either, and it lands on the same surface the mesh draws.
       for (let i = 0; i < positions.count; i += 1) {
         vertices[i * 3] = positions.getX(i);
         vertices[i * 3 + 1] = positions.getY(i);
@@ -3918,7 +4302,14 @@ async function initC01(): Promise<void> {
       terrainColliderRefs.push(
         rapierWorld
           .getWorld()
-          .createCollider(RAPIER.ColliderDesc.trimesh(vertices, indices), soilBody),
+          .createCollider(
+            RAPIER.ColliderDesc.trimesh(vertices, indices).setTranslation(
+              terrainPatch.position.x,
+              terrainPatch.position.y,
+              terrainPatch.position.z,
+            ),
+            soilBody,
+          ),
       );
     }
 
@@ -3978,17 +4369,29 @@ async function initC01(): Promise<void> {
   // C04: inspect (left) and inventory (right), opened together with I. The
   // world stays visible between them. Overlapping HUD panels are hidden while
   // these are open, then restored to their previous display value.
+  //
+  // They are siblings, not one dialog: the key opens both, but from then on the
+  // Inventory key and button toggle the pouch only, and closing Inspect on its
+  // own leaves the pouch exactly where it was.
   function togglePlayerPanels(): void {
     if (!playerPanels) return;
-    if (playerPanels.isOpen) {
-      playerPanels.setOpen(false);
+    const inspectOpen = playerPanels.isPanelOpen('inspect');
+    const inventoryOpen = playerPanels.isPanelOpen('inventory');
+    if (!inspectOpen && !inventoryOpen) {
+      playerPanels.setOpen(true);
+      // Opened by the Inventory key or button, so the inventory face comes first on
+      // the phone sheet; Inspect is one tap away in the switch.
+      playerPanels.showInventory();
+      hideOverlappingHud();
+      requestInventory();
+      refreshPlayerPanels();
+      return;
+    }
+    playerPanels.setPanelOpen('inventory', !inventoryOpen);
+    if (!playerPanels.isOpen) {
       restoreOverlappingHud();
       return;
     }
-    playerPanels.setOpen(true);
-    // Opened by the Inventory key or button, so the inventory face comes first on
-    // the phone sheet; Inspect is one tap away in the switch.
-    playerPanels.showInventory();
     hideOverlappingHud();
     requestInventory();
     refreshPlayerPanels();
@@ -4001,11 +4404,7 @@ async function initC01(): Promise<void> {
       withering: uiConfig.healthWitheringFraction,
     },
     onClose: () => restoreOverlappingHud(),
-    onUseItem: (slotIndex) => {
-      if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: MESSAGE_TYPE.INVENTORY_SLOT_USE, payload: { slotIndex } }));
-      }
-    },
+    onUseItem: (slotIndex) => useInventorySlot(slotIndex),
     // Level a mutation: no card asks the server to deal the cards, a card takes
     // one of the cards it dealt. The client never invents the choice.
     onLevelMutation: (mutationId, cardId) => {
@@ -4027,13 +4426,24 @@ async function initC01(): Promise<void> {
     initialReducedMotion:
       uiConfig.reducedMotion ||
       window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true,
+    initialSound: isPlantSoundEnabled(),
+    initialPlantCursors: plantCursorsEnabled(),
+    onPlantCursors: (enabled) => setCursorTheme(enabled ? 'plant' : 'default'),
     onTextScale: (scale) => uiShell?.setTextScale(scale),
     onReducedMotion: (enabled) => {
       document.documentElement.dataset.reducedMotion = String(enabled);
     },
+    // The title plant's creaks and knocks are the only sound in the game so far,
+    // so this switch is the whole sound setting: the sound module owns the
+    // preference and every live plant instance mutes with it.
+    onSound: (enabled) => setPlantSoundEnabled(enabled),
     // While the panel is up the title's H shortcut must not fire behind it.
     onOpenChange: (open) => entryScreen?.setOverlayOpen(open),
   });
+  // The pointer theme is applied once at boot: it is a CSS dataset on the root, so
+  // every layer (title, HUD, panels) picks it up without knowing about it.
+  applyCursorTheme(readCursorTheme());
+
   // Mount the panel in the modal layer, not on <body>. On the body it stacked at
   // z-index 380 in the root context, which is *below* the modal layer (400) the
   // title screen lives in: opening Settings from the title did nothing visible,
@@ -4238,7 +4648,9 @@ async function initC01(): Promise<void> {
       if (actionId === 'grow_cancel' && state.pressed) hideGrowthSelection();
 
       if (actionId === 'camera_recenter' && state.pressed) {
-        recenterCamera();
+        // The player's own recenter: centred on the plant, at the angle they were
+        // already looking from. The pitch correction is for automatic framing only.
+        recenterCamera(false);
       }
       if (import.meta.env.DEV && actionId === 'plant_regenerate' && state.pressed) {
         if (plantRenderer) {
@@ -4282,10 +4694,26 @@ async function initC01(): Promise<void> {
       if (actionId === 'emote_wheel' && state.pressed) {
         showEmoteWheel();
       }
-      // Inventory slot selection (1-0)
+      // Hotbar slots (1-0). The keys used to select a slot only when the
+      // inventory panel was already open, so during play they did nothing at all.
+      // Now they select the hotbar slot and use it, which is what the number keys
+      // were always advertised to do; with the inventory open they only move the
+      // selection, because a key press while reading the pouch should not spend
+      // an item by accident.
       if (actionId.startsWith('inventory_slot_') && state.pressed) {
         const slotNum = parseInt(actionId.replace('inventory_slot_', ''), 10);
-        if (!Number.isNaN(slotNum)) playerPanels?.selectSlot(slotNum - 1);
+        if (!Number.isNaN(slotNum)) {
+          const index = slotNum - 1;
+          // Two surfaces, two selections. With the inventory open the number keys
+          // address the pouch only; in the world they address the hotbar only.
+          // The keys used to do both at once, which moved the inventory highlight
+          // from a key the player pressed to select a hotbar slot.
+          if (playerPanels?.isOpen) {
+            playerPanels.selectSlot(index);
+          } else {
+            hotbar?.use(index);
+          }
+        }
       }
     },
   );
@@ -4562,6 +4990,16 @@ async function initC01(): Promise<void> {
     const raycaster = new THREE.Raycaster();
     raycaster.setFromCamera(mouse, camera);
 
+    // A drop under the pointer is collected before the plant is considered: a
+    // marker often sits on the soil beside a root, and the node sphere would
+    // otherwise swallow the click. The reach limit means a click on the horizon
+    // collects nothing.
+    const dropUnderPointer = worldDrops.pick(raycaster);
+    if (dropUnderPointer) {
+      collectDrop(dropUnderPointer);
+      return;
+    }
+
     // Pick any visible node, own plant or a rival's. The pick sphere has a
     // configurable world radius floor so a tiny seed is still clickable from
     // the close camera.
@@ -4592,10 +5030,18 @@ async function initC01(): Promise<void> {
         if (nodeData.type === 0 && !nodeData.isSeed && !isRootSightEnabled && !cameraBelowGround)
           continue;
         const sphere = new THREE.Mesh(
-          new THREE.SphereGeometry(Math.max(nodeData.radius * 1.5, 0.35), 8, 8),
+          // A pick sphere the size of the part, on the part *as drawn*. A flat
+          // 0.35 m floor on the server position made a small child root
+          // unreachable: its sphere swallowed its parent's, the ray hit whichever
+          // came first, and the growth panel then belonged to the parent.
+          // Small enough to sit inside its own part rather than swallowing the
+          // child growing out of it; the surface fallback still catches clicks on
+          // a tube or a leaf between nodes.
+          new THREE.SphereGeometry(Math.max(nodeData.radius * 1.15, 0.1), 8, 8),
           new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }),
         );
-        sphere.position.copy(nodeData.position);
+        const pickParent = nodeData.parentId ? nodes.get(nodeData.parentId) : undefined;
+        sphere.position.copy(resolveDrawnNodePosition(nodeData, pickParent, nodes.values()));
         sphere.updateMatrixWorld(true);
         nodeObjects.push(sphere);
         nodeMap.set(sphere, { plantId: id, nodeId, isOwn, nodes });
@@ -4608,13 +5054,29 @@ async function initC01(): Promise<void> {
 
     if (nodeObjects.length === 0) {
       hideGrowthSelection();
-      hidePlantInfoCard();
       return;
     }
 
     const intersects = raycaster.intersectObjects(nodeObjects);
-    let picked: PickTarget | undefined =
-      intersects.length > 0 ? nodeMap.get(intersects[0].object) : undefined;
+    // A parent's sphere contains its children, so "first hit" picked the parent
+    // for a click on the child. The resolver prefers the nearer sphere and, within
+    // a small tie window, the deeper node - the child the player aimed at.
+    const candidates = intersects.flatMap((hit) => {
+      const target = nodeMap.get(hit.object);
+      if (!target) return [];
+      return [
+        {
+          nodeId: target.nodeId,
+          parentId: target.nodes.get(target.nodeId)?.parentId ?? null,
+          distance: hit.distance,
+        },
+      ];
+    });
+    const nodePick = pickNodeHit(candidates, renderConfig?.nodePickTieM ?? 0.02);
+    const pickedHit = nodePick.nodeId
+      ? intersects.find((hit) => nodeMap.get(hit.object)?.nodeId === nodePick.nodeId)
+      : undefined;
+    let picked: PickTarget | undefined = pickedHit ? nodeMap.get(pickedHit.object) : undefined;
 
     if (!picked) {
       // A click that lands on the drawn plant but on no node sphere - the tube
@@ -4644,9 +5106,10 @@ async function initC01(): Promise<void> {
     }
 
     if (!picked) {
-      // Clicked off-plant (but not on UI) -> close growth panel
+      // Clicked off-plant (but not on UI) -> close growth panel, and stop reading
+      // a rival: the panel goes back to being about your own plant.
       hideGrowthSelection();
-      hidePlantInfoCard();
+      playerPanels?.inspectOther(null);
       return;
     }
 
@@ -4655,13 +5118,14 @@ async function initC01(): Promise<void> {
     // Someone else's plant is inspected, never grown and never framed: a single
     // click is a look, and the growth panel belongs to your own plant. Its
     // detailed readout (stored water, minerals, options) is yours alone, so a
-    // rival node gets basic identity only - the same rule in both modes.
+    // rival gets the low-detail face of Inspect - parts, biomass and owner, which
+    // is everything the mirror actually sends - and never a growth option.
     if (picked && !picked.isOwn) {
       hideGrowthSelection();
-      showPlantInfoCard(picked.plantId, picked.nodeId, picked.nodes);
+      inspectOtherPlant(picked.plantId, picked.nodes);
       return;
     }
-    hidePlantInfoCard();
+    playerPanels?.inspectOther(null);
 
     const growthState = growthSelectionStateMachineGetState(growthSelectionMachine);
     const selectedNodeId = growthSelectionMachine.selectedNodeId;
@@ -4741,7 +5205,7 @@ async function initC01(): Promise<void> {
     for (const nodes of otherPlayerPlants.values()) consider(nodes, false);
 
     if (picked) focusCameraOnNode(picked, pickedLookup);
-    else recenterCamera();
+    else recenterCamera(false);
   });
 
   // Grabbing the camera cancels any automatic framing still in flight.
@@ -4781,14 +5245,48 @@ async function initC01(): Promise<void> {
   const hoverCapable = window.matchMedia?.('(hover: hover) and (pointer: fine)');
   let hoverTipAt = 0;
   let hoverNodeId: string | null = null;
-  let hoverText = null as ReturnType<typeof plantHoverText> | null;
+  let hoverText: HoverText | null = null;
+  let hoverTarget: {
+    nodeId: string;
+    nodes: Map<string, PlantNodeData>;
+    isOwnPlant: boolean;
+    nodeType: string;
+    canGrow: boolean;
+  } | null = null;
+  const hoverPointer = { x: 0, y: 0 };
+
+  // Everything the tip says about the part under the pointer. The growth count
+  // arrives from the server a moment after the hover starts, so this is re-run in
+  // place when it does rather than waiting for the pointer to move to another part.
+  const describeHoverTarget = (): HoverText | null => {
+    const target = hoverTarget;
+    if (!target) return null;
+    return plantHoverText({
+      nodeType: target.nodeType,
+      isOwnPlant: target.isOwnPlant,
+      growMode: isGrowMode,
+      canGrow: target.canGrow,
+      info: plantNodeInfo(target.nodeId, target.nodes.values()),
+      totalParts: target.nodes.size,
+      growable: target.isOwnPlant ? (growableCounts.get(target.nodeId) ?? null) : null,
+    });
+  };
+  refreshPlantHoverTip = () => {
+    if (!hoverTarget) return;
+    hoverText = describeHoverTarget();
+    plantHoverTip?.show(hoverText, hoverPointer.x, hoverPointer.y);
+  };
   const handlePlantHover = (e: PointerEvent): void => {
+    hoverPointer.x = e.clientX;
+    hoverPointer.y = e.clientY;
     if (!hoverCapable?.matches) return;
     if (performance.now() - hoverTipAt < 90) return;
     hoverTipAt = performance.now();
     if (growthAimDragging || growthSelectionStateMachineIsDrawing(growthSelectionMachine)) {
       plantHoverTip?.hide();
       hoverNodeId = null;
+      hoveredNodeId = null;
+      hoverTarget = null;
       return;
     }
     const rect = canvas.getBoundingClientRect();
@@ -4808,11 +5306,14 @@ async function initC01(): Promise<void> {
     const surface = hit ? surfaces.find((entry) => entry.object === hit.object) : undefined;
     if (!surface) {
       hoverNodeId = null;
+      hoveredNodeId = null;
+      hoverTarget = null;
       plantHoverTip?.hide();
       return;
     }
     if (surface.nodeId !== hoverNodeId) {
       hoverNodeId = surface.nodeId;
+      hoveredNodeId = surface.nodeId;
       const nodes = surface.isOwnPlant
         ? plantNodes
         : (otherPlayerPlants.get(surface.plantId ?? '') ?? plantNodes);
@@ -4820,18 +5321,26 @@ async function initC01(): Promise<void> {
       const rootVisible = rootSightMachine
         ? rootSightStateMachineIsEnabled(rootSightMachine)
         : isBelowSoil(camera.position, soilQuery());
-      hoverText = plantHoverText({
-        nodeType: node?.nodeType ?? '',
+      hoverTarget = {
+        nodeId: surface.nodeId,
+        nodes,
         isOwnPlant: surface.isOwnPlant,
-        growMode: isGrowMode,
+        nodeType: node?.nodeType ?? '',
         canGrow: !(node?.type === 0 && !node?.isSeed && !rootVisible),
-      });
+      };
+      hoverText = describeHoverTarget();
+      // One question per part, asked when the pointer arrives on it: the tip can
+      // then say that nothing grows here instead of promising a click that finds
+      // an empty panel.
+      if (surface.isOwnPlant) requestGrowableCount(surface.nodeId);
     }
     plantHoverTip?.show(hoverText, e.clientX, e.clientY);
   };
   canvas.addEventListener('pointermove', handlePlantHover);
   canvas.addEventListener('pointerleave', () => {
     hoverNodeId = null;
+    hoveredNodeId = null;
+    hoverTarget = null;
     plantHoverTip?.hide();
   });
 
@@ -4904,21 +5413,24 @@ async function initC01(): Promise<void> {
     }
   });
 
-  // Visibility change: pause render loop & input when hidden
+  // Visibility change: pause render loop & input when hidden. The hidden state is
+  // also handled at startup (the tail of this file), because a page can be
+  // *loaded* hidden - a preview pane, an occluded window - and then no
+  // `visibilitychange` ever fires to start the timer.
   if (renderConfig.pauseOnHidden) {
     document.addEventListener('visibilitychange', () => {
       if (document.hidden) {
-        // Switch to low-rate timer-based loop when hidden
-        if (!backgroundLoopTimer) {
-          backgroundLoopTimer = window.setInterval(() => renderFrame(0.1), 100); // 10 FPS when hidden
-        }
+        startBackgroundLoop();
         setDetail('Tab hidden - background loop');
       } else {
         // Clear background timer, requestAnimationFrame will take over
-        if (backgroundLoopTimer) {
-          window.clearInterval(backgroundLoopTimer);
-          backgroundLoopTimer = null;
-        }
+        stopBackgroundLoop();
+        // And take it over now, not on the next animation frame. A page that was
+        // hidden long enough for the compositor to drop the canvas comes back to
+        // a black rectangle, and a loop that only re-arms can leave it black for
+        // as long as it takes the browser to schedule the first frame.
+        wakeRenderLoop();
+        renderFrame(0.016);
         setDetail('Tab visible - resuming');
         // The band controller must not grade the frame that spans the hidden
         // stretch: its delta is the whole time the tab was away, capped at a
@@ -5258,6 +5770,21 @@ renderer.shadowMap.type = THREE.PCFShadowMap;
 // frame; renderFrame refreshes it on a timer instead.
 renderer.shadowMap.autoUpdate = false;
 app.appendChild(renderer.domElement);
+// A GPU context lost while the window was minimised or the driver reset leaves
+// the canvas black with no error and no frames, and nothing in the loop notices:
+// three keeps calling render() on a dead context. Ask for the context back and
+// draw immediately once it returns, so the page recovers on its own instead of
+// waiting for a reload the player has no reason to know they need.
+renderer.domElement.addEventListener('webglcontextlost', (event) => {
+  event.preventDefault();
+  setDetail('Graphics context lost - restoring');
+});
+renderer.domElement.addEventListener('webglcontextrestored', () => {
+  lastFrameAtMs = 0;
+  wakeRenderLoop();
+  renderFrame(0.016);
+  setDetail('Graphics context restored');
+});
 
 // Cinematic overlay — vignette + film grain for atmospheric depth
 const cinematicOverlay = document.createElement('div');
@@ -5382,6 +5909,8 @@ function setGrowthPanelOpen(open: boolean): void {
   detailSuppressed = open;
   if (open) actionBar?.setVisible(false);
   else if (entryFlow.step === 'world') actionBar?.setVisible(true);
+  hotbar?.setVisible(open ? false : entryFlow.step === 'world');
+  sporeChip?.setVisible(!open && entryFlow.step === 'world');
   if (detailElement) {
     detailElement.style.display =
       open || !detailVisible ? 'none' : detailBody.textContent ? 'block' : 'none';
@@ -5823,11 +6352,30 @@ function updateVitalsWeather(): void {
 function startVitalsTicker(): void {
   if (vitalsTickerStarted) return;
   vitalsTickerStarted = true;
-  setInterval(() => {
-    if (!resourceReadoutElement || resourceReadoutElement.style.display === 'none') return;
-    updateVitalsClock();
-    updateVitalsWeather();
-  }, 1000);
+  // Wake on the countdown's own second, not on the interval's phase.
+  //
+  // A fixed one-second interval starts at an arbitrary moment, so the chip could
+  // hold "0:17" for nearly two seconds and then jump to "0:15": the timer was not
+  // wrong, it was sampling a clock that had moved a fraction of a second past each
+  // whole second before the frame that would have shown it. Waking just after the
+  // next boundary, and re-solving after every wake, keeps the displayed second
+  // within a frame or two of the real one.
+  const step = (): void => {
+    if (resourceReadoutElement && resourceReadoutElement.style.display !== 'none') {
+      updateVitalsClock();
+      updateVitalsWeather();
+    }
+    let waitMs = 1000;
+    if (vitalsWeather) {
+      const elapsedMs = performance.now() - vitalsWeather.atMs;
+      const leftMs = Math.max(0, vitalsWeather.secondsUntilNext * 1000 - elapsedMs);
+      // Aim just past the next whole second; clamp so a 0-second countdown cannot
+      // spin the timer and a stale packet cannot park it for a minute.
+      waitMs = Math.min(1000, Math.max(60, 1000 - (leftMs % 1000) + 12));
+    }
+    window.setTimeout(step, waitMs);
+  };
+  step();
 }
 
 // The readout shows the whole plant id: it is the id players need to quote when
@@ -5845,49 +6393,44 @@ function updateSeasonChip(): void {
 // from PLANT_CREATED, which is the message that carries the owner.
 const plantOwners = new Map<string, string>();
 
-// A small read-only card for someone else's plant. Deliberately shallow: the
-// growth panel's stored water, minerals and options belong to the player's own
-// plant, and showing them for a rival would have been our numbers, not theirs.
-let plantInfoCard: HTMLDivElement | null = null;
-
-function ensurePlantInfoCard(): HTMLDivElement | null {
-  if (plantInfoCard) return plantInfoCard;
-  const layer = uiShell?.getLayer('hud');
-  if (!layer) return null;
-  const card = document.createElement('div');
-  card.id = 'plant-info-card';
-  card.style.pointerEvents = 'none';
-  layer.appendChild(card);
-  plantInfoCard = card;
-  return card;
-}
-
-function showPlantInfoCard(
-  plantId: string,
-  nodeId: string,
-  nodes: Map<string, PlantNodeData>,
-): void {
-  const node = nodes.get(nodeId);
-  const card = ensurePlantInfoCard();
-  if (!node || !card) return;
-
-  const owner = plantOwners.get(plantId);
-  const part = (node.nodeType ?? 'part').replace(/_/g, ' ');
-  const progress = Math.round((node.growthProgress ?? 1) * 100);
-  card.innerHTML = `
-    <div class="plant-info-card__title">Another plant</div>
-    <div class="plant-info-card__row"><span>part</span><b>${part}</b></div>
-    <div class="plant-info-card__row"><span>biomass</span><b>${node.biomass.toFixed(1)}</b></div>
-    <div class="plant-info-card__row"><span>grown</span><b>${progress}%</b></div>
-    ${owner ? `<div class="plant-info-card__row"><span>owner</span><b>${owner.slice(0, 12)}</b></div>` : ''}
-    <div class="plant-info-card__hint">Double-click to look at it</div>
-  `;
-  card.style.display = 'block';
-}
-
-function hidePlantInfoCard(): void {
-  if (!plantInfoCard) return;
-  plantInfoCard.style.display = 'none';
+/**
+ * Inspect a rival plant through the Inspect panel, in low detail.
+ *
+ * The mirror streams a rival's parts and their biomass and nothing else, so that
+ * is the whole readout: parts by type, the body's total, and the owner if the
+ * world named one. The stored water, minerals, mutation list and level-up rows
+ * belong to the player's own plant and are hidden here rather than invented.
+ *
+ * This replaced a small floating card on the click: the card answered "what did
+ * I just click" but the panel is the same readout the player already knows, and
+ * closing it never takes the inventory with it.
+ */
+function inspectOtherPlant(plantId_: string, nodes: Map<string, PlantNodeData>): void {
+  if (!playerPanels) return;
+  const parts = new Map<string, { count: number; biomass: number }>();
+  let totalBiomass = 0;
+  for (const part of nodes.values()) {
+    const type = part.nodeType ?? 'part';
+    const entry = parts.get(type) ?? { count: 0, biomass: 0 };
+    entry.count += 1;
+    entry.biomass += part.biomass ?? 0;
+    parts.set(type, entry);
+    totalBiomass += part.biomass ?? 0;
+  }
+  playerPanels.inspectOther({
+    owner: plantOwners.get(plantId_),
+    plantId: plantId_,
+    parts: [...parts].map(([type, entry]) => ({
+      type,
+      count: entry.count,
+      biomass: entry.biomass,
+    })),
+    totalBiomass,
+    partCount: nodes.size,
+  });
+  playerPanels.setPanelOpen('inspect', true);
+  hideOverlappingHud();
+  refreshPlayerPanels();
 }
 
 // Two-step growth selection UI (ADR-018)
@@ -5923,6 +6466,28 @@ function createGrowthSelectionUI(): void {
 
   layer.appendChild(panel);
   growthSelectionPanel = panel;
+}
+
+/**
+ * Ask how many growth options a node has, without opening the growth panel.
+ *
+ * The hover tip reads the answer back out of `growableCounts`, so it can say that
+ * nothing grows from a part before the player clicks it. Re-asking for the same
+ * node is throttled: a node's options only change when resources do, and the
+ * panel's own request refreshes the same cache.
+ */
+function requestGrowableCount(nodeId: string): void {
+  if (!ws || ws.readyState !== WebSocket.OPEN || !plantId) return;
+  const now = performance.now();
+  const last = growableAskedAt.get(nodeId) ?? 0;
+  if (now - last < GROWABLE_ASK_INTERVAL_MS) return;
+  growableAskedAt.set(nodeId, now);
+  ws.send(
+    JSON.stringify({
+      type: MESSAGE_TYPE.GROWTH_OPTIONS_REQUEST,
+      payload: { plantId, nodeId },
+    }),
+  );
 }
 
 function requestGrowthOptions(nodeId: string): void {
@@ -6169,8 +6734,13 @@ function hideOverlappingHud(): void {
     chatContainer,
     mutationPanel?.panel ?? null,
     plantStatusHud?.element ?? null,
-    document.getElementById('plant-info-card'),
     document.getElementById('resource-readout'),
+    // The hotbar and the purse sit low and to the right, exactly where the
+    // inventory and inspect panels end. Both are part of the HUD the panels
+    // overlap, so they hide with the rest instead of leaving two slots under a
+    // panel's edge.
+    hotbar?.element ?? null,
+    sporeChip?.element ?? null,
   ];
   for (const el of candidates) {
     if (!el || !overlaps(el)) continue;
@@ -6182,6 +6752,12 @@ function hideOverlappingHud(): void {
 function restoreOverlappingHud(): void {
   for (const entry of hiddenHudForPanels) entry.el.style.display = entry.display;
   hiddenHudForPanels = [];
+}
+
+/** Use one pouch slot. The client asks; the server decides what the item does. */
+function useInventorySlot(slotIndex: number): void {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  ws.send(JSON.stringify({ type: MESSAGE_TYPE.INVENTORY_SLOT_USE, payload: { slotIndex } }));
 }
 
 /** Ask the server for the pouch; the client never owns inventory contents. */
@@ -6452,6 +7028,8 @@ function handleOwnPlantLoss(cause?: string, source?: string): void {
   rerootKeys.clear();
   plantStatusHud?.setVisible(false);
   actionBar?.setVisible(false);
+  hotbar?.setVisible(false);
+  sporeChip?.setVisible(false);
   contextHint?.hide();
   updateResourceReadout(
     tileLight,
@@ -6516,6 +7094,8 @@ function enterSpectate(): void {
   spectating = true;
   plantStatusHud?.setVisible(false);
   actionBar?.setVisible(false);
+  hotbar?.setVisible(false);
+  sporeChip?.setVisible(false);
   setGrowModeChrome(false);
   hideGrowthSelection();
   spectateChip?.destroy();
@@ -7009,8 +7589,7 @@ function createReportDialog(): void {
   const backdrop = document.createElement('div');
   backdrop.style.cssText = `
     inset: 0;
-    background: rgba(10, 12, 8, 0.6);
-    backdrop-filter: blur(2px);
+    background: rgba(10, 12, 8, 0.72);
   `;
   backdrop.addEventListener('click', closeReportDialog);
   dialog.appendChild(backdrop);
@@ -7504,6 +8083,20 @@ function confirmGrowth(
 }
 
 const scene = new THREE.Scene();
+/**
+ * The visible half of the server's world drops.
+ *
+ * Built with the scene so a `DROP_SPAWN` that arrives before the first frame
+ * still has somewhere to go. The ground sampler is lazy: the render config is
+ * loaded after this point, and a drop is placed when it spawns, not at boot.
+ */
+const worldDrops = new WorldDrops({
+  scene,
+  groundY: (x, z) =>
+    planetTerrainY(renderConfig?.planetRadiusM ?? 0, x, z, getTerrainParams()) +
+    (renderConfig?.cameraGroundTouchM ?? 0.02),
+  pickDistanceM: () => renderConfig?.dropPickDistanceM ?? 6,
+});
 // Sky-coloured background/fog so the world is never pitched into near-black.
 // EnvironmentRenderer tints both toward the live horizon colour each frame,
 // so this is the neutral starting colour before weather takes over.
@@ -7593,6 +8186,8 @@ if (isDevMode) {
         weather: (state: string) => void;
         stats: () => Record<string, number | boolean | null>;
         rain: () => Record<string, number | boolean> | null;
+        /** What the weather has left on the ground in the world, 0..1 each. */
+        groundCover: () => { water: number; snow: number } | null;
         nodes: () => Array<{ id: string; type: string; x: number; y: number; z: number }>;
       };
     }
@@ -7610,6 +8205,7 @@ if (isDevMode) {
     rootSightStatus: () => ({ ...rootSightDiagnostic, summary: describeRootSightStatus() }),
     weather: (state) => environmentRenderer?.setWeatherState(state),
     rain: () => environmentRenderer?.getRainDebug() ?? null,
+    groundCover: () => environmentRenderer?.groundCover() ?? null,
     stats: () => ({
       serverTick,
       resourceUpdates: resourceUpdateCount,
@@ -7799,6 +8395,8 @@ async function handleWelcome(payload: unknown): Promise<void> {
   });
   entryFlowWorldReady(entryFlow);
   entryScreen.render(entryFlow);
+  // The title parked the render loop; the world's first frame starts here.
+  wakeRenderLoop();
   // Whatever the welcome framing did or skipped (no root node, a plant that
   // arrived only through the node list, a re-framed reconnect), the first own
   // node is the first moment the fit can actually measure the plant. Ask for it
@@ -7817,6 +8415,9 @@ async function handleWelcome(payload: unknown): Promise<void> {
     recenterCamera();
   }, 1200);
   actionBar?.setVisible(true);
+  hotbar?.setVisible(true);
+  sporeChip?.setVisible(true);
+  sporeChip?.setBalance(sporeBalance);
   // Whatever the title left open belongs to the title. A panel opened from the menu
   // used to stay open across Play and be the first thing the player saw in the
   // world, which is how a Settings click that appeared to do nothing "worked" one
@@ -8058,7 +8659,13 @@ function handleInventorySync(payload: unknown): void {
     slots?: Array<{ itemId?: string | null; count?: number | null } | null>;
     maxSlots?: number;
     definitions?: ItemDefinitionView[];
+    sporeBalance?: number;
   };
+  if (typeof sync.sporeBalance === 'number' && Number.isFinite(sync.sporeBalance)) {
+    sporeBalance = Math.max(0, Math.round(sync.sporeBalance));
+    sporeChip?.setBalance(sporeBalance);
+    shopPanel?.setBalance(sporeBalance);
+  }
   const maxSlots = Math.max(0, Math.floor(sync.maxSlots ?? 10));
   inventorySlots = Array.from({ length: maxSlots }, (_, index) => {
     const slot = sync.slots?.[index];
@@ -8072,8 +8679,10 @@ function handleInventorySync(payload: unknown): void {
   if (Array.isArray(sync.definitions)) {
     inventoryDefinitions = sync.definitions;
     playerPanels?.setDefinitions(sync.definitions);
+    hotbar?.setDefinitions(sync.definitions);
   }
   playerPanels?.setInventory(inventorySlots, inventoryMaxSlots);
+  hotbar?.setSlots(inventorySlots, inventoryMaxSlots);
   refreshPlayerPanels();
 }
 
@@ -8090,6 +8699,8 @@ function handleInventorySlotUpdate(payload: unknown): void {
       ? { itemId: update.itemId, count: Math.floor(update.count) }
       : null;
   playerPanels?.setInventory(inventorySlots, inventoryMaxSlots);
+  hotbar?.setSlots(inventorySlots, inventoryMaxSlots);
+  if (inventoryDefinitions.length > 0) hotbar?.setDefinitions(inventoryDefinitions);
   refreshPlayerPanels();
 }
 
@@ -8638,8 +9249,45 @@ function handlePlantDamage(payload: unknown): void {
   }
 }
 
-function ignoreDropMessage(): void {
-  // Drops are world objects; drawing and pickup belong to T51.
+function handleDropSpawn(payload: unknown): void {
+  const drop = payload as {
+    id?: string;
+    kind?: 'fragment' | 'remains' | 'dung';
+    x?: number;
+    y?: number;
+    z?: number;
+    expiresAtMs?: number;
+  };
+  if (!drop?.id || typeof drop.x !== 'number' || typeof drop.z !== 'number') return;
+  worldDrops.spawn({
+    id: drop.id,
+    kind: drop.kind ?? 'fragment',
+    x: drop.x,
+    y: typeof drop.y === 'number' ? drop.y : 0,
+    z: drop.z,
+    expiresAtMs: drop.expiresAtMs,
+  });
+}
+
+function handleKillCredit(payload: unknown): void {
+  // The wire has always carried this; nobody read it. A kill that pays spores is
+  // worth one line of text, or the reward looks like a bug in the purse.
+  const credit = (payload as { credit?: { kind?: string; playerId?: string | null } } | null)
+    ?.credit;
+  if (credit?.kind !== 'player' || !credit.playerId) return;
+  if (credit.playerId !== playerId) return;
+  notify('Kill credited: spores added', 'info', 2600);
+}
+
+function handleDropExpired(payload: unknown): void {
+  const id = (payload as { id?: string } | null)?.id;
+  if (id) worldDrops.remove(id);
+}
+
+/** Ask the server to give us a drop. The reward and the removal are its call. */
+function collectDrop(id: string): void {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  ws.send(JSON.stringify({ type: MESSAGE_TYPE.DROP_COLLECT, payload: { id } }));
 }
 
 function handleFaunaEvent(payload: unknown): void {
@@ -8902,6 +9550,14 @@ function handleGrowthEvent(payload: unknown): void {
     for (const grown of incomingNodes) {
       noteUndergroundGrowth(grown.type, grown.layer);
     }
+    // Growing while the ground is open must not close it. The cavity is rebuilt
+    // around the new part on the same tick, and that rebuild used to be able to
+    // leave the mode half-closed: the state machine's target is re-asserted here
+    // so the player keeps the view they were looking through. Only when it was
+    // already open - this never opens the ground for a player who closed it.
+    if (rootSightMachine && rootSightStateMachineIsEnabled(rootSightMachine)) {
+      rootSightStateMachineSetTarget(rootSightMachine, 'underground');
+    }
     if (lastNode) {
       setDetail(
         `Grew ${lastNode.type} #${plantNodes.size} at (${lastNode.x.toFixed(1)}, ${lastNode.y.toFixed(1)}, ${lastNode.z.toFixed(1)}) - Biomass: ${plantBiomass.toFixed(1)}, Energy: ${plantEnergy.toFixed(1)}`,
@@ -8989,6 +9645,15 @@ function handleGrowthOptionsResult(payload: unknown): void {
     }>;
     error?: string;
   };
+  // Keep the answer for every node, not only the one the panel is showing: the
+  // hover tip asked, and it re-describes the part the pointer is still resting on.
+  if (response.nodeId && response.options) {
+    growableCounts.set(
+      response.nodeId,
+      response.options.filter((option) => option.available).length,
+    );
+    if (hoveredNodeId === response.nodeId) refreshPlantHoverTip?.();
+  }
   console.log('[PlantLegacy] GROWTH_OPTIONS_RESULT received:', response);
   if (!growthSelectionStateMachineIsVisible(growthSelectionMachine)) return;
   if (
@@ -9601,9 +10266,9 @@ const messageHandlers = createDispatchTable([
   [MESSAGE_TYPE.MUTATION_STATE, handleMutationState],
   [MESSAGE_TYPE.PLANT_UPROOT, handlePlantUproot],
   [MESSAGE_TYPE.PLANT_DAMAGE, handlePlantDamage],
-  [MESSAGE_TYPE.DROP_SPAWN, ignoreDropMessage],
-  [MESSAGE_TYPE.DROP_EXPIRED, ignoreDropMessage],
-  [MESSAGE_TYPE.KILL_CREDIT, ignoreDropMessage],
+  [MESSAGE_TYPE.DROP_SPAWN, handleDropSpawn],
+  [MESSAGE_TYPE.DROP_EXPIRED, handleDropExpired],
+  [MESSAGE_TYPE.KILL_CREDIT, handleKillCredit],
   [MESSAGE_TYPE.FAUNA_EVENT, handleFaunaEvent],
   [MESSAGE_TYPE.WEATHER_UPDATE, handleWeatherUpdate],
   [MESSAGE_TYPE.WEATHER_STRIKE, handleWeatherStrike],
@@ -9872,6 +10537,10 @@ function applyViewportSize(): void {
   camera.aspect = width / height;
   camera.updateProjectionMatrix();
   renderer.setSize(width, height);
+  // Resizing clears the drawing buffer. A tab that is not receiving animation
+  // frames would show that cleared, black buffer until something else drew, so
+  // paint the new size at once.
+  if (renderLoopReady && document.hidden) renderFrame(0.016);
   if (plantRenderer) {
     plantRenderer.setViewportSize(renderer.domElement.width, renderer.domElement.height);
     plantRenderer.onResize();
@@ -10148,6 +10817,17 @@ function applyStreamedNodeInterpolation(nowMs: number): void {
 
 // Shared render frame logic (used by both requestAnimationFrame and background setInterval)
 function renderFrame(deltaTime: number): void {
+  // The entry screen paints its own opaque 2D world over the canvas, so nothing of
+  // this scene is on screen while it is up. Rendering it anyway is a full scene
+  // pass, a shadow pass and a plant rebuild every frame for an image that is then
+  // covered - and it competes with the title's own drawing for the same budget,
+  // which is what made the title screen stutter. The stamp keeps the stalled-loop
+  // watchdog quiet while the frame is deliberately skipped.
+  if (entryFlow.step !== 'world') {
+    lastFrameAtMs = performance.now();
+    return;
+  }
+  lastFrameAtMs = performance.now();
   // AL-03: frame timing starts here and closes after the last draw call.
   gpuTimer?.begin();
   applyStreamedNodeInterpolation(performance.now());
@@ -10223,6 +10903,8 @@ function renderFrame(deltaTime: number): void {
   }
   controls.update();
   resolveCameraCollision();
+  // Drops bob and fade on their own clock; the server still owns their life.
+  worldDrops.update(performance.now());
   // OrbitControls only applies minDistance while dollies are in progress, so
   // enforce the floor here too: after leaving the root layer the camera must be
   // pushed back out of the plant instead of staying inside it.
@@ -10238,7 +10920,7 @@ function renderFrame(deltaTime: number): void {
   // inside a hill still has to move in, and the spring arm may legitimately end
   // up closer than the orbit floor.
   clampEyeToGround();
-  clampEyeToCavity();
+  clampEyeToCavity(deltaTime);
   // ... and a held dev pose after that, because the point of holding one is to
   // look from places the rig exists to prevent, such as inside the earth.
   cavityProbe.applyHold();
@@ -10310,11 +10992,17 @@ function renderFrame(deltaTime: number): void {
   if (plantRenderer) {
     // Update sun lighting from environment
     if (environmentRenderer) {
+      const sunDir = environmentRenderer.getSunDirection();
       plantRenderer.setSunLight(
-        environmentRenderer.getSunDirection(),
+        sunDir,
         environmentRenderer.getSunColor(),
         environmentRenderer.getSunIntensity(),
       );
+      // Light through the blades follows the light that is actually in the sky:
+      // `sunLight` is the moon after sunset, where `getSunIntensity()` is the
+      // sun's own number and reads zero. Not the sun's uniforms - those are the
+      // raymarcher's, and its night look is tuned around them.
+      plantRenderer.setLeafBacklight(sunDir, sunLight.color, sunLight.intensity);
     }
     plantRenderer.render(deltaTime);
   }
@@ -10344,6 +11032,9 @@ function renderFrame(deltaTime: number): void {
       isBelowSoil(camera.position, soilQuery(), 0.05) &&
       (rootSightMachine ? rootSightStateMachineIsEnabled(rootSightMachine) : false);
     webgpuRenderer?.setUndergroundView(undergroundView);
+    // Puddles and snow belong to the ground under the player, not to the camera:
+    // a zoom step moves the eye but not the soil.
+    environmentRenderer.setGroundAnchor(controls.target.x, controls.target.z);
     environmentRenderer.update(deltaTime);
     updatePlantLabelPositions();
     updateGrowthDebug();
@@ -10429,6 +11120,13 @@ function renderFrame(deltaTime: number): void {
     const ratio = qualityController.pixelRatio;
     if (Number.isFinite(ratio) && Math.abs(renderer.getPixelRatio() - ratio) > 0.001) {
       renderer.setPixelRatio(ratio);
+      // The plant raymarchs at a resolution of its own, and it read the drawing
+      // buffer only on a window resize. A quality step changes the buffer
+      // without one, so the plants went on computing rays for the size the
+      // window had when it last resized - measured at 1018x820 inside a
+      // 1161x934 buffer, permanently coarser than the screen they were drawn on.
+      plantRenderer?.setViewportSize(renderer.domElement.width, renderer.domElement.height);
+      plantRenderer?.onResize();
       // Both canvases composite over each other; the WebGPU one has to follow
       // the same resolution or half the frame keeps its full pixel cost.
       const viewport = viewportSize();
@@ -10493,7 +11191,22 @@ function renderFrame(deltaTime: number): void {
 }
 
 function animate(): void {
+  // On the title the loop does not re-arm. An empty callback is not free: it asks
+  // the compositor for sixty frames a second, every second, of a page whose only
+  // moving parts are two CSS animations. On a software-composited browser that is
+  // a permanent load on the whole application - the title screen was making the
+  // editor around it stutter - and it starves the very animations it was meant to
+  // serve. Parking is safe: `wakeRenderLoop` is called wherever the world can
+  // begin (the welcome, a visibility flip, a restored graphics context, the pause
+  // menu's resume), the animation loop is started there, and the watchdog below
+  // still draws a frame a second if it ever finds the canvas stale.
+  if (entryFlow.step !== 'world') {
+    renderLoopRunning = false;
+    lastFrameAtMs = performance.now();
+    return;
+  }
   requestAnimationFrame(animate);
+  renderLoopRunning = true;
 
   const now = performance.now();
   const deltaTime = Math.min(0.25, (now - lastUpdateTime) / 1000);
@@ -11033,9 +11746,17 @@ function openShop(): void {
   if (shopPanel) return;
   const layer = uiShell?.getLayer('modal') ?? document.body;
   entryScreen?.setOverlayOpen(true);
+  // Ask for the pouch first: the shop's balance and the item counts are the
+  // server's, and a panel that opens with a stale purse invites a refusal.
+  requestInventory();
   shopPanel = createShopPanel({
     config: shopConfig,
     mount: layer,
+    balance: sporeBalance,
+    onBuy: (itemId) => {
+      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      ws.send(JSON.stringify({ type: MESSAGE_TYPE.SHOP_PURCHASE, payload: { itemId } }));
+    },
     onClose: () => {
       shopPanel?.destroy();
       shopPanel = null;
@@ -11052,15 +11773,34 @@ function closeShop(): void {
   entryScreen?.setOverlayOpen(false);
 }
 
-function startEntryFlow(): void {
+function startEntryFlow(bootTime: Promise<number | null> | null = null): void {
   localProfile = loadProfile(window.localStorage);
   // Read the world's hour before the first frame. The menu used to paint its own
   // cycle start and then snap to the server time a moment later, which read as a
-  // day-to-night flash on every reload.
-  void fetchBootTime().then((timeOfDay) => {
+  // day-to-night flash on every reload. The request is started at the top of the
+  // boot, so by the time the shell exists it has usually answered already.
+  void (bootTime ?? fetchBootTime()).then((timeOfDay) => {
     if (entryScreen) return;
     mountMenu(timeOfDay);
   });
+}
+
+/**
+ * The 3D world, its physics and the rest of the HUD have finished building.
+ *
+ * The title is mounted before this point on purpose: it is a 2D scene that needs
+ * only the UI config and the world's hour, while the boot also compiles shaders,
+ * builds the environment and initialises Rapier. Waiting for all of that left
+ * the app showing nothing for seconds; now the first thing on screen is the
+ * picture, and Play stays disabled until the world behind it is ready.
+ */
+let entryBooted = false;
+function bootEntryFlow(): void {
+  entryBooted = true;
+  if (!entryScreen) return;
+  const stored = loadReconnectData();
+  entryFlowBoot(entryFlow, Boolean(stored?.accessToken || stored?.refreshToken));
+  entryScreen.render(entryFlow);
 }
 
 /** The world's hour as of boot, reused by the game world's first frame. */
@@ -11093,6 +11833,9 @@ function mountMenu(initialTimeOfDay: number | null): void {
     // The menu shows the world's sky, not a sky of its own.
     initialTimeOfDay,
     cycleLengthS: dayNightConfig.cycleLengthS,
+    // The title's verge and its flowers follow the world's calendar, which the
+    // season update in this file keeps current.
+    season: () => seasonNumber,
     fetchWorldTime: () => fetchWorldTime(window.fetch.bind(window), httpOrigin),
     account: menuAccount(),
     displayName: menuAccount()?.displayName ?? localProfile.displayName,
@@ -11102,14 +11845,18 @@ function mountMenu(initialTimeOfDay: number | null): void {
       if (profile.displayName !== undefined) rememberDisplayName(profile.displayName);
     },
   });
-  const stored = loadReconnectData();
-  entryFlowBoot(entryFlow, Boolean(stored?.accessToken || stored?.refreshToken));
+  // The machine may already be past booting: the title can mount after a slow
+  // `/world/time` while the rest of the world has finished. Render it in
+  // whatever state the flow is in, and let the boot finish it if it is ready.
   entryScreen.render(entryFlow);
+  if (entryBooted) bootEntryFlow();
 }
 
 // Start
 await initC01();
-startEntryFlow();
+// The title mounted inside initC01 when its own config was ready. Now the world
+// behind it is built, so the button can work.
+bootEntryFlow();
 
 // Ping every 5 seconds
 setInterval(() => {
@@ -11160,6 +11907,15 @@ interface PlantLegacyDebugHandle {
   readonly socket: WebSocket | null;
   readonly plantId: string | null;
   readonly drawnPositionOf: (node: PlantNodeData) => THREE.Vector3;
+  /** The plant as drawn, for browser checks that need an exact click point. */
+  readonly devNodes: () => Array<{
+    id: string;
+    parentId: string | null;
+    type: PlantNodeData['nodeType'];
+    isSeed: boolean;
+    world: [number, number, number];
+    radius: number;
+  }>;
   readonly plantRenderer: PlantRenderer | null;
   readonly webgpuRenderer: WebGPURenderer | null;
   readonly mutationLook: MutationLook | null;
@@ -11192,6 +11948,8 @@ interface PlantLegacyDebugHandle {
    * without its cavity hole.
    */
   readonly devCavity: CavityProbe;
+  /** How many nodes carry a nub, and by how much: the same rule the meshes use. */
+  readonly devNubs: () => NubReport;
   /** Terrain height under a world x/z. The camera floor's datum, in metres. */
   readonly groundAt: (x: number, z: number) => number;
   /** AL-01 benchmark: start a run, poll it, read the last report. */
@@ -11224,6 +11982,40 @@ const cavityProbe = createCavityProbe({
 // a temporal-dead-zone `ReferenceError` into the catch and log it as a render
 // failure, on every load.
 animate();
+
+// A page that loaded hidden never gets its `visibilitychange`: start the timer
+// loop from the state the page is actually in, so a preview pane or an occluded
+// window draws the world instead of leaving the canvas black.
+//
+// Read through a function: `renderConfig` is assigned inside the loader, so at
+// module tail flow analysis still believes it is null and the property read is
+// rejected.
+function pauseRendersWhenHidden(): boolean {
+  return renderConfig?.pauseOnHidden === true;
+}
+if (pauseRendersWhenHidden() && document.hidden) startBackgroundLoop();
+renderLoopReady = true;
+
+// A stalled animation loop must not leave the last thing on screen a cleared
+// buffer. `requestAnimationFrame` stops entirely for a hidden page, and its
+// timers are throttled, so the world could sit black through a whole season of
+// panel focus changes. One cheap check a second: if no frame has been drawn for
+// half a second, draw one here. On a visible page the loop is healthy and this
+// never fires; a stalled one gets a frame a second, which is a still picture
+// rather than a black one.
+window.setInterval(() => {
+  if (!renderLoopReady) return;
+  // A parked loop is only correct while the title is up. If the world is on screen
+  // and nothing is re-arming, start it here: that is the invariant the parking
+  // relies on, checked once a second, so a world entered by a path that forgot to
+  // wake it cannot sit frozen.
+  if (entryFlow.step === 'world' && !renderLoopRunning) {
+    wakeRenderLoop();
+    return;
+  }
+  if (performance.now() - lastFrameAtMs < 500) return;
+  renderFrame(0.1);
+}, 1000);
 
 // Development handle for inspecting the live scene from the browser console.
 if (import.meta.env.DEV) {
@@ -11291,6 +12083,25 @@ if (import.meta.env.DEV) {
       return plantBiomass;
     },
     devCavity: cavityProbe,
+    /**
+     * The plant as it is drawn, for browser checks that need an exact click point.
+     * Read-only; nothing in the game reads it.
+     */
+    devNodes: () =>
+      [...plantNodes.values()].map((node) => {
+        const drawn = drawnNodePosition(node);
+        return {
+          id: node.id,
+          parentId: node.parentId ?? null,
+          type: node.nodeType,
+          isSeed: node.isSeed === true,
+          world: [drawn.x, drawn.y, drawn.z] as [number, number, number],
+          radius: resolveDrawnRadius(node.nodeType, node.radius ?? 0.05, node.biomass),
+        };
+      }),
+    // The nub swell is a few per cent of a tube: too small to check by eye, so the
+    // count and the range come from the same rule the mesh builders apply.
+    devNubs: () => nubReport(plantNodes.values()),
     groundAt: (x: number, z: number) =>
       planetTerrainY(renderConfig?.planetRadiusM ?? 0, x, z, getTerrainParams()),
   };

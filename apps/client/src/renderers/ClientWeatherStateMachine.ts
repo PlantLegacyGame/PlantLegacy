@@ -11,6 +11,7 @@ import * as THREE from 'three';
 export type ClientWeatherState =
   | 'clear'
   | 'rain'
+  | 'snow'
   | 'thunderstorm_telegraph'
   | 'thunderstorm_active'
   | 'thunderstorm_aftermath'
@@ -23,6 +24,8 @@ export interface WeatherVisualTargets {
   fogFar: number;
   soilMoisture: number;
   isRaining: boolean;
+  /** Snow is falling: flakes instead of streaks, and they settle white. */
+  isSnowing: boolean;
   // No lightning field: a strike is read from `getLightningIntensity()`. A copy
   // kept here was initialised to 0 and never written, so every reader of it saw
   // clear skies.
@@ -37,6 +40,13 @@ export interface ClientWeatherConfig {
     soilMoisture: number;
   };
   rain: {
+    zenithColor: string;
+    horizonColor: string;
+    fogNear: number;
+    fogFar: number;
+    soilMoisture: number;
+  };
+  snow: {
     zenithColor: string;
     horizonColor: string;
     fogNear: number;
@@ -90,6 +100,7 @@ export class ClientWeatherStateMachine {
     fogFar: 0,
     soilMoisture: 0,
     isRaining: false,
+    isSnowing: false,
   };
 
   // Target visual values for current state
@@ -100,6 +111,7 @@ export class ClientWeatherStateMachine {
     fogFar: 0,
     soilMoisture: 0,
     isRaining: false,
+    isSnowing: false,
   };
 
   constructor(config: ClientWeatherConfig) {
@@ -117,6 +129,7 @@ export class ClientWeatherStateMachine {
     const cfg = this.config[state as keyof ClientWeatherConfig] as
       | ClientWeatherConfig['clear']
       | ClientWeatherConfig['rain']
+      | ClientWeatherConfig['snow']
       | ClientWeatherConfig['thunderstorm_telegraph']
       | ClientWeatherConfig['thunderstorm_active']
       | ClientWeatherConfig['thunderstorm_aftermath'];
@@ -129,6 +142,7 @@ export class ClientWeatherStateMachine {
     this.targetTargets.fogFar = cfg.fogFar;
     this.targetTargets.soilMoisture = cfg.soilMoisture;
     this.targetTargets.isRaining = state === 'rain' || state === 'thunderstorm_active';
+    this.targetTargets.isSnowing = state === 'snow';
   }
 
   /**
@@ -202,6 +216,7 @@ export class ClientWeatherStateMachine {
     current.fogFar = THREE.MathUtils.lerp(current.fogFar, target.fogFar, t);
     current.soilMoisture = THREE.MathUtils.lerp(current.soilMoisture, target.soilMoisture, t);
     current.isRaining = t > 0.5 ? target.isRaining : current.isRaining;
+    current.isSnowing = t > 0.5 ? target.isSnowing : current.isSnowing;
   }
 
   /**
@@ -246,6 +261,13 @@ export class ClientWeatherStateMachine {
    */
   isRaining(): boolean {
     return this.currentTargets.isRaining;
+  }
+
+  /**
+   * Check if currently snowing (for particle systems)
+   */
+  isSnowing(): boolean {
+    return this.currentTargets.isSnowing;
   }
 
   /**

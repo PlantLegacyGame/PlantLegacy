@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { clampToCavity, isInsideCavityColumn } from './burrowClamp.ts';
+import { cavityEscapeLiftY, clampToCavity, isInsideCavityColumn } from './burrowClamp.ts';
 
 const CAVITY = { x: 3, z: -2, radius: 2 };
 
@@ -66,5 +66,27 @@ describe('the opening is the only underground space', () => {
 
   it('has no column without an aperture', () => {
     assert.equal(isInsideCavityColumn({ x: 3, z: -2 }, { ...CAVITY, radius: 0 }, 0.2), false);
+  });
+});
+
+describe('cavity escape', () => {
+  it('lifts a buried eye while the player looks up', () => {
+    assert.equal(cavityEscapeLiftY(-3, 0, 0.8, 0.5, 2), -2);
+  });
+
+  it('never rises above the surface', () => {
+    assert.equal(cavityEscapeLiftY(-0.2, 0, 0.9, 1, 10), 0);
+  });
+
+  it('does nothing when the player is not looking up', () => {
+    assert.equal(cavityEscapeLiftY(-3, 0, -0.2, 1, 2), -3);
+  });
+
+  it('does nothing for an eye already above the surface', () => {
+    assert.equal(cavityEscapeLiftY(1.5, 0, 0.9, 1, 2), 1.5);
+  });
+
+  it('ignores a nonsensical rate', () => {
+    assert.equal(cavityEscapeLiftY(-3, 0, 0.9, 1, Number.NaN), -3);
   });
 });

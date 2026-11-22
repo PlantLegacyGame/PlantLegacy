@@ -13,6 +13,7 @@ import type { WeatherStateName } from '@plant-legacy/weather';
 export const DEV_WEATHER_STATES: readonly WeatherStateName[] = [
   'clear',
   'rain',
+  'snow',
   'thunderstorm_telegraph',
   'thunderstorm_active',
   'thunderstorm_aftermath',

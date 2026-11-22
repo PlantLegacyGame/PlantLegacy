@@ -50,6 +50,26 @@ export const ROOT_CAVITY_MARGIN_RATIO = 0.18;
 export const ROOT_CAVITY_FLAT_RATIO = 0.08;
 
 /**
+ * Whether the ground under a mouth has to be followed as a hillside.
+ *
+ * Exported because the caller can sample the ground at one radius and then find
+ * the mouth is wider than the ring it sampled: the answer has to be re-derivable
+ * for a new ring without rebuilding the whole shape (the size does not depend on
+ * the ground, only this label does).
+ */
+export function rimModeFor(groundHeights: readonly number[], apertureM: number): 'flat' | 'slope' {
+  if (groundHeights.length < 2) return 'flat';
+  let lowest = Number.POSITIVE_INFINITY;
+  let highest = Number.NEGATIVE_INFINITY;
+  for (const height of groundHeights) {
+    if (height < lowest) lowest = height;
+    if (height > highest) highest = height;
+  }
+  const drop = highest - lowest;
+  return drop > Math.max(0.1, apertureM * ROOT_CAVITY_FLAT_RATIO) ? 'slope' : 'flat';
+}
+
+/**
  * How much wider than the seed coat the mouth must be, as a ratio.
  *
  * A seedling's roots are thinner than its own seed, so an aperture sized from
@@ -80,6 +100,35 @@ export const ROOT_CAVITY_SEED_PIT_RADII = 3;
  * into the hole it is meant to show.
  */
 export const ROOT_SIGHT_APERTURE_EYE_CLEARANCE = 1.25;
+
+/**
+ * Mouth radius that can hold the bubbles the cavity will cut.
+ *
+ * The mouth is sized from the unmerged roots, but the cavity field pads every
+ * bubble (`bubble_padding_m`, plus a floor of its own). For a thin root the
+ * padding is a larger fraction than the 18% margin, so its bubble reached past
+ * the mouth; the envelope loop then rejected it for standing outside the hole,
+ * the cavity counted zero bubbles, and the soil shut while the root was growing
+ * and opened again a rebuild later. The mouth is widened to the padded bubbles
+ * here, so a bubble that is part of the plant can never be the one left outside.
+ */
+export function mouthRadiusFor(
+  configuredApertureM: number,
+  ownBubbles: readonly RootCavityBubble[],
+  crownX: number,
+  crownZ: number,
+  paddingM: number,
+): number {
+  let reach = 0;
+  for (const bubble of ownBubbles) {
+    reach = Math.max(
+      reach,
+      Math.hypot(bubble.x - crownX, bubble.z - crownZ) + Math.max(0, bubble.radius),
+    );
+  }
+  const padding = Number.isFinite(paddingM) ? Math.max(0, paddingM) : 0;
+  return Math.max(Math.max(0, configuredApertureM), reach > 0 ? reach + padding : 0);
+}
 
 export interface RootCavityShapeInput {
   /** The plant's own underground bubbles, crown-relative or world - any frame. */
@@ -116,18 +165,7 @@ export function rootCavityShape(input: RootCavityShapeInput): RootCavityShape {
     Math.max(0, input.crownRadiusM ?? 0) * ROOT_CAVITY_CROWN_CLEARANCE,
   );
 
-  let rimMode: 'flat' | 'slope' = 'flat';
-  const heights = input.groundHeights;
-  if (heights && heights.length > 1) {
-    let lowest = Number.POSITIVE_INFINITY;
-    let highest = Number.NEGATIVE_INFINITY;
-    for (const height of heights) {
-      if (height < lowest) lowest = height;
-      if (height > highest) highest = height;
-    }
-    const drop = highest - lowest;
-    if (drop > Math.max(0.1, apertureM * ROOT_CAVITY_FLAT_RATIO)) rimMode = 'slope';
-  }
+  const rimMode = rimModeFor(input.groundHeights ?? [], apertureM);
 
   return { rootsRadiusM, rootsDepthM, apertureM, rimMode };
 }

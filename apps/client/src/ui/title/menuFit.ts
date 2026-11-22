@@ -26,6 +26,26 @@
 /** Ground band kept under the line: the roots, and the foot the menu stands on. */
 export const GROUND_BAND_PX = 96;
 
+/**
+ * Most of the pane the sky may take.
+ *
+ * The plant grows upward from the ground line, so the only honest way to give a
+ * tall tree room is to move that line down - and the only thing that stops it is
+ * the menu standing under it. At 0.66 the sky is two thirds of the pane at most
+ * and the hero column always has a third to stand in (at the minimum scale its
+ * own `menuFit` allows). Without this the line could slide to 96 px from the
+ * bottom to keep a huge plant in frame, which put the Play button on the trunk.
+ */
+export const SKY_MAX_SHARE = 0.66;
+
+/** The smallest ground band a pane may be given, given how tall it is. */
+export function skyGroundPx(viewportPx: number, minPx = GROUND_BAND_PX): number {
+  const viewport = Math.max(viewportPx, 0);
+  const floor = Number.isFinite(minPx) ? Math.max(0, minPx) : GROUND_BAND_PX;
+  if (viewport <= 0) return floor;
+  return Math.max(floor, Math.round(viewport * (1 - SKY_MAX_SHARE)));
+}
+
 /** Room kept clear at the foot of the pane for the guest line and the key hint. */
 export const MENU_FOOT_RESERVE_PX = 52;
 
@@ -138,16 +158,28 @@ export function horizonForPane(input: HorizonInput): number {
 /**
  * Largest the mascot may be drawn in this pane.
  *
- * The plant's own height is the thing the ground line has to clear, so in a short
- * pane the plant is what gives way first: it shrinks until it fits the band above
- * the line. `ART_ASPECT` is the drawing's own height over its width (the SVG is
- * 200x224), so a maximum width is what the CSS can actually use.
+ * The plant's own height is the thing the ground line has to clear, so the pane's
+ * sky is the plant's budget: it may be as tall as the band above the line, and no
+ * taller. `PLANT_ART_ASPECT` is the art's own height over its width (200 units
+ * wide around 283 units of drawing), so a maximum *width* is what the CSS can set.
+ *
+ * `maxScale` is the important part: care scales the drawing up to 1.6x, and a cap
+ * derived from the unscaled art is a cap that the grown tree walks straight
+ * through - which is how the crown ended up above the top of the pane. The budget
+ * is divided by it, so the tree at its full height is the tree that fits.
  */
-export const PLANT_ART_ASPECT = 224 / 200;
+export const PLANT_ART_ASPECT = 283 / 200;
 
-export function mascotMaxWidthPx(viewportPx: number, groundPx: number, minPx = 84): number {
+export function mascotMaxWidthPx(
+  viewportPx: number,
+  groundPx: number,
+  minPx = 84,
+  maxScale = 1,
+): number {
   const viewport = Math.max(viewportPx, 0);
   if (viewport <= 0) return minPx;
-  const room = Math.max(minPx * PLANT_ART_ASPECT, viewport - groundPx);
-  return Math.max(minPx, room / PLANT_ART_ASPECT);
+  const scale = Number.isFinite(maxScale) && maxScale > 0 ? maxScale : 1;
+  const aspect = PLANT_ART_ASPECT * scale;
+  const room = Math.max(minPx * aspect, viewport - groundPx);
+  return Math.max(minPx, room / aspect);
 }

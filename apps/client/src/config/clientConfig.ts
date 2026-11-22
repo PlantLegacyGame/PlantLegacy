@@ -180,6 +180,19 @@ export interface RenderConfig {
    * dirt and never through it.
    */
   cameraGroundTouchM: number;
+  /** Reach of a drop pickup, metres. */
+  dropPickDistanceM: number;
+  /** Hits this close together are the same point; the deeper node wins. */
+  nodePickTieM: number;
+  /**
+   * Height of the orbit pivot above the player's feet.
+   *
+   * A pivot on the ground is why the camera could not look up: every orbit angle
+   * that points above the horizon puts the eye under the soil, and the ground
+   * clamp lifts it back. Orbiting a point at head height is what lets the eye
+   * stand on the dirt and look at the sky.
+   */
+  cameraPivotHeightM: number;
   /** Gravity for the player's vertical physics, in metres per second squared. */
   playerGravityMps2: number;
   /** How far above the ground the player spawns, in metres. */
@@ -288,6 +301,10 @@ export interface RootSightConfig {
   cameraBurrowEnabled: boolean;
   maxBurrowDepthM: number;
   cavityClearanceM: number;
+  /** Metres per second the eye rises out of the opening while looking up. */
+  cavityEscapeLiftMps: number;
+  /** Look-up amount (forward-vector height) that starts the climb. */
+  cavityEscapeLookUp: number;
   rebuildHz: number;
   /** Smallest underground extent a cavity can be sized from, metres. */
   minExtentM: number;
@@ -329,9 +346,6 @@ export interface TerrainConfig {
   ridgeStrength: number;
   patchRadiusM: number;
   rimFadeFraction: number;
-  tileSizeM: number;
-  tileVertices: number;
-  lodDistancesM: number[];
   cellSizeM: number;
   chunkCells: number;
   maxActiveChunks: number;
@@ -647,6 +661,12 @@ interface RenderConfigResponse {
   soilDepthM?: number;
   camera_ground_touch_m?: number;
   cameraGroundTouchM?: number;
+  drop_pick_distance_m?: number;
+  dropPickDistanceM?: number;
+  node_pick_tie_m?: number;
+  nodePickTieM?: number;
+  camera_pivot_height_m?: number;
+  cameraPivotHeightM?: number;
   player_gravity_mps2?: number;
   playerGravityMps2?: number;
   player_spawn_height_m?: number;
@@ -806,6 +826,10 @@ interface RootSightConfigResponse {
   maxBurrowDepthM?: number;
   cavity_clearance_m?: number;
   cavityClearanceM?: number;
+  cavity_escape_lift_mps?: number;
+  cavityEscapeLiftMps?: number;
+  cavity_escape_look_up?: number;
+  cavityEscapeLookUp?: number;
   rebuild_hz?: number;
   rebuildHz?: number;
   min_extent_m?: number;
@@ -1096,6 +1120,11 @@ function normalizeRenderConfig(data: RenderConfigResponse, fallback: RenderConfi
     soilDepthM: data.soil_depth_m ?? data.soilDepthM ?? fallback.soilDepthM,
     cameraGroundTouchM:
       data.camera_ground_touch_m ?? data.cameraGroundTouchM ?? fallback.cameraGroundTouchM,
+    dropPickDistanceM:
+      data.drop_pick_distance_m ?? data.dropPickDistanceM ?? fallback.dropPickDistanceM,
+    nodePickTieM: data.node_pick_tie_m ?? data.nodePickTieM ?? fallback.nodePickTieM,
+    cameraPivotHeightM:
+      data.camera_pivot_height_m ?? data.cameraPivotHeightM ?? fallback.cameraPivotHeightM,
     playerGravityMps2:
       data.player_gravity_mps2 ?? data.playerGravityMps2 ?? fallback.playerGravityMps2,
     playerSpawnHeightM:
@@ -1273,6 +1302,10 @@ function normalizeRootSightConfig(
       data.camera_burrow_enabled ?? data.cameraBurrowEnabled ?? fallback.cameraBurrowEnabled,
     maxBurrowDepthM: data.max_burrow_depth_m ?? data.maxBurrowDepthM ?? fallback.maxBurrowDepthM,
     cavityClearanceM: data.cavity_clearance_m ?? data.cavityClearanceM ?? fallback.cavityClearanceM,
+    cavityEscapeLiftMps:
+      data.cavity_escape_lift_mps ?? data.cavityEscapeLiftMps ?? fallback.cavityEscapeLiftMps,
+    cavityEscapeLookUp:
+      data.cavity_escape_look_up ?? data.cavityEscapeLookUp ?? fallback.cavityEscapeLookUp,
     rebuildHz: data.rebuild_hz ?? data.rebuildHz ?? fallback.rebuildHz,
     minExtentM: data.min_extent_m ?? data.minExtentM ?? fallback.minExtentM,
     surfaceProgress: data.surface_progress ?? data.surfaceProgress ?? fallback.surfaceProgress,
@@ -1422,7 +1455,7 @@ export async function loadRenderConfig(serverOrigin: string): Promise<RenderConf
     cameraMinDistance: 10.0,
     cameraMinDistanceRoot: 0.15,
     cameraMaxDistance: 200.0,
-    cameraMaxPolarAngle: 1.52,
+    cameraMaxPolarAngle: 3.09,
     cameraCollisionEnabled: true,
     cameraCollisionMargin: 0.3,
     cameraStartDistance: 6.0,
@@ -1535,6 +1568,9 @@ export async function loadRenderConfig(serverOrigin: string): Promise<RenderConf
     terrainAmplitudeM: 2.4,
     soilDepthM: 1.6,
     cameraGroundTouchM: 0.02,
+    dropPickDistanceM: 6,
+    nodePickTieM: 0.02,
+    cameraPivotHeightM: 1.6,
     playerGravityMps2: 9.81,
     playerSpawnHeightM: 3.5,
     rootAuraRadius: 3.0,
@@ -1636,6 +1672,8 @@ export async function loadRootSightConfig(serverOrigin: string): Promise<RootSig
     cameraBurrowEnabled: true,
     maxBurrowDepthM: 12,
     cavityClearanceM: 0.2,
+    cavityEscapeLiftMps: 1.6,
+    cavityEscapeLookUp: 0.35,
     rebuildHz: 10,
     minExtentM: 0.05,
     surfaceProgress: 0.001,
@@ -1665,9 +1703,6 @@ export async function loadTerrainConfig(serverOrigin: string): Promise<TerrainCo
     ridgeStrength: 0.35,
     patchRadiusM: 620,
     rimFadeFraction: 0.28,
-    tileSizeM: 16,
-    tileVertices: 17,
-    lodDistancesM: [48, 120, 280, 620],
     cellSizeM: 0.5,
     chunkCells: 32,
     maxActiveChunks: 64,
@@ -1701,9 +1736,6 @@ export async function loadTerrainConfig(serverOrigin: string): Promise<TerrainCo
       const parsed = Number(data[key]);
       return Number.isFinite(parsed) ? parsed : value;
     };
-    const lod = Array.isArray(data.lod_distances_m)
-      ? (data.lod_distances_m as unknown[]).map(Number).filter((n) => Number.isFinite(n))
-      : fallback.lodDistancesM;
     return {
       seed: num('seed', fallback.seed),
       surfaceAmplitudeM: num('surface_amplitude_m', fallback.surfaceAmplitudeM),
@@ -1714,9 +1746,6 @@ export async function loadTerrainConfig(serverOrigin: string): Promise<TerrainCo
       ridgeStrength: num('ridge_strength', fallback.ridgeStrength),
       patchRadiusM: num('patch_radius_m', fallback.patchRadiusM),
       rimFadeFraction: num('rim_fade_fraction', fallback.rimFadeFraction),
-      tileSizeM: num('tile_size_m', fallback.tileSizeM),
-      tileVertices: num('tile_vertices', fallback.tileVertices),
-      lodDistancesM: lod.length > 0 ? lod : fallback.lodDistancesM,
       cellSizeM: num('cell_size_m', fallback.cellSizeM),
       chunkCells: num('chunk_cells', fallback.chunkCells),
       maxActiveChunks: num('max_active_chunks', fallback.maxActiveChunks),

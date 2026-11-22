@@ -5,11 +5,13 @@ import { loadConfigDir } from '@plant-legacy/shared/config';
 import type { UprootConfig } from '@plant-legacy/shared/damage';
 import type { PlantNode } from '@plant-legacy/shared/growth';
 import type { WeatherStateName } from '@plant-legacy/weather';
+import { pickupDrop } from '../dropPickup.ts';
 import { loadGrowthConfig } from '../growth.ts';
 import { deserializePlant, serializePlant } from '../persistence/plantPersistence.ts';
 import { PlantWorld } from '../plantWorld.ts';
 import type { ResourceWorld } from '../resourceWorld.ts';
 import { loadResourcesConfig } from '../resourceWorld.ts';
+import type { SporeConfig } from '../spores.ts';
 import { loadDamageConfig, loadTumblingConfig, loadUprootConfig } from './config.ts';
 import { DamagePipeline, type DamagePipelineOptions } from './damagePipeline.ts';
 
@@ -496,6 +498,120 @@ describe('damage pipeline: drops', () => {
     }
     assert.ok(ended);
     assert.ok(pipeline.getDrops().some((drop) => drop.kind === 'dung'));
+  });
+});
+
+/** The spore rates the game pays, in the shape `pickupDrop` reads. */
+const SPORES: SporeConfig = {
+  startingBalance: 0,
+  earnDung: 5,
+  earnMutation: 15,
+  earnFragment: 3,
+  earnKill: 30,
+  maxBalance: 1000,
+};
+
+/**
+ * Drop pickup, against the real pipeline.
+ *
+ * The first version of these tests used a miniature map that imitated
+ * `collectDrop`. That proves the decision, not the store: a bug in the pipeline's
+ * own removal or its expiry would have passed every one of them. These spawn a
+ * drop through `DamagePipeline.spawnWorldDrop`, collect it through the same
+ * `collectDrop` the socket handler calls, and read `getDrops()` for the truth.
+ */
+describe('drop pickup through the real store', () => {
+  it('pays the dung rate for a live drop and takes it out of the world', () => {
+    const { plantWorld, pipeline } = makeHarness();
+    const plantId = makePlant(plantWorld);
+    const drop = pipeline.spawnWorldDrop('dung', 1, 0, 2, plantId);
+    assert.ok(
+      pipeline.getDrops().some((live) => live.id === drop.id),
+      'drop never spawned',
+    );
+    pipeline.drainEvents();
+
+    const result = pickupDrop(pipeline, SPORES, { plantId }, drop.id);
+    assert.deepEqual(result, { ok: true, kind: 'dung', amount: 5 });
+    assert.equal(
+      pipeline.getDrops().some((live) => live.id === drop.id),
+      false,
+      'the store still holds the collected drop',
+    );
+    const expired = pipeline.drainEvents().filter((event) => event.kind === 'drop_expired');
+    assert.equal(expired.length, 1, 'clients were never told to clear the marker');
+  });
+
+  it('pays the fragment rate for fragments and remains', () => {
+    const { plantWorld, pipeline } = makeHarness();
+    const plantId = makePlant(plantWorld);
+    const fragment = pipeline.spawnWorldDrop('fragment', 0, 1, 0, plantId);
+    const remains = pipeline.spawnWorldDrop('remains', 0, 0, 1, plantId);
+    assert.equal(pickupDrop(pipeline, SPORES, { plantId }, fragment.id).amount, 3);
+    assert.equal(pickupDrop(pipeline, SPORES, { plantId }, remains.id).amount, 3);
+    assert.equal(pipeline.getDrops().length, 0);
+  });
+
+  it('pays nothing for an id the world does not have', () => {
+    const { plantWorld, pipeline } = makeHarness();
+    const plantId = makePlant(plantWorld);
+    const drop = pipeline.spawnWorldDrop('dung', 0, 0, 0, plantId);
+    const result = pickupDrop(pipeline, SPORES, { plantId }, 'drop_does_not_exist');
+    assert.deepEqual(result, { ok: false, kind: null, amount: 0 });
+    assert.ok(
+      pipeline.getDrops().some((live) => live.id === drop.id),
+      'a stranger id ate a drop',
+    );
+  });
+
+  it('pays a replayed id nothing, because the first collect removed it', () => {
+    const { plantWorld, pipeline } = makeHarness();
+    const plantId = makePlant(plantWorld);
+    const drop = pipeline.spawnWorldDrop('dung', 0, 0, 0, plantId);
+    let balance = 0;
+    const first = pickupDrop(pipeline, SPORES, { plantId }, drop.id);
+    if (first.ok) balance += first.amount;
+    const replay = pickupDrop(pipeline, SPORES, { plantId }, drop.id);
+    if (replay.ok) balance += replay.amount;
+    assert.equal(balance, 5, `the id paid ${balance} spores`);
+    assert.deepEqual(replay, { ok: false, kind: null, amount: 0 });
+  });
+
+  it('pays nothing for a drop that has already expired', () => {
+    let now = 1_000;
+    const { plantWorld, pipeline } = makeHarness({ now: () => now });
+    const plantId = makePlant(plantWorld);
+    const drop = pipeline.spawnWorldDrop('dung', 0, 0, 0, plantId);
+    now += (damageConfig.dungLifetimeS + 1) * 1000;
+    pipeline.tick(DT, 1);
+    assert.equal(
+      pipeline.getDrops().some((live) => live.id === drop.id),
+      false,
+      'the drop outlived its lifetime',
+    );
+    assert.deepEqual(pickupDrop(pipeline, SPORES, { plantId }, drop.id), {
+      ok: false,
+      kind: null,
+      amount: 0,
+    });
+  });
+
+  it('gives a player without a plant nothing and leaves the drop where it was', () => {
+    const { plantWorld, pipeline } = makeHarness();
+    const plantId = makePlant(plantWorld);
+    const drop = pipeline.spawnWorldDrop('dung', 0, 0, 0, plantId);
+    const result = pickupDrop(pipeline, SPORES, { plantId: null }, drop.id);
+    assert.deepEqual(result, { ok: false, kind: null, amount: 0 });
+    assert.ok(pipeline.getDrops().some((live) => live.id === drop.id));
+  });
+
+  it('ignores ids that are not strings', () => {
+    const { plantWorld, pipeline } = makeHarness();
+    const plantId = makePlant(plantWorld);
+    pipeline.spawnWorldDrop('dung', 0, 0, 0, plantId);
+    assert.equal(pickupDrop(pipeline, SPORES, { plantId }, null).ok, false);
+    assert.equal(pickupDrop(pipeline, SPORES, { plantId }, '').ok, false);
+    assert.equal(pipeline.getDrops().length, 1);
   });
 });
 

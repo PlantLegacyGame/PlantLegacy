@@ -46,6 +46,7 @@ import { DatabaseProbe } from './ops/db.ts';
 import { handleGetDevConfig, handlePostDevConfig } from './ops/dev.ts';
 import { resolveDevAccess } from './ops/devAccess.ts';
 import { resolveDevWeatherCommand } from './ops/devCommands.ts';
+import { pickupDrop } from './ops/dropPickup.ts';
 import { eventBus, GAME_EVENTS } from './ops/eventBus.ts';
 import { loadGrowthConfig } from './ops/growth.ts';
 import {
@@ -108,6 +109,8 @@ import {
   seasonSnapshot,
   seasonUpdatePayload,
 } from './ops/seasonClock.ts';
+import { awardSpores, loadShopConfig, purchaseShopItem, type ShopConfig } from './ops/shop.ts';
+import { loadSporeConfig, type SporeConfig } from './ops/spores.ts';
 import { TerrainService } from './ops/terrain.ts';
 import { createTickClock, type TickClock, tickClockStart, tickClockStop } from './ops/tickClock.ts';
 import {
@@ -201,6 +204,8 @@ interface ConnectedPlayer {
   lastInputTick: number;
   pendingInputs: Map<number, PlayerInput>;
   inventory: Inventory;
+  /** The purse, in spores. Earned and spent through `ops/shop.ts`. */
+  spores: number;
   /** Players whose chat this player has muted. */
   blocked: Set<string>;
   /** Timestamps of recent chat messages, for the per-minute rate limit. */
@@ -326,6 +331,8 @@ class World {
   private readonly tickMetrics: TickMetrics;
   private budgetSubscription: { unsubscribe(): void } | null = null;
   private itemsConfig: ReturnType<typeof loadItemsConfig>;
+  private sporeConfig: SporeConfig;
+  private shopConfig: ShopConfig;
   private chatConfig: ChatConfig;
   private reportConfig: ReportConfig;
   private recentReports = new Map<string, number[]>();
@@ -770,6 +777,25 @@ class World {
               plantId: event.plantId,
               credit: event.credit,
             });
+            // The player credited with the kill is paid in spores, and the
+            // balance reaches them on the next INVENTORY_SYNC.
+            if (event.credit.kind === 'player' && event.credit.playerId) {
+              const killer = this.players.get(event.credit.playerId);
+              if (killer) {
+                awardSpores(
+                  {
+                    itemsConfig: this.itemsConfig,
+                    shopConfig: this.shopConfig,
+                    sporeConfig: this.sporeConfig,
+                    send: (ws, type, out) => this.send(ws, type, out),
+                    log: this.log,
+                  },
+                  killer,
+                  this.sporeConfig.earnKill,
+                  'kill_credit',
+                );
+              }
+            }
             break;
           case 'strike':
             this.broadcast(MESSAGE_TYPE.WEATHER_STRIKE, {
@@ -835,6 +861,17 @@ class World {
     runtimeEnvironment = 'local',
     devAllowedEnvironments: string[] = ['local'],
     devAdminAccounts: string[] = [],
+    // The purse and the catalogue. Appended rather than inserted so every existing
+    // positional caller keeps its arguments.
+    sporeConfig: SporeConfig = {
+      startingBalance: 0,
+      earnDung: 0,
+      earnMutation: 0,
+      earnFragment: 0,
+      earnKill: 0,
+      maxBalance: 0,
+    },
+    shopConfig: ShopConfig = { enabled: false, currencyName: '', items: [] },
   ) {
     this.config = config;
     this.log = log;
@@ -851,6 +888,8 @@ class World {
       this.plantEventLog.seed(plantId, events);
     }
     this.itemsConfig = itemsConfig;
+    this.sporeConfig = sporeConfig;
+    this.shopConfig = shopConfig;
     this.chatConfig = chatConfig;
     this.reportConfig = reportConfig;
     // One clock per world: the season is world state, not per-plant state, so a
@@ -1086,6 +1125,7 @@ class World {
       lastInputTick: 0,
       pendingInputs: new Map(),
       inventory: createInventory(this.itemsConfig.inventorySlots),
+      spores: this.sporeConfig.startingBalance,
       blocked: new Set<string>(),
       chatTimestamps: [],
     };
@@ -1274,6 +1314,7 @@ class World {
       lastInputTick: 0,
       pendingInputs: new Map(),
       inventory: createInventory(this.itemsConfig.inventorySlots),
+      spores: this.sporeConfig.startingBalance,
       blocked: new Set<string>(),
       chatTimestamps: [],
     };
@@ -1423,6 +1464,7 @@ class World {
       lastInputTick: 0,
       pendingInputs: new Map(),
       inventory: createInventory(this.itemsConfig.inventorySlots),
+      spores: this.sporeConfig.startingBalance,
       blocked: new Set<string>(),
       chatTimestamps: [],
     };
@@ -1505,6 +1547,7 @@ class World {
   private inventoryPorts(): InventoryPorts {
     return {
       itemsConfig: this.itemsConfig,
+      sporeConfig: this.sporeConfig,
       send: (ws, type, payload) => this.send(ws, type, payload),
       getPlant: (plantId) => this.plantWorld.getPlant(plantId),
       growthConfig: () => this.plantWorld.getConfig(),
@@ -1600,6 +1643,21 @@ class World {
               this.getTick(),
             );
             if (result.ok) {
+              // A mutation level is a mutation gained, and the config pays for it.
+              // `earn_mutation` was declared and never paid before this, so the
+              // HUD only ever showed dung and kill earnings.
+              awardSpores(
+                {
+                  itemsConfig: this.itemsConfig,
+                  shopConfig: this.shopConfig,
+                  sporeConfig: this.sporeConfig,
+                  send: (ws, type, out) => this.send(ws, type, out),
+                  log: this.log,
+                },
+                player,
+                this.sporeConfig.earnMutation,
+                'mutation_level',
+              );
               this.sendMutationState(player);
             } else {
               this.send(player.ws, MESSAGE_TYPE.ERROR, {
@@ -2036,6 +2094,45 @@ class World {
           const player = this.players.get(playerId);
           if (!player) break;
           sendInventorySync(this.inventoryPorts(), player);
+          break;
+        }
+        case MESSAGE_TYPE.SHOP_PURCHASE: {
+          const request = payload as { itemId: string };
+          const buyer = this.players.get(playerId);
+          if (!buyer) break;
+          purchaseShopItem(
+            {
+              itemsConfig: this.itemsConfig,
+              shopConfig: this.shopConfig,
+              sporeConfig: this.sporeConfig,
+              send: (ws, type, out) => this.send(ws, type, out),
+              log: this.log,
+            },
+            buyer,
+            String(request.itemId ?? ''),
+          );
+          break;
+        }
+        case MESSAGE_TYPE.DROP_COLLECT: {
+          const request = payload as { id: string };
+          const collector = this.players.get(playerId);
+          if (!collector || !this.damagePipeline) break;
+          // The decision lives in `ops/dropPickup.ts`: a live drop pays once and
+          // is removed, an unknown or already-spent id pays nothing.
+          const pickup = pickupDrop(this.damagePipeline, this.sporeConfig, collector, request?.id);
+          if (!pickup.ok || !pickup.kind) break;
+          awardSpores(
+            {
+              itemsConfig: this.itemsConfig,
+              shopConfig: this.shopConfig,
+              sporeConfig: this.sporeConfig,
+              send: (ws, type, out) => this.send(ws, type, out),
+              log: this.log,
+            },
+            collector,
+            pickup.amount,
+            `drop_${pickup.kind}`,
+          );
           break;
         }
         case MESSAGE_TYPE.INVENTORY_SLOT_USE: {
@@ -2826,6 +2923,11 @@ class World {
     const pipeline = this.damagePipeline;
     return {
       defaultToolDamage: () => pipeline?.getConfig().damage.toolDamagePerHit ?? 0,
+      spawnDrop: (kind, x, y, z) => {
+        if (!pipeline) return null;
+        const drop = pipeline.spawnWorldDrop(kind, x, y, z, target?.plantId ?? null);
+        return drop ? { id: drop.id } : null;
+      },
       applyToolDamage: (amount) => {
         if (!pipeline || !target) return;
         pipeline.applyDamage(target.plantId, amount, 'tool', this.getTick(), {
@@ -3090,13 +3192,23 @@ class World {
    * The world clock, as the game itself runs it. The title screen is outside the
    * game loop, so it asks for this instead of keeping a second day.
    */
-  getWorldTime(): { timeOfDay: number; isDay: boolean; paused: boolean; scale: number } {
+  getWorldTime(): {
+    timeOfDay: number;
+    isDay: boolean;
+    paused: boolean;
+    scale: number;
+    weather: string;
+  } {
     const broadcast = this.weatherSystem.getBroadcast();
     return {
       timeOfDay: broadcast.timeOfDay,
       isDay: broadcast.isDay,
       paused: broadcast.timePaused,
       scale: broadcast.timeScale,
+      // The title draws the world's sky, so it needs the world's weather rather
+      // than one invented from the hour: standing in a storm while the menu shows
+      // clear is two skies disagreeing in front of the player.
+      weather: broadcast.weatherState,
     };
   }
 
@@ -3484,6 +3596,8 @@ async function main(): Promise<void> {
     runtime.nodeEnv,
     runtime.devAllowedEnvironments,
     runtime.devAdminAccounts,
+    loadSporeConfig(configs),
+    loadShopConfig(configs),
   );
   if (terrainService) {
     plantWorld.setGrowthResistanceProvider((x, y, z) => terrainService.growthResistanceAt(x, y, z));

@@ -46,6 +46,12 @@ const SKY_FRAGMENT_SHADER = /* glsl */ `
   // floor under the ground instead of the inside of the earth.
   uniform float uEyeUnderGround;
   uniform vec3 uEarthColor;
+  // Seconds since the world was entered: cloud bands drift, so the sky is not a
+  // painted backdrop with a fixed picture on it.
+  uniform float uCloudTime;
+  // 0 in clear air, 1 in a full storm: overcast thickens and darkens the cloud
+  // layer instead of the sky only changing colour.
+  uniform float uStorm;
 
   float hash21(vec2 p) {
     p = fract(p * vec2(123.34, 456.21));
@@ -137,17 +143,27 @@ const SKY_FRAGMENT_SHADER = /* glsl */ `
       sky += starTint * present * point * twinkle * night * 1.35;
     }
 
-    // Light, procedural cloud bands projected on a virtual plane.
+    // Light, procedural cloud bands projected on a virtual plane. The plane
+    // drifts with time and the bands are layered at two scales, so it reads as
+    // moving air rather than a still pattern; a storm raises the coverage and
+    // lowers the ceiling into an overcast instead of only tinting the sky.
     if (dir.y > 0.02) {
-      vec2 cloudUV = dir.xz / dir.y;
+      vec2 drift = vec2(uCloudTime * 0.010, uCloudTime * 0.004);
+      vec2 cloudUV = dir.xz / dir.y + drift;
+      float storm = clamp(uStorm, 0.0, 1.0);
       float clouds =
-        valueNoise2(cloudUV * 0.75) * 0.65 + valueNoise2(cloudUV * 1.8) * 0.35;
-      clouds = smoothstep(0.58, 0.88, clouds);
-      float cloudFade = smoothstep(0.0, 0.28, dir.y);
+        valueNoise2(cloudUV * 0.75) * 0.62 +
+        valueNoise2(cloudUV * 1.8 + drift * 1.7) * 0.26 +
+        valueNoise2(cloudUV * 4.3 - drift * 0.8) * 0.12;
+      // Clear air keeps only the high wisps; rain and storm fill the ceiling.
+      clouds = smoothstep(mix(0.70, 0.42, storm), mix(0.92, 0.62, storm), clouds);
+      float cloudFade = smoothstep(0.0, mix(0.28, 0.10, storm), dir.y);
       vec3 cloudColor =
-        mix(uHorizonColor, vec3(1.0), 0.55) *
-        (0.65 + 0.35 * clamp(uSunIntensity, 0.0, 1.0));
-      sky = mix(sky, cloudColor, clouds * cloudFade * 0.30 * (1.0 - night));
+        mix(uHorizonColor, vec3(1.0), 0.55 * (1.0 - storm)) *
+        (0.65 + 0.35 * clamp(uSunIntensity, 0.0, 1.0)) *
+        (1.0 - storm * 0.55);
+      float coverage = mix(0.30, 0.95, storm) * (1.0 - night * 0.65);
+      sky = mix(sky, cloudColor, clouds * cloudFade * coverage);
     }
 
     // Golden-hour scattering: a wide warm lobe around the sun plus a band lying
@@ -159,20 +175,68 @@ const SKY_FRAGMENT_SHADER = /* glsl */ `
       sky += uSunColor * (lobe + band) * uSunWarmth;
     }
 
-    // Solar disc and corona
+    // The solar disc.
+    //
+    // It used to be a high power of the dot product: a gaussian blob with no edge,
+    // the sun read as a fuzzy ball of light. A body has a limb. This draws a disc
+    // of about half a degree with a sharp, anti-aliased edge, darkens it towards
+    // that edge (limb darkening, and a warm chromosphere right at it) and keeps
+    // the glare in the air *around* the disc where scattering actually puts it.
     if (uSunDir.y > -0.1) {
-      float sunDot = max(0.0, dot(dir, normalize(uSunDir)));
-      float sunCore = pow(sunDot, 512.0) * 1.8;
-      float sunHalo = pow(sunDot, 24.0) * 0.35;
-      sky += uSunColor * (sunCore + sunHalo) * clamp(uSunIntensity, 0.0, 1.5);
+      vec3 sunC = normalize(uSunDir);
+      float sunAngle = acos(clamp(dot(dir, sunC), -1.0, 1.0));
+      // Readable, not true-scale. At its real half a degree the sun is a tenth of
+      // the width of the HUD text and still reads as a smudge; two degrees is the
+      // size that says "sun" at a glance while staying a body with an edge.
+      const float SUN_RADIUS = 0.034;
+      float across = clamp(sunAngle / SUN_RADIUS, 0.0, 1.0);
+      float disc = 1.0 - smoothstep(0.94, 1.0, across);
+      float mu = sqrt(max(0.0, 1.0 - across * across));
+      float limb = 0.42 + 0.58 * pow(mu, 0.6);
+      vec3 discColor = mix(uSunColor * vec3(1.0, 0.70, 0.48), uSunColor, limb);
+      float intensity = clamp(uSunIntensity, 0.0, 2.0);
+      float glare =
+        exp(-sunAngle * 130.0) * 0.55 +
+        exp(-sunAngle * 16.0) * 0.11;
+      sky += discColor * disc * limb * (2.4 + 0.8 * intensity);
+      sky += uSunColor * glare * (0.55 + 0.45 * intensity);
     }
 
-    // Lunar disc and soft glow
+    // The lunar disc.
+    //
+    // Same story as the sun: it was a gaussian, so the moon was a pale smudge.
+    // This is a disc with a local frame, maria (broad dark basins) and craters
+    // sampled on that frame, so they stay put on the moon instead of swimming as
+    // the sky turns; a dusty surface darkens to the limb, and the highlands catch
+    // a little more light there than the maria do.
     if (uMoonDir.y > -0.1) {
-      float moonDot = max(0.0, dot(dir, normalize(uMoonDir)));
-      float moonCore = pow(moonDot, 384.0) * 0.9;
-      float moonHalo = pow(moonDot, 20.0) * 0.15;
-      sky += uMoonColor * (moonCore + moonHalo) * uMoonIntensity;
+      vec3 moonC = normalize(uMoonDir);
+      float moonAngle = acos(clamp(dot(dir, moonC), -1.0, 1.0));
+      const float MOON_RADIUS = 0.027;
+      float moonAcross = clamp(moonAngle / MOON_RADIUS, 0.0, 1.0);
+      float moonDisc = 1.0 - smoothstep(0.93, 1.0, moonAcross);
+      float moonLevel = clamp(uMoonIntensity, 0.0, 1.0);
+      if (moonDisc > 0.002 && moonLevel > 0.002) {
+        vec3 pole = abs(moonC.y) > 0.97 ? vec3(1.0, 0.0, 0.0) : vec3(0.0, 1.0, 0.0);
+        vec3 right = normalize(cross(pole, moonC));
+        vec3 faceUp = cross(moonC, right);
+        vec2 moonUv = vec2(dot(dir, right), dot(dir, faceUp)) / MOON_RADIUS;
+        float radius2 = dot(moonUv, moonUv);
+        float basins = valueNoise2(moonUv * 2.1 + 17.0);
+        float craters =
+          valueNoise2(moonUv * 6.5 - 4.0) * 0.55 + valueNoise2(moonUv * 17.0) * 0.45;
+        float albedo = 0.58 + 0.30 * craters + 0.24 * smoothstep(0.42, 0.86, basins);
+        float dustLimb = 0.55 + 0.45 * sqrt(max(0.0, 1.0 - radius2));
+        float highlands = smoothstep(0.55, 1.0, sqrt(min(1.0, radius2))) * 0.28;
+        // A moon is grey rock, not blue light: the night colour is a tint on it,
+        // not its albedo.
+        vec3 moonRock = mix(uMoonColor, vec3(1.0, 0.98, 0.94), 0.55);
+        vec3 moonSurface = moonRock * (albedo * dustLimb + highlands) * 1.9;
+        sky = mix(sky, moonSurface, moonDisc * moonLevel);
+      }
+      float moonGlow =
+        exp(-moonAngle * 60.0) * 0.20 + exp(-moonAngle * 11.0) * 0.055;
+      sky += uMoonColor * moonGlow * moonLevel;
     }
 
     gl_FragColor = vec4(sky, 1.0);
@@ -219,6 +283,8 @@ export function createSkyDome(
       uMoonColor: { value: new THREE.Color(config.sunColorNight) },
       uMoonIntensity: { value: 0 },
       uEyeUnderGround: { value: 0 },
+      uCloudTime: { value: 0 },
+      uStorm: { value: 0 },
       // The earth tone as configured, not quartered. At a quarter it was #0e0a07
       // - black to any eye - and every patch of "ground" painted with it read as
       // a hole in the world.

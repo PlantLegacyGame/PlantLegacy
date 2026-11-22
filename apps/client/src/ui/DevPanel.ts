@@ -622,6 +622,23 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
               action: () => send(8, { type: 'dev_terrain_collapse' }),
             },
           ]),
+          // The whole drop path in one click: a drop a metre and a half from the
+          // crown, drawn, hoverable and collectible. Without this the spawn half
+          // only happened when a swarm left dung or a plant died.
+          createButtonGroup('Spawn Drop', [
+            {
+              label: 'Dung',
+              action: () => send(8, { type: 'dev_spawn_drop', kind: 'dung' }),
+            },
+            {
+              label: 'Fragment',
+              action: () => send(8, { type: 'dev_spawn_drop', kind: 'fragment' }),
+            },
+            {
+              label: 'Remains',
+              action: () => send(8, { type: 'dev_spawn_drop', kind: 'remains' }),
+            },
+          ]),
           createButtonGroup('Reroot Crawl', [
             { label: 'East', action: () => send(8, { type: 'dev_reroot', dirX: 1, dirZ: 0 }) },
             { label: 'West', action: () => send(8, { type: 'dev_reroot', dirX: -1, dirZ: 0 }) },

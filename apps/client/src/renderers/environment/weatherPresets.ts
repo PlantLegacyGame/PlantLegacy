@@ -6,11 +6,17 @@
  * is one entry here, and nobody has to read `EnvironmentRenderer` to know what
  * a storm looks like.
  */
+import * as THREE from 'three';
 import type { RenderConfig } from '../../config/clientConfig.js';
 import {
   type ClientWeatherStateMachine,
   createClientWeatherStateMachine,
 } from '../ClientWeatherStateMachine.js';
+
+/** Overcast snow light: the rain sky lifted towards white, not a new palette. */
+function snowSky(colour: string, lift: number): string {
+  return new THREE.Color(colour).lerp(new THREE.Color('#c9d3da'), lift).getStyle();
+}
 
 export function createEnvironmentWeatherMachine(config: RenderConfig): ClientWeatherStateMachine {
   return createClientWeatherStateMachine({
@@ -27,6 +33,15 @@ export function createEnvironmentWeatherMachine(config: RenderConfig): ClientWea
       fogNear: config.fogNearRain,
       fogFar: config.fogFarRain,
       soilMoisture: 0.85,
+    },
+    snow: {
+      // Snow light is flat and bright: a pale grey lid over the world, hazier
+      // close in than rain because a snow shower hides the horizon.
+      zenithColor: snowSky(config.skyZenithRain, 0.5),
+      horizonColor: snowSky(config.skyHorizonRain, 0.6),
+      fogNear: config.fogNearRain * 0.7,
+      fogFar: config.fogFarRain * 0.75,
+      soilMoisture: 0.5,
     },
     thunderstorm_telegraph: {
       zenithColor: config.skyZenithTelegraph,

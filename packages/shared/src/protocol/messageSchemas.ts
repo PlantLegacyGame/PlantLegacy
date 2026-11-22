@@ -580,4 +580,12 @@ export const MESSAGE_SCHEMAS: Record<number, Record<string, FieldRule>> = {
     itemId: { type: 'string', required: false, nullable: true },
     count: { type: 'integer', required: false, nullable: true },
   },
+  46: {
+    // SHOP_PURCHASE (client -> server)
+    itemId: { type: 'string', required: true },
+  },
+  47: {
+    // DROP_COLLECT (client -> server)
+    id: { type: 'string', required: true },
+  },
 };

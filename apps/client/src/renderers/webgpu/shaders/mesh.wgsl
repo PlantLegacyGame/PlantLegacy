@@ -270,6 +270,26 @@ fn lookForOrgan(plantIndex: u32, nodeType: f32) -> LookOrgan {
    // organs its style names. The JS side composed and clamped the result; the
    // shader only applies it, so a plant can show a bark mutation and a lamina
    // mutation at once instead of one signature or the other.
+   // Roots are not stems under the soil. They are paler, damper bark, and the
+   // earth they grew through grades their faces: the side turned up sees the sky,
+   // the side turned down sits in the soil's shadow. Without that split a root
+   // field is one brown mass and the cut-away shows dirt rather than roots.
+   if (!isOutline && input.nodeType < 0.5) {
+     let luma = dot(baseColor, vec3f(0.299, 0.587, 0.114));
+     // Contrast on the bark's own grain, so the ridges read at this size.
+     let grain = smoothstep(0.10, 0.60, luma);
+     baseColor = mix(baseColor * 0.74, baseColor * 1.12, grain);
+     // Lifted toward pale, damp bark: a root has to separate from the soil and
+     // the cavity wall by value, or the three materials read as one texture
+     // with creases in it. This is the same tissue, graded - not a new layer.
+     baseColor = mix(baseColor, vec3f(0.58, 0.47, 0.35), 0.38);
+     baseColor = baseColor * 1.06 + vec3f(0.02, 0.015, 0.01);
+     // Light falls off down the root: upward faces catch sky, undersides are in
+     // contact shadow with the soil around them.
+     let skyward = clamp(normal.y * 0.5 + 0.5, 0.0, 1.0);
+     baseColor *= mix(0.66, 1.12, skyward);
+   }
+
    let look = lookForOrgan(input.plantIndex, input.nodeType);
    if (!isOutline) {
      baseColor = applyPlantLook(baseColor, look, input.worldPosition, frame);
@@ -286,17 +306,31 @@ fn lookForOrgan(plantIndex: u32, nodeType: f32) -> LookOrgan {
    var lit = vec4f(baseColor * (0.45 + 0.55 * nDotL) + skyFill, 1.0);
 
     let viewDirection = normalize(frame.cameraPos.xyz - input.worldPosition);
-    // Backlight: a leaf with the sun behind it glows through its own tissue. This
-    // is what makes foliage read as alive at golden hour instead of painted. The
-    // selection outline is not tissue, so it is excluded, like every other
-    // surface term here.
+    // Backlight: a leaf with a light behind it glows through its own tissue, the
+    // way a torch shows through paper. Brightest when the eye, the blade and the
+    // light are in a line, and only where the lit face is the one turned away -
+    // a leaf lit from the front already has its light.
+    //
+    // This was gated on `sunWarmth`, the golden-hour number, which is zero after
+    // sunset: the moon is the only light the night has, and it could not shine
+    // through a leaf at all. Warmth now chooses the *colour* - honey at golden
+    // hour, the moon's cold silver after dark - and its floor is what carries the
+    // night, instead of switching the whole term off.
     if (!isOutline) {
-      let backlight = pow(max(dot(-viewDirection, sunDirection), 0.0), 2.0);
-      let transmission = vec3f(1.0, 0.82, 0.5) * backlight * frame.sunWarmth * 0.5;
+      let aim = pow(max(dot(-viewDirection, sunDirection), 0.0), 1.8);
+      let away = 0.35 + 0.65 * max(dot(-normal, sunDirection), 0.0);
+      let tint = mix(vec3f(0.74, 0.84, 1.0), vec3f(1.0, 0.82, 0.5), frame.sunWarmth);
+      let transmission = tint * aim * away * (0.42 + 0.3 * frame.sunWarmth);
       lit = vec4f(lit.rgb + baseColor.rgb * transmission, lit.a);
     }
-    let rim = pow(1.0 - max(dot(normal, viewDirection), 0.0), 3.0) * 0.18;
-    lit = vec4f(lit.rgb + vec3f(0.18, 0.30, 0.18) * rim, lit.a);
+    // The rim is the silhouette against whatever is behind it, so its colour is
+    // the material's: pale bark on a root seen against dark soil, leaf green on
+    // the canopy. A green rim on a root is what made roots read as painted on.
+    let isRootSurface = input.nodeType < 0.5;
+    let rimTint = select(vec3f(0.18, 0.30, 0.18), vec3f(0.42, 0.33, 0.22), isRootSurface);
+    let rimStrength = select(0.18, 0.27, isRootSurface);
+    let rim = pow(1.0 - max(dot(normal, viewDirection), 0.0), 3.0) * rimStrength;
+    lit = vec4f(lit.rgb + rimTint * rim, lit.a);
 
     // T04: emissive mutations glow from the tissue, after lighting. The
     // selection outline is not tissue, so it keeps its flat gold.

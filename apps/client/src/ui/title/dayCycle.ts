@@ -17,10 +17,6 @@ export interface TitlePalette {
   cloud: string;
   hillFar: string;
   hillNear: string;
-  canopyBack: string;
-  canopyFront: string;
-  grass: string;
-  frond: string;
   groundTop: string;
   groundBody: string;
   soilEdge: string;
@@ -32,23 +28,22 @@ export interface TitlePalette {
 }
 
 const NIGHT: TitlePalette = {
-  skyHigh: '#0b1120',
-  skyMid: '#111a2c',
-  skyLow: '#1b2740',
+  // Night is a deep blue room, not a grey evening: the sky drops almost to black at
+  // the top and keeps its colour low down, so the stars read and the dark is warm
+  // rather than merely unlit.
+  skyHigh: '#05070f',
+  skyMid: '#090f1d',
+  skyLow: '#131d33',
   cloud: '#2a3752',
   hillFar: '#101a24',
   hillNear: '#0d1720',
-  canopyBack: '#0d1a16',
-  canopyFront: '#14261d',
-  grass: '#16261c',
-  frond: '#0c1710',
   groundTop: '#2a2018',
   groundBody: '#1b1510',
   soilEdge: '#3a2c20',
   star: 1,
   sun: '#dfe7ff',
-  sunGlow: 0.12,
-  plantDim: 0.6,
+  sunGlow: 0.16,
+  plantDim: 0.5,
 };
 
 const DAWN: TitlePalette = {
@@ -58,10 +53,6 @@ const DAWN: TitlePalette = {
   cloud: '#f0c3a4',
   hillFar: '#2e3446',
   hillNear: '#26303c',
-  canopyBack: '#1d2b26',
-  canopyFront: '#2a3f2c',
-  grass: '#2c4530',
-  frond: '#1a2a1d',
   groundTop: '#5c4530',
   groundBody: '#3d2e20',
   soilEdge: '#6b5238',
@@ -78,10 +69,6 @@ const DAY: TitlePalette = {
   cloud: '#f4f7f6',
   hillFar: '#33503f',
   hillNear: '#2a4536',
-  canopyBack: '#22402a',
-  canopyFront: '#2f5a34',
-  grass: '#3d6b3c',
-  frond: '#26452a',
   groundTop: '#7a5334',
   groundBody: '#553a26',
   soilEdge: '#8b6544',
@@ -98,10 +85,6 @@ const DUSK: TitlePalette = {
   cloud: '#eab79a',
   hillFar: '#2b3038',
   hillNear: '#232c31',
-  canopyBack: '#1b2a22',
-  canopyFront: '#273c28',
-  grass: '#2a422c',
-  frond: '#18281b',
   groundTop: '#5a422c',
   groundBody: '#3b2a1c',
   soilEdge: '#6b5238',
@@ -186,10 +169,6 @@ export function paletteAt(phase: number): TitlePalette {
     cloud: lerpHex(from.palette.cloud, to.palette.cloud, t),
     hillFar: lerpHex(from.palette.hillFar, to.palette.hillFar, t),
     hillNear: lerpHex(from.palette.hillNear, to.palette.hillNear, t),
-    canopyBack: lerpHex(from.palette.canopyBack, to.palette.canopyBack, t),
-    canopyFront: lerpHex(from.palette.canopyFront, to.palette.canopyFront, t),
-    grass: lerpHex(from.palette.grass, to.palette.grass, t),
-    frond: lerpHex(from.palette.frond, to.palette.frond, t),
     groundTop: lerpHex(from.palette.groundTop, to.palette.groundTop, t),
     groundBody: lerpHex(from.palette.groundBody, to.palette.groundBody, t),
     soilEdge: lerpHex(from.palette.soilEdge, to.palette.soilEdge, t),
@@ -206,6 +185,12 @@ export interface CelestialBody {
   /** Height above the horizon as a share of the sky's height, 0 (on it) to 1. */
   y: number;
   visible: boolean;
+  /**
+   * How strongly to draw it, 0..1. A moon that is still up but in a sky that has
+   * already gone bright is a moon nobody should see whole: it fades out with the
+   * light instead of switching off at an hour boundary.
+   */
+  opacity?: number;
 }
 
 const DAY_START = 0.25;
@@ -231,6 +216,32 @@ export function moonPosition(phase: number): CelestialBody {
     p >= DAY_START && p <= DAY_END ? null : p < DAY_START ? (p + 0.25) / 0.5 : (p - DAY_END) / 0.5;
   if (t === null) return { x: 0, y: 0, visible: false };
   return { x: t, y: Math.sin(t * Math.PI), visible: true };
+}
+
+/**
+ * How much of the sun's wash the sky is showing, from how high the disc is.
+ *
+ * The palette's glow fades slower than the light does, and the wash is a screen
+ * blend over the whole pane: below the horizon it kept painting a bright yellow
+ * wash with no sun to cast it. The gate is the disc's own height, so the wash goes
+ * out as the sun sets.
+ */
+export function sunWashGate(sun: CelestialBody): number {
+  if (!sun.visible) return 0;
+  return Math.max(0, Math.min(1, sun.y / 0.22));
+}
+
+/**
+ * How much of the moon to draw, from the palette's own darkness.
+ *
+ * Deliberately not a function of the hour: the sky is a continuous blend of four
+ * palettes, so there is a band of bright sky that the clock still counts as night,
+ * and a full moon in it was the bug. Zero in daylight, rising through dusk, whole
+ * only in a real night sky.
+ */
+export function moonBrightness(star: number): number {
+  if (!Number.isFinite(star)) return 0;
+  return Math.max(0, Math.min(1, (star - 0.26) / 0.34));
 }
 
 export function isNight(phase: number): boolean {
@@ -266,6 +277,98 @@ export function lightMood(palette: TitlePalette): LightMood {
   // test it does not read a pale dawn horizon as "day".
   const night = Math.max(0, Math.min(1, palette.star));
   return { warmth, night };
+}
+
+/** Light arriving through the leaves from a disc behind them. */
+export interface LeafThroughLight {
+  /** 0..1: how much of the light shows through the canopy. */
+  amount: number;
+  /** The colour that light carries into the leaf. */
+  colour: string;
+  /** Which disc the light came from: weather scatters one of them, not both. */
+  source: 'sun' | 'moon';
+  /**
+   * 0..1: how much that disc stands *behind the crown* - near the trunk's own x,
+   * so the tree is between the eye and the light. This is the top light: it lights
+   * the upper reaches of the canopy and the gaps between the highest leaves,
+   * where `amount` is the sideways transmission through a leaf. A moon overhead is
+   * behind the crown; a moon at the edge of the arc is beside it.
+   */
+  top: number;
+}
+
+/**
+ * How much light comes through the canopy, and in what colour.
+ *
+ * Two versions, one per source, rather than one tint with two strengths: the moon
+ * behind the tree is a thin, cold silver that barely lifts the leaves, and a sun
+ * on the horizon behind it is a warm honey that fills them. Both are deliberately
+ * small numbers - a leaf that turns into a lamp is not a leaf - and both follow the
+ * light that actually reaches the canopy: a disc near the horizon grazes it
+ * sideways, and a disc overhead only lands on the tops of the leaves.
+ *
+ * The gate used to ask for a disc near the middle of the arc *and* near the
+ * horizon, which sounded like "behind the tree" and never happens: the bodies
+ * travel a semicircle, so x = 0.5 only at y = 1 (and at 0.5 either side when the
+ * sun is at 0.09). Every hour therefore returned the base trace alone - measured
+ * across the day, the strongest transmission was 0.16 at midnight with the moon
+ * overhead. The real grazing hours are moonrise and sunset, when a body is low and
+ * at the edge of the arc, so that is what is measured now.
+ *
+ * This is transmission, not a ray: the glow behind the crown and the light in the
+ * leaf are the whole effect, and there is no beam drawn between them.
+ */
+export function leafThroughLight(
+  palette: TitlePalette,
+  sun: CelestialBody,
+  moon: CelestialBody,
+): LeafThroughLight {
+  // Grazing light: how low the disc is (a body at the horizon sends light along the
+  // leaves rather than onto them) and how near the trunk's side of the sky it sits.
+  const graze = (body: CelestialBody): number => {
+    if (!body.visible) return 0;
+    const low = Math.max(0, 1 - body.y / 0.5);
+    const near = Math.max(0, 1 - Math.abs(body.x - 0.5) * 1.25);
+    return low * near;
+  };
+  // Even with nothing behind it, a canopy is thin: night leaves hold a little of
+  // the sky and day leaves a trace of the sun. The base is what makes the foliage
+  // look translucent at all hours; a low disc is what makes it glow.
+  const sunDown = !sun.visible;
+  const moonThrough = (sunDown ? 0.22 : 0.03) + graze(moon) * 0.45;
+  const sunThrough = 0.05 + graze(sun) * 0.45;
+  // Behind the crown: the disc is over the trunk's own column, which is the only
+  // place a tree can stand in front of it. Height decides where the light lands -
+  // a high disc lights the tops of the leaves, one near the horizon comes in
+  // under them - so the top light fades as the disc drops.
+  const behind = (body: CelestialBody): number => {
+    if (!body.visible) return 0;
+    const overTheTrunk = Math.max(0, 1 - Math.abs(body.x - 0.5) * 2.4);
+    const high = 0.3 + 0.7 * Math.min(1, Math.max(0, body.y) / 0.85);
+    return overTheTrunk * high;
+  };
+  const moonTop = behind(moon);
+  const sunTop = behind(sun);
+  if (moonThrough >= sunThrough) {
+    return {
+      top: moonTop,
+      amount: Math.min(0.5, moonThrough),
+      // A cold moon on a blue night. Lerped towards the night cloud colour so a
+      // bright white cannot punch a hole in the canopy, but only a fifth of the way:
+      // at a third the sheen was the same grey as the sky behind it and stopped
+      // reading as light at all.
+      colour: lerpHex('#dfe9ff', palette.cloud, 0.2),
+      source: 'moon',
+    };
+  }
+  return {
+    top: sunTop,
+    amount: Math.min(0.62, sunThrough),
+    // Honey, warmed from the palette's own sun so a holiday palette gets its own
+    // golden hour instead of mine.
+    colour: lerpHex(palette.sun, '#ffe2a8', 0.35),
+    source: 'sun',
+  };
 }
 
 export interface TitleLighting {
@@ -309,17 +412,23 @@ export function titleLighting(palette: TitlePalette): TitleLighting {
     // disappears once the disc is down.
     bloom: palette.sunGlow * (1 - mood.night) * 0.85,
     haze: 0.34 + mood.night * 0.1,
-    milkyWay: mood.night * 0.22,
+    milkyWay: mood.night * 0.3,
     cloudShadow: (1 - mood.night) * 0.5,
     // Warm rim by day, cold rim under the moon: the leaf edge is lit by the same
     // source as everything else.
-    leafRim: lerpHex(palette.sun, palette.cloud, 0.45 + mood.night * 0.35),
-    leafRimOpacity: 0.34 + mood.warmth * 0.22,
+    // The lit edge of a leaf is lit by the disc that owns the hour. At night the
+    // blend used to be 80 % cloud, so the rim took the colour of the sky it was
+    // meant to stand against and the canopy had no lit side at all; the moon's own
+    // cold silver is what a leaf edge shows under it.
+    leafRim: lerpHex(palette.sun, palette.cloud, 0.45 - mood.night * 0.22),
+    leafRimOpacity: 0.34 + mood.warmth * 0.22 + mood.night * 0.1,
     sunWash: palette.sunGlow * (1 - mood.night) * 0.9,
-    moonWash: mood.night * 0.62,
+    // Brighter than it was: the moon is the only light the night has, and at 0.62 it
+    // was a halo you had to look for.
+    moonWash: mood.night * 0.88,
     // Light: the palette has already darkened the scene by then, and the pass is
     // a multiply, so a heavy value crushes the plant's silhouette.
-    nightWash: mood.night * 0.34,
+    nightWash: mood.night * 0.42,
     plantSaturation: 0.72 + 0.28 * palette.plantDim,
     plantSepia: 0.16 * mood.warmth,
     plantHue: mood.warmth * 6 - mood.night * 13,

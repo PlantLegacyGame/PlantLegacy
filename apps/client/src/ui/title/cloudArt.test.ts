@@ -33,39 +33,57 @@ describe('cloudArt', () => {
 
   it('never draws below its own base', () => {
     // The bug was a rounded bar under the puffs putting a straight line five pixels
-    // below the silhouette. Now the base is a clip whose trough is the base line:
-    // the wave may lift, it may never dip.
+    // below the silhouette. There is no clip now: the puffs that reach the base are
+    // shortened to it, so no ellipse can cross its own viewBox, and at least one
+    // does touch it, so a cloud never floats above a strip of empty sky.
     for (const seed of SEEDS) {
       for (const layer of LAYERS) {
         const svg = cloudArt(seed, layer);
-        const { width, height } = viewBoxOf(svg);
-        const clip = /<clipPath id="[^"]+"><path d="([^"]+)"\/>/.exec(svg);
-        assert.ok(clip, 'no clip path');
-        const d = clip[1] ?? '';
-        assert.ok(d.startsWith(`M0 0 H${width.toFixed(1)}`), `clip does not span the width: ${d}`);
-        const waterline = Number(/V([\d.]+)/.exec(d)?.[1]);
-        assert.ok(Math.abs(waterline - height) < 0.1, 'clip does not end at the viewBox base');
-        for (const match of d.matchAll(/Q([\d.]+) ([\d.]+) ([\d.]+) ([\d.]+)/g)) {
-          assert.ok(Number(match[2]) <= waterline + 0.01, 'a billow dips below the base');
-          assert.ok(Number(match[4]) <= waterline + 0.01, 'the base dips below the waterline');
+        const { height } = viewBoxOf(svg);
+        const bottoms: number[] = [];
+        for (const match of svg.matchAll(
+          /<ellipse cx="([\d.]+)" cy="([\d.]+)" rx="([\d.]+)" ry="([\d.]+)"\/>/g,
+        )) {
+          const [, cy, , ry] = match.slice(1).map(Number);
+          assert.ok(cy + ry <= height + 0.05, 'a puff hangs below the base');
+          bottoms.push(Number((cy + ry).toFixed(1)));
         }
+        const deepest = Math.max(...bottoms);
+        assert.ok(deepest >= height - 0.6, 'the base is drawn below the lowest puff');
+      }
+    }
+  });
+
+  it('has no clip region to blend over the sky', () => {
+    // The light rectangle in the sky was the clip path's own box: the browser
+    // blended the clip region as one shape, so it showed wherever the cloud was
+    // thin. Geometry does the trimming now, and there is no clip left to leak.
+    for (const seed of SEEDS) {
+      for (const layer of LAYERS) {
+        const svg = cloudArt(seed, layer);
+        assert.ok(!svg.includes('clipPath'), 'a clip path is still drawn');
+        assert.ok(!svg.includes('clip-path'), 'a clip is still applied');
+        assert.ok(!svg.includes('mask'), 'a mask came back');
       }
     }
   });
 
   it('does not end on a ruler edge', () => {
-    // The complaint after the first fix: the bottoms were perfectly level. The
-    // underside is a wave now - a bank of puffs with shallow lifts between them.
-    // A wisp is the exception: it is a streak whose own puffs are its underside,
-    // and its clip sits on the lowest puff so it trims nothing.
+    // The complaint after the first fix: the bottoms were perfectly level. Now the
+    // base is the scalloped union of several narrow puffs, with different radii, so
+    // the underside rolls instead of ruling.
     for (const seed of SEEDS.filter((s) => s % 3 !== 2)) {
       const svg = cloudArt(seed);
-      const d = /<clipPath id="[^"]+"><path d="([^"]+)"\/>/.exec(svg)?.[1] ?? '';
-      assert.ok((d.match(/Q/g) ?? []).length >= 3, `underside is not a wave: ${d}`);
-      const lifts = new Set(
-        [...d.matchAll(/Q[\d.]+ ([\d.]+)/g)].map((m) => Number(m[1]).toFixed(2)),
-      );
-      assert.ok(lifts.size >= 2, 'every billow lifts by the same amount');
+      const { height } = viewBoxOf(svg);
+      const touching: number[] = [];
+      for (const match of svg.matchAll(
+        /<ellipse cx="[\d.]+" cy="([\d.]+)" rx="([\d.]+)" ry="([\d.]+)"\/>/g,
+      )) {
+        const [cy, rx, ry] = match.slice(1).map(Number);
+        if (Math.abs(cy + ry - height) < 0.6) touching.push(rx);
+      }
+      assert.ok(touching.length >= 3, 'fewer than three puffs form the base');
+      assert.ok(new Set(touching.map((r) => r.toFixed(1))).size >= 2, 'the base is one width');
     }
   });
 
@@ -106,5 +124,23 @@ describe('cloudArt', () => {
     assert.ok(svg.includes('gradientUnits="userSpaceOnUse"'));
     assert.equal(svg.match(/url\(#cl\d+b\)/g)?.length, 1);
     assert.equal(svg.match(/<linearGradient /g)?.length, 1);
+  });
+
+  it('has no shading geometry of its own', () => {
+    // Two rectangle-shaped bugs came from shading the underside separately: a
+    // masked band, then a gradient path with its own straight edges and a top line
+    // that crossed thinner parts of the cloud. The underside is the bottom of the
+    // body's ramp now, so there is nothing left to leak: no path or rect outside
+    // <defs>, one gradient, and it is the body's own.
+    for (const seed of SEEDS) {
+      for (const layer of LAYERS) {
+        const svg = cloudArt(seed, layer);
+        const outside = svg.slice(svg.indexOf('</defs>'));
+        assert.ok(!outside.includes('<path'), 'a path is drawn outside the clip');
+        assert.ok(!outside.includes('<rect'), 'a rect is drawn outside the clip');
+        assert.equal((svg.match(/<linearGradient /g) ?? []).length, 1);
+        assert.ok(!svg.includes('stop-opacity'), 'no second, translucent ramp');
+      }
+    }
   });
 });

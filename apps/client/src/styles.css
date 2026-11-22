@@ -224,6 +224,15 @@ body {
   -webkit-mask-image: var(--film-grain);
 }
 
+/* While the entry screen is up the title is an opaque 2D world. The WebGL
+   canvas and the grain overlay are covered by it, so drawing and compositing
+   them behind it is work nobody can see - the title screen should not be paying
+   for the 3D scene it is hiding. main.ts writes the step here on every render. */
+html[data-pl-entry-step]:not([data-pl-entry-step="world"]) #app > canvas,
+html[data-pl-entry-step]:not([data-pl-entry-step="world"]) #cinematic-overlay {
+  visibility: hidden;
+}
+
 /* ===== HUD primitives — game UI, not website chrome ===== */
 
 .hud-panel {
@@ -239,7 +248,6 @@ body {
      changing the width of the text (and the panel) as it ticks. */
   font-variant-numeric: tabular-nums;
   overflow: hidden;
-  backdrop-filter: blur(8px);
 }
 
 /* Centered modal panels — inventory, etc. */
@@ -594,7 +602,6 @@ body {
   border-radius: 999px;
   background: rgba(13, 17, 10, 0.9);
   box-shadow: var(--hud-shadow-sm);
-  backdrop-filter: blur(8px);
   color: var(--bark-300);
   font-size: 0.72rem;
   letter-spacing: 0.02em;
@@ -611,7 +618,6 @@ body {
   border-radius: 14px;
   background: linear-gradient(160deg, rgba(28, 35, 21, 0.9), rgba(12, 16, 9, 0.94));
   box-shadow: 0 10px 24px rgba(0, 0, 0, 0.35);
-  backdrop-filter: blur(8px);
 }
 
 /* Growth option card */
@@ -632,7 +638,6 @@ body {
   box-shadow:
     0 10px 24px rgba(0, 0, 0, 0.4),
     inset 0 1px 0 rgba(255, 255, 255, 0.05);
-  backdrop-filter: blur(8px);
   cursor: pointer;
   position: relative;
   z-index: 0;
@@ -726,54 +731,6 @@ body {
   }
 }
 
-/* Read-only card for another player's plant: identity and size only. */
-#plant-info-card {
-  position: fixed;
-  right: var(--hud-corner, 12px);
-  bottom: clamp(96px, 16vh, 150px);
-  z-index: 260;
-  display: none;
-  min-width: 168px;
-  padding: 10px 12px;
-  border: 1px solid var(--hud-border-muted);
-  border-radius: 12px;
-  background: linear-gradient(160deg, rgba(28, 35, 21, 0.94), rgba(12, 16, 9, 0.96));
-  box-shadow: var(--hud-shadow-sm);
-  backdrop-filter: blur(8px);
-  color: var(--warm-ink);
-  font-size: 0.68rem;
-  line-height: 1.4;
-}
-
-#plant-info-card .plant-info-card__title {
-  margin-bottom: 6px;
-  color: var(--bone-100);
-  font-size: 0.72rem;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
-#plant-info-card .plant-info-card__row {
-  display: flex;
-  justify-content: space-between;
-  gap: 10px;
-  font-variant-numeric: tabular-nums;
-}
-
-#plant-info-card .plant-info-card__row span {
-  opacity: 0.65;
-  text-transform: capitalize;
-}
-
-#plant-info-card .plant-info-card__hint {
-  margin-top: 7px;
-  padding-top: 6px;
-  border-top: 1px solid rgba(239, 233, 216, 0.12);
-  color: var(--ink-muted);
-  font-size: 0.6rem;
-}
-
 /* Detail drawer: absolutely positioned above the card, so opening it never
    reflows the row or moves the other cards. */
 #growth-options .hud-grow-option__details {
@@ -792,7 +749,6 @@ body {
   border-radius: 12px;
   background: linear-gradient(160deg, #1d2417, #0d1209);
   box-shadow: 0 14px 30px rgba(0, 0, 0, 0.55);
-  backdrop-filter: blur(10px);
   font-size: 0.7rem;
   line-height: 1.5;
   color: var(--warm-ink);

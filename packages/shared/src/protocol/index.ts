@@ -9,8 +9,11 @@
 import type { PlantNode } from '../growth/index.ts';
 
 /** Bumped on any breaking wire change. Mismatch shows an "update required" screen. */
-/** v2 adds MUTATION_STATE/MUTATION_SHED (T04); v3 adds MUTATION_LEVEL. */
-export const PROTOCOL_VERSION = 3;
+/**
+ * v2 adds MUTATION_STATE/MUTATION_SHED (T04); v3 adds MUTATION_LEVEL; v4 adds
+ * SHOP_PURCHASE and DROP_COLLECT.
+ */
+export const PROTOCOL_VERSION = 4;
 
 /** `[version:u8][type:u8][payload]` — payload encoding is T03P's decision. */
 export const FRAME_HEADER_BYTES = 2;
@@ -48,6 +51,10 @@ export const MESSAGE_TYPE = {
   MUTATION_SHED: 36,
   /** Client asks to raise a mutation a level (deals cards, then takes one). */
   MUTATION_LEVEL: 45,
+  /** Client asks to buy one shop item with spores. The price is the server's. */
+  SHOP_PURCHASE: 46,
+  /** Ask the server to pick a world drop up. `{ id }`; the server grants it. */
+  DROP_COLLECT: 47,
   REROOT_INTENT: 37,
   TERRAIN_REGION_REQUEST: 32,
 
@@ -116,6 +123,8 @@ export const CLIENT_TO_SERVER_TYPES: readonly MessageNumber[] = [
   MESSAGE_TYPE.INVENTORY_SLOT_SWAP,
   MESSAGE_TYPE.MUTATION_SHED,
   MESSAGE_TYPE.MUTATION_LEVEL,
+  MESSAGE_TYPE.SHOP_PURCHASE,
+  MESSAGE_TYPE.DROP_COLLECT,
   MESSAGE_TYPE.REROOT_INTENT,
   MESSAGE_TYPE.TERRAIN_REGION_REQUEST,
 ];

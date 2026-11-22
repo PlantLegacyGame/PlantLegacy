@@ -65,6 +65,35 @@ function isPortInUse(port) {
  * Refuse to start on top of another stack. Killing the other process was the
  * old behaviour and the reason two supervisors could fight over a port forever.
  */
+/**
+ * HTTP status of a local URL, or null when nothing answers.
+ *
+ * Used to tell "a stack is already up" from "something unrelated owns the
+ * port". A busy port used to be reported as an error even when the thing on it
+ * was this very project, already running.
+ */
+async function probeHttp(url, timeoutMs = 1500) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, { signal: controller.signal });
+    return response.status;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** True when both ports are answering as this project's own stack. */
+async function stackAlreadyServing() {
+  const [server, client] = await Promise.all([
+    probeHttp(`http://127.0.0.1:${SERVER_PORT}/health`),
+    probeHttp(`http://localhost:${CLIENT_PORT}/`),
+  ]);
+  return server === 200 && client !== null && client < 500;
+}
+
 async function requireFreePort(port, what) {
   if (!(await isPortInUse(port))) return true;
   console.error(`dev: port ${port} is already in use — ${what}.`);
@@ -182,6 +211,18 @@ function stop(signal) {
 process.on('SIGINT', () => stop('SIGINT'));
 process.on('SIGTERM', () => stop('SIGTERM'));
 
+// A stack that is already serving is not a conflict: it is the stack the user
+// wants. Reusing it keeps `pnpm dev` idempotent instead of telling someone to go
+// hunt for a terminal they may not have. Only a port held by something that is
+// not this project's health endpoints is an error.
+if ((await isPortInUse(SERVER_PORT)) || (await isPortInUse(CLIENT_PORT))) {
+  if (await stackAlreadyServing()) {
+    console.log(`dev: already serving - server on ${SERVER_PORT}, client on ${CLIENT_PORT}.`);
+    console.log('dev: reusing the running stack; nothing new was started.');
+    console.log('dev: restart it from its own terminal if it needs new env or config.');
+    process.exit(0);
+  }
+}
 if (!(await requireFreePort(SERVER_PORT, `the game server needs it`))) process.exit(1);
 if (!(await requireFreePort(CLIENT_PORT, `the Vite dev server needs it`))) process.exit(1);
 

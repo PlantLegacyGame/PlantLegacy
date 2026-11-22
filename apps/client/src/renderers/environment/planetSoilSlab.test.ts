@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import * as THREE from 'three';
 import { createSoilSlab } from './planetSoilSlab.ts';
-import { patchSurfaceY } from './planetSurface.ts';
+import { patchLocalSurfaceY } from './planetSurface.ts';
 
 const FIELD = {
   amplitudeM: 0,
@@ -34,6 +34,8 @@ function slab(depthM = 1.6, holeRadiusM = 0) {
 describe('soil slab', () => {
   it('hangs a wall of real thickness off the patch it lines', () => {
     const mesh = slab(1.6);
+    // Patch-local metres, placed at the body's radius, exactly like the patch.
+    assert.equal(mesh.position.y, 400);
     const position = mesh.geometry.getAttribute('position');
     const half = 20;
     const segments = 16;
@@ -42,7 +44,7 @@ describe('soil slab', () => {
     for (let i = 0; i < loopCount; i += 1) {
       const x = position.getX(i);
       const z = position.getZ(i);
-      const top = patchSurfaceY(400, x, z, FIELD as never, 0.02);
+      const top = patchLocalSurfaceY(400, x, z, FIELD as never, 0.02);
       // Float32 storage: millimetre agreement is what the geometry promises.
       assert.ok(Math.abs(position.getY(i) - top) < 1e-3, 'the wall top left the surface');
       const bottom = position.getY(loopCount + i);
@@ -59,7 +61,7 @@ describe('soil slab', () => {
     const underCount = position.count - loopCount * 2;
     assert.ok(underCount > 0, 'the slab has no underside');
     for (let i = loopCount * 2; i < position.count; i += 1) {
-      const top = patchSurfaceY(400, position.getX(i), position.getZ(i), FIELD as never, 0.02);
+      const top = patchLocalSurfaceY(400, position.getX(i), position.getZ(i), FIELD as never, 0.02);
       assert.ok(
         Math.abs(position.getY(i) - (top - 1.6)) < 1e-3,
         'the underside is not the surface minus the depth',
@@ -85,7 +87,8 @@ describe('soil slab', () => {
         Math.hypot(x, z) >= 6,
         `an underside vertex sits ${Math.hypot(x, z).toFixed(2)} m from the cavity axis, inside the 6 m void`,
       );
-      if (position.getY(v) < patchSurfaceY(400, x, z, FIELD as never, 0.02) - 0.1) underFaces += 1;
+      if (position.getY(v) < patchLocalSurfaceY(400, x, z, FIELD as never, 0.02) - 0.1)
+        underFaces += 1;
     }
     assert.ok(underFaces > 0, 'the hole took the whole underside with it');
   });
@@ -93,7 +96,7 @@ describe('soil slab', () => {
   it('takes its thickness from the config, not from a constant', () => {
     const thin = slab(0.3);
     const position = thin.geometry.getAttribute('position');
-    const top = patchSurfaceY(400, position.getX(0), position.getZ(0), FIELD as never, 0.02);
+    const top = patchLocalSurfaceY(400, position.getX(0), position.getZ(0), FIELD as never, 0.02);
     assert.ok(Math.abs((position.getY(64) ?? 0) - (top - 0.3)) < 1e-3);
     assert.equal(thin.name, 'planet-soil-slab');
   });

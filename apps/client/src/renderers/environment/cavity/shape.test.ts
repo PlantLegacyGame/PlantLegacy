@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
+  mouthRadiusFor,
   ROOT_CAVITY_CROWN_CLEARANCE,
   ROOT_CAVITY_MARGIN_RATIO,
   type RootCavityBubble,
+  rimModeFor,
   rootCavityShape,
 } from './shape.ts';
 
@@ -68,6 +70,26 @@ describe('the cavity is sized by the roots that dug it', () => {
   it('measures depth from the deepest bubble bottom, not its centre', () => {
     const shape = shapeOf([bubble(0, 15, 0, 0.5), bubble(0, 17, 0, 0.25)]);
     assert.ok(Math.abs(shape.rootsDepthM - 5.5) < 1e-9, `depth ${shape.rootsDepthM}`);
+  });
+
+  it('opens a mouth that holds the padded bubble of a thin new root', () => {
+    // 0.49 m of config floor and the 18% margin make a 0.59 m mouth for a 0.5 m
+    // root, but the cavity field pads that root's bubble out to a 0.64 m reach.
+    // The bubble then stood outside the hole, the envelope loop rejected it, and
+    // the cavity counted zero bubbles: the ground shut while the root grew.
+    const thinRoot = [bubble(0.5, 19.8, 0, 0.02)];
+    const mouth = mouthRadiusFor(0.49, thinRoot, 0, 0, 0.12);
+    assert.ok(Math.abs(mouth - (0.5 + 0.02 + 0.12)) < 1e-9, `mouth ${mouth}`);
+    assert.ok(mouth > shapeOf(thinRoot).apertureM - 1e-9);
+    // No roots: the configured mouth stands exactly, no phantom padding.
+    assert.equal(mouthRadiusFor(0.49, [], 0, 0, 0.12), 0.49);
+  });
+
+  it('re-reads the rim for a wider ring than the one sampled', () => {
+    // 15 cm of rise is a slope under a 1 m mouth (8 cm allowed) and flat under
+    // a 2 m one (16 cm allowed); the same hillside, two mouth sizes.
+    assert.equal(rimModeFor([20, 20.15], 1), 'slope');
+    assert.equal(rimModeFor([20, 20.15], 2), 'flat');
   });
 
   it('calls level ground flat and a hillside a slope', () => {

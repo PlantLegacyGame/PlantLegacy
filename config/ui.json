@@ -175,7 +175,7 @@
     },
     "title_parallax_drag_px": {
       "type": "number",
-      "value": 90,
+      "value": 140,
       "notes": "How far the background may be dragged from centre, in CSS pixels, before it stops. Title screen only.",
       "range": [
         0,

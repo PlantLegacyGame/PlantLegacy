@@ -187,13 +187,29 @@ export function jointStartRadius(
  * to the shank inside the first quarter and holds, which is how a branch is
  * shaped rather than how a funnel is.
  */
-export function segmentRadiusAt(startRadius: number, endRadius: number, t: number): number {
+export function segmentRadiusAt(
+  startRadius: number,
+  endRadius: number,
+  t: number,
+  /**
+   * Taper exponent for this organ. Above 1 the segment necks down just under its
+   * parent; below 1 it keeps its body further along its length instead of
+   * thinning to a spike. Absent, the shared tunable is used.
+   *
+   * It is an argument because the shape is a property of the organ, not of the
+   * plant: the title plate draws its taproot at 1.0, its laterals at 0.95 and its
+   * feeders at 0.9 with the same formula, and a drawing where every organ thins
+   * alike gives the laterals no body at all.
+   */
+  exponent: number = activeSegmentTaperExponent,
+): number {
   const start = Number.isFinite(startRadius) ? startRadius : 0;
   const end = Number.isFinite(endRadius) ? endRadius : 0;
   const clamped = Math.min(1, Math.max(0, Number.isFinite(t) ? t : 1));
   if (clamped <= 0) return start;
   if (clamped >= 1) return end;
-  const eased = 1 - (1 - clamped) ** activeSegmentTaperExponent;
+  const k = Number.isFinite(exponent) && exponent > 0 ? exponent : activeSegmentTaperExponent;
+  const eased = 1 - (1 - clamped) ** k;
   return start + (end - start) * eased;
 }
 

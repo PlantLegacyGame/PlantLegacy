@@ -22,8 +22,14 @@ export interface SettingsPanelOptions {
   bindings: Record<string, BindingView>;
   initialTextScale: number;
   initialReducedMotion: boolean;
+  /** The title plant's creaks and knocks; remembered by the sound module. */
+  initialSound?: boolean;
+  /** Plant-shaped cursors instead of the system pointer. */
+  initialPlantCursors?: boolean;
   onTextScale?: (scale: number) => void;
   onReducedMotion?: (enabled: boolean) => void;
+  onSound?: (enabled: boolean) => void;
+  onPlantCursors?: (enabled: boolean) => void;
   /** Told whenever the panel opens or closes, so the title can stand down. */
   onOpenChange?: (open: boolean) => void;
 }
@@ -44,13 +50,12 @@ const STYLE = `
   .pl-settings-backdrop {
     position: fixed; inset: 0; z-index: 380; display: none;
     place-items: center; padding: 18px;
-    background: radial-gradient(circle at 50% 42%, rgba(10, 14, 8, 0.55), rgba(5, 7, 4, 0.82));
+    background: radial-gradient(circle at 50% 42%, rgba(10, 14, 8, 0.66), rgba(5, 7, 4, 0.88));
     pointer-events: auto;
   }
-  .pl-settings-backdrop.is-open { display: grid; backdrop-filter: blur(3px); }
   .pl-settings {
     position: relative;
-    width: min(680px, 94vw); max-height: min(78vh, 640px); display: flex; flex-direction: column;
+    width: min(760px, 94vw); max-height: min(74vh, 620px); display: flex; flex-direction: column;
     border-radius: 16px; overflow: hidden; color: var(--bone-200, #efe9d8);
     border: 1px solid rgba(126, 154, 74, 0.44); border-top-color: rgba(200, 232, 108, 0.4);
     background:
@@ -101,13 +106,55 @@ const STYLE = `
   .pl-settings__body { flex: 1; min-height: 0; overflow-y: auto; padding: 14px 16px 18px;
     border-top: 1px solid rgba(126, 154, 74, 0.26); }
   .pl-settings__section { display: grid; gap: 10px; }
+  /* Settings, dense:
+     Two rows of full-width label/hint lines was most of the panel's height for two
+     controls. The same information now sits in a card grid - label, control, and
+     the one-line explanation under it - two cards to a row wherever the panel is
+     wide enough, with the current state repeated in a chip strip that answers
+     "what is it set to?" without reading the controls. */
+  .pl-settings__chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 16px 0; }
+  .pl-settings__chip {
+    display: inline-flex; align-items: baseline; gap: 5px;
+    padding: 3px 9px; border-radius: 999px; font-size: 0.68rem;
+    border: 1px solid rgba(126, 154, 74, 0.26);
+    background: rgba(8, 11, 8, 0.42); color: var(--ink-dim, #9a937a);
+  }
+  .pl-settings__chip b { color: var(--leaf-200, #dfee8e); font-weight: 600; }
+  .pl-settings__grid { display: grid; gap: 8px; }
+  @media (min-width: 560px) { .pl-settings__grid { grid-template-columns: 1fr 1fr; } }
+  .pl-settings__card {
+    display: grid; grid-template-columns: 1fr auto; grid-template-rows: auto auto;
+    gap: 2px 12px; align-items: center;
+    padding: 8px 10px; border-radius: 10px;
+    border: 1px solid rgba(126, 154, 74, 0.18);
+    background: rgba(8, 11, 8, 0.34);
+  }
+  .pl-settings__card > .pl-settings__label { grid-column: 1; grid-row: 1; }
+  .pl-settings__card > .pl-settings__hint { grid-column: 1 / -1; grid-row: 2; }
+  .pl-settings__card > :not(.pl-settings__label):not(.pl-settings__hint) {
+    grid-column: 2; grid-row: 1 / span 2;
+  }
   .pl-settings__row { display: flex; align-items: center; justify-content: space-between;
     gap: 16px; padding: 8px 0; border-bottom: 1px solid rgba(126, 154, 74, 0.12); }
   .pl-settings__row:last-child { border-bottom: none; }
   .pl-settings__label { color: var(--bone-100, #f7f4ed); font-weight: 600; }
-  .pl-settings__hint { color: var(--ink-dim, #9a937a); font-size: 0.7rem; }
-  .pl-settings input[type="range"] { width: 180px; accent-color: #9ed95c; }
+  .pl-settings__hint { color: var(--ink-dim, #9a937a); font-size: 0.7rem; line-height: 1.3; }
+  .pl-settings input[type="range"] { width: 132px; accent-color: #9ed95c; }
   .pl-settings input[type="checkbox"] { width: 16px; height: 16px; accent-color: #9ed95c; }
+  /* The pane's own numbers. They are here because they are the ones that explain a
+     layout the player does not expect: a zoomed browser is reported as a bigger
+     pane at the same pixel ratio, which is what the interface is sizing against. */
+  .pl-settings__facts {
+    display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 2px 16px;
+    margin-top: 2px; padding-top: 8px; border-top: 1px dashed rgba(126, 154, 74, 0.18);
+  }
+  .pl-settings__fact { display: flex; align-items: baseline; justify-content: space-between;
+    gap: 10px; font-size: 0.68rem; }
+  .pl-settings__fact span { color: var(--ink-dim, #9a937a); }
+  .pl-settings__fact b { color: var(--bone-100, #f7f4ed); font-weight: 600;
+    font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; }
+  @media (max-width: 480px) { .pl-settings__facts { grid-template-columns: 1fr; } }
   .pl-settings__value { min-width: 46px; text-align: right; color: var(--leaf-200, #dfee8e);
     font-variant-numeric: tabular-nums; }
   .pl-controls { width: 100%; border-collapse: collapse; }
@@ -117,6 +164,12 @@ const STYLE = `
   .pl-controls td { padding: 5px 8px; border-bottom: 1px solid rgba(126, 154, 74, 0.1);
     vertical-align: top; }
   .pl-controls tr:hover td { background: rgba(90, 144, 46, 0.12); }
+  /* A group heading: a rule and a name, so the table reads as sections rather
+     than one list of thirty rows. */
+  .pl-controls__section th {
+    padding-top: 12px; color: var(--ink-dim, #9a937a); font-size: 0.6rem;
+    border-bottom: 1px solid rgba(126, 154, 74, 0.22);
+  }
   .pl-controls__action { color: var(--bone-100, #f7f4ed); }
   .pl-controls__key { color: var(--leaf-200, #dfee8e); font-family: ui-monospace, monospace; }
   .pl-controls__context { color: var(--ink-dim, #9a937a); }
@@ -157,11 +210,77 @@ function installStyles(): void {
   document.head.appendChild(style);
 }
 
+/**
+ * The order the controls are read in, taken from the controls file.
+ *
+ * The table used to be sorted by action id, which put `inventory_slot_1`,
+ * `inventory_slot_10`, `inventory_slot_2` ... in that order - the tenth slot
+ * between the first and the second, and every camera action after every slot.
+ * The bindings record arrives in the order `config/controls.json` declares, which
+ * is the order a player learns them in, so the file owns the order now. Within
+ * the numbered slots the numeric order is restored explicitly.
+ */
+function controlEntries(bindings: Record<string, BindingView>): Array<[string, BindingView]> {
+  const entries = Object.entries(bindings).filter(
+    ([, binding]) => binding.keys.length > 0 || binding.mouse !== '',
+  );
+  const slotIndex = (action: string): number => {
+    const match = /^inventory_slot_(\d+)$/.exec(action);
+    return match ? Number(match[1]) : 0;
+  };
+  return entries.sort((a, b) => {
+    const aSlot = slotIndex(a[0]);
+    const bSlot = slotIndex(b[0]);
+    if (aSlot && bSlot) return aSlot - bSlot;
+    return 0;
+  });
+}
+
+/** The groups the Control tab reads in, and which actions belong to each. */
+const CONTROL_SECTIONS: ReadonlyArray<{ label: string; test: (action: string) => boolean }> = [
+  { label: 'Camera', test: (action) => action.startsWith('camera_') },
+  {
+    label: 'Growth',
+    test: (action) =>
+      [
+        'select_part',
+        'grow_mode_toggle',
+        'root_sight_toggle',
+        'grow_cancel',
+        'plant_regenerate',
+      ].includes(action),
+  },
+  {
+    label: 'Interface',
+    test: (action) =>
+      ['emote_wheel', 'inventory_overview_toggle', 'settings_toggle', 'hint_card_toggle'].includes(
+        action,
+      ),
+  },
+  { label: 'Hotbar', test: (action) => action.startsWith('inventory_slot_') },
+  { label: 'Developer', test: (action) => action.startsWith('dev_') || action === 'debug_toggle' },
+];
+
+function controlSection(action: string): string {
+  return CONTROL_SECTIONS.find((section) => section.test(action))?.label ?? 'Other';
+}
+
 function prettyAction(action: string): string {
+  const slot = /^inventory_slot_(\d+)$/.exec(action);
+  if (slot) return `Hotbar slot ${slot[1]}`;
   return action
     .split('_')
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(' ');
+}
+
+/** The overlay's current scale, as the stylesheet has it (`ui/uiScale.ts`). */
+function overlayScale(): number {
+  if (typeof getComputedStyle !== 'function') return 1;
+  const raw = Number.parseFloat(
+    getComputedStyle(document.documentElement).getPropertyValue('--pl-ui-scale'),
+  );
+  return Number.isFinite(raw) && raw > 0 ? raw : 1;
 }
 
 /** Same query the stylesheet uses for its finger layout. */
@@ -193,6 +312,8 @@ export function createSettingsPanel(options: SettingsPanelOptions): SettingsPane
   let tab: 'settings' | 'controls' = 'settings';
   let currentTextScale = options.initialTextScale;
   let currentReducedMotion = options.initialReducedMotion;
+  let currentSound = options.initialSound ?? true;
+  let currentPlantCursors = options.initialPlantCursors ?? true;
 
   const backdrop = document.createElement('div');
   backdrop.className = 'pl-settings-backdrop';
@@ -202,6 +323,7 @@ export function createSettingsPanel(options: SettingsPanelOptions): SettingsPane
         <h2 class="pl-settings__title">Settings</h2>
         <button type="button" class="pl-settings__close" aria-label="Close settings">\u00D7</button>
       </header>
+      <div class="pl-settings__chips" aria-live="polite"></div>
       <div class="pl-settings__tabs" role="tablist">
         <button type="button" class="pl-settings__tab" role="tab" data-tab="settings" aria-selected="true">Settings</button>
         <button type="button" class="pl-settings__tab" role="tab" data-tab="controls" aria-selected="false">Controls</button>
@@ -247,10 +369,43 @@ export function createSettingsPanel(options: SettingsPanelOptions): SettingsPane
     options.onOpenChange?.(next);
   }
 
+  /** How many actions actually answer to a key or a mouse button. */
+  const boundActionCount = (): number =>
+    Object.values(options.bindings).filter(
+      (binding) => binding.keys.length > 0 || binding.mouse !== '',
+    ).length;
+
+  /**
+   * The state strip: what the panel is currently set to, in one line, so the
+   * answer to "is motion on?" does not cost a read of every control.
+   */
+  function renderChips(): void {
+    const chips = backdrop.querySelector<HTMLElement>('.pl-settings__chips');
+    if (!chips) return;
+    chips.innerHTML = '';
+    const items: Array<[string, string]> = [
+      ['Text', `${Math.round(currentTextScale * 100)}%`],
+      ['Motion', currentReducedMotion ? 'reduced' : 'full'],
+      ['Input', isFingerLayout() ? 'touch' : 'mouse + keys'],
+      ['Sound', currentSound ? 'on' : 'off'],
+      ['Cursor', currentPlantCursors ? 'leaf' : 'system'],
+      ['Actions', String(boundActionCount())],
+    ];
+    for (const [label, value] of items) {
+      const chip = document.createElement('span');
+      chip.className = 'pl-settings__chip';
+      chip.innerHTML = '<span></span><b></b>';
+      (chip.firstElementChild as HTMLElement).textContent = label;
+      (chip.lastElementChild as HTMLElement).textContent = value;
+      chips.appendChild(chip);
+    }
+  }
+
   function render(): void {
     for (const tabEl of backdrop.querySelectorAll<HTMLButtonElement>('[data-tab]')) {
       tabEl.setAttribute('aria-selected', String(tabEl.dataset.tab === tab));
     }
+    renderChips();
     body.innerHTML = '';
     if (tab === 'controls') {
       renderControls();
@@ -301,16 +456,70 @@ export function createSettingsPanel(options: SettingsPanelOptions): SettingsPane
       control: reduced,
     });
 
+    const sound = document.createElement('input');
+    sound.type = 'checkbox';
+    sound.checked = currentSound;
+    sound.addEventListener('change', () => {
+      currentSound = sound.checked;
+      options.onSound?.(currentSound);
+      renderChips();
+    });
+    rows.push({
+      label: 'Sound',
+      hint: 'The title plant\u2019s creaks, knocks and rustles.',
+      control: sound,
+    });
+
+    const plantCursors = document.createElement('input');
+    plantCursors.type = 'checkbox';
+    plantCursors.checked = currentPlantCursors;
+    plantCursors.addEventListener('change', () => {
+      currentPlantCursors = plantCursors.checked;
+      options.onPlantCursors?.(currentPlantCursors);
+      renderChips();
+    });
+    rows.push({
+      label: 'Leaf cursor',
+      hint: 'Plant-shaped pointer. Turn off to keep your own system cursor.',
+      control: plantCursors,
+    });
+
+    const grid = document.createElement('div');
+    grid.className = 'pl-settings__grid';
     for (const row of rows) {
-      const el = document.createElement('div');
-      el.className = 'pl-settings__row';
-      el.innerHTML =
-        '<div><div class="pl-settings__label"></div><div class="pl-settings__hint"></div></div>';
-      (el.querySelector('.pl-settings__label') as HTMLElement).textContent = row.label;
-      (el.querySelector('.pl-settings__hint') as HTMLElement).textContent = row.hint;
-      el.appendChild(row.control);
-      section.appendChild(el);
+      const card = document.createElement('div');
+      card.className = 'pl-settings__card';
+      const label = document.createElement('div');
+      label.className = 'pl-settings__label';
+      label.textContent = row.label;
+      const hint = document.createElement('div');
+      hint.className = 'pl-settings__hint';
+      hint.textContent = row.hint;
+      card.append(label, hint, row.control);
+      grid.appendChild(card);
     }
+    section.appendChild(grid);
+
+    // The pane's own numbers, read when the panel opens: this is the part that
+    // says which layout the interface is currently being sized for.
+    const facts = document.createElement('div');
+    facts.className = 'pl-settings__facts';
+    const pane = `${Math.round(window.innerWidth)}\u00D7${Math.round(window.innerHeight)}`;
+    const rowsData: Array<[string, string]> = [
+      ['Pane', `${pane} CSS px`],
+      ['Pixel ratio', (window.devicePixelRatio || 1).toFixed(2)],
+      ['Overlay scale', `${Math.round(overlayScale() * 100)}%`],
+      ['Bindings loaded', String(Object.keys(options.bindings).length)],
+    ];
+    for (const [label, value] of rowsData) {
+      const fact = document.createElement('div');
+      fact.className = 'pl-settings__fact';
+      fact.innerHTML = '<span></span><b></b>';
+      (fact.firstElementChild as HTMLElement).textContent = label;
+      (fact.lastElementChild as HTMLElement).textContent = value;
+      facts.appendChild(fact);
+    }
+    section.appendChild(facts);
     body.appendChild(section);
   }
 
@@ -341,10 +550,17 @@ export function createSettingsPanel(options: SettingsPanelOptions): SettingsPane
     // waiting for a producer (the metrics overlay, for one, is a dev-panel switch
     // with no binding on purpose). Listing it as a row of dashes was noise in the
     // one screen a player opens to find out what they can press.
-    const entries = Object.entries(options.bindings)
-      .filter(([, binding]) => binding.keys.length > 0 || binding.mouse !== '')
-      .sort(([a], [b]) => a.localeCompare(b));
-    for (const [action, binding] of entries) {
+    let section = '';
+    for (const [action, binding] of controlEntries(options.bindings)) {
+      const heading = controlSection(action);
+      if (heading !== section) {
+        section = heading;
+        const header = document.createElement('tr');
+        header.className = 'pl-controls__section';
+        header.innerHTML = '<th colspan="4"></th>';
+        (header.firstElementChild as HTMLElement).textContent = heading;
+        tbody.appendChild(header);
+      }
       const row = document.createElement('tr');
       const keys = [...binding.keys.map(prettyKey), binding.mouse].filter(Boolean).join(' / ');
       row.innerHTML =

@@ -11,6 +11,7 @@ const SKY = { zenithColor: '#101010', horizonColor: '#202020', fogNear: 10, fogF
 const CONFIG: ClientWeatherConfig = {
   clear: { ...SKY, soilMoisture: 0.2 },
   rain: { ...SKY, soilMoisture: 0.8 },
+  snow: { ...SKY, soilMoisture: 0.5 },
   thunderstorm_telegraph: { ...SKY, soilMoisture: 0.6 },
   thunderstorm_active: { ...SKY, soilMoisture: 1 },
   thunderstorm_aftermath: { ...SKY, soilMoisture: 0.7 },

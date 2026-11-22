@@ -40,6 +40,21 @@ import {
   organFamily,
   organLook,
 } from './plant/mutations.ts';
+import { nubSwellForNode } from './plant/nubBulge.js';
+import {
+  applyLeafTranslucency,
+  applySoilRamp,
+  BLADE_INK_FRACTION,
+  createBladeInkMaterial,
+  createInkMaterial,
+  INK_WIDTH_M,
+  inkColourFor,
+  organTaperExponent,
+  setLeafBacklight,
+  setSoilLine,
+  usesOwnInkColour,
+  usesSoilRamp,
+} from './plant/organShading.ts';
 import type { PlantNodeData } from './plant/plantNodeData.js';
 import { segmentStartFor } from './plant/segmentStart.js';
 import { buildSpineGeometry } from './plant/spineGeometry.ts';
@@ -90,6 +105,10 @@ interface MeshSegmentData {
   mesh: THREE.Mesh;
   jointMesh: THREE.Mesh | null;
   leafMeshes: THREE.Mesh[];
+  /** The ink pads drawn under the blades: one per leaf, same count and order. */
+  leafInkMeshes: THREE.Mesh[];
+  /** Inverted hulls under a flower's or spore sac's own meshes. */
+  inkOrnament: THREE.Object3D[];
   /** Thorn cones for a spined epidermis; empty for every other plant. */
   spineMeshes: THREE.Mesh[];
   /** Geometry revision this segment was built for (bark/spine changes rebuild). */
@@ -97,6 +116,8 @@ interface MeshSegmentData {
   /** Health band the material was built from; a change rebuilds the materials. */
   healthBand: NodeHealthStatus;
   ornament: THREE.Group | null;
+  /** The plate's ink line for a root: an inverted hull of the tube's geometry. */
+  inkMesh: THREE.Mesh | null;
   parentPosition: THREE.Vector3;
   targetPosition: THREE.Vector3;
   /** Node position this segment was last drawn for, to detect rigid moves. */
@@ -182,9 +203,9 @@ const barkMaterial: THREE.MeshStandardMaterial = new THREE.MeshStandardMaterial(
   flatShading: false,
 });
 const rootMaterial: THREE.MeshStandardMaterial = new THREE.MeshStandardMaterial({
-  // Roots in the cavity were nearly black against the dirt. A warmer, lighter
-  // brown keeps the silhouette and still reads as an underground organ.
-  color: 0x684632,
+  // Roots are pale bark, not dark wood: the title screen's root plate is bone by
+  // the surface, and a root that changes material at the soil line is two organs.
+  color: 0xb9a488,
   roughness: 0.88,
   metalness: 0.02,
   flatShading: false,
@@ -300,10 +321,11 @@ function tubeGeometryCacheKey(
   r1: number,
   length: number,
   quality: MeshQualityConfig,
+  taper: number,
 ): string {
   // The taper exponent is part of the shape: a cached tube built with a
   // different exponent is the wrong silhouette, not just a different number.
-  return `${r0.toFixed(3)},${r1.toFixed(3)},${length.toFixed(3)},${quality.tubeRadialSegments}x${quality.tubeLengthSegments},${getSegmentTaperExponent().toFixed(2)}`;
+  return `${r0.toFixed(3)},${r1.toFixed(3)},${length.toFixed(3)},${quality.tubeRadialSegments}x${quality.tubeLengthSegments},${taper.toFixed(2)}`;
 }
 
 /**
@@ -320,6 +342,7 @@ function applySegmentProfile(
   r0: number,
   r1: number,
   length: number,
+  taper: number,
 ): void {
   const position = geometry.getAttribute('position');
   const span = Math.max(length, 1e-4);
@@ -327,7 +350,7 @@ function applySegmentProfile(
     const t = THREE.MathUtils.clamp(position.getY(i) / span, 0, 1);
     const linear = r0 + (r1 - r0) * t;
     if (linear <= 1e-6) continue;
-    const scale = segmentRadiusAt(r0, r1, t) / linear;
+    const scale = segmentRadiusAt(r0, r1, t, taper) / linear;
     position.setX(i, position.getX(i) * scale);
     position.setZ(i, position.getZ(i) * scale);
   }
@@ -340,8 +363,10 @@ function buildTubeGeometry(
   length: number,
   quality: MeshQualityConfig,
   bend = 0,
+  /** The organ's own taper exponent: roots hold their body, shoots neck. */
+  taper = getSegmentTaperExponent(),
 ): THREE.BufferGeometry {
-  const key = `${tubeGeometryCacheKey(r0, r1, length, quality)}|${bend.toFixed(3)}`;
+  const key = `${tubeGeometryCacheKey(r0, r1, length, quality, taper)}|${bend.toFixed(3)}`;
   let geo = tubeGeometryCache.get(key);
   if (!geo) {
     geo = new THREE.CylinderGeometry(
@@ -356,7 +381,7 @@ function buildTubeGeometry(
     // and keep +Y as the growth axis; the old rotateX made the geometry run
     // along Z while the mesh was aligned from +X, so every tube was off-axis.
     geo.translate(0, length / 2, 0);
-    applySegmentProfile(geo, r0, r1, length);
+    applySegmentProfile(geo, r0, r1, length, taper);
     if (Math.abs(bend) > 1e-5) {
       const position = geo.getAttribute('position');
       for (let i = 0; i < position.count; i += 1) {
@@ -397,8 +422,36 @@ function buildLeafGeometry(
 ): THREE.BufferGeometry {
   const rows = Math.max(4, segments * 2);
   const cols = Math.max(4, segments * 2);
-  const positions: number[] = [];
+  const positions = leafSurfacePoints(length, width, rows, cols, isCotyledon);
   const indices: number[] = [];
+
+  const stride = cols + 1;
+  for (let row = 0; row < rows; row += 1) {
+    for (let col = 0; col < cols; col += 1) {
+      const a = row * stride + col;
+      const b = a + 1;
+      const c = a + stride;
+      const d = c + 1;
+      indices.push(a, c, b, b, c, d);
+    }
+  }
+
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setIndex(indices);
+  geometry.computeVertexNormals();
+  return geometry;
+}
+
+/** The blade's surface, row-major, base at u = 0 and tip along +X. */
+function leafSurfacePoints(
+  length: number,
+  width: number,
+  rows: number,
+  cols: number,
+  isCotyledon: boolean,
+): number[] {
+  const positions: number[] = [];
 
   for (let row = 0; row <= rows; row += 1) {
     const u = row / rows;
@@ -418,16 +471,64 @@ function buildLeafGeometry(
       positions.push(x, y, z);
     }
   }
+  return positions;
+}
 
+/**
+ * The ink under a blade: a band that follows the blade's own silhouette.
+ *
+ * A blade is a surface, so the tube's inverted hull would only put ink under the
+ * leaf where the leaf already hides it. A second, slightly larger copy of the
+ * whole blade is worse: the blade is cupped, so scaling lifts the copy's centre
+ * in front of the original and the ink eats the leaf from the inside (which is
+ * exactly what the first attempt did - a brown patch over half a cotyledon).
+ *
+ * This band shares the blade's own perimeter vertices and only grows *outward*
+ * from them, so it is the same surface at the same depth and no part of it lies
+ * where the leaf is. `inkFraction` is the band's width as a fraction of the
+ * blade's size, so a cotyledon and a true leaf get the same weight of line.
+ */
+function buildLeafOutlineGeometry(
+  length: number,
+  width: number,
+  segments: number,
+  isCotyledon: boolean,
+  inkFraction: number,
+): THREE.BufferGeometry {
+  const rows = Math.max(4, segments * 2);
+  const cols = Math.max(4, segments * 2);
+  const points = leafSurfacePoints(length, width, rows, cols, isCotyledon);
   const stride = cols + 1;
-  for (let row = 0; row < rows; row += 1) {
-    for (let col = 0; col < cols; col += 1) {
-      const a = row * stride + col;
-      const b = a + 1;
-      const c = a + stride;
-      const d = c + 1;
-      indices.push(a, c, b, b, c, d);
-    }
+  const at = (row: number, col: number): [number, number, number] => {
+    const i = (row * stride + col) * 3;
+    return [points[i] ?? 0, points[i + 1] ?? 0, points[i + 2] ?? 0];
+  };
+
+  // The perimeter, in one loop: down one edge from the base, across the tip, back
+  // up the other. The base itself is a single point, so it is visited once.
+  const perimeter: Array<[number, number, number]> = [];
+  for (let row = 0; row <= rows; row += 1) perimeter.push(at(row, 0));
+  for (let col = 1; col <= cols; col += 1) perimeter.push(at(rows, col));
+  for (let row = rows - 1; row >= 0; row -= 1) perimeter.push(at(row, cols));
+
+  const centreX = length * 0.45;
+  const outward = (p: [number, number, number]): [number, number, number] => [
+    centreX + (p[0] - centreX) * (1 + inkFraction),
+    p[1] * (1 + inkFraction),
+    p[2],
+  ];
+
+  const positions: number[] = [];
+  const indices: number[] = [];
+  for (let i = 0; i < perimeter.length; i += 1) {
+    const a = perimeter[i] as [number, number, number];
+    const b = perimeter[(i + 1) % perimeter.length] as [number, number, number];
+    const oa = outward(a);
+    const ob = outward(b);
+    const base = positions.length / 3;
+    positions.push(...a, ...b, ...oa, ...ob);
+    // Winding is free: the band is double sided.
+    indices.push(base, base + 2, base + 1, base + 1, base + 2, base + 3);
   }
 
   const geometry = new THREE.BufferGeometry();
@@ -454,6 +555,22 @@ export class MeshPlantRenderer {
    * AL-04: use the shared atmosphere instead of the scene's fog, so a mesh plant
    * fades into the same air as the ground and the SDF plants.
    */
+  /**
+   * The light blades are lit from behind by, and how much of it they let through.
+   *
+   * The direction is the celestial body's - the sun by day, the moon at night - so
+   * the same blade turns honey at sunset and cold silver under the moon without a
+   * second set of numbers. Strength follows the light's own intensity, so the
+   * effect fades exactly as the disc does.
+   */
+  setSunLight(dir: THREE.Vector3, colour: THREE.Color, intensity: number): void {
+    const strength = intensity * 0.85;
+    for (const material of BASE_MATERIALS) setLeafBacklight(material, dir, colour, strength);
+    for (const material of this.materialVariants.values()) {
+      setLeafBacklight(material, dir, colour, strength);
+    }
+  }
+
   setAtmosphere(params: AtmosphereParams, sunDir: THREE.Vector3): void {
     atmosphereParams = params;
     atmosphereSunDir.copy(sunDir);
@@ -463,10 +580,56 @@ export class MeshPlantRenderer {
     for (const material of this.materialVariants.values()) {
       applyAtmosphereToStandardMaterial(material, params, atmosphereSunDir);
     }
+    // Ink is a line, not a surface: it takes the same air as the organ it outlines
+    // but a quarter of the in-scatter. At full strength the haze washed the band
+    // to a pale rim at night, brighter than the leaf it was drawn around; cut back,
+    // the line stays below the body's value at every hour, which is what an ink
+    // value is for.
+    const inkParams: AtmosphereParams = { ...params, inScatter: params.inScatter * 0.25 };
+    for (const material of this.inkVariants.values()) {
+      applyAtmosphereToStandardMaterial(material, inkParams, atmosphereSunDir);
+    }
   }
 
   private scene: THREE.Scene;
   private meshGroup = new THREE.Group();
+  /** One ink material for every woody tube in the scene; the width is a uniform. */
+  private readonly inkMaterial = createInkMaterial(INK_WIDTH_M);
+  /**
+   * Ink for the organs the tube hull cannot outline: one material per organ colour.
+   *
+   * Foliage is not outlined in the plate's root brown. Its line is its own pigment
+   * at its deepest - green in dark green, a petal in its own shade - so the outline
+   * belongs to the thing it surrounds instead of being a stamp over every growth.
+   */
+  private readonly inkVariants = new Map<string, THREE.MeshStandardMaterial>();
+  private readonly inkColour = new THREE.Color();
+
+  /**
+   * Ink for one node's own colour. `blade` is the flat band a leaf lies on; `hull`
+   * is the inverted hull a flower or spore sac wears.
+   */
+  private inkFor(node: MeshNode, kind: 'blade' | 'hull'): THREE.MeshStandardMaterial {
+    const base = this.materialFor(node.nodeType, this.lookFor(node), this.healthBandOf(node)).color;
+    inkColourFor(base, this.inkColour);
+    const key = `${kind}:${this.inkColour.getHexString()}`;
+    const cached = this.inkVariants.get(key);
+    if (cached) return cached;
+    const material =
+      kind === 'blade'
+        ? createBladeInkMaterial(this.inkColour.clone())
+        : createInkMaterial(INK_WIDTH_M, this.inkColour.clone());
+    // The same air as the organ it outlines, at a quarter of the in-scatter, so the
+    // line cannot out-brighten the body at night: an ink that ignores the hour is
+    // the one fixed colour left in a lit scene.
+    applyAtmosphereToStandardMaterial(
+      material,
+      { ...atmosphereParams, inScatter: atmosphereParams.inScatter * 0.25 },
+      atmosphereSunDir,
+    );
+    this.inkVariants.set(key, material);
+    return material;
+  }
   private nodeMap = new Map<string, MeshNode>();
   private childrenMap = new Map<string, string[]>();
   private segments = new Map<string, MeshSegmentData>();
@@ -621,6 +784,12 @@ export class MeshPlantRenderer {
     if (cached) return cached;
     const material = baseMaterialFor(nodeType).clone();
     applyNodeHealthLook(material, health);
+    // Before the atmosphere patch, which chains whatever is already here.
+    if (usesSoilRamp(nodeType)) applySoilRamp(material);
+    // A blade is thin, so it transmits: patched before the atmosphere, which
+    // chains whatever is already attached.
+    const type = nodeType.toLowerCase();
+    if (type === 'leaf' || type === 'cotyledon') applyLeafTranslucency(material);
     // `.clone()` does not carry the fog patch across, so each new variant is
     // attached to the shared atmosphere as it is created.
     applyAtmosphereToStandardMaterial(material, atmosphereParams, atmosphereSunDir);
@@ -731,6 +900,10 @@ export class MeshPlantRenderer {
   private disposeSegment(seg: MeshSegmentData): void {
     this.meshGroup.remove(seg.mesh);
     seg.mesh.geometry.dispose();
+    if (seg.inkMesh) {
+      // The hull shares the tube's geometry, which the line above has disposed.
+      this.meshGroup.remove(seg.inkMesh);
+    }
     if (seg.jointMesh) {
       this.meshGroup.remove(seg.jointMesh);
       seg.jointMesh.geometry.dispose();
@@ -738,6 +911,13 @@ export class MeshPlantRenderer {
     for (const leaf of seg.leafMeshes) {
       this.meshGroup.remove(leaf);
       leaf.geometry.dispose();
+    }
+    for (const pad of seg.leafInkMeshes) {
+      this.meshGroup.remove(pad);
+      pad.geometry.dispose();
+    }
+    for (const hull of seg.inkOrnament) {
+      hull.removeFromParent();
     }
     for (const spine of seg.spineMeshes) {
       this.meshGroup.remove(spine);
@@ -819,6 +999,18 @@ export class MeshPlantRenderer {
       mesh.userData.sourcePosition = node.position.clone();
       mesh.castShadow = true;
       mesh.receiveShadow = true;
+      // The coat is a body like any other, so it carries the same line. The hull is
+      // a child of the seed, not a sibling: it inherits the ovoid's scale and every
+      // move, and it shares the sphere's geometry, so it costs one draw and no
+      // bookkeeping when the seed crawls.
+      // The plate's own root brown, not the coat's colour deepened: a seed is
+      // already a dark body, and its own ink landed on the coat as a value it
+      // barely differed from. The line has to be a value below the body.
+      const seedHull = new THREE.Mesh(geo, this.inkMaterial);
+      seedHull.renderOrder = -1;
+      seedHull.castShadow = false;
+      seedHull.receiveShadow = false;
+      mesh.add(seedHull);
       this.meshGroup.add(mesh);
       this.seedMeshes.set(id, mesh);
     }
@@ -866,12 +1058,21 @@ export class MeshPlantRenderer {
       const segmentEnd = node.targetPosition ?? node.position.clone();
 
       const parentVisualRadius = resolveDrawnRadius(parent.nodeType, parent.radius, parent.biomass);
-      let tubeEndRadius = resolveDrawnRadius(node.nodeType, node.radius, node.biomass);
       const softPart =
         node.nodeType === 'leaf' ||
         node.nodeType === 'cotyledon' ||
         node.nodeType === 'flower' ||
         node.nodeType === 'spore_sac';
+      let tubeEndRadius = resolveDrawnRadius(node.nodeType, node.radius, node.biomass);
+      // A primed node is a little fuller than the tube it continues (see
+      // nubBulge). The WebGPU mesh does this in applyNubBulges; this is the mesh
+      // the player actually sees, so the swell has to be applied here too.
+      //
+      // Soft parts are exempt. The swell is a *tip* swell - it makes the growing
+      // end of a woody tube full - and a leaf or cotyledon's drawn end is the
+      // blade, not a tip of its own: swelling it made the petiole thicker where
+      // the leaf met it than where it left the seed.
+      if (!softPart) tubeEndRadius *= nubSwellForNode(node);
       // The parent's radius *where this part leaves it*: a lateral takes a
       // fraction of its parent's segment, and the segment necks down along
       // itself, so the parent's nominal radius sized a bud near its tip as if it
@@ -901,6 +1102,10 @@ export class MeshPlantRenderer {
           tubeEndRadius = Math.min(tubeEndRadius, 0.03);
         }
       }
+      // A petiole may only narrow towards its blade. Whatever the drawn radius
+      // says, a stalk that gets wider at the leaf end reads as a growth put on
+      // backwards, which is what every cotyledon looked like.
+      if (softPart) tubeEndRadius = Math.min(tubeEndRadius, tubeStartRadius);
 
       // Start on the parent where it is drawn this frame. A child of a growing
       // parent used to start at the parent's final tip, leaving a visible gap
@@ -953,7 +1158,15 @@ export class MeshPlantRenderer {
         tubeStartRadius *= barkScale;
         tubeEndRadius *= barkScale;
       }
-      const geo = buildTubeGeometry(tubeStartRadius, tubeEndRadius, length, this.quality, bend);
+      const taper = organTaperExponent(node.nodeType, getSegmentTaperExponent());
+      const geo = buildTubeGeometry(
+        tubeStartRadius,
+        tubeEndRadius,
+        length,
+        this.quality,
+        bend,
+        taper,
+      );
       const mat =
         node.nodeType === 'flower' || node.nodeType === 'spore_sac'
           ? this.materialFor('stem', this.lookFor(node), this.healthBandOf(node))
@@ -1004,6 +1217,7 @@ export class MeshPlantRenderer {
       // true leaves multiply with biomass. Blades are attached exactly at the
       // growing tip — never floated past it.
       const leafMeshes: THREE.Mesh[] = [];
+      const leafInkMeshes: THREE.Mesh[] = [];
       if (node.nodeType === 'leaf' || node.nodeType === 'cotyledon') {
         const isCotyledon = node.nodeType === 'cotyledon';
         // Cotyledons are seed leaves: fleshy and large enough to read as the
@@ -1034,6 +1248,28 @@ export class MeshPlantRenderer {
           );
           const angle = (i / Math.max(1, leafCount)) * Math.PI * 2;
           this.placeLeaf(leaf, segmentEnd, axis, angle, isCotyledon);
+          // The plate's ink under a blade: the same blade, a few per cent bigger,
+          // unlit, painted first - so a rim of ink shows around the silhouette.
+          // The tube hull cannot do this: a blade is a surface, and a surface pushed
+          // along its own normals is still the same surface underneath itself.
+          const leafInk = new THREE.Mesh(
+            buildLeafOutlineGeometry(
+              leafLength * this.appearanceFor(node).leafScale,
+              leafWidth * this.appearanceFor(node).leafScale,
+              this.quality.leafSegments,
+              isCotyledon,
+              BLADE_INK_FRACTION,
+            ),
+            this.inkFor(node, 'blade'),
+          );
+          leafInk.position.copy(leaf.position);
+          leafInk.quaternion.copy(leaf.quaternion);
+          leafInk.scale.copy(leaf.scale);
+          leafInk.renderOrder = -1;
+          leafInk.castShadow = false;
+          leafInk.receiveShadow = false;
+          this.meshGroup.add(leafInk);
+          leafInkMeshes.push(leafInk);
           this.meshGroup.add(leaf);
           leafMeshes.push(leaf);
         }
@@ -1045,9 +1281,61 @@ export class MeshPlantRenderer {
       } else if (node.nodeType === 'spore_sac') {
         ornament = this.buildSporeSac(node, segmentEnd, dir);
       }
-      if (ornament) this.meshGroup.add(ornament);
+      // Flowers and spore sacs are volumes, so they take the same inverted hull the
+      // tubes do - mounted as children of their group so they follow it.
+      const inkOrnament: THREE.Object3D[] = [];
+      if (ornament) {
+        for (const child of [...ornament.children]) {
+          const asMesh = child as THREE.Mesh;
+          if (!asMesh.isMesh) continue;
+          const hull = new THREE.Mesh(asMesh.geometry, this.inkFor(node, 'hull'));
+          hull.position.copy(child.position);
+          hull.quaternion.copy(child.quaternion);
+          hull.scale.copy(child.scale);
+          hull.renderOrder = -1;
+          hull.castShadow = false;
+          hull.receiveShadow = false;
+          ornament.add(hull);
+          inkOrnament.push(hull);
+        }
+        this.meshGroup.add(ornament);
+      }
 
       this.meshGroup.add(mesh);
+
+      // The plate's ink: the same tube, back faces, pushed out along its normals
+      // by a constant world distance.
+      //
+      // Every segment is a body and takes one. This used to be gated on the organ
+      // type, which was the wrong unit: a cotyledon's petiole is drawn as this
+      // node's own tube, so excluding "cotyledon" and "leaf" as blades left the
+      // stalks of every leaf and seed leaf un-inked while their blades were
+      // outlined. The blade's band is a second line for the blade; it was never a
+      // reason for its stalk to go bare.
+      let inkMesh: THREE.Mesh | null = null;
+      // A green stem in the roots' warm brown reads as a root that grew upwards:
+      // above the soil the line is the organ's own colour, deepened.
+      inkMesh = new THREE.Mesh(
+        geo,
+        usesOwnInkColour(node.nodeType) ? this.inkFor(node, 'hull') : this.inkMaterial,
+      );
+      inkMesh.position.copy(mesh.position);
+      inkMesh.quaternion.copy(mesh.quaternion);
+      inkMesh.renderOrder = -1;
+      inkMesh.castShadow = false;
+      inkMesh.receiveShadow = false;
+      this.meshGroup.add(inkMesh);
+
+      // Bark to pale root across the soil line, decided per part: materials are
+      // shared between segments and plants, so the ground under this one is
+      // handed to the shader on its own draw.
+      if (usesSoilRamp(node.nodeType)) {
+        const soilY = this.drawnGroundY(mesh.position.x, mesh.position.z, mesh.position.y);
+        mesh.onBeforeRender = (_renderer, _scene, _camera, _geometry, material) => {
+          setSoilLine(material, soilY);
+        };
+      }
+
       this.segments.set(id, {
         // The segment's own start is where it is actually drawn from — the
         // attach point — so the growth animation must extend it from there.
@@ -1061,10 +1349,13 @@ export class MeshPlantRenderer {
         mesh,
         jointMesh,
         leafMeshes,
+        leafInkMeshes,
+        inkOrnament,
         spineMeshes,
         lookRevision: this.geometryRevision,
         healthBand: this.healthBandOf(node),
         ornament,
+        inkMesh,
         parentPosition: segmentStart.clone(),
         targetPosition: segmentEnd.clone(),
         sourcePosition: node.position.clone(),
@@ -1200,7 +1491,9 @@ export class MeshPlantRenderer {
         seg.mesh.position.add(shift);
         seg.jointMesh?.position.add(shift);
         for (const leaf of seg.leafMeshes) leaf.position.add(shift);
+        for (const pad of seg.leafInkMeshes) pad.position.add(shift);
         for (const spine of seg.spineMeshes) spine.position.add(shift);
+        seg.inkMesh?.position.add(shift);
         seg.ornament?.position.add(shift);
         seg.parentPosition.add(shift);
         seg.targetPosition.add(shift);
@@ -1232,6 +1525,7 @@ export class MeshPlantRenderer {
           length,
           this.quality,
           seg.bend * (length / Math.max(seg.originalLength, 1e-4)),
+          organTaperExponent(seg.nodeType, getSegmentTaperExponent()),
         );
         seg.mesh.geometry.dispose();
         seg.mesh.geometry = newGeo;
@@ -1241,6 +1535,12 @@ export class MeshPlantRenderer {
             new THREE.Vector3(0, 1, 0),
             dir.clone().normalize(),
           );
+        }
+        // The ink hull is the same tube: it follows the growth step exactly.
+        if (seg.inkMesh) {
+          seg.inkMesh.geometry = newGeo;
+          seg.inkMesh.position.copy(seg.mesh.position);
+          seg.inkMesh.quaternion.copy(seg.mesh.quaternion);
         }
 
         // Update joint sphere
@@ -1255,6 +1555,12 @@ export class MeshPlantRenderer {
           const leaf = seg.leafMeshes[i];
           const angle = (i / Math.max(1, seg.leafMeshes.length)) * Math.PI * 2;
           this.placeLeaf(leaf, currentEnd, leafDir, angle, seg.nodeType === 'cotyledon');
+          // The pad is the blade's own shadow: same place, same angle, bigger.
+          const pad = seg.leafInkMeshes[i];
+          if (pad) {
+            pad.position.copy(leaf.position);
+            pad.quaternion.copy(leaf.quaternion);
+          }
         }
 
         needsUpdate = true;
@@ -1270,6 +1576,9 @@ export class MeshPlantRenderer {
       const growthScale = 0.35 + 0.65 * extended * extended * (3 - 2 * extended);
       for (const leaf of seg.leafMeshes) {
         leaf.scale.setScalar(growthScale * matureScale);
+      }
+      for (const pad of seg.leafInkMeshes) {
+        pad.scale.setScalar(growthScale * matureScale);
       }
       if (seg.ornament) {
         const ornamentEnd = new THREE.Vector3().lerpVectors(
@@ -1342,6 +1651,7 @@ export class MeshPlantRenderer {
       seg.mesh.geometry.dispose();
       if (seg.jointMesh) seg.jointMesh.geometry.dispose();
       for (const leaf of seg.leafMeshes) leaf.geometry.dispose();
+      for (const pad of seg.leafInkMeshes) pad.geometry.dispose();
       if (seg.ornament) {
         seg.ornament.traverse((obj) => {
           if (obj instanceof THREE.Mesh) obj.geometry.dispose();
