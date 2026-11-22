@@ -45,20 +45,16 @@ export class UIShell {
   ) {
     this.root = root;
     this.textScale = config.textScale;
-    this.applyTheme(config.theme);
     this.applyTextScale();
     this.createLayers();
   }
 
-  // ---- Theme / scale -------------------------------------------------
+  // ---- Scale ---------------------------------------------------------
 
-  private applyTheme(theme: Record<string, string>): void {
-    const style = document.documentElement.style;
-    for (const [name, color] of Object.entries(theme)) {
-      const cssVar = `--${name.replace(/_/g, '-')}`;
-      style.setProperty(cssVar, color);
-    }
-  }
+  // A01: colour is not the shell's business. `ui/theme.ts` publishes the palette
+  // and the design tokens once at boot; the shell used to write the raw tokens as
+  // `--<token>`, which put a role name where a colour belonged and shadowed the
+  // stylesheet's own ramp variables of the same name.
 
   private applyTextScale(): void {
     document.documentElement.style.setProperty('--text-scale', String(this.textScale));

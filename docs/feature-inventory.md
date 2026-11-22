@@ -128,7 +128,7 @@ Defects live in `bug-inventory.md`, values in `config/`, task scope in `DESIGN.m
 
 | ID | Feature | Task | Code home | Status | Open issues | Next action | Pri |
 |---|---|---|---|---|---|---|---|
-| F66 | UI shell, layers, tokens, text scale, toasts | C01 | `ui/UIShell.ts`, `config/ui.json` | ✔ | Three styling systems | A01: tokens resolve through the palette; the UI ramp rewrite is open | P2 |
+| F66 | UI shell, layers, tokens, text scale, toasts | C01 | `ui/UIShell.ts`, `config/ui.json` | ✔ | Three styling systems | A01: HUD ramps and tokens come from the palette; title/menu ramps (A02) open | P2 |
 | F67 | Vitals card, world clock, weather chip | C04 | `ui/resourceVitals.ts` | ✔ | No per-row history | — | P3 |
 | F68 | Plant status HUD and health | C04 | `ui/PlantStatusHud.ts` | ✔ | — | — | P3 |
 | F69 | Action bar and contextual hints | C01/C04 | `ui/ActionBar.ts`, `ui/ContextHint.ts` | ✔ | — | — | P3 |

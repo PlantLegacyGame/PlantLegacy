@@ -3,24 +3,33 @@
    universal selector in the sheet and must not follow higher-specificity rules. */
 * {
   scrollbar-width: thin;
-  scrollbar-color: rgba(142, 176, 84, 0.6) rgba(14, 18, 10, 0.72);
+  scrollbar-color: color-mix(in srgb, var(--palette-foliage-500) 60%, transparent)
+    color-mix(in srgb, var(--palette-foliage-900) 72%, transparent);
 }
 *::-webkit-scrollbar {
   width: 10px;
   height: 10px;
 }
 *::-webkit-scrollbar-track {
-  background: rgba(14, 18, 10, 0.72);
+  background: color-mix(in srgb, var(--palette-foliage-900) 72%, transparent);
   border-radius: 8px;
 }
 *::-webkit-scrollbar-thumb {
   border: 2px solid transparent;
   border-radius: 8px;
-  background: linear-gradient(180deg, rgba(142, 176, 84, 0.72), rgba(90, 112, 52, 0.78));
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--palette-foliage-500) 72%, transparent),
+    color-mix(in srgb, var(--palette-foliage-700) 78%, transparent)
+  );
   background-clip: padding-box;
 }
 *::-webkit-scrollbar-thumb:hover {
-  background: linear-gradient(180deg, rgba(168, 204, 102, 0.86), rgba(112, 138, 64, 0.9));
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--palette-foliage-300) 86%, transparent),
+    color-mix(in srgb, var(--palette-foliage-500) 90%, transparent)
+  );
   background-clip: padding-box;
 }
 *::-webkit-scrollbar-corner {
@@ -32,70 +41,79 @@
    No website chrome — just game HUD that feels like part of the soil. */
 
 :root {
-  /* A01: these hexes are the sheet's own fallback. `config/ui.json` names
-     palette roles instead of colours; `ui/theme.ts` resolves them against
-     `config/palette.json` and the UI shell publishes them as --<token> custom
-     properties over these at boot. Steps without a token still carry their own
-     hex: the ramp rewrite that retires them is the rest of A01. */
+  /* A01: the HUD has no colours of its own. Every step below is a palette step
+     (`--palette-<ramp>-<step>`, published at boot from config/palette.json);
+     where the sheet needs a value between two ladder stops it mixes them in
+     oklab, and the two ends the ladder cannot reach - near-black chrome and a
+     highlight lighter than paper - mix toward black and white. The semantic
+     tokens read the design tokens (`--pl-theme-*`), so a surface asks for paper
+     or hazard rather than a shade. If the palette fails to load nothing is
+     published and the HUD loses its colours on purpose: broken should look
+     broken, not keep a stale copy of the palette. */
   /* Earthy soil / bark — grounding, dark, rich */
-  --loam-900: #0a0c08;
-  --loam-800: #12140e;
-  --loam-700: #1c1e14;
-  --bark-900: #050603;
-  --bark-800: #0b0d07;
-  --bark-700: #181a12;
-  --bark-600: #28271c;
-  --bark-500: #3c3a2b;
-  --bark-400: #54523e;
-  --bark-300: #706c56;
-  --bark-200: #9a9577;
-  --bark-100: #bab699;
+  --loam-900: color-mix(in oklab, var(--palette-foliage-900) 50%, black);
+  --loam-800: color-mix(in oklab, var(--palette-foliage-900) 72%, black);
+  --bark-900: color-mix(in oklab, var(--palette-bark-900) 45%, black);
+  --bark-800: color-mix(in oklab, var(--palette-bark-900) 68%, black);
+  --bark-700: var(--palette-bark-900);
+  --bark-600: color-mix(in oklab, var(--palette-bark-700) 20%, var(--palette-bark-900));
+  --bark-500: color-mix(in oklab, var(--palette-bark-700) 48%, var(--palette-bark-900));
+  --bark-400: var(--palette-bark-700);
+  --bark-300: color-mix(in oklab, var(--palette-bark-500) 45%, var(--palette-bark-700));
+  --bark-200: color-mix(in oklab, var(--palette-bark-500) 60%, var(--palette-bark-300));
+  --bark-100: var(--palette-bark-300);
 
   /* Warm parchment / bone — soft light surfaces (high contrast text) */
-  --bone-300: #e3dcc2;
-  --bone-200: #efe9d8;
-  --bone-100: #f7f4ed;
-  --bone-50: #fdfbf6;
+  --bone-300: color-mix(in oklab, var(--palette-paper) 85%, var(--palette-ink-300));
+  --bone-200: var(--palette-paper);
+  --bone-100: color-mix(in oklab, var(--palette-paper) 60%, white);
+  --bone-50: color-mix(in oklab, var(--palette-paper) 45%, white);
 
-  /* Plant life — leaf greens, tender sprouts (vibrant, distinct) */
-  --leaf-900: #1c2610;
-  --leaf-800: #2a3a18;
-  --leaf-700: #426520;
-  --leaf-600: #5a902e;
-  --leaf-500: #7db83d;
-  --leaf-400: #9ed95c;
-  --leaf-300: #c8ff80;
-  --leaf-200: #dfee8e;
-  --leaf-100: #effeb0;
+  /* Plant life — leaf greens, tender sprouts */
+  --leaf-900: color-mix(in oklab, var(--palette-foliage-900) 85%, black);
+  --leaf-800: var(--palette-foliage-900);
+  --leaf-700: var(--palette-foliage-700);
+  --leaf-600: color-mix(in oklab, var(--palette-foliage-500) 50%, var(--palette-foliage-700));
+  --leaf-500: var(--palette-foliage-500);
+  --leaf-400: var(--palette-foliage-300);
+  --leaf-300: var(--palette-foliage-100);
+  --leaf-200: var(--palette-foliage-100);
 
-  /* Sprout — tender new growth yellow-green */
-  --sprout-300: #c8e86c;
-  --sprout-200: #dcf0a0;
-  --sprout-100: #eef4c8;
+  /* Sprout — tender new growth */
+  --sprout-300: var(--palette-accent-sprout);
+  --sprout-200: var(--palette-leaf-sprout);
 
-  /* Ember — warnings, dry soil (bright, attention-grabbing) */
-  --ember-900: #5c2215;
-  --ember-800: #7a3020;
-  --ember-700: #a5442a;
-  --ember-600: #d06034;
-  --ember-500: #ee7040;
-  --ember-400: #ff8c5f;
+  /* Ember — warnings, dry soil */
+  --ember-800: color-mix(in oklab, var(--palette-ember-700) 60%, var(--palette-ember-900));
+  --ember-700: var(--palette-ember-700);
+  --ember-600: var(--palette-ember-500);
+  --ember-500: var(--palette-ember-500);
+  --ember-400: color-mix(in oklab, var(--palette-ember-300) 55%, var(--palette-ember-500));
 
-  /* Resource accents — vibrant, high distinction */
-  --gold-400: #f0c05b;
-  --water-400: #8ec9f0;
-  --mineral-400: #c8a8f0;
+  /* Caution — the stressed/notice tone between clear and hazard. The palette's
+     light warm (ember 300) is what this sheet used to call gold. */
+  --gold-400: var(--palette-ember-300);
 
   --text-scale: 1;
 
   /* HUD tokens — soft, organic, plant-like, fewer hard edges */
-  --hud-bg: rgba(10, 12, 8, 0.95);
-  --hud-bg-hover: rgba(18, 22, 14, 0.96);
-  --hud-border: rgba(94, 122, 53, 0.35);
-  --hud-border-focus: var(--leaf-400);
-  --hud-border-muted: rgba(50, 58, 40, 0.5);
-  --hud-shadow: 0 16px 48px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(157, 198, 94, 0.1);
-  --hud-shadow-sm: 0 8px 24px rgba(0, 0, 0, 0.5);
+  --hud-bg: color-mix(
+    in srgb,
+    color-mix(in oklab, var(--pl-theme-ground) 55%, black) 95%,
+    transparent
+  );
+  --hud-bg-hover: color-mix(
+    in srgb,
+    color-mix(in oklab, var(--pl-theme-panel) 80%, black) 96%,
+    transparent
+  );
+  --hud-border: color-mix(in srgb, var(--palette-foliage-700) 35%, transparent);
+  --hud-border-focus: var(--pl-theme-sprout);
+  --hud-border-muted: color-mix(in srgb, var(--palette-foliage-900) 50%, transparent);
+  --hud-shadow:
+    0 16px 48px rgb(0 0 0 / 0.6),
+    inset 0 1px 0 color-mix(in srgb, var(--palette-foliage-300) 10%, transparent);
+  --hud-shadow-sm: 0 8px 24px rgb(0 0 0 / 0.5);
   --hud-radius: 14px;
   --hud-radius-sm: 10px;
 
@@ -121,14 +139,14 @@
   --hud-chat-w: clamp(200px, 34vw, 320px);
   --hud-readout-top: var(--hud-top);
   --hud-transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1);
-  --leaf-glow: rgba(157, 198, 94, 0.18);
-  --ember-glow: rgba(238, 112, 64, 0.18);
-  --warm-ink: #f0ead6;
-  --ink-muted: #c9c2ad;
-  --ink-dim: #9a937a;
+  --leaf-glow: color-mix(in srgb, var(--palette-foliage-300) 18%, transparent);
+  --ember-glow: color-mix(in srgb, var(--pl-theme-hazard) 18%, transparent);
+  --warm-ink: var(--pl-theme-paper);
+  --ink-muted: var(--pl-theme-paper-dim);
+  --ink-dim: var(--palette-ink-500);
 
-  --ok-color: var(--leaf-500);
-  --low-color: var(--ember-500);
+  --ok-color: var(--pl-theme-accent-life);
+  --low-color: var(--pl-theme-hazard);
 
   /* Cinematic overlay tokens — vignette, film grain, atmospheric depth */
   --vignette: radial-gradient(circle at 50% 50%, transparent 0%, rgba(0, 0, 0, 0.55) 100%);
@@ -150,7 +168,7 @@ body {
   padding: 0;
   width: 100%;
   height: 100%;
-  background: radial-gradient(circle at 50% 0%, #2d371f 0%, var(--loam-900) 70%);
+  background: radial-gradient(circle at 50% 0%, var(--palette-foliage-700) 0%, var(--loam-900) 70%);
   color: var(--bone-100);
   font-family: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
   font-size: calc(13px * var(--text-scale));
@@ -752,7 +770,11 @@ html[data-pl-entry-step]:not([data-pl-entry-step="world"]) #cinematic-overlay {
   padding: 10px 12px;
   border: 1px solid var(--hud-border);
   border-radius: 12px;
-  background: linear-gradient(160deg, #1d2417, #0d1209);
+  background: linear-gradient(
+    160deg,
+    color-mix(in oklab, var(--palette-foliage-900) 80%, black),
+    color-mix(in oklab, var(--palette-foliage-900) 50%, black)
+  );
   box-shadow: 0 14px 30px rgba(0, 0, 0, 0.55);
   font-size: 0.7rem;
   line-height: 1.5;
@@ -777,7 +799,7 @@ html[data-pl-entry-step]:not([data-pl-entry-step="world"]) #cinematic-overlay {
   bottom: -5px;
   width: 10px;
   height: 10px;
-  background: #0d1209;
+  background: color-mix(in oklab, var(--palette-foliage-900) 50%, black);
   border-right: 1px solid var(--hud-border);
   border-bottom: 1px solid var(--hud-border);
   transform: translateX(-50%) rotate(45deg);
@@ -1336,13 +1358,13 @@ html[data-pl-entry-step]:not([data-pl-entry-step="world"]) #cinematic-overlay {
 }
 
 #dev-panel .dev-btn-danger {
-  background: #7a3a3a;
-  border-color: #a84a4a;
-  color: #ffd0d0;
+  background: var(--palette-ember-700);
+  border-color: var(--palette-ember-500);
+  color: var(--palette-ember-100);
 }
 
 #dev-panel .dev-btn-danger:hover {
-  background: #984a4a;
+  background: var(--palette-ember-500);
 }
 
 #dev-panel .dev-btn-group {
@@ -1408,19 +1430,19 @@ html[data-pl-entry-step]:not([data-pl-entry-step="world"]) #cinematic-overlay {
 }
 
 #dev-panel .dev-validation-warning {
-  color: #ff6b6b;
+  color: var(--palette-ember-500);
   font-size: 9px;
   margin-top: 5px;
   padding: 3px 8px;
-  background: rgba(255, 107, 107, 0.1);
-  border: 1px solid rgba(255, 107, 107, 0.25);
+  background: color-mix(in srgb, var(--palette-ember-500) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--palette-ember-500) 25%, transparent);
   border-radius: 4px;
 }
 
 #dev-panel .dev-validation-warning.warning {
-  color: #ffb26b;
-  background: rgba(255, 178, 107, 0.1);
-  border-color: rgba(255, 178, 107, 0.25);
+  color: var(--palette-ember-300);
+  background: color-mix(in srgb, var(--palette-ember-300) 10%, transparent);
+  border-color: color-mix(in srgb, var(--palette-ember-300) 25%, transparent);
 }
 
 #dev-panel .dev-drag-handle {
@@ -1491,19 +1513,11 @@ html[data-pl-entry-step]:not([data-pl-entry-step="world"]) #cinematic-overlay {
   resize: none;
 }
 
-/* ===== C04 UI polish: green/brown surfaces and in-world scrollbars =====
-   Native scrollbars were the last default web chrome left in the game. They are
-   styled on both engines so panels inside the HUD read as part of the soil, not
-   as a browser page. */
-:root {
-  --hud-bg: rgba(19, 26, 14, 0.95);
-  --hud-bg-hover: rgba(29, 38, 21, 0.97);
-  --hud-border: rgba(126, 154, 74, 0.4);
-  --hud-border-muted: rgba(96, 108, 64, 0.4);
-  --hud-shadow: 0 16px 48px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(200, 232, 108, 0.1);
-}
-
+/* A01: the second `:root` that used to sit here re-declared --hud-bg, --hud-bg-hover,
+   --hud-border, --hud-border-muted and --hud-shadow with older values, so it silently
+   overrode the top of this sheet (a later :root of equal specificity wins). One
+   definition, at the top, where the palette lives. */
 ::selection {
-  background: rgba(142, 176, 84, 0.34);
-  color: var(--bone-50, #fdfbf6);
+  background: color-mix(in srgb, var(--palette-foliage-500) 34%, transparent);
+  color: var(--bone-50);
 }

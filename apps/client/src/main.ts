@@ -236,7 +236,7 @@ import { createSettingsPanel, type SettingsPanelAPI } from './ui/SettingsPanel.j
 import { createShopPanel, type ShopPanel } from './ui/ShopPanel.js';
 import { createSporeChip, type SporeChipAPI } from './ui/SporeChip.js';
 import { formatSeasonRemaining } from './ui/seasonLabel.js';
-import { resolveTheme } from './ui/theme.ts';
+import { applyPaletteCssVars } from './ui/theme.ts';
 import { isPlantSoundEnabled, setPlantSoundEnabled } from './ui/title/plantSound.js';
 import { touchHintLines } from './ui/touchCopy.js';
 import { createUIShell, type UIShell } from './ui/UIShell.js';
@@ -3924,11 +3924,11 @@ async function initC01(): Promise<void> {
     );
   }
 
-  // A01: one colour source. `config/ui.json` names palette roles, so resolve
-  // them before the shell is built: it publishes each token as a `--<token>`
-  // custom property, and that path now carries the palette's hex rather than a
-  // role name that no surface can paint.
-  uiConfig.theme = resolveTheme(uiConfig.theme, paletteConfig);
+  // A01: one colour source, published once before the HUD can paint. The
+  // palette's steps and roles become --palette-*, and `config/ui.json`'s design
+  // tokens resolve through those roles to --pl-theme-*, so the stylesheet names
+  // paper or a ladder step and never a hex.
+  applyPaletteCssVars(paletteConfig, uiConfig.theme);
 
   // Build UI shell
   uiShell = createUIShell(uiConfig);

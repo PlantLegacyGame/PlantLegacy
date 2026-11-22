@@ -1,63 +1,72 @@
 /**
- * Turns the palette into the HUD's colours.
+ * Publishes the palette as CSS custom properties.
  *
- * A01: `config/palette.json` is the only place a colour value lives. The UI's
- * tokens (`config/ui.json` -> `theme`) name a palette role, not a hex, so the
- * HUD cannot drift from the world a hand-edited colour at a time: change a ramp
- * step and every surface that asks for that role follows.
+ * A01: `config/palette.json` is the only place a colour value lives. At boot its
+ * steps become `--palette-<ramp>-<step>` and its roles `--palette-<role>`, so
+ * `styles.css` can name a ladder step or a role and never a hex. The UI's design
+ * tokens (`config/ui.json` -> `theme`, each naming a role) become
+ * `--pl-theme-<token>`: a surface asks for paper or hazard rather than a shade,
+ * and the prefix keeps a token from shadowing a ramp variable the way an
+ * unprefixed `--bone-100` did (paper vying with the sheet's lightest bone).
  *
- * The shell already publishes each token as a `--<token>` custom property on the
- * document root (`bark_700` -> `--bark-700`). Resolving the tokens to hex before
- * the shell is built means that one publish path carries the palette's value,
- * and `styles.css` keeps its own hexes only as the fallback for a missing or
- * partial palette.
+ * Everything is published in one write. A palette that fails to load publishes
+ * nothing, which leaves the stylesheet's `--palette-*` references unset -
+ * deliberately loud, because a HUD with no colour source should look broken
+ * rather than quietly keep a stale second copy of the palette.
  */
 import { oklchToHex } from '@plant-legacy/shared/color';
 import type { PaletteConfig } from '../config/clientConfig.js';
 
-// The shape is the loader's, so the route and the resolver cannot disagree
-// about what `/config/palette` returns.
-export type {
-  PaletteConfig,
-  PaletteRamp,
-  PaletteRole,
-  PaletteStep,
-} from '../config/clientConfig.js';
+/** Custom property for a name: `('--palette-', 'accent_life')` -> `--palette-accent-life`. */
+const cssName = (prefix: string, name: string) => `${prefix}${name.replaceAll('_', '-')}`;
 
-/** Every role's colour, resolved through the ramps: `role -> #rrggbb`. */
-export function roleHexes(palette: PaletteConfig): Record<string, string> {
+/** Step hexes keyed `ramp.step`. */
+function stepHexes(palette: PaletteConfig): Map<string, string> {
   const steps = new Map<string, string>();
   for (const ramp of palette.ramps ?? []) {
     for (const step of ramp.steps ?? []) {
       steps.set(`${ramp.name}.${step.step}`, oklchToHex(step).hex);
     }
   }
-  const colours: Record<string, string> = {};
-  for (const role of palette.roles ?? []) {
-    const hex = steps.get(`${role.ramp}.${role.step}`);
-    // A role pointing at a step that is not in the file is a palette bug, and
-    // the palette build rejects it. Here it simply leaves the stylesheet's
-    // fallback in place instead of painting something arbitrary.
-    if (hex) colours[role.name] = hex;
-  }
-  return colours;
+  return steps;
 }
 
 /**
- * `theme` tokens resolved to hex, keyed by the token name `config/ui.json` uses.
- *
- * A token whose role does not resolve is left out, so the shell publishes
- * nothing for it and the stylesheet's own value stands.
+ * Every palette step, every role, and the UI's design tokens, as custom
+ * properties: `--palette-soil-500`, `--palette-paper`, `--pl-theme-paper-dim`.
  */
-export function resolveTheme(
-  theme: Record<string, string> | undefined,
+export function paletteCssVars(
   palette: PaletteConfig,
+  theme: Record<string, string> | undefined,
 ): Record<string, string> {
-  const roles = roleHexes(palette);
-  const resolved: Record<string, string> = {};
+  const steps = stepHexes(palette);
+  const vars: Record<string, string> = {};
+  for (const [key, hex] of steps) vars[cssName('--palette-', key.replace('.', '-'))] = hex;
+
+  const roles: Record<string, string> = {};
+  for (const role of palette.roles ?? []) {
+    const hex = steps.get(`${role.ramp}.${role.step}`);
+    // A role pointing at a step that is not in the file is a palette bug, and
+    // the palette build rejects it. Here it is simply left unpainted.
+    if (!hex) continue;
+    roles[role.name] = hex;
+    vars[cssName('--palette-', role.name)] = hex;
+  }
+
   for (const [token, role] of Object.entries(theme ?? {})) {
     const hex = roles[role];
-    if (hex) resolved[token] = hex;
+    if (hex) vars[cssName('--pl-theme-', token)] = hex;
   }
-  return resolved;
+  return vars;
+}
+
+/** Writes {@link paletteCssVars} onto the root (or a root the caller supplies). */
+export function applyPaletteCssVars(
+  palette: PaletteConfig,
+  theme: Record<string, string> | undefined,
+  root: HTMLElement = document.documentElement,
+): Record<string, string> {
+  const vars = paletteCssVars(palette, theme);
+  for (const [name, value] of Object.entries(vars)) root.style.setProperty(name, value);
+  return vars;
 }

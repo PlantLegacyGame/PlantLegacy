@@ -48,14 +48,20 @@ the one to build against: a surface asks for a role, never for a step.
 `pnpm verify` fails when either is stale, and `node tools/palette/build.mjs`
 rejects a step outside sRGB rather than documenting a clipped hex.
 
-The interface follows the same rule. `config/ui.json`'s `theme` tokens hold role
-names, not hexes; the server serves this file at `/config/palette`, and
-`apps/client/src/ui/theme.ts` resolves the tokens to hex before the UI shell
-publishes them as `--<token>` custom properties over the stylesheet's own values.
-A missing palette leaves the sheet's hexes standing instead of painting a role
-name into a colour slot, so the HUD and the world cannot drift apart one
-hand-edited colour at a time. The one conversion (`packages/shared/src/color`) is
-also what draws the swatches, so the sheet and the game agree by construction.
+The interface follows the same rule, and does it with no colours of its own.
+`apps/client/src/ui/theme.ts` publishes the whole file once at boot: every step
+becomes `--palette-<ramp>-<step>` and every role `--palette-<role>`. `styles.css`
+defines its ramps from those steps - mixing two ladder stops in OKLAB where the
+HUD needs a value between them, and mixing toward black or white at the two ends
+the ladder cannot reach - and its semantic tokens (paper, hazard, the panel
+ground) from `config/ui.json`'s design tokens, which name a role each and are
+published as `--pl-theme-*`. A missing palette therefore publishes nothing and
+the HUD loses its colours loudly instead of keeping a stale second copy.
+
+`apps/client/src/styles.palette.test.ts` holds the line: it fails on a hex in the
+root block, on a `--palette-*` name the file does not have, and on a design token
+`ui.json` does not declare. The one conversion (`packages/shared/src/color`) also
+draws the swatches, so the sheet and the game agree by construction.
 
 ![Palette ramps: one row per material, one cell per step](./assets/palette.svg)
 
