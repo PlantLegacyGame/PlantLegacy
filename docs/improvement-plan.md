@@ -188,7 +188,7 @@ camera-relative D-pad; WASD/arrow steering while uprooted; server sends
 and reroot without opening the Dev Panel.
 **Verification:** `PlantStatusHud.test.ts` (6); `pnpm verify`, `docs:check` and
 `build` green. **In-browser pass blocked** by the Chrome access limitation.
-**Still open:** context dock and rebinding screen (recorded in
+**Still open:** the context dock and the wider in-browser pass (recorded in
 `docs/tasks/C04.md`).
 
 ### 2-B Render interpolation and offline cue `[~]`

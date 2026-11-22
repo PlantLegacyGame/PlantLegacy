@@ -1,9 +1,10 @@
 /**
  * C04 settings panel: Settings and Controls tabs.
  *
- * Settings owns text size and reduced motion; Controls is a read-only view of
- * the bindings the input bus actually loaded, so the panel can never claim a
- * key the game does not use. Rebinding is deliberately not exposed yet.
+ * Settings owns text size and reduced motion; Controls lists the bindings the
+ * input bus actually loaded, so the panel can never claim a key the game does
+ * not use, and lets a player change one. A rebind is a key press, not a text
+ * field: click Change, press the key, and the table redraws from the new table.
  *
  * On a finger layout the Controls tab lists the touch gestures instead: those
  * have no binding table to quote, so their words come from `touchCopy.ts`.
@@ -30,6 +31,10 @@ export interface SettingsPanelOptions {
   onReducedMotion?: (enabled: boolean) => void;
   onSound?: (enabled: boolean) => void;
   onPlantCursors?: (enabled: boolean) => void;
+  /** A key chosen for an action in the Controls tab (`KeyJ`, `ArrowUp`, …). */
+  onRebind?: (action: string, code: string) => void;
+  /** Put every action back on the config's key. */
+  onResetBindings?: () => void;
   /** Told whenever the panel opens or closes, so the title can stand down. */
   onOpenChange?: (open: boolean) => void;
 }
@@ -41,6 +46,8 @@ export interface SettingsPanelAPI {
   toggle(): void;
   /** Open straight to a tab: the pause menu's Controls entry lands here. */
   showTab(tab: 'settings' | 'controls'): void;
+  /** Replace the displayed table after a rebind or a config reload. */
+  setBindings(bindings: Record<string, BindingView>): void;
   dispose(): void;
 }
 
@@ -176,6 +183,24 @@ const STYLE = `
   .pl-controls__action { color: var(--bone-100); }
   .pl-controls__key { color: var(--leaf-200); font-family: ui-monospace, monospace; }
   .pl-controls__context { color: var(--ink-dim); }
+  .pl-controls__bar {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    padding: 0 0 8px;
+  }
+  .pl-controls__hint { color: var(--ink-dim); font-size: 0.68rem; }
+  .pl-controls__reset, .pl-controls__change {
+    min-height: 28px; padding: 4px 10px; border-radius: 8px; cursor: pointer;
+    border: 1px solid color-mix(in srgb, var(--palette-foliage-700) 34%, transparent);
+    background: color-mix(in srgb, var(--palette-foliage-900) 60%, transparent);
+    color: var(--bone-200); font: inherit; font-size: 0.68rem;
+  }
+  .pl-controls__reset:hover, .pl-controls__change:hover { border-color: var(--leaf-400); }
+  .pl-controls__change.is-capturing {
+    border-color: var(--leaf-300); color: var(--leaf-200);
+  }
+  .pl-controls__change:focus-visible, .pl-controls__reset:focus-visible {
+    outline: 2px solid var(--leaf-300); outline-offset: 2px;
+  }
   /* The touch layout of the same controls. A phone reading a table of keys is
      reading a manual for a device it is not holding. */
   .pl-controls-touch { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
@@ -268,7 +293,7 @@ function controlSection(action: string): string {
   return CONTROL_SECTIONS.find((section) => section.test(action))?.label ?? 'Other';
 }
 
-function prettyAction(action: string): string {
+export function prettyAction(action: string): string {
   const slot = /^inventory_slot_(\d+)$/.exec(action);
   if (slot) return `Hotbar slot ${slot[1]}`;
   return action
@@ -292,7 +317,7 @@ function isFingerLayout(): boolean {
   return window.matchMedia('(hover: none) and (pointer: coarse)').matches;
 }
 
-function prettyKey(key: string): string {
+export function prettyKey(key: string): string {
   const map: Record<string, string> = {
     ArrowUp: '\u2191',
     ArrowDown: '\u2193',
@@ -317,6 +342,8 @@ export function createSettingsPanel(options: SettingsPanelOptions): SettingsPane
   let currentReducedMotion = options.initialReducedMotion;
   let currentSound = options.initialSound ?? true;
   let currentPlantCursors = options.initialPlantCursors ?? true;
+  let bindings = options.bindings;
+  let capturing: string | null = null;
 
   const backdrop = document.createElement('div');
   backdrop.className = 'pl-settings-backdrop';
@@ -348,13 +375,35 @@ export function createSettingsPanel(options: SettingsPanelOptions): SettingsPane
   }
 
   const onKeyDown = (event: KeyboardEvent): void => {
-    if (event.key === 'Escape' && open) {
+    if (event.key === 'Escape' && open && capturing === null) {
       event.preventDefault();
       event.stopPropagation();
       setOpen(false);
     }
   };
   document.addEventListener('keydown', onKeyDown);
+
+  /** While a row is listening, the next real key is the answer. */
+  const onRebindKey = (event: KeyboardEvent): void => {
+    if (!open || capturing === null) return;
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      event.stopPropagation();
+      capturing = null;
+      render();
+      return;
+    }
+    // A modifier or Tab cannot be the answer: one is held around another key,
+    // the other has to keep moving focus.
+    if (['Shift', 'Control', 'Alt', 'Meta', 'Tab'].includes(event.key)) return;
+    if (!event.code) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const action = capturing;
+    capturing = null;
+    options.onRebind?.(action, event.code);
+  };
+  document.addEventListener('keydown', onRebindKey, true);
 
   function setOpen(next: boolean): void {
     if (open === next) return;
@@ -374,9 +423,8 @@ export function createSettingsPanel(options: SettingsPanelOptions): SettingsPane
 
   /** How many actions actually answer to a key or a mouse button. */
   const boundActionCount = (): number =>
-    Object.values(options.bindings).filter(
-      (binding) => binding.keys.length > 0 || binding.mouse !== '',
-    ).length;
+    Object.values(bindings).filter((binding) => binding.keys.length > 0 || binding.mouse !== '')
+      .length;
 
   /**
    * The state strip: what the panel is currently set to, in one line, so the
@@ -512,7 +560,7 @@ export function createSettingsPanel(options: SettingsPanelOptions): SettingsPane
       ['Pane', `${pane} CSS px`],
       ['Pixel ratio', (window.devicePixelRatio || 1).toFixed(2)],
       ['Overlay scale', `${Math.round(overlayScale() * 100)}%`],
-      ['Bindings loaded', String(Object.keys(options.bindings).length)],
+      ['Bindings loaded', String(Object.keys(bindings).length)],
     ];
     for (const [label, value] of rowsData) {
       const fact = document.createElement('div');
@@ -544,23 +592,45 @@ export function createSettingsPanel(options: SettingsPanelOptions): SettingsPane
       body.appendChild(list);
       return;
     }
+    if (options.onRebind || options.onResetBindings) {
+      const bar = document.createElement('div');
+      bar.className = 'pl-controls__bar';
+      const hint = document.createElement('span');
+      hint.className = 'pl-controls__hint';
+      hint.textContent = capturing
+        ? `Press a key for ${prettyAction(capturing)}. Esc cancels.`
+        : 'Change a key, or reset every action to the config.';
+      bar.appendChild(hint);
+      if (options.onResetBindings) {
+        const reset = document.createElement('button');
+        reset.type = 'button';
+        reset.className = 'pl-controls__reset';
+        reset.textContent = 'Reset to defaults';
+        reset.addEventListener('click', () => {
+          capturing = null;
+          options.onResetBindings?.();
+        });
+        bar.appendChild(reset);
+      }
+      body.appendChild(bar);
+    }
     const table = document.createElement('table');
     table.className = 'pl-controls';
     table.innerHTML =
-      '<thead><tr><th>Action</th><th>Keys</th><th>Mouse</th><th>Mode</th></tr></thead><tbody></tbody>';
+      '<thead><tr><th>Action</th><th>Keys</th><th>Mouse</th><th>Mode</th><th></th></tr></thead><tbody></tbody>';
     const tbody = table.querySelector('tbody') as HTMLElement;
     // A binding with no key and no mouse button is not a control: it is an action
     // waiting for a producer (the metrics overlay, for one, is a dev-panel switch
     // with no binding on purpose). Listing it as a row of dashes was noise in the
     // one screen a player opens to find out what they can press.
     let section = '';
-    for (const [action, binding] of controlEntries(options.bindings)) {
+    for (const [action, binding] of controlEntries(bindings)) {
       const heading = controlSection(action);
       if (heading !== section) {
         section = heading;
         const header = document.createElement('tr');
         header.className = 'pl-controls__section';
-        header.innerHTML = '<th colspan="4"></th>';
+        header.innerHTML = '<th colspan="5"></th>';
         (header.firstElementChild as HTMLElement).textContent = heading;
         tbody.appendChild(header);
       }
@@ -568,13 +638,27 @@ export function createSettingsPanel(options: SettingsPanelOptions): SettingsPane
       const keys = [...binding.keys.map(prettyKey), binding.mouse].filter(Boolean).join(' / ');
       row.innerHTML =
         '<td class="pl-controls__action"></td><td class="pl-controls__key"></td>' +
-        '<td class="pl-controls__key"></td><td class="pl-controls__context"></td>';
+        '<td class="pl-controls__key"></td><td class="pl-controls__context"></td>' +
+        '<td class="pl-controls__rebind"></td>';
       (row.children[0] as HTMLElement).textContent = prettyAction(action);
       (row.children[1] as HTMLElement).textContent =
         binding.keys.map(prettyKey).join(' / ') || '\u2014';
       (row.children[2] as HTMLElement).textContent = binding.mouse || '\u2014';
       (row.children[3] as HTMLElement).textContent = binding.mode;
       row.title = keys;
+      if (options.onRebind) {
+        const change = document.createElement('button');
+        change.type = 'button';
+        change.className = 'pl-controls__change';
+        change.classList.toggle('is-capturing', capturing === action);
+        change.textContent = capturing === action ? 'Press a key\u2026' : 'Change';
+        change.setAttribute('aria-label', `Change the key for ${prettyAction(action)}`);
+        change.addEventListener('click', () => {
+          capturing = capturing === action ? null : action;
+          render();
+        });
+        (row.children[4] as HTMLElement).appendChild(change);
+      }
       tbody.appendChild(row);
     }
     body.appendChild(table);
@@ -586,6 +670,11 @@ export function createSettingsPanel(options: SettingsPanelOptions): SettingsPane
       tab = next;
       render();
     },
+    setBindings: (next) => {
+      bindings = next;
+      if (capturing !== null && !(capturing in next)) capturing = null;
+      if (open) render();
+    },
     get isOpen() {
       return open;
     },
@@ -595,6 +684,7 @@ export function createSettingsPanel(options: SettingsPanelOptions): SettingsPane
     },
     dispose() {
       document.removeEventListener('keydown', onKeyDown);
+      document.removeEventListener('keydown', onRebindKey, true);
       backdrop.remove();
     },
   };

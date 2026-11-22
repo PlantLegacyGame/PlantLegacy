@@ -132,7 +132,7 @@ Defects live in `bug-inventory.md`, values in `config/`, task scope in `DESIGN.m
 | F67 | Vitals card, world clock, weather chip | C04 | `ui/resourceVitals.ts` | ✔ | No per-row history | — | P3 |
 | F68 | Plant status HUD and health | C04 | `ui/PlantStatusHud.ts` | ✔ | — | — | P3 |
 | F69 | Action bar and contextual hints | C01/C04 | `ui/ActionBar.ts`, `ui/ContextHint.ts` | ✔ | — | — | P3 |
-| F70 | Pause, Settings, Controls, accessibility | C04 | `ui/PauseMenu.ts`, `ui/SettingsPanel.ts` | ◐ | Rebinding screen | C04 closeout | P1 |
+| F70 | Pause, Settings, Controls, accessibility | C04 | `ui/PauseMenu.ts`, `ui/SettingsPanel.ts` | ✔ | Keyboard only; mouse/modifiers listed, not rebindable | — | P1 |
 | F71 | Inspect and inventory panels, rival inspect | C04/T08A | `ui/PlayerPanels.ts` | ✔ | D4 no shared panel primitive | — | P1 |
 | F72 | Hover tips, node picking, leaf cursors | C04 | `ui/PlantHoverTip.ts`, `nodePick.ts` | ✔ | — | — | P3 |
 | F73 | Debug overlay, tick card, dev panel | C01/D01 | `ui/DebugOverlay.ts`, `ui/DevPanel.ts` | ✔ | — | — | P3 |

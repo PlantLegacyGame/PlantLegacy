@@ -27,6 +27,8 @@ export interface ActionBarAPI {
   setActive(id: string, active: boolean): void;
   /** Unread count for an action (chat). 0 hides the badge. */
   setBadge(id: string, count: number): void;
+  /** Replace the key badge after a rebind (`null` hides it). */
+  setKey(id: string, key: string | null): void;
   setVisible(visible: boolean): void;
   destroy(): void;
 }
@@ -180,6 +182,9 @@ export function createActionBar(options: ActionBarOptions): ActionBarAPI {
 
   const buttons = new Map<string, HTMLButtonElement>();
   const badges = new Map<string, HTMLSpanElement>();
+  const keyBadges = new Map<string, HTMLElement>();
+  const labels = new Map<string, string>();
+  for (const action of options.actions) labels.set(action.id, action.label);
   for (const action of options.actions) {
     const button = document.createElement('button');
     button.type = 'button';
@@ -192,12 +197,12 @@ export function createActionBar(options: ActionBarOptions): ActionBarAPI {
     const label = document.createElement('span');
     label.textContent = action.label;
     button.appendChild(label);
-    if (action.key) {
-      const key = document.createElement('kbd');
-      key.className = 'pl-actionbar__key';
-      key.textContent = action.key;
-      button.appendChild(key);
-    }
+    const key = document.createElement('kbd');
+    key.className = 'pl-actionbar__key';
+    key.textContent = action.key ?? '';
+    key.hidden = !action.key;
+    button.appendChild(key);
+    keyBadges.set(action.id, key);
     // A badge, not an auto-opening panel: chat used to pop open for five seconds
     // on every message, which on a phone meant a full-width panel over the HUD.
     const badge = document.createElement('span');
@@ -237,6 +242,15 @@ export function createActionBar(options: ActionBarOptions): ActionBarAPI {
     setActive: (id, active) => {
       const button = buttons.get(id);
       if (button) button.setAttribute('aria-pressed', active ? 'true' : 'false');
+    },
+    setKey: (id, key) => {
+      const badge = keyBadges.get(id);
+      const button = buttons.get(id);
+      if (!badge || !button) return;
+      badge.textContent = key ?? '';
+      badge.hidden = !key;
+      const label = labels.get(id) ?? '';
+      button.setAttribute('aria-label', key ? `${label} (${key})` : label);
     },
     setBadge: (id, count) => {
       const badge = badges.get(id);

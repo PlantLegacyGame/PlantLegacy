@@ -10,7 +10,7 @@
  */
 
 import RAPIER from '@dimforge/rapier3d-compat';
-import { createInputBus, type InputBus } from '@plant-legacy/input';
+import { type Binding, createInputBus, type InputBus } from '@plant-legacy/input';
 import {
   clampGrowthDirectionByGene,
   getSeedBodyHeightRatio,
@@ -60,6 +60,13 @@ import {
   type ShopConfig,
   type SizeClassConfig,
 } from './config/clientConfig.js';
+import {
+  type ControlOverrides,
+  loadControlOverrides,
+  mergeControlOverrides,
+  rebindAction,
+  saveControlOverrides,
+} from './config/controlOverrides.js';
 import { httpOrigin, isDevMode, probeDevTools, wsOrigin } from './config/endpoints.js';
 import { loadGrowthGeometryConfig } from './config/growthGeometryConfig.js';
 import { loadMutationVisualsConfig } from './config/mutationVisuals.js';
@@ -245,7 +252,12 @@ import {
   weatherChip,
 } from './ui/resourceVitals.js';
 import { waitForServer } from './ui/ServerUnreachableOverlay.js';
-import { createSettingsPanel, type SettingsPanelAPI } from './ui/SettingsPanel.js';
+import {
+  createSettingsPanel,
+  prettyAction,
+  prettyKey,
+  type SettingsPanelAPI,
+} from './ui/SettingsPanel.js';
 import { createShopPanel, type ShopPanel } from './ui/ShopPanel.js';
 import { createSporeChip, type SporeChipAPI } from './ui/SporeChip.js';
 import { formatSeasonRemaining } from './ui/seasonLabel.js';
@@ -796,6 +808,33 @@ let tileMinerals = 0;
 // Loaded initially in initC01() before WebSocket connects; reloaded on WELCOME
 // so bindings are available even if the server wasn't ready on first fetch.
 let controlsConfig: ControlsConfig | null = null;
+// Key rebinds belong to this device, not the account: stored beside the other
+// local preferences and merged over the config every time the bus is built.
+let controlOverrides: ControlOverrides = loadControlOverrides(window.localStorage);
+
+/** The server's binding table with this device's rebinds applied. */
+function currentBindings(): Record<string, Binding> {
+  return mergeControlOverrides(controlsConfig?.bindings ?? {}, controlOverrides);
+}
+
+/** The action-bar pills whose badge is a key from the binding table. */
+const ACTION_BAR_KEYS: Record<string, string> = {
+  grow: 'grow_mode_toggle',
+  rootsight: 'root_sight_toggle',
+  inventory: 'inventory_overview_toggle',
+  emotes: 'emote_wheel',
+  hints: 'hint_card_toggle',
+};
+
+/** Keep the on-screen key badges honest after a rebind or a config reload. */
+function syncActionBarKeys(): void {
+  if (!actionBar) return;
+  const table = currentBindings();
+  for (const [id, action] of Object.entries(ACTION_BAR_KEYS)) {
+    const key = table[action]?.keys[0];
+    actionBar.setKey(id, key ? prettyKey(key) : null);
+  }
+}
 
 // Track which plants have Root Sight already enabled, to avoid resetting
 // the state machine (and flickering aura circles) on every new underground node.
@@ -3728,6 +3767,7 @@ function createWorldChrome(): void {
     ],
     onAction: (id: string) => handleActionBarAction(id),
   });
+  syncActionBarKeys();
   actionBar.setVisible(false);
   // The hotbar is the other half of `1`-`0`: the keys address these slots, and
   // before this there was nothing on screen for them to address during play.
@@ -4015,7 +4055,7 @@ async function initC01(): Promise<void> {
   physicsConfig = loadedPhysicsConfig;
 
   // Build input bus
-  inputBus = createInputBus({ bindings: controlsConfig.bindings });
+  inputBus = createInputBus({ bindings: currentBindings() });
   // An empty binding table is not a subtle failure: every named action - Root
   // Sight, recenter, grow mode, emotes - stops existing and the keys do nothing
   // with no error anywhere. Say so out loud instead of leaving a player (or a
@@ -4595,7 +4635,7 @@ async function initC01(): Promise<void> {
   document.body.appendChild(playerPanels.inventory);
 
   settingsPanel = createSettingsPanel({
-    bindings: controlsConfig?.bindings ?? {},
+    bindings: currentBindings(),
     initialTextScale: uiConfig.textScale,
     initialReducedMotion:
       uiConfig.reducedMotion ||
@@ -4603,6 +4643,29 @@ async function initC01(): Promise<void> {
     initialSound: isPlantSoundEnabled(),
     initialPlantCursors: plantCursorsEnabled(),
     onPlantCursors: (enabled) => setCursorTheme(enabled ? 'plant' : 'default'),
+    onRebind: (action, code) => {
+      const result = rebindAction(currentBindings(), action, code);
+      if (!result) return;
+      // Persist every action that moved, so a key taken from another action
+      // stays taken after a reload instead of coming back from the config.
+      Object.assign(controlOverrides, result.changes);
+      saveControlOverrides(window.localStorage, controlOverrides);
+      inputBus?.setBindings(result.bindings);
+      settingsPanel?.setBindings(result.bindings);
+      syncActionBarKeys();
+      if (result.displaced.length > 0) {
+        notify(`${result.displaced.map(prettyAction).join(', ')} lost that key.`, 'state', 3000);
+      }
+    },
+    onResetBindings: () => {
+      controlOverrides = {};
+      saveControlOverrides(window.localStorage, controlOverrides);
+      const base = currentBindings();
+      inputBus?.setBindings(base);
+      settingsPanel?.setBindings(base);
+      syncActionBarKeys();
+      notify('Bindings reset to the config.', 'info', 2000);
+    },
     onTextScale: (scale) => uiShell?.setTextScale(scale),
     onReducedMotion: (enabled) => {
       document.documentElement.dataset.reducedMotion = String(enabled);
@@ -8739,7 +8802,9 @@ async function handleWelcome(payload: unknown): Promise<void> {
     const reloaded = await loadControlsConfig(httpOrigin);
     if (reloaded.bindings && Object.keys(reloaded.bindings).length > 0) {
       controlsConfig = reloaded;
-      inputBus?.setBindings(reloaded.bindings);
+      inputBus?.setBindings(currentBindings());
+      settingsPanel?.setBindings(currentBindings());
+      syncActionBarKeys();
       console.debug('[PlantLegacy] Controls config reloaded from server', {
         actionCount: Object.keys(reloaded.bindings).length,
       });
@@ -10117,8 +10182,12 @@ function handleReject(payload: unknown): void {
 function handleError(payload: unknown): void {
   const error = payload as ErrorPayload;
   console.log('[PlantLegacy] ERROR received:', error);
-  setDetail(`ERROR: ${error.code} - ${error.message}`);
-  notify(`Server error: ${error.code}`, 'error', 4000);
+  // The server's message is already a sentence; the code is an operator detail.
+  // `report_received` arrives as ERROR on purpose (a confirmation), so it must
+  // not be shown in the error colour.
+  const message = error.message?.trim() || refusalCopy(error.code);
+  setDetail(message);
+  notify(message, error.code === 'report_received' ? 'info' : 'error', 4000);
   if (error.code === 'SESSION_REPLACED') {
     // The same account opened somewhere else and the server kicked this
     // socket. Reconnecting would quietly come back as a guest.
@@ -10151,7 +10220,7 @@ function handleDevResponse(payload: unknown): void {
   // instead labelled every successful dev action a failure.
   const ok = response.ok ?? response.success ?? true;
   const failure = response.error ?? response.message;
-  const msg = ok ? 'Dev command applied' : `Dev command refused: ${failure ?? 'unknown'}`;
+  const msg = ok ? 'Dev command applied' : refusalCopy(String(failure ?? 'unknown'));
   setDetail(msg);
   uiShell?.toast({
     message: msg,

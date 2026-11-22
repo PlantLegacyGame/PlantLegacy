@@ -14,6 +14,12 @@ describe('refusalCopy', () => {
     assert.equal(refusalCopy('item_gone'), 'That item is already gone.');
   });
 
+  it('covers dev-command and server error codes', () => {
+    assert.equal(refusalCopy('no_plant'), 'There is no plant to act on.');
+    assert.equal(refusalCopy('grant_failed'), 'That item could not be granted.');
+    assert.equal(refusalCopy('bad_tile'), 'That tile is not valid.');
+  });
+
   it('never returns a bare machine reason, even for an unknown one', () => {
     const copy = refusalCopy('some_new_reason');
     assert.equal(copy, 'That action was refused: some new reason.');

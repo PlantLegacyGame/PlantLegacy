@@ -19,6 +19,18 @@ const REFUSALS: Record<string, string> = {
   plant_mismatch: 'That is not your plant.',
   intent_queue_full: 'Too many growth orders at once. Try again.',
   growth_failed: 'That growth could not be made.',
+  // Server ERROR and dev-command codes. A message from the server is already a
+  // sentence and wins; these cover the codes that arrive without one.
+  no_plant: 'There is no plant to act on.',
+  no_drop_store: 'Drops are not available right now.',
+  grant_failed: 'That item could not be granted.',
+  bad_tile: 'That tile is not valid.',
+  out_of_bounds: 'That is outside the world.',
+  bad_time: 'That time is not valid.',
+  bad_scale: 'That scale is not valid.',
+  unknown_mutation: 'That mutation is not known.',
+  shed_refused: 'That mutation could not be shed.',
+  level_refused: 'That mutation could not be levelled.',
 };
 
 /** `insufficient_spores` -> `insufficient spores`, for an unknown reason. */

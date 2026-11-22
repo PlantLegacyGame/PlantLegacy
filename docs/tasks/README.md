@@ -31,8 +31,7 @@ through ADR-029, ADR-041/ADR-048 and the 2026-11-21 scope choices (ADR-080):
    every pouch mutation is now a locked read-modify-write (purchase, item use,
    slot swap, spore award, dev grant) and the duplication audit passed.
    Config ownership is resolved (ADR-082). Record: [T08A.md](./T08A.md).
-2. **C04 closeout** — rebinding screen and one real-device pass. Record:
-   [C04.md](./C04.md).
+2. **C04 closeout** — one real-device pass. Record: [C04.md](./C04.md).
 3. **ADR-044 burial** — dead biomass becomes organic matter.
 4. **W6 water slices 1–2** — the accepted ADR-065 rebuild.
 5. AL-01 then AL-03 — client measurement, per **ADR-050** (gameplay first).
@@ -67,7 +66,7 @@ Specs for every task in this list are in [`DESIGN.md` Part 11](../../DESIGN.md).
 | T25 | Terrain, colliders, physical dirt | `[ ]` Shared terrain/cavity fields, two-patch LOD ground with exact colliders, bounded plant colliders, root tunnels with collapse and persistence, protocol 32–34. Client height-texture application, debris/rain wiring and dev overlay pending | [T25.md](./T25.md) |
 | C03b | Ground LOD and relief | `[x]` inner detail + 620 m outer patch from one shared field, exact trimesh colliders | [C03b.md](./C03b.md) |
 | C03 | Environment Rendering | `[x]` Sky dome, sun/moon arcs, atmospheric fog, rain particles, storm lightning flashes, soil moisture/mineral tinting, and Root Sight cutaway refinement | [C03.md](./C03.md) |
-| C04 | HUD and Controls v1 | `[~]` **Partial.** Health-word HUD (biomass/rate, health, mutations, `Day N` clock and forecast), damage vignette/toast, reroot countdown and camera-relative D-pad + movement-key steering, Inspect/Inventory side panels with per-node health, Settings/Controls tabs, recent-activity notification log, death-screen stats, server `structure` and `dayNumber` fields. **Open:** rebinding screen, in-browser checklist | [C04.md](./C04.md) |
+| C04 | HUD and Controls v1 | `[~]` **Partial.** Health-word HUD (biomass/rate, health, mutations, `Day N` clock and forecast), damage vignette/toast, reroot countdown and camera-relative D-pad + movement-key steering, Inspect/Inventory side panels with per-node health, Settings/Controls tabs, per-device key rebinding, recent-activity notification log, death-screen stats, server `structure` and `dayNumber` fields. **Open:** in-browser checklist | [C04.md](./C04.md) |
 | C02b | WebGPU Compute-Driven Plant Renderer | `[ ]` v1 slice + impostor baking (readRenderData-driven, 16-view texture array + atlas copy) + VRAM pool budgeting (256MB default, allocateOrThrow) + GPU skinning for 0.9s emergence + texture arrays (Bark/Leaf/Flower/SporeSac/Seed) + cross-fade between tiers 1↔2 (blendFactor in PlantRenderData, mesh fades out, billboard fades in); mutation signatures (per-node mask, three documented signatures); planet-body occlusion in the cull pass; missing: shared depth between the WebGPU plant pass and the WebGL environment pass (separate canvases; no browser exposes WebGL depth to WebGPU without a readback) | [C02b.md](./C02b.md) |
 | C02c | Client physics and collider budgets | `[ ]` no task record yet; `config/physics.json` owns the values (`owner_task: C02c`) | — |
 | D01 | Dev settings engine | `[x]` `?dev=1` gate, server `/dev/config` endpoints, `config/dev.json`, DevPanel wired to server, persistence switch wired to disconnect logic, key binding added | [D01.md](./D01.md) |

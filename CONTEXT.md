@@ -36,7 +36,9 @@ roots, the weather and the palette can be checked without a browser. The palette
 is written per painting layer, the ground has its own 1/16-day clock, and the
 loop sleeps when the camera settles. Detail:
 [`docs/what-works-now.md`](./docs/what-works-now.md). C04's recent-activity log
-keeps the last 80 toasts with their times, opened from Pause.
+keeps the last 80 toasts with their times, opened from Pause, and Controls can
+rebind a key for this device (`config/controlOverrides.ts`, localStorage) with a
+conflict taken from the other action and a reset to the config.
 
 **Scope reset (2026-11-21).** One season now defaults to 90 days
 (`config/world.json`), and the single global season-end kill is replaced in the
