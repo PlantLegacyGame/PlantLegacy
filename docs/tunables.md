@@ -78,8 +78,8 @@ owning task fills it.
 | `growth_scale` | T23 | stub | 0 |
 | `guilds` | T44 | stub | 0 |
 | `heirlooms` | T06A | stub | 0 |
-| `inventory` | T08A | stub | 0 |
-| `item_flags` | T08A | stub | 0 |
+| `inventory` | T08A | deprecated | 0 |
+| `item_flags` | T08A | deprecated | 0 |
 | `items` | T08A | active | 7 |
 | `leaderboards` | T38 | stub | 0 |
 | `ledger` | T16 | stub | 0 |
@@ -129,7 +129,7 @@ owning task fills it.
 | `world` | T03 | active | 17 |
 
 
-Total: **80 files**; 31 populated and 49 stubs (3 of them `draft`).
+Total: **80 files**; 31 populated and 49 stubs (3 of them `draft`, 2 `deprecated`).
 
 **This line owns the count.** Other documents link here rather than quoting a
 number (ADR-049).

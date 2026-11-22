@@ -4,8 +4,8 @@
     "version": "0.1.0",
     "schema": "extended-1",
     "owner_task": "T08A",
-    "status": "stub",
-    "notes": "Declared by T00. Populated by T08A per DESIGN.md Part 5."
+    "status": "deprecated",
+    "notes": "Retired 2026-11-22 (ADR-082). items.json is the single item catalogue: definitions, flags, starting inventory and slot count. This file has no readers and is kept only so the config count does not churn until a later cleanup."
   },
   "values": {}
 }

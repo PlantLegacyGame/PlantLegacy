@@ -129,11 +129,11 @@ function clampSpores(
 /**
  * The only reader and writer of `player_state`.
  *
- * `save` is one upsert, which takes the row lock on the conflicting key and is
- * atomic. The in-memory player remains the live copy between saves; the row is
- * the restart copy. A full read-modify-write transaction will be needed when
- * two sessions can mutate one account at the same time, which the single-active-
- * player rule currently prevents.
+ * `save` is a transaction: it locks the account row with `SELECT ... FOR UPDATE`
+ * and then upserts. The in-memory player remains the live copy between saves;
+ * the row is the restart copy. A read-modify-write transaction that loads inside
+ * the lock will be needed when two sessions can mutate one account at the same
+ * time; the single-active-player rule currently prevents that.
  */
 export class PlayerStateStore {
   readonly #pool: Pool;
@@ -160,14 +160,32 @@ export class PlayerStateStore {
   async save(ownerId: string, state: PersistedPlayerState): Promise<void> {
     const slots = sanitizeSlots(state.slots, this.#options);
     const spores = clampSpores(state.spores, this.#options.maxSpores, this.#options.onRepair);
-    await this.#pool.query(
-      `INSERT INTO player_state (owner_id, slots, spores, updated_at)
-       VALUES ($1, $2::jsonb, $3, NOW())
-       ON CONFLICT (owner_id) DO UPDATE
-         SET slots = EXCLUDED.slots,
-             spores = EXCLUDED.spores,
-             updated_at = NOW()`,
-      [ownerId, JSON.stringify(slots), spores],
-    );
+    const client = await this.#pool.connect();
+    try {
+      await client.query('BEGIN');
+      // Lock the account row before writing, so two writers cannot interleave
+      // their pouch and purse. A missing row is locked by the INSERT itself.
+      await client.query('SELECT owner_id FROM player_state WHERE owner_id = $1 FOR UPDATE', [
+        ownerId,
+      ]);
+      await client.query(
+        `INSERT INTO player_state (owner_id, slots, spores, updated_at)
+         VALUES ($1, $2::jsonb, $3, NOW())
+         ON CONFLICT (owner_id) DO UPDATE
+           SET slots = EXCLUDED.slots,
+               spores = EXCLUDED.spores,
+               updated_at = NOW()`,
+        [ownerId, JSON.stringify(slots), spores],
+      );
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => {
+        // The connection may already be gone; the original error is the one
+        // the caller needs to see.
+      });
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 }

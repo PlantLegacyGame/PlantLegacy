@@ -134,14 +134,16 @@ describe('PlayerStateStore', () => {
     });
   });
 
-  it('writes one upsert with the validated slots and purse', async () => {
-    let captured: unknown[] = [];
-    const pool = {
-      query: async (_sql: string, params: unknown[]) => {
-        captured = params;
+  it('writes in a transaction that locks the row first', async () => {
+    const queries: Array<{ sql: string; params: unknown[] }> = [];
+    const client = {
+      query: async (sql: string, params: unknown[] = []) => {
+        queries.push({ sql, params });
         return { rows: [] };
       },
-    } as unknown as Pool;
+      release: () => {},
+    };
+    const pool = { connect: async () => client } as unknown as Pool;
     const store = new PlayerStateStore(pool, options);
     await store.save('acct_one', {
       slots: [
@@ -150,11 +152,42 @@ describe('PlayerStateStore', () => {
       ],
       spores: 77,
     });
-    assert.equal(captured[0], 'acct_one');
+
+    assert.deepEqual(
+      queries.map((query) => query.sql.split(/\s+/)[0]),
+      ['BEGIN', 'SELECT', 'INSERT', 'COMMIT'],
+    );
+    const upsert = queries.find((query) => query.sql.startsWith('INSERT'));
+    assert.ok(upsert);
+    assert.equal(upsert.params[0], 'acct_one');
     assert.equal(
-      captured[1],
+      upsert.params[1],
       JSON.stringify([{ itemId: 'dung', count: 2 }, { itemId: 'dung', count: 5 }, null, null]),
     );
-    assert.equal(captured[2], 77);
+    assert.equal(upsert.params[2], 77);
+  });
+
+  it('rolls back and releases the connection when the write fails', async () => {
+    const queries: string[] = [];
+    let released = false;
+    const client = {
+      query: async (sql: string) => {
+        queries.push(sql);
+        if (sql.startsWith('INSERT')) throw new Error('write failed');
+        return { rows: [] };
+      },
+      release: () => {
+        released = true;
+      },
+    };
+    const pool = { connect: async () => client } as unknown as Pool;
+    const store = new PlayerStateStore(pool, options);
+    await assert.rejects(
+      store.save('acct_one', { slots: [null, null, null, null], spores: 1 }),
+      /write failed/,
+    );
+    assert.equal(queries[0], 'BEGIN');
+    assert.equal(queries.at(-1), 'ROLLBACK');
+    assert.equal(released, true);
   });
 });
