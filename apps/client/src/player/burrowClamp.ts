@@ -85,6 +85,27 @@ export function cavityEscapeLiftY(
 }
 
 /**
+ * Raise the eye and the aim point together by one climb.
+ *
+ * Lifting only the eye shortens its orbit ray, and the orbit floor enforces a
+ * minimum distance by pushing the eye back out along that ray - from below the
+ * target that push is straight down, into the pit the climb was leaving. The lift
+ * and the floor then undid each other on alternate frames, which is the camera
+ * bouncing into the seed and out instead of holding its place or climbing free.
+ * Moving the aim with the eye keeps the orbit distance, so the floor has nothing
+ * to correct and the climb is the whole of the motion.
+ */
+export function raiseEyeWithAim(
+  eyeY: number,
+  aimY: number,
+  liftM: number,
+): { eyeY: number; aimY: number } {
+  const lift = Number.isFinite(liftM) ? Math.max(0, liftM) : 0;
+  if (lift === 0) return { eyeY, aimY };
+  return { eyeY: eyeY + lift, aimY: aimY + lift };
+}
+
+/**
  * Pull a point inside the aperture, keeping the clearance the config asks for.
  *
  * Returns `null` when the point is already inside: the caller then leaves the

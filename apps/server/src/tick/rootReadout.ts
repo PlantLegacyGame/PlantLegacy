@@ -51,8 +51,13 @@ export interface RootReadoutPorts {
   coverage(plantId: string): RootCoverage;
   capacity(plantId: string): { water: number; minerals: number };
   groundwaterCapacity(): number;
-  /** Built only when the revision changes, so this is not on the hot path. */
-  waterTable(x: number, z: number): unknown;
+  /**
+   * The newest finished water-table field for this player, or undefined before
+   * the first one. The field is filled a slice per tick (see WaterTableGridBuilder)
+   * rather than sampled here, because sampling 2,304 terrain points in one call
+   * stopped the event loop for ~100 ms twice a second.
+   */
+  waterTable(playerId: string): unknown;
   waterTableRevisionSent(playerId: string): number | undefined;
   rememberWaterTableRevision(playerId: string, revision: number): void;
   unchanged(playerId: string, snapshot: RootResourceSnapshot): boolean;
@@ -79,11 +84,12 @@ export interface RootReadoutResult {
 /**
  * The per-player root readout: stores, capacities and the tiles the plant sits on.
  *
- * Two rules live here. The water-table grid is rebuilt only when the slow-moving
- * revision changes, and a repeat payload is skipped only when every field is
- * bit-identical to what was last written — the cache is updated after a
- * successful write, so a backpressure skip is retried next tick instead of being
- * remembered as delivered.
+ * Two rules live here. The water-table grid is attached only when the slow-moving
+ * revision changes (the grid itself is built a slice per tick, not here), and a
+ * repeat payload is skipped only when every field is bit-identical to what was
+ * last written — the cache is updated after a successful write, so a
+ * backpressure skip is retried next tick instead of being remembered as
+ * delivered.
  */
 export function broadcastRootReadouts(
   ports: RootReadoutPorts,
@@ -129,7 +135,7 @@ export function broadcastRootReadouts(
     const root = plant.rootPosition;
     const waterTable =
       snapshot.waterTableRevision !== ports.waterTableRevisionSent(player.playerId) && root
-        ? ports.waterTable(root.x, root.z)
+        ? ports.waterTable(player.playerId)
         : undefined;
     if (waterTable) {
       ports.rememberWaterTableRevision(player.playerId, snapshot.waterTableRevision);

@@ -43,8 +43,8 @@ function createPorts(overrides: Partial<RootReadoutPorts> = {}) {
     coverage: () => coverage,
     capacity: () => ({ water: 40, minerals: 20 }),
     groundwaterCapacity: () => 10,
-    waterTable: (x, z) => {
-      events.push(`table:${x},${z}`);
+    waterTable: (playerId) => {
+      events.push(`table:${playerId}`);
       return { cells: 4 };
     },
     waterTableRevisionSent: (playerId) => revisions.get(playerId),
@@ -107,12 +107,12 @@ describe('broadcastRootReadouts', () => {
     assert.deepEqual(sent, []);
   });
 
-  it('builds the water table only when the slow revision changes', () => {
+  it('attaches the water table only when the slow revision changes', () => {
     const { ports, events, revisions } = createPorts();
     broadcastRootReadouts(ports, input({ tick: 40 }));
     assert.deepEqual(
       events.filter((e) => e.startsWith('table:')),
-      ['table:5,-5'],
+      ['table:a'],
     );
     assert.equal(revisions.get('a'), 4);
 

@@ -28,7 +28,7 @@ function createPorts(dirtyCount: number, overrides: Partial<ResourceBroadcastPor
 }
 
 const input = { tick: 42, wholeGridThreshold: 1000, minIntervalMs: 1000 };
-const fresh: ResourceBroadcastState = { lastWholeGridAt: 0 };
+const fresh: ResourceBroadcastState = { lastWholeGridAt: 0, lastWholeGridBase64: null };
 
 describe('broadcastResourceDeltas', () => {
   it('sends a small delta as a tile list', () => {
@@ -56,7 +56,32 @@ describe('broadcastResourceDeltas', () => {
     assert.equal(sent[0]?.gridBase64, 'packed:1');
     assert.equal(sent[0]?.tiles, undefined);
     assert.equal(state.lastWholeGridAt, 10_000);
+    assert.equal(state.lastWholeGridBase64, 'packed:1');
     assert.deepEqual(calls, ['dirtyTiles', 'encode']);
+  });
+
+  it('does not resend a whole grid whose packed bytes have not changed', () => {
+    // The grid is quantised, so a re-tint of an unchanged field packs to the same
+    // bytes. Resending those 192 KB cost the client a decoded texture upload and a
+    // dropped frame every second.
+    const { ports, sent } = createPorts(5000);
+    const first = broadcastResourceDeltas(ports, input, fresh);
+    const second = broadcastResourceDeltas({ ...ports, now: () => 11_000 }, input, first);
+    assert.equal(sent.length, 1);
+    // The clock still moves on: the encode stays on the throttle.
+    assert.equal(second.lastWholeGridAt, 11_000);
+    assert.equal(second.lastWholeGridBase64, 'packed:1');
+  });
+
+  it('sends the whole grid again once the packed bytes change', () => {
+    let packed = 'packed:a';
+    const { ports, sent } = createPorts(5000, { encodeWholeGrid: () => packed });
+    const first = broadcastResourceDeltas(ports, input, fresh);
+    packed = 'packed:b';
+    const second = broadcastResourceDeltas({ ...ports, now: () => 11_000 }, input, first);
+    assert.equal(sent.length, 2);
+    assert.equal(sent[1]?.gridBase64, 'packed:b');
+    assert.equal(second.lastWholeGridBase64, 'packed:b');
   });
 
   it('throttles whole-grid updates to one per interval', () => {
@@ -76,7 +101,10 @@ describe('broadcastResourceDeltas', () => {
 
   it('never delays a small delta, even right after a whole-grid send', () => {
     const { ports, sent } = createPorts(2);
-    const state = broadcastResourceDeltas(ports, input, { lastWholeGridAt: 9_999 });
+    const state = broadcastResourceDeltas(ports, input, {
+      lastWholeGridAt: 9_999,
+      lastWholeGridBase64: null,
+    });
     assert.equal(sent.length, 1);
     assert.deepEqual(sent[0]?.tiles, [{ x: 1, z: 2 }]);
     assert.equal(state.lastWholeGridAt, 9_999);

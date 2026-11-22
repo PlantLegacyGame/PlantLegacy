@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { cavityEscapeLiftY, clampToCavity, isInsideCavityColumn } from './burrowClamp.ts';
+import {
+  cavityEscapeLiftY,
+  clampToCavity,
+  isInsideCavityColumn,
+  raiseEyeWithAim,
+} from './burrowClamp.ts';
 
 const CAVITY = { x: 3, z: -2, radius: 2 };
 
@@ -88,5 +93,20 @@ describe('cavity escape', () => {
 
   it('ignores a nonsensical rate', () => {
     assert.equal(cavityEscapeLiftY(-3, 0, 0.9, 1, Number.NaN), -3);
+  });
+
+  it('raises the aim with the eye, so the orbit distance is unchanged', () => {
+    // Lifting the eye alone shrinks its orbit ray, and the orbit floor pushes it
+    // back out along that ray - straight down, into the pit. The camera bounced
+    // into the seed and out on alternate frames.
+    const raised = raiseEyeWithAim(-3, -1.5, 0.4);
+    assert.equal(raised.eyeY, -2.6);
+    assert.equal(raised.aimY, -1.1);
+    assert.equal(raised.aimY - raised.eyeY, -1.5 - -3);
+  });
+
+  it('moves nothing for a zero or nonsensical lift', () => {
+    assert.deepEqual(raiseEyeWithAim(-3, -1.5, 0), { eyeY: -3, aimY: -1.5 });
+    assert.deepEqual(raiseEyeWithAim(-3, -1.5, Number.NaN), { eyeY: -3, aimY: -1.5 });
   });
 });

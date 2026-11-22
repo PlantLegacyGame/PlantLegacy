@@ -111,6 +111,12 @@ export interface MainMenuOptions {
   season?: () => number;
   /** Called when the player commits a name or a new avatar. */
   onProfileChange?: (profile: { displayName?: string; avatar?: string | null }) => void;
+  /**
+   * One line of session diagnostics. The avatar picker reports each step, so a
+   * session that stops without unloading can be read back afterwards and the
+   * upload blamed or cleared.
+   */
+  onDiagnostic?: (kind: string, detail?: Record<string, unknown>) => void;
 }
 
 const STYLE_ID = 'pl-menu-style';
@@ -2917,10 +2923,12 @@ export class MainMenu {
     input.addEventListener('change', () => {
       const file = input.files?.[0];
       if (!file) return;
+      this.options.onDiagnostic?.('avatar.picked', { bytes: file.size, type: file.type });
       // A ceiling on what gets decoded at all. The picture is shrunk to the size
       // an avatar is drawn at before it is stored (see `storeAvatar`), so this is
       // only a guard against handing the decoder something pathological.
       if (file.size > 8 * 1024 * 1024) {
+        this.options.onDiagnostic?.('avatar.rejected', { bytes: file.size });
         this.showError('That image is larger than 8 MB.');
         return;
       }
@@ -2961,6 +2969,7 @@ export class MainMenu {
     const image = new Image();
     image.addEventListener('error', () => {
       URL.revokeObjectURL(url);
+      this.options.onDiagnostic?.('avatar.error', { bytes: file.size, type: file.type });
       this.showError('That file is not an image we can use.');
     });
     image.addEventListener('load', () => {
@@ -2992,6 +3001,10 @@ export class MainMenu {
     // WebP keeps a 128 px photo near a kilobyte; a browser without it encodes
     // PNG instead, which is still small at this size.
     const small = canvas.toDataURL('image/webp', 0.9);
+    this.options.onDiagnostic?.('avatar.stored', {
+      sourcePx: `${width}x${height}`,
+      chars: small.length,
+    });
     this.avatar = small;
     this.renderProfileButton();
     this.renderPopover();

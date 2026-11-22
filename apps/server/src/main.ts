@@ -154,6 +154,7 @@ import {
   type PlantStateSnapshot,
   type StateBroadcastPorts,
 } from './tick/stateBroadcast.ts';
+import { WaterTableGridBuilder } from './tick/waterTableGrid.ts';
 import { broadcastWeather } from './tick/weatherBroadcast.ts';
 
 const STARTED_AT = Date.now();
@@ -265,11 +266,18 @@ async function saveAllPlants(
 class World {
   private players = new Map<string, ConnectedPlayer>();
   // Last time a whole-grid (compact) resource broadcast went out. Weather and
-  // daylight re-tint every tile at once; the client only needs that a couple of
-  // times a second, and the skipped state is naturally resent by the next
-  // whole-grid event because it dirties every tile again.
+  // daylight re-tint every tile at once, and the skipped state is naturally
+  // resent by the next whole-grid event because it dirties every tile again.
   private lastCompactGridBroadcastAt = 0;
-  private static readonly COMPACT_GRID_MIN_INTERVAL_MS = 1000;
+  // The packed grid that went out last, so an unchanged re-tint is not resent.
+  private lastCompactGridBase64: string | null = null;
+  /**
+   * Whole-grid payloads are 192 KB each, and the client parses, decodes and
+   * uploads every one of them: at 1 Hz that was a dropped frame a second. A tint
+   * a player cannot see at 400 ms cannot be seen at 2.5 s either, so the re-tint
+   * runs slower and the dedupe in `broadcastResourceDeltas` drops the rest.
+   */
+  private static readonly COMPACT_GRID_MIN_INTERVAL_MS = 2500;
   /** Wire cadence accumulators (INV-TM-09). */
   private stateCadenceAccumulatorMs = 0;
   private weatherCadenceAccumulatorMs = 0;
@@ -2354,6 +2362,10 @@ class World {
         if (plant?.rootNodeId) {
           const rootNode = plant.nodes.get(plant.rootNodeId);
           if (rootNode) {
+            // One slice of this player's water-table field (see
+            // WaterTableGridBuilder): the whole 48x48 field in one call was the
+            // last ~100 ms stall in the loop.
+            this.advanceWaterTableGrid(player.playerId, rootNode.x, rootNode.z);
             // A cell crossing reveals plants that appeared while this player was
             // elsewhere; PLANT_CREATED is only sent when a plant is created.
             if (
@@ -2371,6 +2383,11 @@ class World {
       if (player.plantId) {
         onlinePlantIds.add(player.plantId);
       }
+    }
+    // A player who left keeps no field: the builder holds a live Float32Array
+    // plus its base64, and nothing else will ever read it.
+    for (const playerId of this.waterTableBuilders.keys()) {
+      if (!this.players.has(playerId)) this.waterTableBuilders.delete(playerId);
     }
 
     // Root uptake first: capture is what makes photosynthesis possible.
@@ -2480,15 +2497,20 @@ class World {
     // Whole-grid updates (daylight / weather re-tinting every tile) are capped at
     // one per second; skipping one is harmless because the next event dirties
     // every tile again. Small deltas are never delayed.
-    this.lastCompactGridBroadcastAt = broadcastResourceDeltas(
+    const gridBroadcast = broadcastResourceDeltas(
       this.resourceBroadcastPorts(),
       {
         tick,
         wholeGridThreshold: COMPACT_GRID_TILE_THRESHOLD,
         minIntervalMs: World.COMPACT_GRID_MIN_INTERVAL_MS,
       },
-      { lastWholeGridAt: this.lastCompactGridBroadcastAt },
-    ).lastWholeGridAt;
+      {
+        lastWholeGridAt: this.lastCompactGridBroadcastAt,
+        lastWholeGridBase64: this.lastCompactGridBase64,
+      },
+    );
+    this.lastCompactGridBroadcastAt = gridBroadcast.lastWholeGridAt;
+    this.lastCompactGridBase64 = gridBroadcast.lastWholeGridBase64;
 
     const rootReadout = broadcastRootReadouts(this.rootReadoutPorts(), {
       tick,
@@ -2591,7 +2613,7 @@ class World {
         return { water: capacity.water, minerals: capacity.minerals };
       },
       groundwaterCapacity: () => this.resourceWorld.getGroundwaterCapacity(),
-      waterTable: (x, z) => this.buildWaterTableGrid(x, z),
+      waterTable: (playerId) => this.waterTableBuilders.get(playerId)?.grid ?? undefined,
       waterTableRevisionSent: (playerId) => this.lastWaterTableRevision.get(playerId),
       rememberWaterTableRevision: (playerId, revision) =>
         this.lastWaterTableRevision.set(playerId, revision),
@@ -2646,30 +2668,26 @@ class World {
    * one float per cell, updated twice a second — the same information the
    * simulation already holds, not a rendering guess.
    */
-  private buildWaterTableGrid(
-    centreX: number,
-    centreZ: number,
-  ): { originX: number; originZ: number; cellSizeM: number; cells: number; heightsBase64: string } {
-    const cells = 48;
-    const cellSizeM = 2;
-    const originX = centreX - (cells / 2) * cellSizeM;
-    const originZ = centreZ - (cells / 2) * cellSizeM;
-    const heights = new Float32Array(cells * cells);
-    for (let j = 0; j < cells; j += 1) {
-      for (let i = 0; i < cells; i += 1) {
-        heights[j * cells + i] = this.resourceWorld.getWaterTableHeightAt(
-          originX + (i + 0.5) * cellSizeM,
-          originZ + (j + 0.5) * cellSizeM,
-        );
-      }
+  /**
+   * The water-table field each player's readout draws, one slice per tick.
+   *
+   * The 48x48 field used to be sampled whole from the readout, twice a second,
+   * for 2,304 five-tap terrain evaluations in a single call: ~100 ms of stopped
+   * event loop each time, which showed up outside as a ping climbing to 150 ms
+   * on loopback. It is the same work, spread over twenty calls a second, and the
+   * readout picks up whichever field finished last.
+   */
+  private waterTableBuilders = new Map<string, WaterTableGridBuilder>();
+
+  private advanceWaterTableGrid(playerId: string, x: number, z: number): void {
+    let builder = this.waterTableBuilders.get(playerId);
+    if (!builder) {
+      builder = new WaterTableGridBuilder((sx, sz) =>
+        this.resourceWorld.getWaterTableHeightAt(sx, sz),
+      );
+      this.waterTableBuilders.set(playerId, builder);
     }
-    return {
-      originX,
-      originZ,
-      cellSizeM,
-      cells,
-      heightsBase64: Buffer.from(new Uint8Array(heights.buffer)).toString('base64'),
-    };
+    builder.advance(x, z);
   }
 
   /** Root position used for proximity chat range checks. */

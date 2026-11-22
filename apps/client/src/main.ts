@@ -76,7 +76,7 @@ import { closePingProbe, openPingProbe } from './net/pingProbe.js';
 import { fetchWorldTime } from './net/worldTime.js';
 import { playerWorldY, spawnPlayer, stepPlayerVertical } from './physics/playerPhysics.js';
 import { plantPhysicsSync, rapierWorld } from './physics/RapierPhysicsManager.js';
-import { cavityEscapeLiftY, clampToCavity } from './player/burrowClamp.ts';
+import { cavityEscapeLiftY, clampToCavity, raiseEyeWithAim } from './player/burrowClamp.ts';
 import { aimLiftY } from './player/cameraAim.js';
 import { solveGroundCeiling, stepLookUpPitch } from './player/cameraOrbit.js';
 import { ownBodyNodes, resolveOwnAnchor } from './player/ownPlantAnchor.js';
@@ -151,6 +151,13 @@ import { isWebGPUSupported, WebGPUDevice } from './renderers/webgpu/WebGPUDevice
 import { WebGPURenderer } from './renderers/webgpu/WebGPURenderer.js';
 import { applyWorldPalette } from './renderers/worldPalette.ts';
 import { type LocalProfile, loadProfile, saveProfile } from './state/localProfile.js';
+import {
+  describeLastAction,
+  loadJournal,
+  markCleanExit,
+  previousSessionEnd,
+  recordEvent,
+} from './state/sessionJournal.js';
 import { type ActionBarAPI, createActionBar } from './ui/ActionBar.js';
 import { type ContextHintAPI, createContextHint } from './ui/ContextHint.js';
 import {
@@ -245,10 +252,55 @@ import { isPlantSoundEnabled, setPlantSoundEnabled } from './ui/title/plantSound
 import { touchHintLines } from './ui/touchCopy.js';
 import { createUIShell, type UIShell } from './ui/UIShell.js';
 import { setUiScale, uiScaleForPane } from './ui/uiScale.js';
+import { FrameBudget, frameStatsOf } from './util/frameBudget.js';
 import './styles.css';
 
 // Server origins and the dev-mode gate live in `config/endpoints.ts`, so the
 // socket, the config fetches and the reconnect payload all read one copy.
+
+/**
+ * What this session did, and how the last one ended.
+ *
+ * The avatar reboot was reported and never reproduced, and a crashed tab leaves
+ * no console to read: the page simply restarts with nothing to say. Every
+ * session therefore leaves a bounded trail in localStorage, and the next one
+ * says out loud if the previous one never unloaded. Recorded here rather than in
+ * a module of its own so there is one place to see what is instrumented.
+ */
+const sessionJournalStorage = window.localStorage;
+const sessionStart = loadJournal(sessionJournalStorage);
+const previousSession = previousSessionEnd(sessionStart);
+if (previousSession === 'crashed') {
+  console.warn(
+    `[PlantLegacy] previous session stopped without unloading (crash or kill) after: ${describeLastAction(sessionStart)}`,
+    sessionStart.entries.slice(-8),
+  );
+}
+
+function memoryHeapMb(): number | undefined {
+  const memory = (performance as Performance & { memory?: { usedJSHeapSize: number } }).memory;
+  return memory ? Math.round(memory.usedJSHeapSize / 1048576) : undefined;
+}
+
+/** One journal line, with the heap size, which is the interesting number here. */
+function recordSessionEvent(kind: string, detail?: Record<string, unknown>): void {
+  recordEvent(sessionJournalStorage, {
+    at: Date.now(),
+    kind,
+    detail: { ...detail, heapMB: memoryHeapMb() },
+  });
+}
+
+recordSessionEvent('boot', {
+  previous: previousSession,
+  after: previousSession === 'crashed' ? describeLastAction(sessionStart) : undefined,
+  cores: navigator.hardwareConcurrency,
+  gpu: isWebGPUSupported(),
+  viewport: `${window.innerWidth}x${window.innerHeight}`,
+});
+// A tab that leaves on purpose says so; one that is killed writes nothing, and
+// that absence is the signal the next boot reads.
+window.addEventListener('pagehide', () => markCleanExit(sessionJournalStorage, Date.now()));
 
 // T00A: Onboarding config types
 interface OnboardingConfig {
@@ -635,7 +687,14 @@ function wakeRenderLoop(): void {
  */
 function startBackgroundLoop(): void {
   if (backgroundLoopTimer) return;
-  backgroundLoopTimer = window.setInterval(() => renderFrame(0.1), 100);
+  backgroundLoopTimer = window.setInterval(() => {
+    // Measured here too, not only in the animation loop: a hidden tab does not
+    // receive animation frames, so this is the only frame cost a background pane
+    // can report (`__pl.frameStats().cpuP50Ms`).
+    const started = performance.now();
+    renderFrame(0.1);
+    recordRenderCost(performance.now() - started);
+  }, 100);
   renderFrame(0.1);
 }
 
@@ -2721,7 +2780,17 @@ function clampEyeToCavity(deltaTime: number): void {
     // literal: a glance should not lift the eye, a look at the sky should.
     rootSightConfig?.cavityEscapeLookUp ?? 0.35,
   );
-  if (lifted !== camera.position.y) camera.position.y = lifted;
+  if (lifted !== camera.position.y) {
+    // The aim point climbs with the eye; see `raiseEyeWithAim` for why lifting
+    // the eye alone made the camera bounce into the seed and back out.
+    const raised = raiseEyeWithAim(
+      camera.position.y,
+      controls.target.y,
+      lifted - camera.position.y,
+    );
+    camera.position.y = raised.eyeY;
+    controls.target.y = raised.aimY;
+  }
   const clamped = clampToCavity(
     { x: camera.position.x, z: camera.position.z },
     { x: centre.x, z: centre.z, radius },
@@ -5679,6 +5748,7 @@ async function initPlantRenderer(): Promise<void> {
           gpuRenderer.setSunDirection(environmentRenderer?.getSunDirection() ?? sunLight.position);
           device.setDeviceLostCallback((reason) => {
             console.error('WebGPU device lost:', reason);
+            recordSessionEvent('device.lost', { reason: String(reason) });
             device.setDeviceLostCallback(() => {});
             // A lost device is a renderer failure, not a world failure. This used
             // to reload the page, which threw away the plant, the camera and the
@@ -5694,11 +5764,13 @@ async function initPlantRenderer(): Promise<void> {
           webgpuRenderer = gpuRenderer;
           webgpuCanvas = canvasEl;
           useWebGPU = true;
+          recordSessionEvent('renderer', { backend: 'webgpu' });
           console.log('Using WebGPU plant renderer with compute-driven LOD');
         } else {
           gpuRenderer.destroy();
           device.destroy();
           canvasEl.remove();
+          recordSessionEvent('renderer', { backend: 'webgl' });
         }
       } else {
         device.destroy();
@@ -8211,12 +8283,18 @@ camera.position.set(0, 18, 26);
 camera.lookAt(0, 0, 0);
 
 /**
- * Smallest polar angle the orbit may reach. At exactly zero the view direction
- * and the camera up vector are parallel, so OrbitControls has no stable roll and
- * a drag over the pole flips the view. A few degrees keeps the overhead view
- * while removing the singularity.
+ * Smallest polar angle the orbit may reach.
+ *
+ * At exactly zero the view direction and the camera up vector are parallel, so
+ * OrbitControls has no stable roll and a drag over the pole flips the view. The
+ * singularity only needs to be missed by a hair, though, and it used to be
+ * dodged by 3.4 degrees: at the 2 m orbit a young plant is framed from, that
+ * parks the eye 12 cm short of the point straight above the target, which is a
+ * hard stop you can see - the camera would not look directly down. A fortieth of
+ * a degree is below what the viewport can show and still leaves the azimuth
+ * defined.
  */
-const CAMERA_MIN_POLAR_ANGLE = 0.06;
+const CAMERA_MIN_POLAR_ANGLE = 0.0005;
 
 /**
  * Ceiling on the pitch a blocked orbit may spend looking up, radians (~75°).
@@ -8369,6 +8447,18 @@ if (isDevMode) {
         lookUpPitch: number;
         /** Where that pitch is heading: it eases toward this like the orbit does. */
         lookUpPitchTarget: number;
+        /** What this session has done, and how the last one ended. */
+        journal: () => Array<{ at: number; kind: string; detail?: Record<string, unknown> }>;
+        /** The one frame readout: pacing and how much of a frame is our own work. */
+        frameStats: () => import('./util/frameBudget.js').FrameStats;
+        /** The three.js renderer, for `info.render` when a frame is expensive. */
+        renderer: import('three').WebGLRenderer;
+        /**
+         * Draw one frame on demand. A hidden tab is throttled to about one frame a
+         * second, so this is how a frame's real cost is measured: call it in a loop
+         * and time the calls instead of waiting for vsync that never comes.
+         */
+        renderFrame: (deltaTime: number) => void;
       };
     }
   ).__pl = {
@@ -8386,6 +8476,10 @@ if (isDevMode) {
     get lookUpPitchTarget() {
       return lookUpPitchTargetRad;
     },
+    journal: () => loadJournal(sessionJournalStorage).entries,
+    frameStats: () => frameStatsOf(frameBudget, renderBudget),
+    renderFrame: (deltaTime) => renderFrame(deltaTime),
+    renderer,
     scene,
     setCamera: (px, py, pz, tx, ty, tz) => {
       cameraFocusTween = null;
@@ -10877,6 +10971,18 @@ window.addEventListener('beforeunload', () => {
 
 // Render loop
 let measuredFps = 60;
+/** The last four seconds of frame pacing, so "it stutters" can be measured. */
+const frameBudget = new FrameBudget(240);
+/**
+ * Distribution of `renderFrame` cost, not frame intervals: the animation loop
+ * only records intervals when it is actually animating, and a hidden tab never
+ * animates. Feeding the CPU time as both numbers puts the percentiles that
+ * matter (`p50Ms`/`p95Ms`/`worstMs`) on the cost itself.
+ */
+const renderBudget = new FrameBudget(240);
+function recordRenderCost(cpuMs: number): void {
+  renderBudget.record(cpuMs, cpuMs);
+}
 
 /**
  * Spring-arm collision: when the line from the orbit target to the camera
@@ -11478,16 +11584,22 @@ function animate(): void {
   renderLoopRunning = true;
 
   const now = performance.now();
-  const deltaTime = Math.min(0.25, (now - lastUpdateTime) / 1000);
+  const frameIntervalMs = now - lastUpdateTime;
+  const deltaTime = Math.min(0.25, frameIntervalMs / 1000);
   lastUpdateTime = now;
   if (deltaTime > 0) measuredFps = 1 / deltaTime;
 
+  const frameStart = performance.now();
   try {
     renderFrame(deltaTime);
   } catch (error) {
     console.error('[PlantLegacy] Render frame error:', error);
     // Continue animation loop even if one frame fails
   }
+  recordRenderCost(performance.now() - frameStart);
+  // Interval and our own work in that interval: a long frame with little of our
+  // code in it is the GPU (see `__pl.frameStats()`), not the loop.
+  frameBudget.record(frameIntervalMs, performance.now() - frameStart);
 }
 
 // ---- Account presence ----------------------------------------------------
@@ -12113,6 +12225,10 @@ function mountMenu(initialTimeOfDay: number | null): void {
       if (profile.avatar !== undefined) rememberAvatar(profile.avatar);
       if (profile.displayName !== undefined) rememberDisplayName(profile.displayName);
     },
+    // Avatar uploads are recorded because the one report we never reproduced
+    // was "choosing a picture reboots the game". If it happens, the journal says
+    // what the session had just done when it stopped.
+    onDiagnostic: (kind, detail) => recordSessionEvent(kind, detail),
   });
   // The machine may already be past booting: the title can mount after a slow
   // `/world/time` while the rest of the world has finished. Render it in
