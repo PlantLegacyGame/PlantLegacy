@@ -166,19 +166,26 @@ export class PlayerStateStore {
    * the lock, not the caller's stale copy, so two purchases in flight cannot
    * both spend the same spores. Return `null`, or a result with no `next`, to
    * refuse the change; the transaction rolls back and the row is untouched.
+   *
+   * `onCommitted` receives the state **as written**, after the commit: the
+   * caller's plan may have been clamped (a stack above its limit, a purse above
+   * the maximum), and adopting the plan instead would leave the live copy ahead
+   * of the row it is supposed to mirror.
    */
   mutate<T>(
     ownerId: string,
     initial: PersistedPlayerState,
     apply: (current: PersistedPlayerState) => { next?: PersistedPlayerState; result: T } | null,
+    onCommitted?: (state: PersistedPlayerState) => void,
   ): Promise<T | null> {
-    return this.#serialize(ownerId, () => this.#mutateNow(ownerId, initial, apply));
+    return this.#serialize(ownerId, () => this.#mutateNow(ownerId, initial, apply, onCommitted));
   }
 
   async #mutateNow<T>(
     ownerId: string,
     initial: PersistedPlayerState,
     apply: (current: PersistedPlayerState) => { next?: PersistedPlayerState; result: T } | null,
+    onCommitted?: (state: PersistedPlayerState) => void,
   ): Promise<T | null> {
     const seedSlots = sanitizeSlots(initial.slots, this.#options);
     const seedSpores = clampSpores(initial.spores, this.#options.maxSpores, this.#options.onRepair);
@@ -232,6 +239,9 @@ export class PlayerStateStore {
         [ownerId, JSON.stringify(slots), spores],
       );
       await client.query('COMMIT');
+      // What the row holds, not what the caller asked for. `slots` and `spores`
+      // are the sanitised values the upsert wrote.
+      onCommitted?.({ slots, spores });
       return change.result;
     } catch (error) {
       await client.query('ROLLBACK').catch(() => {

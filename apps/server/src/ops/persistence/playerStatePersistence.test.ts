@@ -4,6 +4,7 @@ import type { ItemDefinition } from '@plant-legacy/shared/schemas';
 import type { Pool } from 'pg';
 import { createInventory } from '../inventory.ts';
 import {
+  type PersistedPlayerState,
   PlayerStateStore,
   sanitizeSlots,
   toInventory,
@@ -199,6 +200,65 @@ describe('PlayerStateStore', () => {
     assert.equal(writes.length, 2);
     assert.equal(writes[0]?.params[2], 5);
     assert.equal(writes[1]?.params[2], 11);
+  });
+
+  it('hands the sanitised committed state back after COMMIT', async () => {
+    const queries: string[] = [];
+    let adopted: PersistedPlayerState | null = null;
+    const client = {
+      query: async (sql: string) => {
+        queries.push(sql.split(/\s+/)[0] ?? sql);
+        if (sql.startsWith('SELECT')) {
+          return { rows: [{ slots: [], spores: 900 }] };
+        }
+        return { rows: [] };
+      },
+      release: () => {},
+    };
+    const pool = { connect: async () => client } as unknown as Pool;
+    const store = new PlayerStateStore(pool, options);
+
+    await store.mutate(
+      'acct_one',
+      { slots: [], spores: 900 },
+      () => ({
+        // The plan is wider than the row allows: 99 dung against a limit of 5,
+        // 5000 spores against a maximum of 1000.
+        next: { slots: [{ itemId: 'dung', count: 99 }], spores: 5000 },
+        result: 'planned' as const,
+      }),
+      (state) => {
+        assert.equal(queries.at(-1), 'COMMIT', 'adoption must follow the commit');
+        adopted = state;
+      },
+    );
+
+    assert.notEqual(adopted, null);
+    assert.deepEqual(adopted, {
+      slots: [{ itemId: 'dung', count: 5 }, null, null, null],
+      spores: 1000,
+    });
+  });
+
+  it('does not hand back a state for a refused mutation', async () => {
+    const client = {
+      query: async (sql: string) => {
+        if (sql.startsWith('SELECT')) return { rows: [{ slots: [], spores: 0 }] };
+        return { rows: [] };
+      },
+      release: () => {},
+    };
+    const pool = { connect: async () => client } as unknown as Pool;
+    const store = new PlayerStateStore(pool, options);
+
+    const result = await store.mutate(
+      'acct_one',
+      { slots: [], spores: 0 },
+      () => ({ result: 'refused' as const }),
+      () => assert.fail('a refused change must not be adopted'),
+    );
+
+    assert.equal(result, 'refused');
   });
 
   it('rolls back a refused mutation without writing the change', async () => {

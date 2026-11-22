@@ -11,10 +11,12 @@ emotes, block and report), **C03b** (inner detail + 620 m outer ground patch
 from one shared field, exact trimesh colliders) and **T04** (data-driven
 mutations, adaptive pressure, maintenance/shedding, PLNT v2 snapshots, protocol
 v2 `MUTATION_STATE`/`MUTATION_SHED`, twelve visual signatures). **T06** damage, uproot and tumbling is implemented: one four-source damage pipeline (weather, tool, scripted herbivore swarm, terrain collapse/landing), uproot from sustained saturation, a height-scaled storm gust, a collapse or accumulated structural damage, a steered reroot crawl with a starvation failure, deterministic tumbling, kill credit, fragment/remains/dung world drops, protocol 37–43 and PLNT v3 snapshots (ADR-055, ADR-056). The in-browser checklist is outstanding; drop pickup is now live (2026-11-20, `ops/dropPickup.ts`) — see `docs/tasks/T06.md`. **T08A** inventory is
-partial: the `player_state` restart copy now persists an account's pouch and
-purse (2026-11-22, ADR-081) and a shop purchase is a locked read-modify-write,
-the other mutation paths are still open and the purchase audit passed; see
-`docs/tasks/T08A.md`.
+partial: the `player_state` restart copy persists an account's pouch and purse
+(2026-11-22, ADR-081), and purchases, item use, slot swaps and spore awards are
+locked read-modify-writes that adopt the committed row rather than the plan
+(`ops/playerStateMutations.ts`). The purchase, item-use and award audits pass
+against Postgres; what remains is the dev-grant path and the trade/mail/list
+systems; see `docs/tasks/T08A.md`.
 
 **2026-11-20/21 batch.** The economy got its first playable slice and the title
 got its performance pass. Spores are the server-owned currency (`ops/spores.ts`),
@@ -539,9 +541,8 @@ enforcement changes.
 
 ## 8. Not built yet
 
-The rest of the economy — the locked read-modify-write inventory transaction,
-`item_flags.json` and config ownership (T08A), marketplace/mail/trade
-(T14/T29/T45) and admin/compliance tooling. The T06 damage pipeline is
+The rest of the economy — the dev-grant path and `item_flags.json` ownership in
+T08A, marketplace/mail/trade (T14/T29/T45) and admin/compliance tooling. The T06 damage pipeline is
 implemented and drop pickup is now live; reroot controls and the damage HUD
 belong to T51/C04. Chat, emotes and reports are implemented; the pouch and purse
 are exercised by the shop and now have an account-scoped restart copy in
@@ -654,8 +655,10 @@ placement), and the three unread tile keys (`tile_size_m`, `tile_vertices`,
   rides on `INVENTORY_SYNC.sporeBalance` (protocol v4). The client never invents
   a balance or a price: `SHOP_PURCHASE { itemId }` is all it sends. A signed-in
   account's pouch and purse now load from `player_state` after a restart; guests
-  still reset to the configured starting state. The full read-modify-write
-  transaction is the open half of T08A, not a shop bug.
+  still reset to the configured starting state. Pouch and purse mutations are
+  locked read-modify-writes that adopt the committed row, and the Postgres
+  audit for purchases, item use and awards passes; the open parts of T08A are
+  the dev-grant path and the trade/mail/list systems, not a shop bug.
 - **A drop pays once.** `ops/dropPickup.ts` owns the rule (a live drop pays its
   kind's rate and the store removes it; unknown, expired, replayed and
   plantless requests pay nothing), the damage pipeline owns removal, and

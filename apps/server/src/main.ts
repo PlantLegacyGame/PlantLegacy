@@ -97,6 +97,7 @@ import { plantOwnerName } from './ops/plantOwnerName.ts';
 import { canAdoptGuestPlant, isAnonymousOwner } from './ops/plantOwnership.ts';
 import { selectVisiblePlants } from './ops/plantVisibility.ts';
 import { PlantWorld } from './ops/plantWorld.ts';
+import { awardSporesStored, mutatePlayerState } from './ops/playerStateMutations.ts';
 import { createTokenBucket, tokenBucketAllow } from './ops/rateLimiter.ts';
 import {
   createReconnectStateMachine,
@@ -118,7 +119,6 @@ import {
   seasonUpdatePayload,
 } from './ops/seasonClock.ts';
 import {
-  awardSpores,
   loadShopConfig,
   planShopPurchase,
   purchaseShopItem,
@@ -127,7 +127,7 @@ import {
   type ShopPurchasePlan,
 } from './ops/shop.ts';
 import { type HeartbeatSocket, heartbeatTick } from './ops/socketHeartbeat.ts';
-import { earnSpores, loadSporeConfig, type SporeConfig } from './ops/spores.ts';
+import { loadSporeConfig, type SporeConfig } from './ops/spores.ts';
 import { TerrainService } from './ops/terrain.ts';
 import { createTickClock, type TickClock, tickClockStart, tickClockStop } from './ops/tickClock.ts';
 import {
@@ -1716,21 +1716,27 @@ class World {
       });
     };
 
-    void store
-      .mutate<ShopPurchasePlan>(
+    void mutatePlayerState<ShopPurchasePlan>(
+      {
+        store,
         accountId,
-        toPersistedState(player.inventory, player.spores),
-        (current) => {
-          const inventory = toInventory(current, {
-            itemDefinitions: this.itemsConfig.itemDefinitions,
-            maxSlots: this.itemsConfig.inventorySlots,
-            onRepair: (message, meta) => this.log.warn(message, { accountId, ...meta }),
-          });
-          const plan = planShopPurchase(this.shopPorts(), inventory, current.spores, itemId);
-          if (!plan.ok) return { result: plan };
-          return { next: toPersistedState(plan.inventory, plan.spores), result: plan };
-        },
-      )
+        unavailable: false,
+        initial: toPersistedState(player.inventory, player.spores),
+      },
+      (current) => {
+        const inventory = toInventory(current, {
+          itemDefinitions: this.itemsConfig.itemDefinitions,
+          maxSlots: this.itemsConfig.inventorySlots,
+          onRepair: (message, meta) => this.log.warn(message, { accountId, ...meta }),
+        });
+        const plan = planShopPurchase(this.shopPorts(), inventory, current.spores, itemId);
+        if (!plan.ok) return { result: plan };
+        return { next: toPersistedState(plan.inventory, plan.spores), result: plan };
+      },
+      (state) => {
+        if (this.players.get(player.playerId) === player) this.adoptPlayerState(player, state);
+      },
+    )
       .then((plan) => {
         if (!plan) return;
         if (this.players.get(player.playerId) !== player) return;
@@ -1738,8 +1744,6 @@ class World {
           reject(plan.reason);
           return;
         }
-        player.inventory.slots = plan.inventory.slots;
-        player.spores = plan.spores;
         sendInventorySync(this.inventoryPorts(), player);
         const entry = this.shopConfig.items.find((item) => item.id === itemId);
         this.log.info('Shop purchase', {
@@ -1767,39 +1771,33 @@ class World {
    * the committed value. Guests and a failed store keep the live path.
    */
   private awardSporesLocked(player: ConnectedPlayer, amount: number, reason: string): void {
-    const accountId = player.accountId;
-    const store = this.playerStateStore;
-    if (!store || !accountId || this.playerStateUnavailable.has(accountId)) {
-      awardSpores(this.shopPorts(), player, amount, reason);
-      return;
-    }
     if (!(amount > 0)) return;
-
-    let committed: PersistedPlayerState | undefined;
+    const accountId = player.accountId ?? null;
     let earned = 0;
-    void store
-      .mutate<number | null>(
+    void awardSporesStored(
+      {
+        store: this.playerStateStore,
         accountId,
-        toPersistedState(player.inventory, player.spores),
-        (current) => {
-          const next = earnSpores(current.spores, amount, this.sporeConfig.maxBalance);
-          if (next === current.spores) return { result: null };
-          earned = next - current.spores;
-          committed = { slots: current.slots, spores: next };
-          return { next: committed, result: next };
-        },
-      )
-      .then((balance) => {
-        if (balance === null || !committed) return;
+        unavailable: accountId ? this.playerStateUnavailable.has(accountId) : false,
+        initial: toPersistedState(player.inventory, player.spores),
+        amount,
+        maxBalance: this.sporeConfig.maxBalance,
+      },
+      (state, paid) => {
         if (this.players.get(player.playerId) !== player) return;
-        const state = committed;
-        player.spores = state.spores;
+        earned = paid;
+        this.adoptPlayerState(player, state);
+      },
+    )
+      .then((balance) => {
+        if (balance === null) return;
+        if (this.players.get(player.playerId) !== player) return;
         sendInventorySync(this.inventoryPorts(), player);
         this.log.info('Spores earned', {
           playerId: player.playerId,
           amount: earned,
           reason,
-          balance: player.spores,
+          balance,
         });
       })
       .catch((error: unknown) => {
@@ -1826,40 +1824,29 @@ class World {
     apply: (current: PersistedPlayerState) => { next?: PersistedPlayerState; result: T } | null,
   ): Promise<T | null> {
     const player = this.players.get(invPlayer.playerId);
-    const store = this.playerStateStore;
     const accountId = player?.accountId ?? null;
-    const options = {
+    return mutatePlayerState<T>(
+      {
+        store: this.playerStateStore,
+        accountId,
+        unavailable: accountId ? this.playerStateUnavailable.has(accountId) : false,
+        initial: toPersistedState(invPlayer.inventory, invPlayer.spores),
+      },
+      apply,
+      (state) => {
+        if (player) this.adoptPlayerState(player, state);
+      },
+    );
+  }
+
+  /** Replace the live pouch and purse with the state the store committed. */
+  private adoptPlayerState(player: ConnectedPlayer, state: PersistedPlayerState): void {
+    player.inventory.slots = toInventory(state, {
       itemDefinitions: this.itemsConfig.itemDefinitions,
       maxSlots: this.itemsConfig.inventorySlots,
       onRepair: (message: string, meta?: Record<string, unknown>) => this.log.warn(message, meta),
-    };
-    const adopt = (state: PersistedPlayerState): void => {
-      if (!player) return;
-      player.inventory.slots = toInventory(state, options).slots;
-      player.spores = state.spores;
-    };
-
-    if (!player || !store || !accountId || this.playerStateUnavailable.has(accountId)) {
-      const change = apply(toPersistedState(invPlayer.inventory, invPlayer.spores));
-      if (!change) return Promise.resolve(null);
-      if (change.next && player) adopt(change.next);
-      return Promise.resolve(change.result);
-    }
-
-    // The plan's own `next` is what the store sanitises and commits; remember it
-    // so the live copy is replaced with the committed row, not the caller's
-    // stale view of it.
-    let committed: PersistedPlayerState | undefined;
-    return store
-      .mutate<T>(accountId, toPersistedState(player.inventory, player.spores), (current) => {
-        const change = apply(current);
-        if (change?.next) committed = change.next;
-        return change;
-      })
-      .then((result) => {
-        if (committed) adopt(committed);
-        return result;
-      });
+    }).slots;
+    player.spores = state.spores;
   }
 
   /** The shop handlers' view, including the write-back after a payout. */
