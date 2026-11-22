@@ -253,6 +253,7 @@ import { touchHintLines } from './ui/touchCopy.js';
 import { createUIShell, type UIShell } from './ui/UIShell.js';
 import { setUiScale, uiScaleForPane } from './ui/uiScale.js';
 import { FrameBudget, frameStatsOf } from './util/frameBudget.js';
+import { shouldIdleRender } from './util/idleThrottle.js';
 import './styles.css';
 
 // Server origins and the dev-mode gate live in `config/endpoints.ts`, so the
@@ -8410,6 +8411,30 @@ function trackOrbitUpDrag(): void {
 
 trackOrbitUpDrag();
 
+/**
+ * Note real input, so the loop can drop to its idle cadence and wake from it.
+ *
+ * `pointermove` counts on purpose: a hand on the mouse is not an idle machine
+ * even when no button is down. The listeners are in the capture phase, so a
+ * handler that stops propagation cannot make a busy game look idle.
+ */
+function trackActivityForIdle(): void {
+  const note = (): void => {
+    lastInputAtMs = performance.now();
+    if (idleRenderTimer === null) return;
+    // Resume at display rate now rather than on the next idle tick: waiting the
+    // tenth of a second would put a visible delay on the first drag or keypress.
+    window.clearTimeout(idleRenderTimer);
+    idleRenderTimer = null;
+    animate();
+  };
+  for (const type of ['pointerdown', 'pointermove', 'keydown', 'wheel', 'touchstart'] as const) {
+    window.addEventListener(type, note, { capture: true, passive: true });
+  }
+}
+
+trackActivityForIdle();
+
 // The explicit handles every extracted subsystem is given, instead of reaching
 // into this module's 250-odd bindings. Getters for anything that is replaced
 // during a session (the controls are rebuilt when the surface normal moves).
@@ -10991,6 +11016,12 @@ window.addEventListener('beforeunload', () => {
 
 // Render loop
 let measuredFps = 60;
+/** Last real input; anchors the configured idle drop. */
+let lastInputAtMs = performance.now();
+/** Pending idle-cadence tick, so any input resumes the loop immediately. */
+let idleRenderTimer: number | null = null;
+/** Idle cadence: 10 fps, the rate `config/render.json`'s note names. */
+const IDLE_FRAME_INTERVAL_MS = 1000 / 10;
 /** The last four seconds of frame pacing, so "it stutters" can be measured. */
 const frameBudget = new FrameBudget(240);
 /** Last GPU time the driver reported, milliseconds; 0 until a query completes. */
@@ -11618,10 +11649,47 @@ function animate(): void {
     lastFrameAtMs = performance.now();
     return;
   }
+  const now = performance.now();
+  const idleDropEnabledMs = renderConfig?.idleDropTimeoutMs ?? 0;
+  if (shouldIdleRender(now, lastInputAtMs, idleDropEnabledMs)) {
+    // One frame, a tenth of a second apart: the "throttles to 10 fps" that
+    // `config/render.json` and the C01 record have promised since the client
+    // foundation. Asking the compositor for sixty frames a second of a still
+    // picture is a permanent load for a frame that does not change.
+    //
+    // A hidden tab is drawn by its own timer instead; stopping here keeps the two
+    // from both drawing, and visibility calls `wakeRenderLoop` on the way back.
+    if (document.hidden) {
+      renderLoopRunning = false;
+      lastFrameAtMs = now;
+      return;
+    }
+    renderLoopRunning = true;
+    lastFrameAtMs = now;
+    const idleIntervalMs = Math.max(1, now - lastUpdateTime);
+    lastUpdateTime = now;
+    measuredFps = 1000 / idleIntervalMs;
+    // The band must not grade a frame whose delta is the idle gap: it would read
+    // as a 100 ms frame and spend detail on a world that is not moving.
+    skipQualitySample = true;
+    const idleStart = performance.now();
+    try {
+      renderFrame(Math.min(0.25, idleIntervalMs / 1000));
+    } catch (error) {
+      console.error('[PlantLegacy] Render frame error:', error);
+    }
+    recordRenderCost(performance.now() - idleStart);
+    frameBudget.record(idleIntervalMs);
+    idleRenderTimer = window.setTimeout(() => {
+      idleRenderTimer = null;
+      animate();
+    }, IDLE_FRAME_INTERVAL_MS);
+    return;
+  }
+
   requestAnimationFrame(animate);
   renderLoopRunning = true;
 
-  const now = performance.now();
   const frameIntervalMs = now - lastUpdateTime;
   const deltaTime = Math.min(0.25, frameIntervalMs / 1000);
   lastUpdateTime = now;
