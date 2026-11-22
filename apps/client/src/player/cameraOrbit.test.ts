@@ -7,54 +7,109 @@ const close = (a: number, b: number, epsilon = 1e-9) => Math.abs(a - b) <= epsil
 const clearsBelow = (horizon: number) => (angle: number) => angle <= horizon;
 
 describe('looking up off the ground', () => {
-  const base = { upDragRad: 0, maxRad: 1.31, decayPerSecond: 4, deltaTimeS: 0.016 };
+  const base = {
+    targetRad: 0,
+    appliedRad: 0,
+    upDragRad: 0,
+    maxRad: 1.31,
+    gain: 0.55,
+    decayPerSecond: 4,
+    dampingFactor: 0.14,
+    deltaTimeS: 0.016,
+    atCeiling: true,
+  };
 
-  it('spends an upward drag the ceiling swallowed as pitch on the camera', () => {
-    const once = stepLookUpPitch({ ...base, currentRad: 0, upDragRad: 0.08, atCeiling: true });
-    assert.ok(close(once, 0.08));
-    // The drag keeps pushing and the pitch keeps growing, instead of the view
-    // stopping the moment the ground is touched.
-    const twice = stepLookUpPitch({ ...base, currentRad: once, upDragRad: 0.08, atCeiling: true });
-    assert.ok(close(twice, 0.16));
+  it('eases into the pitch instead of snapping to the drag', () => {
+    // One frame of drag: the target takes the drag, the drawn pitch is still on
+    // its way there. That is what keeps the handover from the orbit smooth - the
+    // controls damp their own rotation by the same factor.
+    const step = stepLookUpPitch({ ...base, upDragRad: 0.1 });
+    assert.ok(close(step.targetRad, 0.055), `target ${step.targetRad}`);
+    assert.ok(close(step.appliedRad, 0.055 * 0.14), `applied ${step.appliedRad}`);
+    assert.ok(step.appliedRad < step.targetRad, 'the drawn pitch must lag the target');
+  });
+
+  it('settles on the target over a third of a second, like the orbit', () => {
+    let state = { targetRad: 0, appliedRad: 0 };
+    for (let frame = 0; frame < 22; frame += 1) {
+      state = stepLookUpPitch({ ...base, ...state, upDragRad: frame === 0 ? 0.3 : 0 });
+    }
+    // 0.86^22 leaves under a tenth of the gap; the point is that it converges
+    // rather than jumping, so the tolerance is a tenth of a degree.
+    assert.ok(
+      close(state.appliedRad, 0.3 * 0.55, 0.01),
+      `after 22 frames the pitch is ${state.appliedRad}`,
+    );
+  });
+
+  it('takes only part of the drag, so looking up is slower than orbiting', () => {
+    // A full drag handed over at gain 1 raced: this is the sensitivity.
+    const full = stepLookUpPitch({ ...base, gain: 1, upDragRad: 0.2 });
+    const gentle = stepLookUpPitch({ ...base, gain: 0.5, upDragRad: 0.2 });
+    assert.ok(close(full.targetRad, 0.2));
+    assert.ok(close(gentle.targetRad, 0.1));
   });
 
   it('stops at its own ceiling', () => {
-    const capped = stepLookUpPitch({
+    const capped = stepLookUpPitch({ ...base, targetRad: 1.3, upDragRad: 5 });
+    assert.equal(capped.targetRad, base.maxRad);
+    assert.ok(capped.appliedRad <= base.maxRad);
+  });
+
+  it('holds when idle, and ignores a downward drag at the ceiling', () => {
+    const held = stepLookUpPitch({ ...base, targetRad: 0.4, appliedRad: 0.4 });
+    assert.ok(close(held.targetRad, 0.4), 'an idle view at the ceiling must not drift');
+    const down = stepLookUpPitch({
       ...base,
-      currentRad: 1.3,
-      upDragRad: 0.5,
-      atCeiling: true,
+      targetRad: 0.4,
+      appliedRad: 0.4,
+      upDragRad: -0.3,
     });
-    assert.equal(capped, base.maxRad);
+    assert.ok(close(down.targetRad, 0.4), "a downward drag at the ceiling is the orbit's");
   });
 
-  it('holds the pitch when idle or dragging down against the ceiling', () => {
-    const held = stepLookUpPitch({ ...base, currentRad: 0.4, atCeiling: true });
-    assert.ok(close(held, 0.4), 'an idle view against the ceiling must not drift back');
-    const down = stepLookUpPitch({ ...base, currentRad: 0.4, upDragRad: -0.3, atCeiling: true });
-    assert.ok(close(down, 0.4), "a downward drag at the ceiling is the orbit's, not the pitch's");
-  });
-
-  it('never returns a negative or over-ceiling pitch', () => {
-    assert.equal(
-      stepLookUpPitch({ ...base, currentRad: 0.5, atCeiling: false, deltaTimeS: 10 }),
-      0,
-      'a long free frame unwinds to the target, never past it',
-    );
-    assert.ok(
-      stepLookUpPitch({ ...base, currentRad: 99, atCeiling: false }) <= base.maxRad,
-      'a pitch above the ceiling starts from the ceiling, not from 99',
-    );
-  });
-
-  it('unwinds once the orbit is free again', () => {
+  it('unwinds smoothly once the orbit is free again', () => {
     const free = stepLookUpPitch({
       ...base,
-      currentRad: 0.5,
+      targetRad: 0.5,
+      appliedRad: 0.5,
       atCeiling: false,
       deltaTimeS: 0.1,
     });
-    assert.ok(close(free, 0.1), 'a zoom out must not leave the camera staring at the sky');
+    assert.ok(close(free.targetRad, 0.1), `target ${free.targetRad}`);
+    assert.ok(free.appliedRad > free.targetRad, 'the drawn pitch eases down behind the target');
+    assert.equal(free.appliedRad <= 0.5, true);
+  });
+
+  it('never returns a negative, over-ceiling or NaN pitch', () => {
+    const long = stepLookUpPitch({
+      ...base,
+      targetRad: 0.5,
+      appliedRad: 0.5,
+      atCeiling: false,
+      deltaTimeS: 10,
+    });
+    assert.equal(long.targetRad, 0);
+    const high = stepLookUpPitch({ ...base, targetRad: 99, appliedRad: 99, atCeiling: false });
+    // Off the ceiling the overshoot decays from the cap rather than sitting on it.
+    assert.ok(high.targetRad <= base.maxRad, `target ${high.targetRad}`);
+    assert.ok(high.appliedRad <= base.maxRad, `applied ${high.appliedRad}`);
+    assert.ok(
+      high.appliedRad > base.maxRad - 0.02,
+      `applied ${high.appliedRad} should ease off the cap`,
+    );
+    const nan = stepLookUpPitch({
+      targetRad: Number.NaN,
+      appliedRad: Number.NaN,
+      upDragRad: Number.NaN,
+      atCeiling: true,
+      maxRad: 1,
+      gain: Number.NaN,
+      decayPerSecond: Number.NaN,
+      dampingFactor: Number.NaN,
+      deltaTimeS: Number.NaN,
+    });
+    assert.ok(Number.isFinite(nan.targetRad) && Number.isFinite(nan.appliedRad));
   });
 });
 

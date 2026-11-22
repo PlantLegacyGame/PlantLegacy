@@ -47,35 +47,69 @@ export interface GroundCeilingInput {
  * than read out of the controls' private spherical delta.
  */
 export interface LookUpPitchInput {
-  /** Extra pitch already spent, radians. */
-  currentRad: number;
+  /** Where the pitch is heading, radians. */
+  targetRad: number;
+  /** The pitch actually drawn last frame, radians. */
+  appliedRad: number;
   /** Upward pitch the player dragged for this frame, radians (negative = down). */
   upDragRad: number;
   /** Whether the orbit is against its ceiling. */
   atCeiling: boolean;
   /** Ceiling for the extra pitch itself, radians. */
   maxRad: number;
-  /** How fast the extra pitch unwinds once the orbit is free, radians/second. */
+  /** How much of the drag the pitch takes, 0..1. */
+  gain: number;
+  /** How fast the pitch unwinds once the orbit is free, radians/second. */
   decayPerSecond: number;
+  /** Per-frame easing, the same number OrbitControls uses for its own glide. */
+  dampingFactor: number;
   /** Frame time, seconds. */
   deltaTimeS: number;
 }
 
-export function stepLookUpPitch(input: LookUpPitchInput): number {
+export interface LookUpPitchStep {
+  targetRad: number;
+  appliedRad: number;
+}
+
+/**
+ * One frame of the extra pitch, with the orbit's own glide.
+ *
+ * Two numbers, not one, because the handover has to keep the *feel* of the drag.
+ * OrbitControls damps every drag: the eye catches up to the mouse over about a
+ * third of a second. Adding the blocked drag straight to the camera instead made
+ * the view snap 1:1 with the mouse the instant the ceiling took over - a visible
+ * kink at the moment looking up began, and a look-up that felt far faster than
+ * the orbit that led into it. So the drag moves a *target*, and the pitch eases
+ * toward it at the controls' own damping factor.
+ *
+ * `gain` is a sensitivity, not a feature: the pitch is a secondary control and
+ * taking the whole drag made looking up race.
+ */
+export function stepLookUpPitch(input: LookUpPitchInput): LookUpPitchStep {
   const max = Number.isFinite(input.maxRad) ? Math.max(0, input.maxRad) : 0;
-  const current = Number.isFinite(input.currentRad)
-    ? Math.min(max, Math.max(0, input.currentRad))
-    : 0;
+  const clamp = (value: number) => Math.min(max, Math.max(0, Number.isFinite(value) ? value : 0));
+  let target = clamp(input.targetRad);
+  const applied = clamp(input.appliedRad);
+
   if (input.atCeiling) {
-    const up = Number.isFinite(input.upDragRad) ? input.upDragRad : 0;
+    const up = Number.isFinite(input.upDragRad) ? Math.max(0, input.upDragRad) : 0;
+    const gain = Number.isFinite(input.gain) ? Math.min(1, Math.max(0, input.gain)) : 1;
     // Against the ceiling the orbit cannot take any more of the drag, so the
     // camera does. A downward drag is the orbit's again - it can move away from
     // the ceiling - and the pitch is given back once the orbit is free.
-    return up > 0 ? Math.min(max, current + up) : current;
+    if (up > 0) target = clamp(target + up * gain);
+  } else {
+    const deltaTime = Number.isFinite(input.deltaTimeS) ? Math.max(0, input.deltaTimeS) : 0;
+    const decay = Number.isFinite(input.decayPerSecond) ? Math.max(0, input.decayPerSecond) : 0;
+    target = clamp(target - decay * deltaTime);
   }
-  const deltaTime = Number.isFinite(input.deltaTimeS) ? Math.max(0, input.deltaTimeS) : 0;
-  const decay = Number.isFinite(input.decayPerSecond) ? Math.max(0, input.decayPerSecond) : 0;
-  return Math.max(0, current - decay * deltaTime);
+
+  const ease = Number.isFinite(input.dampingFactor)
+    ? Math.min(1, Math.max(0, input.dampingFactor))
+    : 1;
+  const next = applied + (target - applied) * ease;
+  return { targetRad: target, appliedRad: clamp(next < 1e-4 ? 0 : next) };
 }
 
 export function solveGroundCeiling(input: GroundCeilingInput): number {

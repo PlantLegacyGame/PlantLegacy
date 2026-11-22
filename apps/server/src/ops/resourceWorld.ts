@@ -340,11 +340,38 @@ export class ResourceWorld {
   /** Inject the terrain field the water table drains along. */
   setSurfaceHeightProvider(provider: (x: number, z: number) => number): void {
     this.surfaceHeightProvider = provider;
+    this.regionalHeights = null;
   }
 
   /** Inject the undug terrain field used to place the water table. */
   setBaseHeightProvider(provider: (x: number, z: number) => number): void {
     this.baseHeightProvider = provider;
+    this.regionalHeights = null;
+  }
+
+  /**
+   * Regional ground level at every cell centre, computed once.
+   *
+   * The terrain the world is drawn from does not move, so this is a constant per
+   * cell. Groundwater flow used to recompute it - five fractal-noise and
+   * river-path evaluations per cell - on every soil step, four times a second.
+   * On this world that is a few hundred thousand terrain lookups in one tick, and
+   * the profile put 60% of the server's CPU inside them: the event loop stopped
+   * for ~500 ms at a time and a WebSocket round trip on loopback measured
+   * 150-500 ms because of it. Caching it is not an approximation; it is the same
+   * number, read once.
+   */
+  private regionalHeights: Float64Array | null = null;
+
+  private regionalHeightsByCell(): Float64Array {
+    if (this.regionalHeights) return this.regionalHeights;
+    const heights = new Float64Array(this.cells.length);
+    for (let cell = 0; cell < this.cells.length; cell += 1) {
+      const centre = this.cellCentres[cell];
+      heights[cell] = this.regionalHeightAt(centre.x, centre.z);
+    }
+    this.regionalHeights = heights;
+    return heights;
   }
 
   private surfaceHeightAt(x: number, z: number): number {
@@ -987,14 +1014,14 @@ export class ResourceWorld {
 
     const maxDepth = Math.max(0.1, this.config.groundwaterTableDepthM ?? 2.5);
     const elevations = new Float64Array(this.cells.length);
+    const regional = this.regionalHeightsByCell();
     for (let cell = 0; cell < this.cells.length; cell += 1) {
-      const centre = this.cellCentres[cell];
       const level = clamp((this.cells[cell].groundwater ?? 0) / capacity, 0, 1);
       // A full cell has its table at the regional ground level; an empty one has
       // it maxDepth below. Measuring against the same regional level the render
       // uses is what makes a filled hollow pool and a dry rise stay dry, and it
       // keeps dug tunnels from acting as drains.
-      elevations[cell] = this.regionalHeightAt(centre.x, centre.z) - (1 - level) * maxDepth;
+      elevations[cell] = regional[cell] - (1 - level) * maxDepth;
     }
 
     const transferFactor = Math.min(1, rate * dt);

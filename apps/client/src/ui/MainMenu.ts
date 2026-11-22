@@ -115,6 +115,11 @@ export interface MainMenuOptions {
 
 const STYLE_ID = 'pl-menu-style';
 
+/** The size an avatar slot draws, in pixels. */
+const AVATAR_DRAW_PX = 128;
+/** Widest the picker will decode, before the cover crop: a bounded allocation. */
+const AVATAR_DECODE_PX = 512;
+
 const STYLE = `
   .pl-menu {
     position: absolute;
@@ -2919,13 +2924,7 @@ export class MainMenu {
         this.showError('That image is larger than 8 MB.');
         return;
       }
-      const reader = new FileReader();
-      reader.addEventListener('load', () => {
-        const url = typeof reader.result === 'string' ? reader.result : null;
-        if (url) this.storeAvatar(url);
-      });
-      reader.addEventListener('error', () => this.showError('That file could not be read.'));
-      reader.readAsDataURL(file);
+      this.storeAvatar(file);
     });
     input.click();
   }
@@ -2933,43 +2932,70 @@ export class MainMenu {
   /**
    * Shrink a picked picture to the size an avatar is drawn at, then store that.
    *
-   * The file's own data URL used to be stored and drawn as-is: a phone photo is
-   * several megabytes of base64 in a localStorage bucket shared with the
-   * session, and a texture the compositor has to upload while the game is
-   * rendering. Choosing one was enough to make the device unhappy. 128 px is
-   * more than the largest avatar slot draws, so nothing visible is lost, and the
-   * stored URL is a few kilobytes.
+   * The file's own data URL used to be stored and drawn as-is, which put a
+   * multi-megabyte base64 string in a localStorage bucket shared with the
+   * session. The pixels matter more than the bytes, though: a phone photo is
+   * 4000x3000, so decoding it allocates a 48 MB bitmap in the renderer before
+   * anything shrinks it, and the file itself can be well under 200 KB. Asking
+   * for the decode at 512 px wide bounds that allocation at about a megabyte,
+   * while still leaving four times the pixels a 128 px crop can use.
    */
-  private storeAvatar(url: string): void {
+  private storeAvatar(file: File): void {
+    if (typeof createImageBitmap === 'function') {
+      createImageBitmap(file, { resizeWidth: AVATAR_DECODE_PX, resizeQuality: 'high' })
+        .then((bitmap) => {
+          this.commitAvatar(bitmap, bitmap.width, bitmap.height);
+          bitmap.close();
+        })
+        // SVG has no bitmap size to decode to, and an older browser has no
+        // createImageBitmap at all: those take the ordinary image path.
+        .catch(() => this.decodeAvatarUrl(file));
+      return;
+    }
+    this.decodeAvatarUrl(file);
+  }
+
+  /** The unbounded decode, for a format or browser that has no bounded one. */
+  private decodeAvatarUrl(file: File): void {
+    const url = URL.createObjectURL(file);
     const image = new Image();
-    image.addEventListener('error', () => this.showError('That file is not an image we can use.'));
+    image.addEventListener('error', () => {
+      URL.revokeObjectURL(url);
+      this.showError('That file is not an image we can use.');
+    });
     image.addEventListener('load', () => {
-      const size = 128;
-      const canvas = document.createElement('canvas');
-      canvas.width = size;
-      canvas.height = size;
-      const ctx = canvas.getContext('2d');
-      if (!ctx) return;
-      // Cover crop: fill the square from the middle instead of squashing it.
-      const width = Math.max(1, image.width);
-      const height = Math.max(1, image.height);
-      const scale = Math.max(size / width, size / height);
-      ctx.drawImage(
-        image,
-        (size - width * scale) / 2,
-        (size - height * scale) / 2,
-        width * scale,
-        height * scale,
-      );
-      // WebP keeps a 128 px photo near a kilobyte; a browser without it encodes
-      // PNG instead, which is still small at this size.
-      const small = canvas.toDataURL('image/webp', 0.9);
-      this.avatar = small;
-      this.renderProfileButton();
-      this.renderPopover();
-      this.options.onProfileChange?.({ avatar: small });
+      URL.revokeObjectURL(url);
+      this.commitAvatar(image, image.width, image.height);
     });
     image.src = url;
+  }
+
+  /** Cover-crop the decoded picture, encode it small, and store that. */
+  private commitAvatar(source: CanvasImageSource, sourceWidth: number, sourceHeight: number): void {
+    const size = AVATAR_DRAW_PX;
+    const canvas = document.createElement('canvas');
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    // Cover crop: fill the square from the middle instead of squashing it.
+    const width = Math.max(1, sourceWidth);
+    const height = Math.max(1, sourceHeight);
+    const scale = Math.max(size / width, size / height);
+    ctx.drawImage(
+      source,
+      (size - width * scale) / 2,
+      (size - height * scale) / 2,
+      width * scale,
+      height * scale,
+    );
+    // WebP keeps a 128 px photo near a kilobyte; a browser without it encodes
+    // PNG instead, which is still small at this size.
+    const small = canvas.toDataURL('image/webp', 0.9);
+    this.avatar = small;
+    this.renderProfileButton();
+    this.renderPopover();
+    this.options.onProfileChange?.({ avatar: small });
   }
 
   private togglePopover(): void {

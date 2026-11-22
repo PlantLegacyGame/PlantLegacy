@@ -134,6 +134,31 @@ describe('validateMessage', () => {
     assert.ok(codes(99, 'bad').includes('message.payload_type'));
   });
 
+  it('carries the plant owner name, and does not require one', () => {
+    // The tag over a rival's plant shows this name; a plant whose owner is
+    // offline has none, so the field must stay optional.
+    const plant = {
+      id: 'p1',
+      ownerId: 'o1',
+      totalBiomass: 1,
+      totalEnergy: 1,
+      totalUpkeep: 1,
+      nodes: [],
+    };
+    assert.deepEqual(validateMessage(18, { plants: [plant] }).issues, []);
+    assert.deepEqual(
+      validateMessage(18, { plants: [{ ...plant, ownerName: 'Fern Test' }] }).issues,
+      [],
+    );
+    assert.deepEqual(validateMessage(19, { plant }).issues, []);
+    assert.deepEqual(
+      validateMessage(19, { plant: { ...plant, ownerName: 'Fern Test' } }).issues,
+      [],
+    );
+    assert.ok(codes(18, { plants: [{ ...plant, ownerName: 7 }] }).includes('message.field_type'));
+    assert.ok(codes(19, { plant: { ...plant, ownerName: null } }).includes('message.field_type'));
+  });
+
   it('renders issues via formatMessageIssue', () => {
     const result = validateMessage(1, {});
     const rendered = result.issues.map(formatMessageIssue);

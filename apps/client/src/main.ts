@@ -72,6 +72,7 @@ import {
   type MessageContext,
   missingServerMessageTypes,
 } from './net/dispatch.js';
+import { closePingProbe, openPingProbe } from './net/pingProbe.js';
 import { fetchWorldTime } from './net/worldTime.js';
 import { playerWorldY, spawnPlayer, stepPlayerVertical } from './physics/playerPhysics.js';
 import { plantPhysicsSync, rapierWorld } from './physics/RapierPhysicsManager.js';
@@ -87,6 +88,7 @@ import { createGrowthAimGizmo, type GrowthAimGizmo } from './render/growthAimGiz
 import { interpolationDurationMs, NodeInterpolator } from './render/PlantInterpolation.js';
 import { clientNodeHealth, resolveDrawnProgress } from './render/plantProgress.js';
 import { createQualityController, type QualityController } from './render/QualityController.js';
+import { rivalTagLabel } from './render/rivalTagLabel.js';
 import { EnvironmentRenderer } from './renderers/EnvironmentRenderer.js';
 import {
   APERTURE_FLOOR_MARGIN_M,
@@ -1795,27 +1797,6 @@ let plantLabels: ReturnType<typeof createPlantLabelLayer> | null = null;
 function plantLabelLayer(): ReturnType<typeof createPlantLabelLayer> | null {
   if (!plantLabels && scene) plantLabels = createPlantLabelLayer(scene);
   return plantLabels;
-}
-
-/**
- * The tag over a rival's plant: what it expresses, and whose it is.
- *
- * The owner half is the player's display name. It used to be
- * `ownerId.slice(0, 6)`, which for a guest is a random id prefix and for an
- * account an opaque one - a tag a player could not read and nobody could match
- * to a person. The id prefix is only the fallback for a plant whose owner is not
- * connected, because that plant has no name to send.
- */
-function rivalTagLabel(
-  ownerId: string,
-  ownerName: string | undefined,
-  mutations: string[] | undefined,
-): string {
-  const mutationTag = mutations?.[0] ?? '';
-  // Gallery plants are named after their mutation only: repeating an id on
-  // every tag buried the names in clutter.
-  if (ownerId.startsWith('gallery:')) return mutationTag;
-  return `${mutationTag} · ${ownerName?.trim() || ownerId.slice(0, 6)}`;
 }
 
 /** Keep each rival's tag above the highest point of its body. */
@@ -8244,7 +8225,15 @@ const CAMERA_MIN_POLAR_ANGLE = 0.06;
 const LOOK_UP_PITCH_MAX_RAD = 1.31;
 /** How fast that pitch unwinds once the orbit is free again, radians/second. */
 const LOOK_UP_PITCH_RETURN_RAD_PER_S = 4;
+/**
+ * How much of a blocked drag the pitch takes. Handing over the whole drag made
+ * looking up race compared with the orbit that led into it; a little over half
+ * keeps it a deliberate second control.
+ */
+const LOOK_UP_PITCH_GAIN = 0.55;
 /** Extra pitch currently spent looking up off the ground, radians. */
+let lookUpPitchTargetRad = 0;
+/** The pitch actually drawn, eased toward the target like the orbit is. */
 let lookUpPitchRad = 0;
 
 /** Settings every OrbitControls instance starts with, including rebuilt ones. */
@@ -8378,6 +8367,8 @@ if (isDevMode) {
         cameraProbe: () => Record<string, number>;
         /** Extra pitch the camera is spending looking up off the ground. */
         lookUpPitch: number;
+        /** Where that pitch is heading: it eases toward this like the orbit does. */
+        lookUpPitchTarget: number;
       };
     }
   ).__pl = {
@@ -8391,6 +8382,9 @@ if (isDevMode) {
     },
     get lookUpPitch() {
       return lookUpPitchRad;
+    },
+    get lookUpPitchTarget() {
+      return lookUpPitchTargetRad;
     },
     scene,
     setCamera: (px, py, pz, tx, ty, tz) => {
@@ -10452,13 +10446,12 @@ function handlePlantRemoved(payload: unknown): void {
 }
 
 function handlePong(): void {
-  if (pingSentAt !== null) {
-    const rtt = Math.round(performance.now() - pingSentAt);
-    pingSentAt = null;
-    // Round-trips above the configured threshold feel like a bad link.
-    if (rtt > networkConfig.slowRttMs) setStatus(`Slow connection (${rtt} ms)`, 'down');
-    else setStatus(`Connected (${rtt} ms)`, 'ok');
-  }
+  const rtt = closePingProbe(pingSentAt, performance.now());
+  if (rtt === null) return;
+  pingSentAt = null;
+  // Round-trips above the configured threshold feel like a bad link.
+  if (rtt > networkConfig.slowRttMs) setStatus(`Slow connection (${rtt} ms)`, 'down');
+  else setStatus(`Connected (${rtt} ms)`, 'ok');
 }
 
 function handleChatBroadcast(payload: unknown): void {
@@ -11154,14 +11147,21 @@ function renderFrame(deltaTime: number): void {
   const upDragRad = orbitUpDragRad;
   orbitUpDragRad = 0;
   const orbitAtCeiling = controls.getPolarAngle() >= controls.maxPolarAngle - 0.02;
-  lookUpPitchRad = stepLookUpPitch({
-    currentRad: lookUpPitchRad,
+  const lookUp = stepLookUpPitch({
+    targetRad: lookUpPitchTargetRad,
+    appliedRad: lookUpPitchRad,
     upDragRad,
     atCeiling: orbitAtCeiling,
     maxRad: LOOK_UP_PITCH_MAX_RAD,
+    gain: LOOK_UP_PITCH_GAIN,
     decayPerSecond: LOOK_UP_PITCH_RETURN_RAD_PER_S,
+    // The controls' own glide, so the handover from orbit to pitch has the same
+    // weight as the rotation that preceded it.
+    dampingFactor: controls.dampingFactor,
     deltaTimeS: deltaTime,
   });
+  lookUpPitchTargetRad = lookUp.targetRad;
+  lookUpPitchRad = lookUp.appliedRad;
   controls.update();
   resolveCameraCollision();
   // Drops bob and fade on their own clock; the server still owns their life.
@@ -12130,17 +12130,9 @@ bootEntryFlow();
 // Ping every 5 seconds
 setInterval(() => {
   if (ws && ws.readyState === WebSocket.OPEN) {
-    const now = performance.now();
-    // One probe in flight at a time, and every send starts a new one. The old
-    // shape only stamped the clock when nothing was pending, so a probe that
-    // never answered kept its five-second-old timestamp and the *next* pong was
-    // measured from it - reporting the interval as the round trip, and leaving
-    // the dot reading "slow connection" on a link that was fine. A probe that
-    // has outlived `stallMs` is a stalled link, so say so and start fresh.
-    if (pingSentAt !== null && now - pingSentAt > networkConfig.stallMs) {
-      setStatus('Connection unstable', 'down');
-    }
-    pingSentAt = now;
+    const probe = openPingProbe(pingSentAt, performance.now(), networkConfig.stallMs);
+    if (probe.stalled) setStatus('Connection unstable', 'down');
+    pingSentAt = probe.sentAt;
     ws.send(JSON.stringify({ type: MESSAGE_TYPE.PING, payload: {} }));
   }
 }, 5000);

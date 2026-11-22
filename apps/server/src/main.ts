@@ -92,6 +92,7 @@ import {
 import { TerrainPersistence } from './ops/persistence/terrainPersistence.ts';
 import { computePlantCapacity } from './ops/plantCapacity.ts';
 import { PlantEventLog } from './ops/plantEventLog.ts';
+import { plantOwnerName } from './ops/plantOwnerName.ts';
 import { canAdoptGuestPlant, isAnonymousOwner } from './ops/plantOwnership.ts';
 import { selectVisiblePlants } from './ops/plantVisibility.ts';
 import { PlantWorld } from './ops/plantWorld.ts';
@@ -124,6 +125,7 @@ import {
   type ShopPorts,
   type ShopPurchasePlan,
 } from './ops/shop.ts';
+import { type HeartbeatSocket, heartbeatTick } from './ops/socketHeartbeat.ts';
 import { loadSporeConfig, type SporeConfig } from './ops/spores.ts';
 import { TerrainService } from './ops/terrain.ts';
 import { createTickClock, type TickClock, tickClockStart, tickClockStop } from './ops/tickClock.ts';
@@ -164,6 +166,9 @@ const STARTED_AT = Date.now();
  * is a base64 buffer of three 0-255 channels per tile: ~262 KB, no per-tile
  * objects to parse on the client.
  */
+/** How often live sockets are pinged, and how long a missed pong is tolerated. */
+const SOCKET_HEARTBEAT_MS = 25_000;
+
 const COMPACT_GRID_TILE_THRESHOLD = 2048;
 const COMPACT_GRID_LIGHT_BASE = 80;
 
@@ -455,8 +460,7 @@ class World {
    * to the id rather than inventing one.
    */
   private ownerNameFor(ownerId: string): string | undefined {
-    const name = this.players.get(ownerId)?.displayName?.trim();
-    return name ? name : undefined;
+    return plantOwnerName(this.players, ownerId);
   }
 
   /** Full plant snapshot for PLANT_CREATED, mirroring the WELCOME node shape. */
@@ -1647,7 +1651,12 @@ class World {
   }
 
   handlePing(ws: WebSocket): void {
-    this.send(ws, MESSAGE_TYPE.PONG, {});
+    // Straight out, not through `writeIfHealthy`. Every other message may be
+    // dropped when the socket is behind, because the next state supersedes it.
+    // A health probe may not: dropping the pong makes a congested link look like
+    // a dead one, and the client then reports the stall as a round trip.
+    if (ws.readyState !== WebSocket.OPEN) return;
+    ws.send(JSON.stringify({ type: MESSAGE_TYPE.PONG, payload: {} }));
   }
 
   /**
@@ -4063,7 +4072,23 @@ async function main(): Promise<void> {
   // WebSocket server
   const wss = new WebSocketServer({ server, maxPayload: netProtoConfig.maxMessageSizeBytes });
 
+  // Sockets that die without closing stay in `wss.clients` and keep being
+  // broadcast to, so their backlog grows until every send to them is skipped.
+  // Ping them and terminate whatever misses a pong.
+  const heartbeat = setInterval(() => {
+    for (const dead of heartbeatTick(wss.clients as unknown as HeartbeatSocket[])) {
+      log.warn('terminating unresponsive socket', { reason: 'missed heartbeat' });
+      dead.terminate();
+    }
+  }, SOCKET_HEARTBEAT_MS);
+  heartbeat.unref();
+
   wss.on('connection', (ws: WebSocket, request: IncomingMessage) => {
+    const live = ws as WebSocket & { isAlive?: boolean };
+    live.isAlive = true;
+    ws.on('pong', () => {
+      live.isAlive = true;
+    });
     const origin = request.headers.origin;
     if (origin && !isAllowedOrigin(origin, runtime.corsOrigins, runtime.nodeEnv)) {
       log.warn('websocket connection rejected: origin not allowed', { origin });
