@@ -1,10 +1,13 @@
 import assert from 'node:assert';
+import { dirname, join } from 'node:path';
 import { describe, it } from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { loadConfigDir } from '@plant-legacy/shared/config';
 import type { PlantNode } from '@plant-legacy/shared/growth';
 import { loadResourcesConfig, type PlantForResource, ResourceWorld } from './resourceWorld.ts';
 
-const configDir = process.env.CONFIG_DIR ?? 'C:\\Users\\khmer\\PlantLegacy\\config';
+const configDir =
+  process.env.CONFIG_DIR ?? join(dirname(fileURLToPath(import.meta.url)), '../../../../config');
 const configs = await loadConfigDir(configDir);
 if (!configs.ok) throw new Error('config load failed');
 
