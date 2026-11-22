@@ -17,13 +17,16 @@
 | Zoom (mouse/touch) | Scroll wheel / Pinch | `OrbitControls`, smooth continuous zoom |
 | Zoom (keyboard) | `-` / `+` (or `=`) | Smooth keyboard zoom with acceleration/damping |
 | Recenter camera | `Space` / Double-click ground / Double-tap | Frames root node |
-| Select node | Left-click / Tap | In Grow Mode: opens growth options. In Normal Mode: focuses camera on node |
+| Select node | Left-click / Tap | In Grow Mode: opens growth options. In Normal Mode: focuses camera on node. A near-tie between a parent's and child's pick sphere goes to the deeper node |
+| Name a part | Hover a plant part | Shows `Leaf #2` and its place in the plant, plus how many growth options the server reports. The "click to see what it can grow" promise appears only when that count is above zero |
 | Grow Mode toggle | `G` | Toggles between Normal Mode and Grow Mode |
 | Root Sight toggle | `R` | Toggles organic ground cutaways & subterranean camera elevation. It also opens by itself when a radicle or root starts growing (`root_sight.auto_open_on_root_growth`); a hand-close then stands until the next buried part starts |
 | Emote wheel | `E` | Opens emote selection |
-| Inventory / Overview | `I` | Toggles combined inventory + plant overview panel |
-| Inventory slot 1–10 | `1`–`9`, `0` | Selects inventory slot |
-| Cancel growth / Close panel | `Escape` / Right-click (context) | Cancels growth drawing, closes the topmost open panel or wheel, otherwise opens the pause menu |
+| Inventory / Overview | `I` | Opens the inventory and plant overview together; once they are up, toggles the inventory only, so closing one panel never takes the other with it |
+| Inventory slot 1–10 | `1`–`9`, `0` | In the world, selects and uses a hotbar slot. With the inventory open, moves the inventory selection only, where typing a count is the point |
+| Collect drop | Left-click a drop within `render.drop_pick_distance_m` | Sends `DROP_COLLECT` for a dung, remains or fragment marker. The server owns the reward and removal |
+| Shop | Spore chip `+` / title screen Shop button | Opens the shop panel; the balance and prices are the server's |
+| Cancel growth / Close panel | `Escape` / Right-click (context) | Cancels growth drawing, closes the open plant panels or wheel, otherwise opens the pause menu. A panel's own close button closes that panel alone |
 | Pause menu | `Escape` in the world | Resume, Settings, Controls, Leave to title. Also the action bar's Menu button, so it is reachable on touch |
 | Operator readout, growth readout | dev panel → Debug | The tick card and the growth readout are switches in the dev panel. They were F3 and F2: F3 is the browser's find bar in Chrome and quick-find in Firefox, and both are function keys a browser game must not claim |
 | Dev panel toggle | `` ` `` (backtick) | Opens dev panel with admin commands (only with `?dev=1`). The dev panel's Debug tab also owns the three readouts below |

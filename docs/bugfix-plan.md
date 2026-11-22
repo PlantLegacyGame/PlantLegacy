@@ -18,7 +18,7 @@ Re-run after the first pass of this plan landed (FIX-01, 02, 03, 06, 07).
 |---|---|---|
 | `pnpm lint` | pass | 275 files, 0 errors (was 1 formatter error in `tools/docs-check/check.mjs`) |
 | `pnpm typecheck` | pass | 7 workspace projects |
-| `pnpm config:validate` | pass | 79 files, schema + rarity ban, including the two new Root Sight keys |
+| `pnpm config:validate` | pass at this pass | 79 files then (80 today; the count is owned by `docs/tunables.md`), schema + rarity ban, including the two new Root Sight keys |
 | `pnpm test` | pass | client 247, server 279, shared 183, weather 9; 0 failures |
 | `pnpm docs:check` | pass | 0 mismatched quoted defaults in 95 rows (was 24, reported while exiting 0); 45/45 protocol rows |
 | `pnpm build` | pass | chunk-size warning unchanged (5.4 MB main bundle) |
@@ -177,8 +177,10 @@ against `netProtoConfig.protocolVersion`) while the client sends the shared
 constant (`apps/client/src/main.ts:6462`), so a config edit without a code edit
 makes every client fail to connect.
 
-**Truth today:** `packages/shared/src/protocol/index.ts:13` `PROTOCOL_VERSION = 3`;
-`config/net_proto.json` `protocol_version` = 3; `docs/protocol.md:25` says 3.
+**Truth at the 2026-11-16 pass:** `packages/shared/src/protocol/index.ts:13`
+`PROTOCOL_VERSION = 3`; `config/net_proto.json` `protocol_version` = 3;
+`docs/protocol.md:25` says 3. (Current: v4, with `SHOP_PURCHASE`,
+`DROP_COLLECT` and the spore balance in `INVENTORY_SYNC`.)
 
 **Drift to correct:** `CONTEXT.md:382` (says 2), `docs/protocol.md:350` (config
 table row says 2), `docs/tasks/T03P.md:20` and `:53` (say 1),
@@ -459,7 +461,7 @@ Tick these; each is one commit at most.
 
 **Docs**
 - [x] Inventory rows F5, A6, E4 corrected (see §6) — already done on 2026-11-16 and the ledger row was stale: `docs/bug-inventory.md` carries all three as `[x]` with the correction (A6 at line 46, E4 at 144, F5 at 196), each naming the code or doc that resolves it.
-- [x] Protocol version agrees everywhere: `PROTOCOL_VERSION = 3` in `@plant-legacy/shared/protocol`, `net_proto.protocol_version` is 3, and `docs/protocol.md` (config table) and `docs/tasks/T03P.md:20,53` all say 3; `CONTEXT.md` §5.6 states that the key must equal the constant or the server refuses to boot. The line numbers in this row had drifted, which is why it read as an open mismatch.
+- [x] Protocol version agrees everywhere at the time of this pass: `PROTOCOL_VERSION = 3`, `net_proto.protocol_version` 3, and the docs all said 3; `CONTEXT.md` §5.6 states that the key must equal the constant or the server refuses to boot. It has since moved to v4, and the same rule still holds.
 - [x] README `pnpm verify` claim matches reality (verify includes `docs:check`; `verify:ci` adds the build)
 
 ## 8. Open decisions

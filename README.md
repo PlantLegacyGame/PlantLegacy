@@ -3,7 +3,9 @@
 A multiplayer plant-organism simulation. One server, one world, one Postgres.
 Phase 1 foundation is in place, together with the Gate 0 networking gate and a
 first procedural-rendering prototype. Growth simulation, persistence, accounts,
-chat, weather and day/night are implemented. Economy is not built yet.
+chat, weather, day/night, world drops and the first economy slice are
+implemented. Economy is not finished: the shop, spore purse and pouch are live,
+but the inventory and purse are still in memory.
 
 **Source of truth:** [`DESIGN.md`](./DESIGN.md) (Master Build Plan v5.3.1). Every
 task, rule and tunable comes from there. This repository implements **T00, O01,
@@ -15,7 +17,9 @@ emotes, block, report),
 **C03** (environment rendering) and **C03b** (ground LOD), the
 **C02b slice** (WebGPU compute-driven plant LOD with WebGL2 fallback), **D01**
 (dev settings), **T06** (damage, uproot, tumbling, reroot crawl, kill credit and
-drops; in-browser checklist pending), and
+collectible drops; in-browser checklist pending), **T13/C05** (spore purse and
+shop, in memory), **T08A** (inventory UI and pouch, in memory; Postgres
+persistence still pending), and
 **T25** (shared terrain field, LOD ground colliders, plant colliders, sparse
 persistent soil edits; client height-texture application still pending).
 
@@ -70,7 +74,7 @@ packages/shared/      Types, config loader/validator, protocol, events, ids
 tools/config-validator/  CLI used by CI and `pnpm config:validate`
 tools/docs-check/     Documentation guardrail (`pnpm docs:check`)
 tools/dev.mjs         One-command local stack
-config/               78 tunable files in extended-1 format + _meta (count owned by docs/tunables.md)
+config/               80 tunable files in extended-1 format + _meta (count owned by docs/tunables.md)
 docs/                 Design notes, tunables, task records, checklists
 ops/                  Docker compose, staging `.env`, deploy and backup placeholders
 .github/workflows/    CI (verify) and staging static deploy
@@ -98,8 +102,9 @@ Every tunable lives in `config/<system>.json` in the **extended-1** format:
   the build if one appears.
 - `account_bound: true` forces `tradeable`, `mailable` and `listable` to false
   (RULE_23).
-- Stubs carry `values: {}` until their owning task fills them. **Twenty-four**
-  files carry values today and 54 are stubs; the authoritative list is owned by
+- Stubs carry `values: {}` until their owning task fills them. **Thirty-one**
+  files carry values today and 49 are stubs (3 of them `draft`); the
+  authoritative list and count are owned by
   [`docs/tunables.md`](./docs/tunables.md) rather than duplicated here.
 
 ## Environment
@@ -161,7 +166,10 @@ Supporting references: [`docs/controls.md`](./docs/controls.md) (bindings),
 [`docs/partitioning-lod.md`](./docs/partitioning-lod.md) (interest, partitioning),
 [`docs/tick-budget.md`](./docs/tick-budget.md) (tick timing),
 [`docs/compliance-policy.md`](./docs/compliance-policy.md),
-[`docs/what-spores-are.md`](./docs/what-spores-are.md),
+[`docs/what-spores-are.md`](./docs/what-spores-are.md) (the currency, including
+what is live today),
+[`docs/planet-scale.md`](./docs/planet-scale.md) (the horizon arithmetic and the
+proposed 200–400 km step),
 [`docs/abyssal-garden-source-analysis.md`](./docs/abyssal-garden-source-analysis.md) (Abyssal Garden source analysis and what to take from it),
 [`ATTRIBUTION.md`](./ATTRIBUTION.md) (asset licences).
 
@@ -180,7 +188,7 @@ where earlier descriptions of it were wrong, and the order to adopt it in are in
 Its nine review decisions are ADR-041 to ADR-049 in
 [`docs/decisions.md`](./docs/decisions.md).
 
-Nothing in that program changes the current 78-file config count (owned by
+Nothing in that program changes the current 80-file config count (owned by
 [`docs/tunables.md`](./docs/tunables.md)) or the
 single-process World until the individual task is started.
 

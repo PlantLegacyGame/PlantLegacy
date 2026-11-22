@@ -13,6 +13,16 @@ the game. Once spent, they are gone.
 
 **There is no artificial earn cap.** Playing more earns more.
 
+**What is live today (2026-11-20).** The server owns one balance
+(`INVENTORY_SYNC.sporeBalance`), starts a new plant at **120** spores and caps it
+at **1,000,000**. The earn sources wired are: consuming dung **5**, acquiring a
+mutation **15**, kill credit **30**, and picking up a fragment drop **3**. The
+shop sells six items in two sections, priced **20–80** spores; prices and earn
+rates are `config/shop.json` and `config/spores.json`. Sessions, first-visit
+chunks and season rewards are still design intent, not earn sources yet. The
+purse is in memory, so a restart begins again from the configured starting
+balance until T08A lands.
+
 **What money cannot buy:** potency grades above common. Inferior and common
 boosters are purchasable and tradeable. Standard and above are account-bound,
 earn-only, and standard crafting requires Essence, which is never purchasable.

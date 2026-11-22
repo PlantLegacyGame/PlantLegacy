@@ -14,7 +14,7 @@ gaps.
 - [x] `pnpm typecheck`
   - Expected: all 4 projects `Done`.
 - [x] `pnpm config:validate`
-  - Expected: 79 files, OK.
+  - Expected: every file in `docs/tunables.md` validates (80 at the time of writing), OK.
 - [x] `pnpm test`
   - Expected: 57 shared tests + 127 server tests pass, 0 fail (184 total).
 - [x] `pnpm build`
@@ -28,8 +28,8 @@ gaps.
 - [x] `node apps/server/src/main.ts` (no `DATABASE_URL`)
   - Expected log: `listening`, `database: skipped`.
 - [x] `curl http://127.0.0.1:8080/health`
-  - Expected: 200, `"status":"ok"`, `"config_files":78`,
-    `"database":"skipped"`.
+  - Expected: 200, `"status":"ok"`, `"config_files":80`,
+    `"database":"skipped"` (the count is owned by `docs/tunables.md`).
   - Observed: exact.
 - [x] `curl http://127.0.0.1:8080/ready`
   - Expected: 503 while `READINESS_REQUIRES_DB=true` and DB is skipped.

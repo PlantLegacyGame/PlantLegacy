@@ -1,6 +1,6 @@
 # Protocol
 
-**Status:** implemented by T03P (Gate 0) and T03 (full protocol with persistence, offline tiers, interest management, event bus). T05 adds chat, emotes, blocking and reports; inventory sync/use/swap and the dev panel are wired server-side. Transport is WebSocket + JSON at 20 Hz. Server-authoritative state with client-side camera.
+**Status:** implemented by T03P (Gate 0) and T03 (full protocol with persistence, offline tiers, interest management, event bus). T05 adds chat, emotes, blocking and reports; inventory sync/use/swap and the dev panel are wired server-side. T13/C05 add the spore purse and shop (`SHOP_PURCHASE`, `DROP_COLLECT`, `sporeBalance` in `INVENTORY_SYNC`). Transport is WebSocket + JSON at 20 Hz. Server-authoritative state with client-side camera.
 **Source of truth:** DESIGN.md Part 13.8.
 
 ---
@@ -22,11 +22,12 @@ Message format:
 
 ## Protocol Version
 
-`PROTOCOL_VERSION = 3` — bumped on any breaking wire change. v2 adds
+`PROTOCOL_VERSION = 4` — bumped on any breaking wire change. v2 adds
 `MUTATION_STATE` (35) and `MUTATION_SHED` (36); v3 adds `MUTATION_LEVEL` (45) and
 carries each mutation's level, level cost and any open card deal in
-`MUTATION_STATE`.
-Client sends `HELLO { clientVersion: 1, accessToken?: string, plantId?: string, displayName?: string }` on connect.
+`MUTATION_STATE`; v4 adds `SHOP_PURCHASE` (46), `DROP_COLLECT` (47) and the
+server-owned `sporeBalance` in `INVENTORY_SYNC`.
+Client sends `HELLO { clientVersion: 4, accessToken?: string, plantId?: string, displayName?: string }` on connect.
 Server rejects with `ERROR { code: "VERSION_MISMATCH", ... }` if mismatch.
 
 ## Message Types
@@ -50,7 +51,11 @@ Server rejects with `ERROR { code: "VERSION_MISMATCH", ... }` if mismatch.
 | 29 | `REPORT` | `ReportPayload` | File a player/message report (rate-limited, T05) |
 | 30 | `BLOCK` | `{ targetPlayerId: string, blocked: boolean }` | Mute or unmute a player's chat (T05) |
 | 32 | `TERRAIN_REGION_REQUEST` | `{ worldX: number, worldZ: number, radiusM: number, revision?: number }` | Ask for sparse soil chunks around a point; radius is capped at 120 m (T25) |
+| 36 | `MUTATION_SHED` | `{ plantId: string, mutationId: string }` | Client asks to shed one mutation; the server refuses during cooldown (T04) |
 | 37 | `REROOT_INTENT` | `{ dirX: number, dirZ: number }` | Steer an uprooted plant's crawl in world XZ; zero stops it. Ignored unless the plant is uprooted (T06) |
+| 45 | `MUTATION_LEVEL` | `{ plantId: string, mutationId: string, cardId?: string }` | Client raises a held mutation. Without `cardId` the server deals that mutation's cards; with one it takes that card, spends the stored resources and applies the level. A card the server did not deal is refused (T04) |
+| 46 | `SHOP_PURCHASE` | `{ itemId: string }` | Client asks to buy one shop item with spores. The price, the balance check and the inventory grant are the server's; the client only names the item. The reply is `INVENTORY_SYNC` (with the new balance) or `REJECT` |
+| 47 | `DROP_COLLECT` | `{ id: string }` | Client asks to pick up a drop it was shown. The server owns the drop, its expiry and the reward: dung and fragments pay spores, the drop is removed, and `DROP_EXPIRED` tells every client that holds it. An id the server does not know is ignored, so a stale marker cannot mint a reward |
 
 ### Server → Client
 
@@ -70,14 +75,12 @@ Server rejects with `ERROR { code: "VERSION_MISMATCH", ... }` if mismatch.
 | 21 | `WEATHER_UPDATE` | `WeatherUpdatePayload` | Weather/day-night state, including the world clock's `timePaused`/`timeScale` so every client and dev panel shows the server's clock mode |
 | 22 | `GROWTH_OPTIONS_RESULT` | `GrowthOptionsResultPayload` | Legal options, costs and plain reasons for a node |
 | 23 | `CHAT_BROADCAST` | `ChatBroadcastPayload` | Chat or emote from another player |
-| 27 | `INVENTORY_SYNC` | `{ slots: Array<{ itemId: string \| null, count: number \| null }>, maxSlots: number, definitions: Array<{ id, name, description, category, stackLimit, use }> }` | Full inventory plus the definitions behind it: the panel's name, prose and "Use:" line are the server's own text and numbers, never invented by the client |
+| 27 | `INVENTORY_SYNC` | `{ slots: Array<{ itemId: string \| null, count: number \| null }>, maxSlots: number, definitions: Array<{ id, name, description, category, stackLimit, use }>, sporeBalance: number }` | Full inventory plus the definitions behind it, and the player's spore balance. The panel's name, prose, "Use:" line and the purse are the server's own text and numbers, never invented by the client |
 | 28 | `INVENTORY_SLOT_UPDATE` | `{ slotIndex: number, itemId: string \| null, count: number \| null }` | One slot changed |
 | 31 | `SEASON_UPDATE` | `{ season: number, remainingSeconds: number, lengthTicks: number, calamity: boolean }` | Current season, seconds left before the rollover, and whether the next rollover is the calamity. Sent on join, on every rollover and when the calamity runs; the client counts down locally |
 | 33 | `TERRAIN_REGION` | `{ originX, originZ, cellSizeM, cols, rows, revision, heightsBase64, materialBase64 }` | Height deltas (Float32) and moisture (Uint8) for the requested region (T25) |
 | 34 | `TERRAIN_EDITS` | `{ revision: number, edits: TerrainEdit[] }` | Root tunnels/voids since the client's revision; also broadcast near a new root (T25) |
 | 35 | `MUTATION_STATE` | `MutationStatePayload` | The plant's mutation set with upkeep, level/cost per mutation, the adaptive-pressure readout, the shed cooldown and any open level-up card deal. Sent on join and after every growth, shed or level (T04) |
-| 36 | `MUTATION_SHED` | `{ plantId: string, mutationId: string }` | Client asks to shed one mutation; the server refuses during cooldown |
-| 45 | `MUTATION_LEVEL` | `{ plantId: string, mutationId: string, cardId?: string }` | Client raises a held mutation. Without `cardId` the server deals that mutation's cards; with one it takes that card, spends the stored resources and applies the level. A card the server did not deal is refused (T04) |
 | 38 | `PLANT_DAMAGE` | `PlantDamagePayload` | A plant lost tissue to weather, a tool, a herbivore swarm or a collapse, including any parts destroyed and the structural damage left against the uproot threshold (T06, C04) |
 | 39 | `PLANT_UPROOT` | `PlantUprootPayload` | Uproot phase, root position, lean and the reroot window left. Phase `rooted` announces a successful reroot (T06) |
 | 40 | `DROP_SPAWN` | `DropSpawnPayload` | A fragment, remains pile or dung appeared in the world with its expiry time (T06) |

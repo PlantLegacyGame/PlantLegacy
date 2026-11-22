@@ -6,6 +6,39 @@ Honest list. No feature promises (T42, RULE_13). Updated at every gate.
 
 - Monorepo, CI, config validator with the rarity ban, Docker image and compose
   stack, `/health` and `/ready`.
+- **Title tree and frame time (2026-11-20):** the mature mascot is a tree now,
+  not a stem with big leaves on it. Eight limbs leave the trunk at their own
+  heights, each one an upward-bending arc carrying a cluster of three or four
+  leaves at its end; half the limbs are drawn behind the trunk and half in front
+  of it, which is what gives a flat drawing a near side and a far side. The
+  leaves ride inside the limb's own group, so the bend moves them - the painters
+  no longer place twenty-five crown leaves one at a time. The strain marks are
+  bark, not stem green: the compression shadow and the creases down the inside of
+  a bent trunk were drawn in `--pl-stem-dark`, and on wood that is exactly the
+  green skeleton that used to show through when the tree was pulled over.
+
+  Frame time, measured on the real page in a windowed browser at 1440x900 rather
+  than guessed: 12-15 fps at rest before, 59.9 fps now (median frame 16.7 ms, p95
+  16.9 ms), 58.5 fps while a drag is bending the tree, 59.9 fps with the camera
+  pulled back to 0.55. Three things did it, and one of them was the whole cost:
+  the day cycle rewrote ~30 custom properties on the menu root ten times a second
+  for values that had not changed, and a custom property there invalidates the
+  style of everything below it - measured at 12 ms of style recalculation per
+  tick, half the CPU. They now go through `title/styleVars.ts`, which writes only
+  a value that changed, and the sky clock is quantised to 1/512 of a day, so the
+  palette moves when the sky visibly does. The parallax loop sleeps once the
+  camera and the pointer have settled instead of running for as long as the title
+  is mounted, and the star field stops twinkling while the stars are transparent.
+  `renderFrame` also returns early while the entry screen is up: the 3D scene was
+  being drawn every frame behind an opaque 2D world.
+- **Spores, shop, collectible drops and a live pouch (2026-11-20):** the shop is
+  a server-checked purchase again, not a disabled panel; the purse and pouch are
+  on screen during play (spore chip and hotbar); and a death or swarm leaves a
+  drop that can be seen, hovered and picked up for spores. The pointer pass from
+  the day before gives the same world a hover tip that names the exact part, a
+  deeper-node pick rule and optional leaf cursors. The detailed records are the
+  "Drops, picking and the way out of the earth" and "Shop, spores and the pouch"
+  sections below; the remaining economy gap is Postgres persistence (T08A).
 - One-command local start (`pnpm dev`) and a strict verify chain (`pnpm verify`).
 - **T03P networking gate:** two tabs, one server, server-authoritative
   plant state over WebSocket + JSON at 20 Hz. WASD/arrows pan the camera.
@@ -21,6 +54,465 @@ Honest list. No feature promises (T42, RULE_13). Updated at every gate.
   scaling to hold target FPS. **Debug overlay** (`\`` key) shows fps, frame ms,
   triangles, draw calls, memory, network KB/s. **Pause on hidden tab**.
   Config served via `/config/render`, `/config/controls`, `/config/ui`.
+- **The camera follows the ground instead of being pinned to it (2026-11-21):**
+  `settlePlayerOnGround` used to write the pivot (head height, 1.6 m) onto
+  `controls.target` on every frame. Two things came out of that: a pan downwards
+  was undone on the next frame, and the framed subject sat a pivot height below
+  the middle of the screen - a fresh seed sat near the bottom edge with no way to
+  bring it up. The follow is a delta now: when the terrain under the player moves,
+  the eye and the target move with it by the same amount and the view is
+  unchanged, but a pan stays where the player put it. The target is floored at the
+  ground under it, because a free pan can otherwise bury it and the eye with it
+  (`clampEyeToGround` gives up when the target is under the soil - a black
+  frame), with the Root Sight cutaway's floor as the one exception. Measured in
+  game: a right-drag pan moved the target 20.877 -> 21.950 and it held at 21.964
+  a second and a half later; the seed's framing puts it at 0.51 of the pane.
+- **The palette is written per layer (2026-11-21):** the day cycle's custom
+  properties used to go on `.pl-menu`, and a custom property reaches every
+  descendant: a step invalidated ~1.8k elements and the browser repainted the
+  whole title. The paint was the cost, not the recalculation - hiding the world
+  layer took a step from 200-250 ms to 50 ms, and a style write measures 0.1 ms of
+  script and about 12 ms of recalculation. The properties are now written on the
+  layers that paint them: a new `.pl-menu__backdrop` element (the menu's old
+  background, moved out so the menu itself carries no palette), each child of
+  `.pl-menu__world` (scene, soil stage, plant, root plate), and the weather,
+  screen and interface layers - resolved per write (`MainMenu.paletteHosts`), so
+  layers created later are covered. The static recipes (`--pl-soil-face`,
+  `--pl-soil-detail`) stay on `.pl-menu` and inherit, since they never change.
+- **The cut face has its own, coarser clock (2026-11-21):** the soil's seventeen
+  gradient layers are the expensive thing to repaint, and the eye cannot read a
+  dark cut face moving by a few per cent. The palette is quantised twice - 128
+  steps for the sky, 16 for the ground (`GROUND_STEPS`) - and `setPalette` takes
+  the ground palette separately, so ninety per cent of sky steps never touch the
+  soil.
+- **The plant's rim light no longer restyles the tree every two seconds
+  (2026-11-21):** `--pl-plant-rim-x` was written on the plant element every sky
+  tick, rounded to quarter pixels - and the sun moves a quarter pixel between most
+  ticks. That element is 921 SVG nodes with filters: one write measured 70-170 ms.
+  It is whole pixels now, one step every twelve minutes of game time. Some other
+  per-tick plant write remains (20 in an 8 s window), and a title tick still shows
+  occasional 180-230 ms frames.
+- **The title's palette steps are half as frequent (2026-11-21):** each step is a
+  restyle of ~1.8k elements and measured a 150-250 ms frame; at 256 steps on a
+  3600 s day that was a hitch every fourteen seconds, which is the stutter the
+  title had. `SKY_STEPS` is 128, one every ~28 s, for a step far finer than the
+  eye reads at dusk. Spreading the writes over frames was tried and reverted: the
+  cost is per recalculation pass over the subtree, so twelve smaller passes cost
+  twelve times as much (four steps took five seconds of 380-460 ms frames). That
+  frequency change is the stopgap; the real fix was writing the palette on the
+  layers instead of the menu - see "The palette is written per layer" above.
+- **Camera (2026-11-19):** the orbit no longer stops at the player's own
+  elevation. The polar limit used to be the horizon of the ground plane under the
+  *player*, and on flat ground that is exactly horizontal — the eye could come
+  level with the seed and not a centimetre lower. It is now read from the ground
+  the eye is orbiting *over*, at four points along the orbit ray (30%, 55%, 80%
+  and 100% of it): each probe asks for the steepest angle that keeps that point
+  above the soil, and the limit is the strictest answer, so a hill under the
+  middle of the ray counts as well as one under its end. A probe depends only on
+  the angle and its own terrain, never on where the eye currently is, so the four
+  passes settle instead of feeding back. It stops two and a half contact margins
+  short of the dirt, which keeps the spring arm (`clampEyeToGround`) a no-op: it
+  used to park exactly on the margin, so terrain noise set the arm going, and
+  because the arm shortens the orbit radius the camera crept in towards the plant
+  a little on every drag. The arm also gets its clearance right at the target
+  end now — the player stands *on* the ground, so demanding 2 cm of air there made
+  it give up before it started, and that is how the eye ended up inside a hill at
+  the bottom of a drag — and bisects to the crossing instead of stepping in 30%
+  jumps. Dragged with real mouse input at eight azimuths: at five of them the eye
+  settles below the seed (up to 1.6 m below it) with the view tilted upwards, the
+  other three stop at or above the seed on the uphill side; clearance to the
+  ground under the eye never went below 0.14 m, and the eye held still to within
+  0.002 m with no direction reversals while the drag was held.
+- **Night and hidden tabs (2026-11-19):** the world no longer reads as a black
+  screen in two situations. Night was the first: at `ambient_intensity_night`
+  0.15, `sun_intensity_night` 0.15 and `exposure_night` 0.92 the young-plant
+  framing - three metres out and 30° down, per `camera_young_elevation` - was a
+  frame of unlit soil with a plant-shaped hole in it (light 0.5 at 19:15). The
+  night floor is now 0.28 ambient, 0.30 moonlight and exposure 1.0: dark, but the
+  ground keeps its texture and the plant reads as a silhouette. The second is a
+  page that is *hidden*: `requestAnimationFrame` stops entirely for it, and the
+  low-rate timer loop that draws instead was only ever started by a
+  `visibilitychange` event - a page that loaded hidden (a preview pane, an
+  occluded window) never got one, so nothing ever drew and the canvas stayed
+  cleared. The loop now starts from the visibility state at boot, a resize paints
+  once while hidden instead of leaving the cleared buffer, and a one-second
+  watchdog draws a frame if the animation loop has stalled for half a second.
+- **Title screen (2026-11-20, screen-space pass):** light, weather, pollen,
+  fireflies and the vignette were still living inside the world, where each of the
+  eight of them was a full-world surface - a 200vw by 230vh layer per effect, ten
+  full-frame composites every frame. They now hang in a `pl-menu__screen` layer the
+  size of the pane, set on the menu root so they still inherit the palette, and the
+  world's painting is enclosed with `contain: paint`. The world itself came down
+  from 260vw by 300vh to 200vw by 230vh (the smallest that still covers the pane at
+  the wheel's 0.55 limit on a wide, a tall and a laptop window - checked
+  arithmetically for 689x657, 1000x625, 1600x900 and 420x860), and the gaussian blur
+  over the cloud shades is gone: a full-screen filter was the single most expensive
+  thing being asked of the renderer each frame, and it was polishing an edge that is
+  a 70% gradient falloff.
+- **Title screen (2026-11-20, world and camera pass):** the title scene is no
+  longer a picture the size of the window. The world is 260vw by 300vh with its
+  horizon 160vh down, and the camera pans and zooms over it, so pulling back shows
+  more sky, more ground and more of the tree instead of shrinking a framed
+  composition into a box in the void. Every layer inside the world inherits the
+  horizon from the world, which is why the ranges, the cut, the finds and the plant
+  all still sit on one line. The sky is painted for the whole world above the line
+  (deepening towards the top) with a 58vh weather band at the horizon for the sun,
+  moon, stars and clouds; the ranges are drawn without `slice` so their ridges
+  survive a wide box; the farthest range takes the colour of the air in front of it
+  so three planes of night-green read as distance instead of one flat band. World
+  layers that used to be placed against the bottom of the pane (foreground blades,
+  bedrock, hearth, verge, finds) are anchored to the soil line instead. The world
+  clips its own painting, so the foreground blur no longer leaks past the scene as
+  dark smudges. Verified at zoom 1 and at 0.450 (the wheel's pulled-back limit) the
+  world still covers the pane completely.
+- **Title screen (2026-11-20, scene and growth pass):** the title is a place now,
+  not a backdrop: a band of air where the ranges meet the sky, a hedge of blades
+  closing the bottom of the frame, and fireflies that only come out when the scene
+  is dark (they ride the same measured darkness as the cloud shadows and the
+  hearth). Growth is the drawing filling out rather than one drawing scaled: leaves
+  arrive one at a time in the order a shoot makes them (oldest front leaves, then
+  the back pair, then the crown from the bottom up), the trunk's stroke widens from
+  13 to 21 units with age, and the wood reaches 81% of the stem, so a grown plant is
+  a trunk with a crown on it instead of a green stalk holding a canopy. The seed and
+  sprout states are still the bottom of that range. The lag had two structural
+  causes and both are gone: a four-function CSS filter on the whole plant (it
+  re-rasterised fourteen gradient leaves and the root plate every frame the leaves
+  moved) and full-screen `mix-blend-mode` passes on the cloud shadows and the
+  hearth. Measured at 689x658 the scene ran at a 16.7ms median; larger panes could
+  not be measured in this environment because frames do not run in a hidden tab.
+- **Title screen (2026-11-20, one-plant pass):** the plant and its roots are one
+  drawing again. The plate under the stem was laid at 51.25% of the art box while
+  the shoot was 41.67%, so the same drawing units measured 23% bigger underground
+  than above it: the taproot came out wider than the trunk it hangs from and the
+  two halves read as two drawings stacked. Same width, same units, and the crown of
+  the plate is the trunk's own bark, so the joint is invisible. The second root
+  system is gone: the reaches that ran from the stem to each buried find were a
+  fan crossing the plate, which read as a second plant buried beside the first - the
+  rule that decides which find a stage reached is kept, nothing is drawn for it.
+  The green stripe up the middle of the trunk and the bright rim on every leaf are
+  gone (a highlight on a cut-out drawing reads as a sticker), and the trunk thickens
+  once the plant is mature. Growth is no longer a sapling drawn larger: the ceiling
+  is 1.35 instead of 0.6, the pane fit reserves the sky for the *grown* tree, and
+  the last part of the range is wood - a wider trunk, not more height. The sway was
+  the whole plant leaning 1.7x the motion function; it is 0.5 now, and the leaves
+  flutter on their own `translate` animation so the foliage moves instead of the
+  tree tilting. Watering or feeding plays a happy dance (shake plus fluttering
+  leaves); four actions inside six seconds and the plant goes groggy - half-speed
+  sway, a slow wander off upright, and a slack colour - until it sobers up. The
+  chest's dark mouth is part of its open state now (it showed as a strip of soil
+  between lid and body when shut) and the lid closes again after its beat. Clouds
+  enter from the upwind edge instead of appearing mid-sky. The camera pulls back to
+  0.55 and the world has a backdrop, so pulling back shows more of the place rather
+  than a black border. Night is a deep blue room with a warm hearth on the soil, and
+  the title scene's per-frame cost is down: the parallax writes nothing at rest, the
+  mascot paints at 30 fps, and the moving layers are composited planes.
+- **Title screen (2026-11-20, sky and camera pass):** the tree is twice the height
+  it was and the plate below it grows with it. The taproot was 11 units wide with a
+  taper exponent of 1.9 while the laterals were 4.2 at 0.85, so the centre of the
+  plate was the thinnest root in it and the roots spreading out to the sides were
+  the widest; it is 17 at 1.0 now, and root depth runs 0.74 to 1.04 across the care
+  range, so the roots stop staying a seedling under a tree. The stem ends at y=-30
+  (254 units of drawing against 190) and the art box carries 140 units of gutter
+  each side, so a hard bend curls inside its own frame instead of being cut into a
+  small rectangle; the pane fit reserves the sky for the *grown* tree
+  (`PLANT_MAX_SCALE`) and caps the sky at two thirds of the pane, because a plant
+  whose height does not enter the fit is a plant that grows through the top of it.
+  The sky is a table now (`title/skyLayout.ts`): fourteen clouds in six families,
+  each crossing in its own time, with the soil's shadows built from the same rows so
+  the weather above and below is one event, and one size for both the sun and the
+  moon. Two more ranges (mid, near) join the far hills for the parallax, and the
+  wheel, `+`, `-` and `0` move a camera the world eases towards, scaled from the
+  soil line up.
+- **Title screen (2026-11-20, tree and underground pass):** the roots to the
+  buried finds were a second root system. They were stroked paths in the ground
+  layer while the roots under the plant are filled tapered shapes, so eight thin
+  pale wires crossed the plate's fan and the soil read as two drawings stacked.
+  `rootReach` in `title/roots.ts` builds each reach as the plate's own drawing - a
+  closed ribbon that leaves heavy and arrives fine, with an ink copy one edge wider
+  under it, feeders included - and it now starts where the plate is thickest
+  instead of at the stem's foot in the middle of the fan, so it continues that fan
+  rather than crossing it. The ribbon divides its sideways offset by the cut's own
+  3.3:1 proportions (`RUN_ASPECT`), or every vertical root comes out as a fat
+  horizontal slab; `roots.test.ts` checks the closed shape, the ink under the body
+  and that the run arrives on the piece it reached. The base of the plate was
+  painted with the *stem's* green for its first sixteen units and the shoot's own
+  foot was a green rectangle on the soil line: both are bark now - `pl-root-bark`
+  ramps dark bark into pale root - which is the colour a tree of this age has.
+  The plant also became a tree by using the drawing it already had. The art's box
+  is 224 units tall and the stem stopped at 84, so the top third of every plant was
+  empty gutter that scaling could never reach. `STEM_TIP_Y` is 34, the crown moved
+  up with it (seven canopy leaves instead of six, and larger), the trunk is wider
+  with four limbs instead of two, and the stem's foot is bark. Same box, same soil
+  line, a plant 38% taller - and the crown does not sit against the top of the pane,
+  because the care ceiling stayed where it was. A tree's leaves are deeper than a
+  sprout's too: `.is-tree` moves the two tender stops and nothing else.
+  Pressing H hid the menu's opacity but not its controls. They set
+  `pointer-events: auto` to stay clickable through the scene layer, and a child
+  that opts back in ignores the parent's `none`, so the invisible Play button still
+  started the game. `is-ui-hidden` turns the controls off and then takes them out
+  of the tab order after the fade. The ground the parallax uncovers is now the same
+  ground as the cut: pebbles, clumps and bedding planes live in `--pl-soil-detail`
+  and both elements paint it, the grass lip is shared, the drag clamp went 90 ->
+  140 px with the bleed and foreground overscan to match, and the sun and moon are
+  one 11.6vmin disc. Clouds: the low bank in the bottom-right corner (the sausage)
+  is gone, two shapes were added with a fourth high wisp, and the drift is 18% of a
+  cloud's own width on each cloud's own duration instead of 2.2% over two minutes,
+  which was a still sky with an animation in the file. The fern fossil is a fern
+  now rather than an ammonite coil - eight pairs of swept pinnae with a dark print
+  under the pale leaf - and the chest is wider, shut, and full of more than gold:
+  coins, three cut stones, pearls, a crown and a ring that are not drawn at all
+  until the lid lifts, because a shut lid that shows its gold is a picture of a
+  chest. The lid lifts off the rim and tips back (620ms, ending at -27px / -13deg)
+  instead of snapping 38 degrees and back like a clapperboard, and the open state
+  does not depend on the animation: reduced motion gets the same chest, still.
+- **Title screen (2026-11-20, generated roots):** the root plate under the
+  seedling is generated now, and the hand-authored table it replaced is gone. The
+  table was fourteen spines typed as literals; `buildRoots(seed)` in
+  `title/roots.ts` grows the plate from a taproot and three laterals a side, each
+  forking off its parent's own centre line, with hairs placed from each spine's
+  geometry rather than typed as free paths, and every spine pushed through
+  `fitToGrid` so an outline can never leave the 200 x 58 grid it is drawn in - the
+  table had no such guarantee, and a widened root could poke out of the art's cut.
+  The first generator pass was worse than the table and was replaced in turn: it
+  mirrored the two sides, drew every fork from the parent's *base* width (which put
+  a knob on the end of every lateral) and grew the plate by truncating each spine
+  along its own curve. Truncation is the one that showed: a part-grown plate was a
+  fringe of short stubs and a grown one was a ball of strings, because extension
+  makes a root longer without making it thicker. Growth is a scale again - the same
+  drawing, scaled about the soil line - and `rootDepth(points)` is the roots' share
+  of the plant's own care scale, 0.85 to 1, so it can never outgrow the drawing that
+  carries it. That property had looked inert all along: the plant's `> svg` rule
+  already scales every child by the care scale and wins on specificity, and a second
+  transform on the same element replaces it rather than adding to it. The plate is
+  composed the way the deleted table was: the two sides are not mirror images (a
+  plate of matched pairs is a bouquet, and that symmetry is what read as a tangle),
+  the shallow laterals leave and arrive within a few degrees of level and get their
+  droop from a bow on the chord's normal rather than from a steep arrival heading
+  (which drew fronds), the taper exponent is below 1 so a long root keeps a body
+  instead of thinning to a hair for its last third, and the buttresses are gone:
+  they doubled the shallow laterals into a winged wedge under the trunk. It is drawn
+  at 88% of the shoot's width instead of 71%, because a root plate reaches wider than
+  the trunk. The strands that led nowhere are gone entirely (see below); the ground
+  now holds the plate's own fan and the reaches to a find, nothing else.
+  `roots.test.ts` was rewritten against the generator: every root starts inside
+  another one, the taproot joins the stem at exactly the stem's width on the soil
+  line, every spine tapers monotonically to a point, every spine sags off its own
+  chord, nothing leaves the grid including the skew of an angled cap, the plate
+  covers most of its grid and is not mirrored, and the roots' share of growth is
+  monotonic and capped at the plant's own scale.
+  A second review fixed two things that only showed at full care. Forks left their
+  lateral at 0.8 of its length, where the lateral is thinner than the feeder coming
+  off it, so the feeder's flat start showed either side of the root it came from:
+  roots that looked sliced off. They leave at 0.36 and 0.62 now and are always
+  narrower than the parent there, which `roots.test.ts` checks for every spine. And
+  a reach to a buried find was one cable of constant width from the stem to the
+  piece; each is three lengths of the same curve with falling weight plus three
+  offshoots, so it thins as it travels and branches instead of being a long thick
+  root. The strands under the plant that led nowhere were removed rather than tuned:
+  stroked they read as wire beside the plate's filled roots, given weight they read
+  as pale straps at low care (the plate is small then and they do not scale with
+  it), and filled shapes in the plate's own outline still read as bands hanging off
+  the foot. The plate already fills the near ground, so the ground now holds the
+  plate's fan and the reaches to a find, nothing in between.
+- **Title screen (2026-11-20, roots pass):** a review of the tree pass turned up
+  one real duplicate and several leftovers. Root depth was written twice, in two
+  modules, with two different formulas (1.7 against 2.6, one counting stages and
+  one counting care points); it is one function in `title/roots.ts` now, and the
+  plant reads it. The root-run path generator moved out of `title/treasures.ts` into
+  `title/roots.ts` beside the rest of the root geometry, and a run's body is drawn
+  in the plate's own pale instead of a separate colour, so the roots under the plant
+  and the roots reaching a find are visibly the same system. The roots are a tree's
+  roots now: two buttress spines leave the base at the soil line and spread before
+  they dive, with hairs on them, since every other root left the stem below the
+  surface and the base read as a cutting. The plate grows on both axes instead of
+  being stretched vertically - `scaleY` made each root longer and thinner rather
+  than bigger - with `overflow: visible` so a widened plate is not cut off at the
+  sides, and the ceiling came down to 1.35 for the same reason. `roots.test.ts`
+  grew the checks for the two (a buttress has to start below the line, or half its
+  width is in the air). Three leftovers went with it: the leaf painter kept three
+  parallel arrays keyed by index (one list of leaf parts now), the bud carried an
+  extra element and a second ref just to hold its flick (folded into the anchor's
+  own rotation), and the chest drew a rim strip the curved band already covered plus
+  the lid's glow twice. The ground bleed and the stage now take their soil ramp from
+  one `--pl-soil-face` custom property rather than two copies of the same gradient.
+- **Title screen (2026-11-20, tree pass):** the leaves were coming off the tree
+  when it bent, and the cause was one property. A leaf was rotated with a CSS
+  `transform` and a `transform-origin` written in the art's own units - but the
+  element also had `transform-box: view-box`, which measures the origin from the
+  viewBox corner, and the viewBox starts at x = -40. Every leaf in the plant was
+  therefore pivoting forty units to the left of its own stem attachment. Placement
+  is an SVG transform attribute now (in user units, about the attachment) and the
+  only thing moving a leaf is the CSS `translate` property, which no origin can
+  skew, so a leaf's base lands on the bent spine and stays there. The hover tilt
+  went with it: a CSS rotation there pivots on the drawing's corner too, so the
+  hover highlight is a light change, not a movement. The mascot is a tree now, not
+  a stalk: from the young-plant stage the bottom of the same spine is drawn again
+  in bark, one width wider, with a flare at the soil and two branches off the
+  upper stem (`bendArcSegment` in `title/plantBend.ts` returns any part of the
+  bent arc, so the trunk and the stem are one curve and cannot drift apart), and
+  at five care points a five-leaf crown appears at the top. Growth no longer stops
+  at the last stage: the care count is unbounded, the stage table is only the art
+  state, and the drawing keeps scaling - smoothly, with a soft ceiling so it stays
+  in the scene - while the roots keep deepening to 2.6x. The cut also has ground
+  either side of it now: the parallax slides the soil band, which used to take its
+  own edge off the pane and show sky through the cut, so a wider copy of the same
+  soil sits behind the stage and moves at 0.9 with it (`.pl-menu__ground-bleed`).
+  Three finds were redrawn because detail had turned into noise at 80 px: the
+  skeleton is a skull over two crossed bones with knuckled ends instead of a skull
+  with a rib, the fossil is a coiled ammonite pressed into the slab instead of a
+  fern whose fronds read as scratches, and the leg bone is one femur silhouette
+  with two lobes at each end and a lit edge instead of a bar with corners.
+- **Title screen (2026-11-20, polish pass):** the light rectangles in the sky
+  behind every cloud were the cloud's own `clip-path`. Three passes removed
+  shapes that had corners - a shade band, then a gradient path - and the box
+  survived all of them, because the clip region is a shape the compositor blends
+  as one: a rectangle the size of the SVG, visible wherever the cloud was thin.
+  There is no clip now. The base is trimmed by geometry: a puff that would hang
+  below the base line keeps its centre and has its radius shortened until its
+  bottom sits on the line, and the numbers are rounded down so rounding cannot put
+  it back under. `cloudArt.test.ts` pins it - no `clipPath`, no `mask`, no ellipse
+  under its own viewBox, and at least three puffs of different widths forming the
+  base. The sun and moon are the brightest things in the scene again: the sun is
+  wider, with a tight white bloom on the rim under a wider corona, and the moon
+  carries a cool two-stage drop shadow, so neither reads as the same value as the
+  sky around it. The buried finds are drawn in more detail at the same size: the
+  chest has planks, iron bands and rivets, a keyhole and a gem in the gold; the
+  skull has a lit brow, cheek shadow, teeth and a crack; the fossil gains broken
+  faces and chips; the crystal a third facet and sparkles; the ore a fourth nugget
+  and rock planes; the bone a marrow groove; the worm segment shading; the
+  mushroom gills. Water and feed no longer do the same thing: water falls as
+  droplets and rings off the soil and pulses the leaves, feed scatters as specks
+  of meal and swells the whole plant, and the two react different plant parts.
+  Carrying a prop bobs and tilts it, lights the plant up while it is held over it
+  (`.is-carry-target`), and the drop leaves particles in a dedicated layer; the
+  carried clone also clears `box-shadow`, `outline` and `border-radius`, so a
+  focus ring cannot ride along as a box. The plant grows at every action rather
+  than per stage: the menu passes the running care count and `setGrowthStage`
+  interpolates between the stage scales (and the root depth) with `Math.floor`
+  choosing the art state. The grab cursor is no longer the default - the scene
+  inherits the plain leaf arrow and only switches to the closed-leaf grab while
+  it is being dragged or the plant is bending - and the plant's parts take the
+  pointing leaf, because they can be dragged. The cut is one picture with the
+  hills: the stage, the plant and the care props translate with
+  `--pl-scene-drag-x` (0.9 / 1.1 / 1.1) horizontally, and the root-run layer moved
+  into the world above the soil, below the menu, at 0.9 with a quieter stroke.
+- **Title screen (2026-11-19, care pass):** the plant on the title screen now
+  starts as a seed and grows. Three states share one drawing box, so they all stand
+  on the same soil line: a seed half out of the soil (stage 0), a two-leaf sprout
+  (stage 1), and the bending plant, which arrives small and fills out stage by
+  stage. Care is not rationed any more - the once-a-day rule made a save depend on
+  the calendar and turned the loop into a timer - so every watering or feeding is
+  one step, stored as a single number in `localStorage['pl-title-care']`. A sprout
+  reaches nothing; from the young-plant stage on, each step sends one root run out
+  to the next buried find (`rootRunPath` in `title/treasures.ts`), drawn as a pale
+  root from the stem's foot and animated with its own dash offset, and the find is
+  marked and announced. There are eight finds now, in two columns of four: an
+  overlap bug came from placing pieces by width alone, because the ground is about
+  three times wider than it is tall, so a 7.5% wide chest is 22% of the band's
+  height and landed on the piece below. Positions are rows spaced further apart
+  than a piece is tall, the art's size is capped in `vh` (10.8vh, about 20% of the
+  band on any pane), and `treasures.test.ts` checks the boxes at three pane shapes.
+  A prop can be dragged: carried to the plant it is given, put down anywhere else
+  above ground it is wasted (with a caption saying so), and brought back to where
+  it stood it is put back with nothing spent. A press that never travels is still a
+  tap. The carried copy is a clone with its own class, so it no longer sat in a
+  white button box, and a lost pointer capture removes it. The sun's wash is gated
+  on the disc (`sunWashGate`): the palette's glow faded slower than the sun set, so
+  for a few minutes every evening a screen-blended yellow wash covered the title
+  with no sun in the sky. The wash is a 44vmax halo now, not a full-pane gradient.
+  The default cursor is a pointer again - a green arrow with a midrib and a dark
+  rim - because three attempts at a leaf-shaped arrow read as a seed or a pod; the
+  leaf shapes stay for hover and grab. Bedrock lost four of its seven pebbles, its
+  fine fourteen-point torn edge and its drop-shadow; the buried art lost the facets
+  and cracks that turned into noise at 60-90 px.
+- **Title screen (2026-11-19, evening pass):** the camera keeps its own line of
+  sight. `frameCameraOnPlant` used to pick a fixed azimuth and elevation, so
+  pressing space swung the view round to a scripted angle and the click read as a
+  spin rather than a zoom; it now reuses the current eye-to-target direction (with
+  a fallback for a brand-new camera) and only clamps the rise, and
+  `focusCameraOnNode` keeps the player's current `riseRatio` inside its own limits
+  instead of forcing ±0.3, so a double-click lifts the node into the middle of the
+  screen without turning round to face the other way. The mascot bends to
+  `MAX_BEND_DEG = 168`, and the canopy no longer comes apart while it does: each
+  leaf turns only `0.55` of its stem's tangent (`LEAF_TURN_FOLLOW`), droops with the
+  bend and is clamped to ±132°, and the whole-canopy sway is scaled by
+  `1 - 0.72 * bendFraction`, which is what stopped the top leaves whipping out of
+  the drawing at deep bends. The scene's near foreground and cloud shadows now read
+  `--pl-scene-drag-x/y`, published only while a drag is held, so the whole picture
+  moves under a held pointer and nothing moves when the pointer merely crosses it;
+  a press inside `.pl-title-plant` never starts a scene drag, so bending the plant
+  and dragging the hills cannot both happen. The sun gained limb darkening and a
+  corona, the moon maria, the clouds a shaded base, and the soil a grass lip,
+  bedding planes and six buried finds (`title/treasures.ts`: a chest, a worm, a
+  skull, a fern fossil, gold ore and amber crystals, each tilted and clickable with
+  its own reaction). The care loop stands beside the plant: a watering can and a bag
+  of feed, once each per day, one stage per action for seven stages, persisted in
+  `localStorage['pl-title-care']` and reset by date. A stage scales the drawing
+  (`--pl-care-scale`), deepens the roots (`--pl-root-depth`) and grows two more
+  leaves; each stage's roots reach one buried find, which is announced and marked
+  `is-reached`. The growth gizmo's pick is 3D now: `pickGrowthAimNodePoint` rejects
+  a hit when the drawn plant is nearer than the node's own sphere, and
+  `branchAttachAnchor` clamps to the node's own drawn radius instead of 1.6 m, so
+  the ring can no longer be parked on the parent a child root grew from. Node picks
+  use each part's drawn position and its own size rather than a flat 0.35 m sphere
+  on the server position. `ui/cursors.ts` adds leaf-shaped cursors (arrow, pointer,
+  grab) applied through `html[data-pl-cursor='plant']`, with a **Leaf cursor**
+  switch in Settings that remembers `localStorage['pl-cursor-theme']`. A follow-up
+  pass removed the grey rectangle that sat behind every cloud: the shaded underside
+  was a full-width path with a CSS mask, and the mask was not clipping it, so each
+  cloud was drawn inside a visible box. The shade is a gradient fill now, spanning
+  only the puffs that cross its own top edge (`cloudArt.test.ts` pins both). The cut
+  in the soil gained the stone layer it was missing - a bedrock band from 46% of the
+  ground with a torn top edge, bedding planes and pebbles - and the ore, crystal and
+  fossil were moved into it, redrawn as a chunk with a gold seam, an amber pocket in
+  rock and a frond in a broken slab, so they read as finds in stone rather than
+  shapes on soil. The skull got a jaw, cheekbones and teeth; the watering can became
+  a can with a raised spout and a rose; the feed sack got a tied paper top and a leaf
+  label; the leaf cursors got a stem into the hot spot and a bright inner edge, and
+  fall back to the system pointer under forced colours.
+- **Title screen (2026-11-19):** the scene drags as one picture. The near
+  foreground and the cloud shadows read the far layer's own offset (published as
+  `--pl-scene-x/y`), so grass pans further than hills instead of standing still
+  under a moving backdrop, and each hill layer carries a skirt of its own colour
+  below the horizon so a vertical drag can no longer open a strip of sky between
+  the hills and the soil. The sun and moon are sized in `vmin`, not `vw` behind a
+  pixel ceiling: a px cap is what made the moon shrink when the browser was
+  zoomed out, because the hills kept growing with the frame while the disc had
+  stopped. The mascot bends to 120° (`MAX_BEND_DEG`) and says so: the stem is an arc
+  (`title/plantBend.ts`), not two hinges, and its curvature is weighted towards the
+  tip (`bend * t^1.2`) because a rooted stem is stiff where it enters the soil and
+  gives above its middle — an even arc leaned from the base and read as a bent
+  wire. Arc length is preserved by integrating along unit tangents; every leaf and
+  node nub rides the arc at its own attachment, and the leaves droop a further 15°
+  towards the ground. The strain is drawn: the stem thins 11 → 8.4 units, three
+  creases cross it and a compression shadow runs down the inside of the curve, both
+  fading in only near the limit, while the sunlit side brightens. The drawing's
+  viewBox carries 40 units of empty gutter on each side of the 200 the art uses,
+  because a canopy swung either way reaches past the art's own width and was being
+  cut off square at the edge of the drawing; the plant's box is 1.4× the art to
+  match, its footprint and height are unchanged, and the padded gutter takes no
+  pointers so a press beside the plant still drags the scene.
+  `title/plantSound.ts`
+  synthesises a creak from the physical model rather than from taste. Each slip is
+  a short excitation into a wooden body (four band-passed modes at 140-480 Hz, two
+  short panel delays, the dry impulse mixed in, a quiet 3 kHz squeak edge), fired
+  by the stick-slip generator of Farnell's *Designing Sound* door: a static
+  threshold below which nothing slips at all, and a slip rate rising from ~1 Hz to 240 Hz with the pull. Since the slip
+  rate is the creak's pitch, a faster pull creaks higher; a stem held still is
+  jammed and silent; letting go answers with a falling amplitude-modulated groan,
+  a tail of spreading slips and a wooden knock. A review cut the graph back: the
+  continuous strain oscillator with its LFO and tremolo, the third panel tap, the
+  690 Hz mode, the groan's noise tail, and the mutable force accumulator that was
+  nudged on every pointer move all went — one `forceNow()` decay is read when a slip
+  is scheduled. Scheduling is a single self-timing pump (35 ms, 120 ms lookahead on
+  the audio clock) instead of an interval plus a guard. A **Sound** switch in
+  Settings silences it for good: the preference is module-level
+  (`localStorage['pl-plant-sound']`) with a registry of live instances, so it mutes
+  every plant rather than the one it was switched from. `plantSound.test.ts` and
+  `plantBend.test.ts` pin the arithmetic. The scene is warmer: a soft pool of sun-coloured light lies on the soil
+  around the stem, ten pollen motes lift off the meadow, and the vignette is warm
+  brown instead of black. The account popover's small print is a caption in its
+  own flow now, so it can no longer sit behind the Create account button.
 - **Title screen (2026-11-18):** a 2D cutout scene with four parallax layers
   that drag and follow the pointer, an interactive mascot plant above the
   logotype, a nickname box with generated defaults, Play / Settings / Shop, and
@@ -93,6 +585,51 @@ Honest list. No feature promises (T42, RULE_13). Updated at every gate.
 - **Seeded deterministic RNG (2026-11-09):** `hash32`, `hash01`, `mulberry32` in `@plant-legacy/shared/math`. PlantMeshBuilder uses `hash01(nodeId, salt)` for leaf normals and branch curvature — deterministic appearance per node, no `Math.random()`.
 - **T07 Weather & Day/Night:** 5-state weather state machine (`clear`, `rain`, `thunderstorm_telegraph`, `thunderstorm_active`, `thunderstorm_aftermath`) with Markov transition probabilities, day/night diurnal orbital cycle (1800s day, 0.66 day fraction, dynamic solar elevation and intensity), server tick integration modifying `ResourceWorld` moisture deposition and canopy light reception in real time, client `WEATHER_UPDATE` broadcast handling adjusting directional sun and ambient lighting dynamically. Fully driven by `config/weather.json` and `config/daynight.json`.
 - **C03 Environment Rendering:** dynamic sky dome with zenith/horizon exponential gradient responding to diurnal time and weather condition; sun and moon celestial arcs in orbital opposition; atmospheric distance fog dynamically density-graded with horizon weather colors; lightweight instanced particle rain (1500 points, phone budget friendly, zero-cost when dry); thunderstorm lightning flashes with randomized multi-frame strobe and light spike; pre-storm sulfur telegraph cast and clearing aftermath; terrain ground mesh with dynamic soil moisture darkening and mineral tinting, refining and preserving the T02 Root Sight cutaway. Driven by `config/render.json`.
+- **C03b environment realism (2026-11-19):** the sun and the moon are bodies, not
+  glows. Each is a disc with an anti-aliased limb: the sun darkens towards a warm
+  chromosphere at its edge and keeps its glare in the air around it, and the moon
+  carries maria and craters sampled in a frame fixed to the disc, with a dusty limb
+  and a highland rim. Both are drawn two degrees across, because at their true half
+  a degree they still read as smudges at a 60° view. Cloud bands drift with a clock
+  and layer at two scales, and the overcast thickens with the weather's own light
+  multiplier, so a storm fills the ceiling instead of only tinting the sky. Rain
+  drops are alpha-blended grey water tinted by the light they fall through - they
+  were additive cyan, which is why they read as glowing strips - each a comet with
+  a crisp head and a trail, gusting as it falls and thinning out with distance. The
+  bolt is a jagged, branching channel of camera-facing ribbons (a thin core inside a
+  narrow glow) that flickers over its short life and leaves a soft pool of light
+  where it lands; it replaces four additive cylinders that read as a white
+  rectangle. Strikes land somewhere in the storm cell around the target plant (five
+  damage radii, squared towards it) instead of always on its root, so about two in
+  five hurt the plant and the rest are weather in the field, and a strike's light
+  dims with distance from the eye. `renderers/environment/skyDome.ts`,
+  `rainSystem.ts`, `lightningBolt.ts`, `EnvironmentRenderer.ts`,
+  `ops/damage/damagePipeline.ts`.
+- **Patch geometry is patch-local (2026-11-21).** A terrain patch and the soil slab
+  store heights above the pole's tangent plane (curvature drop plus relief, under
+  30 m over the 620 m ring) and carry the body radius in their placement; each Rapier
+  trimesh takes the same placement instead of having it baked into its vertices. Before
+  this, every vertex stored the planet radius, so float32 spent its whole 7.8 mm
+  spacing on heights that vary by 26 m. The three terrain LOD keys that no renderer
+  read are deleted. Tests: `planetSurface` and `planetSoilSlab`, 17/17.
+- **Root Sight opens the hole its roots need (2026-11-21).** The mouth is sized from
+  the roots' lateral spread (depth deepens the cavity but no longer widens the
+  opening), and it is guaranteed to contain the padded bubbles it cuts, so the soil
+  can no longer shut mid-growth when a thin new root's bubble fell just outside a
+  mouth sized at an 18% margin. The cut's top is sampled on the ring at the mouth the
+  hole will have, so a slope no longer keeps an uphill lid over the opening until the
+  mouth catches up. Measured: aperture 1.99 m -> 0.82 m for the same 7-node plant;
+  status stayed `open` through a seven-node growth burst (before: `bubbles: 0` and
+  `progress: 0` on the growth frame).
+- **Own-plant hover tip (2026-11-19):** resting the pointer on one of your parts
+  names it and numbers it by growth order (`Root #1`, `Leaf #2`), then lists the
+  plant's part total, how many growth options the server reports as available from
+  that part, the part it is attached to and every part grown directly from it. The
+  count is fetched on hover (`GROWTH_OPTIONS_REQUEST`, one ask per node per four
+  seconds) and cached from every `GROWTH_OPTIONS_RESULT`, so the tip no longer
+  promises "click to see what it can grow" on a part whose panel would answer that
+  nothing can grow - it says so before the click. Names and counts come from
+  `ui/PlantNodeInfo.ts` (pure, tested); the wording from `ui/PlantHoverTip.ts`.
 - **C02b WebGPU renderer v1:** optional WebGPU path enabled from
   `config/render.json` when `navigator.gpu` is available, with automatic WebGL2
   fallback and device-loss recovery. Plants upload into GPU storage buffers;
@@ -153,7 +690,8 @@ Honest list. No feature promises (T42, RULE_13). Updated at every gate.
   objects (ADR-056). Protocol 37–43, PLNT snapshots v3, T04's
   `movement.rerootSpeed` is consumed, and the Dev Panel has T06 buttons. The
   in-browser checklist is still outstanding, T02's substrate multiplier is 1.0,
-  and drop pickup belongs to T51/T08A. Record: `docs/tasks/T06.md`.
+  and drop pickup is now live (see "Drops, picking and the way out of the earth"
+  below). Record: `docs/tasks/T06.md`.
 - **Title art pass (2026-11-17):** every cloud had a straight line hanging under
   it. The "flat underside" was a rounded bar drawn under the puffs, so its bottom
   edge sat five pixels below the lowest puff and three pixels past it at each end,
@@ -240,7 +778,7 @@ Honest list. No feature promises (T42, RULE_13). Updated at every gate.
 - **The plant answers per part (ADR-072).** A leaf flicks about its own attachment
   and alternates direction leaf to leaf, the stem rocks the whole canopy, the bud
   nods and the roots flex; a double tap rattles everything; a drag from the top
-  bends the stem in two hinges and releasing springs it back through straight. A
+  bends the stem along its arc and releasing springs it back through straight. A
   press is a tap until it moves, so the bud at the top of the drawing is tappable
   *and* is where a bend starts.
 - **The plant notices, without becoming a control.** It leans up to 3.2 degrees
@@ -542,8 +1080,11 @@ their `notes` in `config/growth.json`.
 
 ## Not built yet
 
-Economy, item pickup for fragments/remains/dung, the rest of C04 (rebinding
-screen, notification log).
+The rest of the economy: Postgres-backed inventory and spore purse (T08A),
+marketplace/mail/trade (T14/T29/T45) and admin/compliance tooling. The shop, the
+spore purse, world drops and drop pickup are built — see "Shop, spores and the
+pouch" and "Drops, picking and the way out of the earth" below. C04 still owes
+its rebinding screen and notification log.
 
 **Touch is a second producer, not a second interface.** Orbit, pan, pinch zoom,
 tap-to-select, the reroot pad, the action bar and every panel work on a finger
@@ -622,13 +1163,860 @@ decisions are recorded as ADR-041 to ADR-049 in
 - **Shared depth is deferred, not abandoned.** C02's transparent canvas stands
   (ADR-041). Unification is now the gate for shipping caves, arches and sea —
   the point where local occlusion first matters.
-- **The config count is 79 files**, owned by [`tunables.md`](./tunables.md). Any
-  surviving count of 77 is stale.
+- **The config count is 80 files**, owned by [`tunables.md`](./tunables.md). Any
+  surviving count of 77 or 79 is stale.
 - The renderer work is ranked in
   [`abyssal-garden-source-analysis.md`](./abyssal-garden-source-analysis.md) Part II;
   the task specs behind it are in `DESIGN.md` Parts 11 and 16.
+
+## Drops, picking and the way out of the earth (2026-11-20)
+
+- **World drops are visible and collectible.** `DROP_SPAWN` draws a model - a
+  lumpy heap with seeds, a shard with a bright cut face, a knobbed bone - that
+  hovers a few centimetres above the surface, spins slowly, casts a soft shadow
+  and fades before expiry; a click within `drop_pick_distance_m` reach sends
+  `DROP_COLLECT`. The server owns the drop, its expiry and the reward (dung pays
+  `earn_dung`, fragments `earn_fragment`), removes it, and reuses `DROP_EXPIRED`
+  so every client clears the marker the same way. `KILL_CREDIT` now says so on
+  screen.
+- **A drop keeps the height it was given.** The marker sits at
+  `groundY(x, z) + drop.y`, with `drop.y` measured from the soil line exactly as a
+  node's height is. A drop in a tunnel stays in the tunnel and a drop in the pond
+  stays on the pond floor; nothing clips a drop to the surface, so none of them
+  can shoot up out of the ground or the water. `WorldDrops.test.ts` holds both.
+- **`dev_spawn_drop` proves the path.** Dev panel → Uproot & Damage → Spawn Drop
+  puts dung, a fragment or remains 1.4 m beside the crown and settles the event
+  before answering, so the marker appears even with the simulation paused.
+- **Pickup is tested against the real store.** `dropPickup` tests spawn through
+  `DamagePipeline.spawnWorldDrop` and collect through the same `collectDrop` the
+  socket handler calls, then read `getDrops()`; a replay, an unknown id, an
+  expired drop and a plantless player all pay nothing and leave the world intact.
+
+## Title scene: water, snow, wind and wood (2026-11-20)
+
+- **The pointer is in the picture.** Landing rings near the pointer are pushed
+  aside with a translate on the ring's own property, snow drifts move a little,
+  and a fast pass across the canopy (middle third of the pane, above the ground
+  line) sends `pl-title-gust` to the plant, which yields along the same arc a
+  released drag uses and springs back.
+- **Water lands where it falls.** Rings, puddles and drifts are placed from the
+  landing histogram of the drop field (landings per second per column), not from a
+  seeded spread across the ground line - see the 2026-11-21 section for the
+  measurements.
+- **Weather fades.** Rain, splash, fog and wet ground share one 2.6 s opacity fade.
+- **The title roots match the plate.** A reach to a find is a filled, tapered
+  ribbon with an ink edge and three hairs (`rootGrowth.ts`), revealed from the
+  crown by a clip circle instead of a dashed stroke. The tip closes to a hair and
+  is drawn with a `Q` curve through the centreline, so it ends in a point instead
+  of the flat cut the first version closed with, and the ink edge is a constant
+  0.16 units outside the body - it no longer thickens with the root, which is what
+  made the thin reaches mostly outline. Tips are staggered by run (three depths,
+  a small sideways bias, alternating approach side) so reaches to two close finds
+  no longer end on one line.
+- **Light comes through the leaves.** `leafThroughLight` has two versions: a low
+  moon is a cold silver, a low sun is warm honey. Each leaf carries a screened copy
+  of its own outline and there is a light pool behind the canopy; both fade in with
+  how much light actually arrives, and rain scatters it before it does. A thin leaf
+  always holds a trace of the sky (0.18 at night, 0.05 by day); a disc grazing the
+  canopy is what makes it glow - 0.30 at moonrise, 0.22 at sunset - capped at 0.5 so
+  the canopy never becomes a lamp. No beam is drawn: it is transmission, not a shaft
+  of light.
+
+  The gate is about grazing light, not about a disc sitting "behind" the trunk. The
+  bodies travel a semicircle, so a disc is at the middle of the sky only when it is
+  overhead (measured across the day: x = 0.5 happens only at y = 1, and at y = 0.5
+  the sun is at x = 0.09 or 0.91). The first version asked for centred *and* low and
+  therefore fired never - the strongest transmission it could produce was 0.16 at
+  midnight with the moon straight overhead. Moonrise and sunset are the real grazing
+  hours, and those are what the function measures now.
+- **The plant takes the hour and the weather.** A filter on the two drawings
+  (never the wrapper, which would clip the roots): dimmer and cooler under the
+  moon, warm at golden hour, paler and flatter under snow, greyer in a downpour.
+  The night dimming has a knee: dusk keeps most of the daylight, and past a third
+  dark the canopy falls to 0.47 at 21:00 and 0.30 at midnight, at 0.63 of its green
+  and turned 17-33 degrees towards teal - green is the one hue that survives a
+  dim-and-desaturate, so the cool turn is what stops a night canopy reading as a
+  daylight tree with the lamp off. The roots dim further (0.47 at 21:00) because they
+  are the lightest thing in the drawing.
+- **A passing hand rustles the leaves.** A fast pointer pass over the canopy asks the
+  plant for a `rustle`: every blade is pushed along the hand's direction and released
+  in five waves down the canopy, so the touch travels and each leaf settles on its own.
+  It moves the leaves' own `rotate` and `translate` and nothing else: no bend, no sway
+  of the trunk or stem.
+
+  The push (120ms) and the spring back (900ms, on a curve that overshoots zero by a
+  hair) are CSS transitions rather than keyframes, which is what makes a second pass
+  answerable at once: a new touch re-aims the blades that are still moving from
+  wherever they are - measured, 260ms after the first pass a reverse pass took the
+  same leaf from +3.14deg to -3.14deg - instead of being dropped for the length of the
+  settle or restarting from rest. Both leaf kinds are covered now: the seven mascot
+  leaves are placed groups and a crown's leaves are leaf-rest groups, and the rustle
+  only ever queried the first kind, so on a mature tree it moved nothing anyone could
+  see. Before this it was three quick swings either side of rest in 640ms (a leaf
+  being shaken) with a 1.38s lockout, and the pointer handler called `gust` - the drag
+  gesture - so moving the mouse over the tree leaned the whole plant.
+
+  The touch is local and it follows the hand: the scene sends the pointer with the
+  gust, the blades are measured once per pass, and only those within 54px move - with
+  amplitude by nearness and the release waves running outward from the touch - so a
+  pass over one shoulder leaves the rest of the crown alone (measured: 22 of 119 blades
+  moved on a pass, max tilt 1.73deg, median 1.35deg). The push is 90ms and the spring
+  720ms: shorter than the hand's own pass, so the leaf reads as brushed rather than as
+  pushed by the air behind it. The gust gate is 90ms so a fast sweep is a series of
+  touches that travel, not one touch near the end. The plant's destroy clears the
+  rustle timers, so nothing writes to detached leaves.
+
+  **Big leaves grow on the wood.** Every crown blade leaves its limb on a short stalk:
+  the blade used to pivot straight off the branch's centreline, half buried in it and
+  the rest hanging beside it, which is what made a leafy tree read as leaves stuck onto
+  sticks. The stalk is drawn from the wood to the blade's base, its length is the
+  branch's own half-width plus a unit, and each blade's angle carries up to three
+  degrees of its own so an arm's leaves stop arriving in rows. Measured on the built
+  tree: 112 crown blades, 112 stalks, and the worst stalk-to-blade gap is 0.00 units.
+
+  **The crown cheers with the stem.** The happy dance used to run only on the seven
+  small leaves on the mascot's stem, so a watered tree shook its bottom blades while the
+  canopy sat still. Crown blades now turn about their own base by up to 2.4 degrees on
+  the same beat - pinned at the twig, never sliding.
+
+  The watering can and the sack are redrawn: the can's handle loops off the back of the
+  body at both ends, its rose is a flat fan of holes square to the spout, and its
+  droplets exist only while the can is tipped (`is-pouring`). The feed sack is open at
+  the top with the mouth folded down and the meal heaped over the rim, granules in it,
+  a centred label and the leaf on it.
+- **The crown is lit from the moon's side.** At night the half of the tree under the
+  moon takes the lit rung of its shade ladder and the other half the shaded one, so a
+  night tree reads as lit from somewhere instead of being a flat dark silhouette: the
+  same shade-`e` leaf renders `pl-leaf-g` on the moon side and `pl-leaf-c` on the far
+  side, and the pair swaps as the moon crosses the sky. The swap has hysteresis (it
+  needs the moon 3% of the arc past the middle), because a bare threshold at x = 0.5
+  flickered when the arc wobbled by a thousandth: stepping the hour through a moonrise
+  in 0.004 steps flips the side exactly once, and wobbling the hour by 0.001 either
+  side of the crossing flips it not at all. A soft pool of moonlight lies on the soil in
+  front of the plant (screen, at half the moon's wash), and the night sky keeps a deeper
+  pass and a stronger Milky Way.
+- **The title plate's root grammar is in the mesh path.** Three rules from
+  `ui/title/roots.ts`, ported to `renderers/plant/organShading.ts` and
+  `MeshPlantRenderer`, all of it maths and no image:
+  - **per-organ taper** - the exponent is the organ's, not a global tunable:
+    taproot/root 1.0, lateral_root/rhizome/tuber 0.95, feeders 0.9, stem/branch/
+    trunk 1.15 (`segmentRadiusAt` now takes an exponent argument, tested);
+  - **bark to pale root across the soil line** - the plate's gradient is evaluated
+    per vertex from the part's world height against the ground under it
+    (`applySoilRamp`), as a multiplier, so a mutation's pigment survives and only
+    its lightness follows the soil; depth 0.32 m, root tint 1.55/1.44/1.22, bark
+    tint 0.74/0.68/0.6;
+  - **ink** - an inverted hull: the same tube, back faces, pushed out along its
+    normals by a constant 1.6 cm (`createInkMaterial`), so a thin feeder and a
+    thick taproot carry a line of the same width, as the plate's 1.2-unit pad does.
+  Roots only for the ink; every organ with wood gets the ramp. Verified on a
+  eleven-node root system in Root Sight at noon: pale bodies, ink edge, bark at the
+  seed. What is left between it and the plate is *topology*, not shading - the
+  server's roots are laterals off a radicle with no forks and no hairs, and the
+  plate's beauty is mostly its forks, hairs and sag.
+- **The world is the smallest box the camera can reach.** The title world used to
+  be 200vw x 230vh with a 140vh horizon, which is 46,000 square vh of raster for a
+  camera that never shows more than 1/0.55 of the pane. It is now
+  `calc(100vh / 0.55 + 6px)` tall with its horizon at
+  `calc(var(--pl-horizon-base) / 0.55 + 2px)`, so it is exactly the pane's reach at
+  the pulled-back limit however tall the pane's sky is: 1631 x 1199 CSS px against
+  1631 x 1509, a 20.8% smaller layer, 1.95 M px instead of 2.46 M. The width stays
+  200vw - the camera's drag needs the margin and every cloud, star and find is
+  authored as a share of it. The sky ramp is sized to the world's sky, so its stops
+  moved from 70/88/100% to 57.2/82.9/100% and the top stop to 43% of the sky's high
+  tone over the deep mix: sampled every 6vh above the horizon at zoom 1, the colour
+  is identical up to 36vh, 5/255 out at 48vh and 10/255 at the top edge. Landmarks
+  (sky band, care bar, sun, moon, finds) show 0px drift at zoom 1, and at 0.55 the
+  world still spans -1px to 658px over a 656px pane. The gesture's frame profile is
+  unchanged within noise at this pane size (two interleaved pairs, first run
+  discarded: 55/4-over-33ms/50ms max against 47/3/117, then 53/4/67 against 52/4/67)
+  and a forced repaint costs ~110ms either way, so this is a smaller layer rather
+  than a faster wheel.
+- **The 3D world is drawn at the screen's own density.** The quality band's
+estimated-timing ceiling was a pixel ratio of 1, and on a scaled display that is
+below native: at `devicePixelRatio` 1.425 the canvas was 815x656 where it should
+have been 1161x934. The ceiling is now the device's own ratio (`nativePixelRatio`,
+passed from `window.devicePixelRatio`), and a quality step pushes the new drawing
+buffer into the plant renderer, which used to read it only on a window resize and
+so raymarched the plants at 1018x820 inside a 1161x934 buffer. Both are measured
+from the live canvas and the live renderer, not estimated. At that density the
+world holds 52.4fps (p50 16.7ms, p95 33.4ms, 50.6ms worst over 2.5s) with 250,184
+triangles and 6 draw calls, and the quality band keeps the ratio rather than
+spending it.
+- **The ground does not repeat.** The cut's detail is five scales: eight hand-placed
+grains (one per element, so they never tile), aggregate and grit tiled at 137, 211 and
+397px - no two sharing a factor - and bedding as four rhythms at 180, 176, 171 and 168
+degrees with periods of 63, 137, 191 and 397px. It used to be one 46px rhythm at nine
+per cent plus eight evenly spread dots, which read as floorboards. The rock under the
+soil is stoned at four scales: boulders over a 631x337 tile, pebbles over 397x211, gravel
+over 240x130, and bedding at 24 and 57px, so the 240px repeat of three stones that gave
+the band away is no longer findable.
+- **The sky belongs to the camera.** The sun, the moon, the stars, the clouds and the
+  bank of cloud the rain falls out of are counter-scaled by the camera's own factor
+  about the horizon, so they keep the same size and the same place on screen at every
+  zoom - pulling back shows more ground and more tree, not clouds fleeing outwards.
+  Measured: the sun, moon, a cloud, the storm bank and the sky band have byte-identical
+  boxes at zoom 1 and zoom 0.7 (sun 382,8 76x76 both times; band 1631x360 both times),
+  and the sky band's own scale reads 1.42857 at 0.7. Looked at on screen at the
+  pulled-back limit (0.55) and at 1.4: the band's colour meets the world's gradient
+  with no seam at either stop. The band is also no longer sized
+  in world units divided by the zoom, so a change of camera no longer re-lays it out a
+  quarter of a second after the wheel stops - which is what made the sky seem to fit
+  itself late.
+- **Weather arrives as a front, not a switch.** Measured from a clear sky, sampling
+  the rendered opacity of each layer every 0.4s after the weather changes:
+
+  | t | storm bank | rain | wet ground |
+  |---|---|---|---|
+  | 0.4s | 0 | 0 | 0 |
+  | 1.3s | 0.06 | 0.05 | 0 |
+  | 1.7s | 0.15 | 0.14 | 0.01 |
+  | 3.0s | 0.44 | 0.39 | 0.21 |
+  | 4.3s | 0.60 | 0.65 | 0.41 |
+
+  So the sky turns first, the rain is visibly falling a beat later, and the ground is
+  the last thing to go wet - in that order, at those times. Clearing runs the same
+  delays in reverse: the rain stops and the ground dries behind it while the sky is
+  still clouded.
+- **Zooming is 60fps, not four.** The camera's scale used to be written as a custom
+  property on the menu root on every frame of the ease; a property the whole tree
+  inherits makes the browser recalculate every node under it, and the world had to be
+  re-rasterised at each step. Measured on a rain-filled title: 10 frames in 3.9s - a
+  266ms median frame and a 1084ms worst - for fifteen wheel notches. The scale is a
+  transform on the world with the layer promoted while the camera moves, and the zoom
+  variable (which the sky band and the sun's arc are sized from) is written once, 260ms
+  after the last notch. Same measurement after: 173 frames in 3.7s, 17ms median, 34ms
+  p95, five frames over 50ms and one 217ms re-raster at the very end.
+- **The roots never animate.** The root plate used to swing by six tenths of the tap angle
+  when the roots were poked. They are the plant's anchor in the ground: nothing moves
+  them now.
+- **The care props stand on the ground.** The Water and Feed buttons are aligned to
+  the soil line (their bottom edge is the line, measured at 354px against a soil top
+  of 354) rather than floating half-sunk in it, and both drawings are redrawn: the can
+  has a closed looped handle, a rolled rim, a long spout and a rose with holes and
+  droplets; the feed is a stitched sack, symmetrical but for the leaf on its centred
+  label, with no open top.
+- **Leaves have depth, not two greens.** A crown leaf used to be either a bright front
+  fill or a dark back fill, chosen per arm, so whole arms were one colour and the
+  canopy read as two schemes side by side. Each blade now takes its own rung of a
+  seven-shade ladder: bright front tones, a shared mid tone both halves of the crown
+  use, and a far plane that is cooler and bluer rather than merely darker - which is
+  what distance does to foliage. Measured on the mature crown: 11/17 bright, 34 mid,
+  12/14 dark, 13 far, across 112 leaves.
+- **The reaches stay underground.** The root band is clipped to the soil cut, so a
+  route that bows up past the band's top edge is no longer painted over the soil line
+  and across the hills - eight of the runs started just above it. They now begin on the
+  line and stay in the dirt, where they can be seen.
+- **Moonlight does not go out in the rain.** The through-canopy light was gated by the
+  storm for whichever disc won, so a shower dimmed a moon that was not even covered:
+  measured at 21:00, a rain took the leaf through-light from 0.220 to 0.208 (a 5% dip
+  from the 8% gate) instead of the old 30%. The moon's halo is 0.78 at full night
+  (was 0.55) and the night pass is deeper (night wash 0.42 against 0.34, canopy
+  brightness 0.25 against 0.30), because a moon that is the only light should read
+  like one.
+- **A shower is not a storm.** One heat number (rain^1.2 x 0.8 + storm x 0.45) drives
+  the drops, the splash rings, the wet grade and the puddles together: drizzle 0.37
+  (rings every 812ms, no pooling), rain 0.81, thunderstorm 1.0 (rings 538ms, densest
+  drops, longest wakes and the most slant). The storm token also stopped being rain:
+  `rain`/`shower` map to rain 0.68, `thunder`/`storm`/`squall` to rain 1 at full cloud.
+- **The wet ground is actually wet.** The grade used to live in the scene, and the
+  stage is painted over the scene, so the layer that was meant to darken the dirt was
+  behind the dirt and never showed. The scene takes a `wetHost` now (the stage, built
+  before the scene) and mounts the grade and its eleven flat pools of sky colour into
+  it - pools that appear above heat 0.45 and only while it rains, because snow is not
+  a puddle. The menu no longer reaches into the scene with a querySelector to move the
+  layer after the fact; each layer is built into the host that shows it.
+- **Snow lies on the ground.** Flakes stop on the soil line, and what has landed is a
+  bank: a solid lid along the whole cut that deepens with the fall (2px + 15px at full
+  snow) over a soft belly, plus the drifts that were already there. It used to be a
+  scatter of soft blobs with nothing under them, which read as flakes resting on the
+  edge of a cut-out rather than as snow that had fallen.
+- **The lit turf line.** The soil's top edge was a 3px border, which read as a seam
+  between the sky and the dirt. It is 7px now with a soft 26px band of the same light
+  under it, so the ground is a surface catching the sky rather than a cut with a line
+  drawn on it.
+- **The sun's glow is behind the tree, not over it.** The screen wash was 62vmax across
+  at 44vmax of gradient, so at most hours it screened a white fuzz over the canopy and
+  the trunk - the light in front of the tree, rain or no rain. It is a halo that hugs
+  the disc now (30vmax, 20vmax of gradient) at 60% of the old strength, and the wide
+  glow the eye reads as light is the disc's own corona in the sky, which the crown is
+  painted over. The horizon haze also came down from 21vh at 0.42 to 16vh at 0.3.
+- **The moon has light, not just a disc.** A wide, soft halo is painted behind the moon
+  and behind the clouds (the sky paints the bodies before the weather), so a cloud
+  crossing it is a cloud in front of a light; a second, tighter glow in the screen
+  layer is the air between the cloud and the eye. The old screen wash was 62vmax across
+  at a third of an opacity - spread that wide it did not read as light at all. The
+  moon's own opacity is part of the disc repaint's cache key now, too: two positions
+  can be identical while the sky has moved from dusk to dark under them, and the old
+  key could leave the moon at a dusk opacity (or hidden) after a clock jump.
+- **No warm blob around the base.** The hearth (a 118vw warm radial pool under the
+  trunk, strongest in daylight because it was driven by the cloud-shadow strength)
+  is gone. The fireflies that shared its variable have their own, driven by the dark.
+- **No dev frame pill in the game.** The `?dev` frame meter that sat in a rounded box
+  in the corner of the 3D scene, over the hotbar, is removed.
+- **The title's hour can be pinned for looking at.** With `?dev=1` the menu exposes
+  `window.__plTitle.setHour(phase)`, `setWeather('snow' | 'clear' | ...)`,
+  `hour()` and `release()`; they write the same two values the world clock and the
+  server's weather write and call the same render, so a dusk, a moonrise or a
+  snowfall can be inspected without walking the clock there. Absent unless `?dev=1`.
+- **The finds are buried in the world, and so are the reaches.** The band is a piece
+  of the world (`100vw` by the soil band, in world units) and every piece is sized in
+  world units, so pulling the camera back brings the finds in towards the tree and
+  shrinks them with the soil: measured at zoom 1 they are 63-80 px wide with columns
+  at x 29 and 718, at 0.55 they are 35-44 px and converge to x 198-620, at 1.4 they
+  are 89-112 px and run past the frame edges. Nothing redraws on zoom - the reaches
+  are in the same percentage space, so the camera scales their length, taper and ink
+  with everything else, and the eight paths are built once. While a care prop is
+  dragged its ghost is sized from the button's measured rect. Before this the finds
+  were pinned to the pane (constant screen position and size, which made them look
+  like they drifted away from the tree as the camera pulled back), the chest was the
+  one piece whose caps did not cancel the zoom, the reaches needed a redraw to change
+  thickness, and the ghost was a fixed 72 px.
+- **The rock belongs to the cut.** The bedrock's top is measured from the soil line in
+  the world's units, so pulling the camera back brings the rock up with the dirt
+  (measured: 169 px below the line at zoom 1, 93 px at 0.55) instead of holding it at
+  a fixed screen distance while the soil shrank around it.
+- **A reach ends on its find, not through it.** Each run leaves the crown in a fan,
+  leans inwards of its column about halfway down, then turns out at its own row and
+  stops just inside the piece's top rim, off centre. Reaches are drawn under the
+  pieces, so a neighbour's root passes behind a find rather than over it. Two
+  invariants are tested: a tip lands within five units of its piece's top edge, and
+  no sample of one run lies inside another piece's box. The body is filled with the
+  plate's own depth ramp (pale cream at the soil line to a tan at the bottom of the
+  cut), is half the plate's laterals wide, and its hairs are the plate's darker tip
+  colour at half opacity; the reaches take the plant's night dimming with the plate.
+- **The trunk has no dark lines.** The two dark bark strokes are gone (they read
+  as scratches and slid off the silhouette when the tree bent); one warm highlight
+  on the lit side keeps the wood round.
+- **The weather chip counts in real seconds.** The vitals ticker wakes just past
+  the next whole second of the countdown instead of on a fixed one-second
+  interval, so the chip no longer holds a number for two seconds and skips one.
+- **Picking a node prefers the child.** A parent's pick sphere contains its
+  children, so "first hit" selected the parent for a click on the child. The
+  spheres are tighter, and `ui/nodePick.ts` resolves the nearest hit with a
+  `node_pick_tie_m` window that hands a near-tie to the deeper node.
+- **A buried eye leaves by looking up, and only by looking up.**
+  `cavityEscapeLiftY` raises the eye at `cavity_escape_lift_mps` while the
+  forward vector is above `cavity_escape_look_up` (0.35, about 20 degrees above
+  the horizon), stopping at the surface. The lift runs before the cavity wall
+  clamp, because that clamp returns early for an eye already inside the opening -
+  which is the normal case, and skipping the lift there made looking up do
+  nothing. Measured in the browser: 0.80 m under, climbing 0.2 m per 120 ms to
+  the surface; looking down stays under.
+- **The hotbar and the inventory have separate selections.** Number keys in the
+  world select and use a hotbar slot; with the inventory open they move the
+  inventory selection only. The bar is one tab stop with arrow-key movement and
+  `aria-keyshortcuts`, and its phone slots are 44 px.
+
+## Shop, spores and the pouch (2026-11-20)
+
+- **There is a currency, and it is the server's.** Spores are earned (dung 5,
+mutation 15, kill credit 30) and spent in the shop; the balance travels in
+`INVENTORY_SYNC.sporeBalance` (protocol v4). The starting balance is 120, so the
+cheapest item is affordable on the first visit.
+- **A purchase is a server decision.** `SHOP_PURCHASE { itemId }` names an item;
+the price comes from `config/shop.json`, the balance from the purse, and the
+grant goes through `addItem` into the same pouch the hotbar and inventory panel
+read. A refusal is a `REJECT` with a reason (`insufficient_spores`,
+`inventory_full`, `unknown_item`, `shop_closed`), not a silent no-op.
+- **The purse is in memory.** It survives a reload only as far as the starting
+  balance; wiring it to Postgres is the open half of T08A, as it is for the pouch.
+- **Every advertised earn source now pays.** Dung on use, a mutation level, a
+  kill credit, and collecting a drop (dung or fragment, exactly once: the drop
+  is removed, so a replayed id finds nothing).
+- **The hotbar draws the pouch, not a copy.** Number keys select and use outside
+the inventory; inside it they still pick a slot to move or drop.
+
+## Growths that match the roots (2026-11-21)
+
+- **The ink covers what the plate outlines.** Roots, stems, branches and the seed
+  take the 5 mm warm-brown hull; flowers and spore sacs get the same hull on their
+  own meshes; leaves and cotyledons get a band built outward from their own
+  silhouette, because a blade is a surface and an inverted hull on a surface is
+  invisible. Seen in game: a cotyledon now has a continuous dark rim.
+- **A petiole only narrows.** Soft parts are exempt from the nub swell and clamped
+  to `end <= start`, so a cotyledon's stalk leaves the seed wider than it meets
+  the leaf instead of the other way round.
+- **The cavity's mouth has no seam.** The lip ring borrows the top wall course's
+  normals after every rim refit, so it no longer turns pale against the sky when
+  a growth changes the cavity's scale. A ring lifted above the mouth plane was
+  tried and rejected: it broke the invariant that every rim vertex sits on or
+  under the ground it cuts.
+- **Root Sight survives growth.** A growth event re-asserts the open target, and
+  the camera's underground exemption holds the widest mouth seen since the cavity
+  opened, so a rebuild that narrows the mouth for a frame cannot lift the eye to
+  the surface. Not reproducible from the dev tools before the change - the mode
+  stayed `ON` through `dev_grow_roots` - so this is the defensive half only.
+
+## Outlines that take the light, and weather that lands where it falls (2026-11-21)
+
+- **A growth's outline is its own colour.** Leaves, cotyledons, flowers and spore
+  sacs are inked from the node's own material (`inkColourFor`: same hue, a little
+  more saturated, a sixth of the lightness), lit by the scene and attached to the
+  same atmosphere as the tube hulls. The band under a blade has no thickness - it
+  lies in the blade's plane and only grows outward - so it is a drawn outline, not
+  a strip of geometry. Checked on one cotyledon at noon and at midnight: a deep
+  green line by day, a cool grey-green one under the moon, readable in both.
+- **The underground exemption forgets.** The widest mouth seen since the cavity
+  opened now decays toward the live radius at 8 % of the gap per frame, so the eye
+  cannot stay exempt inside dirt after the mouth narrows.
+- **Weather pools where it lands.** The 3D patches are laid out with their rims
+  clear of one another (no stacked translucency) and their size and fill threshold
+  come from a landing histogram of the drop field. In the 2D title every drop is
+  an element with a column, so the landing histogram is the real one: rings, pools
+  and drifts are placed and sized from landings per second per column, the settled
+  lid is masked by it, and a column no drop falls in stays bare. Measured: 70
+  flakes over 48 columns (10 dry), 26 drifts and none in a dry column.
+- **Every growth is outlined, in its own colour.** Every segment carries the ink
+  line, and above-ground ones use their own pigment deepened rather than the
+  roots' brown. The unit is the segment, not the organ type: gating the hull on the
+  node type left the stalks of every leaf and seed leaf bare, because a
+  cotyledon's petiole *is* that node's tube - so "cotyledon" and "leaf" were being
+  skipped as blades while their blades were outlined separately. The seed, which
+  is drawn as a sphere rather than a tube, carries the plate's own brown hull as a
+  child of the ovoid, so it inherits its scale and follows it when it crawls. The
+  ink takes a quarter of the atmosphere in-scatter, so the line stays darker than
+  the organ at night as well as at noon.
+- **Rain lands where it falls, too.** The splash rings and puddles were already
+  placed from the drop field after the drop-element rewrite; this is the rain half
+  of that check, run on the title in a thunderstorm. Measured: 100 drops over 48
+  columns with 5 dry columns, 34 rings and 9 puddles, **none of either in a dry
+  column**, and the puddles sat in the columns with the most drops per second
+  (7, 6, 5, 4, 4, 3, 2, 2, 1 in a row, densest first).
+- **A seedling is framed from the side - by the game, not by you.** Framing keeps the
+  azimuth the player is already looking from, which was right for a pan but wrong
+  at spawn: the welcome view looks down 35°, so the three-metre young-plant fit
+  put the eye 1.7 m up and the ground line above the top of the frame - a seed in
+  a wall of soil, which reads as a camera that is not on the plant at all. A young
+  plant's pitch is now capped at the side view the framing was written around
+  (`y = 0.2`, about 12°, and never more than 60 % of the half field of view), so
+  the horizon stays in the picture with the plant centred. Measured on a fresh
+  seed: 3.03 m out at 15.8° down (was 3.04 m at 34.6°), target 0.00 m off the
+  seed in x and z. It is scoped to the automatic framings (spawn, plant switch,
+  the first-node refit): pressing Space, or double-clicking empty ground, centres
+  the plant at the angle the player was already looking from. Measured: at 50.2°
+  down, Space left the pitch at 50.4° with the target 0.00 m off the seed.
+- **A drop lands on the pile, not under it.** The field falls to the ground line,
+  which is where the soil starts, so a column holding a drift had flakes sinking
+  into the snow and a pool had drops stopping above its water. Each drop now lands
+  on the surface its column carries (`--pl-land-lift`, written from the drift and
+  pool shapes when the layer is drawn): the settled lid's 2-9 px plus the crown of
+  the deepest drift over it, or the top of a pool. Measured at snow: 70 flakes,
+  bare ground 347.8 px against 339.5-347.8 px over crowns 5.9-8.3 px tall; in a
+  thunderstorm, 56 drops in pools land 1-3 px lower, on the water.
+- **The moon owns the night, in both scenes.** The title's tree is graded by a
+  filter rather than painted from the palette, and the filter's floors were low
+  enough to crush the canopy to #040806 and the roots to near-black while the
+  hills still had colour - so the trunk keeps 0.44 and the roots 0.5 of their value
+  at midnight. The moonlight is now twice the night ambient (0.6 against
+  0.28: measured in the scene as 0.529 moonlight, 0.28 ambient and 0.28 hemi), so
+  a surface facing the moon is moonlit and one facing away is not. And a disc
+  behind the crown gets a new `top` term in `leafThroughLight` (over the trunk's column,
+  weighted by height, which grazed light could not see): the crown glow rose from
+  0.231 to 0.531 at midnight and a second pool lights the upper reaches, so a moon
+  coming over the tree lights its top and moves with it.
+- **Snow settles on the surface only.** The title's drift band sits above the
+  horizon line and its lid is a few pixels of standing snow at the line, so nothing
+  is painted down the soil cut.
 
 ## Explicitly not promised
 
 Dates beyond the gate weeks in DESIGN.md, features not in the plan, and any
 outcome the players have not built themselves.
+
+## Light through the canopy, and a night that keeps its colour (2026-11-21)
+
+- **A leaf is paper, not a wall.** Transmission was gated on `sunWarmth` in the
+  WebGPU leaf shader, which is the golden-hour number and is zero after sunset,
+  so the moon - the only light the night has - could not shine through a leaf at
+  all; the mesh fallback had no transmission. Both now add the same term: the
+  alignment of the view ray with the light through the surface (pow 1.8), the
+  face turned away from the light (0.35 floor), tinted by the light itself - honey
+  by warmth, the moon's cold silver by night. Seen at 21:10 from below a
+  cotyledon with the moon behind it: the near blade reads pale and lit, the far
+  one stays dark green.
+- **Why growth intents "stopped landing":** they were being sent from the title
+  screen, where `__plantLegacy.socket` is null and `plantId` is the last session's
+  - nothing left the page. In the world the same intents were refused with
+  `germination_conditions_not_met`, because a fresh seed's tile must be wet and
+  lit to germinate and the clock was at dusk. With the dev gerministration gate
+  cleared (`dev_set_growth`, mins 0) radicle and two cotyledons grow in one
+  session. The rule itself is unchanged.
+- **The night moonlight stays at 0.6.** Measured in the scene as 0.529 against
+  0.28 ambient and 0.28 hemisphere, and the night screenshots stay dark ground and
+  dark sky with the plant reading against them: brighter than the old 0.3, not
+  washed out.
+
+## Title light and 3D stalks (2026-11-21, corrections)
+
+- **The night floor only ever applied to the canopy.** The pale root pigment is
+  the brightest thing in the drawing, so the same floor that saved the trunk from
+  black turned the roots into cream - brighter than the hills under a moon that is
+  meant to be the light. Roots keep 0.34 (`--pl-roots-bright`) against the canopy's
+  0.44, and their colour is pulled 60 % into the soil at night.
+- **Nothing under the soil is a light source.** Three things had piled up at the
+  trunk's foot: the wordmark's fill glow (now zero after dark), the crown
+  through-light pool spilling down the trunk (ellipse raised to cy 46 / ry 74, so
+  it stays in the canopy), and a root colour lifted towards bone.
+- **The torch is in the 2D title, not only the 3D.** The per-leaf overlay is
+  screened over every blade and its opacity is `--pl-leaf-through`, which now
+  carries the crown-top term: at midnight it is 0.481 against the old 0.220, so
+  the moon behind the crown lights the canopy from within.
+- **Petioles only narrow towards their blade.** The WebGPU builder used a leaf's
+  *blade* radius as its tube's end radius, so every cotyledon stalk was an
+  upside-down cone. A soft organ's tube now ends at 85 % of its start radius at
+  most; the blade keeps its own full size.
+
+## The title's night, the mist, and its frame budget (2026-11-21, second pass)
+
+- **The bark was outside the night grade.** The trunk is a separate drawing from
+  the shoot, and it kept its daytime `#6a4a2b` under a moon that had dimmed the
+  canopy to 0.44. What looked like a glow around the static root was the trunk
+  painted at noon brightness, with the moon's halo falling on its foot. The
+  trunk now takes the same grade, and the halo only reaches -120 % of the disc
+  (it used to reach 265 % and light the soil).
+- **The canopy is green, not grey, when lit through.** The per-leaf overlay was
+  0.481 of pale blue-white screened over every blade. It is 0.34, and after dark
+  its colour is pulled 70 % towards pale leaf green - the moon lights a leaf, it
+  does not paint it grey.
+- **Mist has light in it.** Each disc carries its own shaft layer, graded by the
+  weather's fog (0.98 in mist, 0 in a clear sky), drawn with gradients only so it
+  costs nothing to keep in step with the arc.
+- **The title's stutter was a filter transition and a filtered cloud.** The
+  plant's grade is a filter over 900 nodes; transitioning it re-rasterised the
+  whole drawing every frame of a 700 ms fade, and the overcast grade filtered a
+  cloud that was mid-crossing. Measured in rain: p95 frame time 99.7 ms → 50.2 ms
+  at the same 60 fps median.
+- **What is still stuttering, and what is not.** An 8 s sample in the rain still
+  shows about one ~180 ms frame per second (p99 184 ms at a 16.7 ms median), and
+  hiding the plant drawing does not remove it (2 vs 3 long frames in the same
+  window), so it is not the grade or the filter any more: it is the title's
+  once-a-second sky tick. The plant's grade numbers were also quantised to two
+  decimals so a thousandth of a brightness step cannot re-raster it, but that was
+  not the hitch on its own. The next step is the palette writer itself: forty
+  custom properties rewritten on the menu root each tick is a style recalc over
+  two thousand descendants, and they belong on the few elements that read them.
+
+## Wood, roots, and one light (2026-11-21, third pass)
+
+- **Bark is its own material.** It was taking the canopy's night curve - 0.44
+  brightness and a -36deg hue turn, which is how brown becomes grey - and the
+  branch drawing was outside the grade entirely. The trunk, the limbs and the
+  twigs now share one rule: brightness with a 0.62 floor at night, no hue turn,
+  full saturation. One brown ramp from the flare to the crown.
+- **The roots are one system.** 0.34 was below the point where the pale root
+  pigment stops reading as stone: the static roots and the runs to the treasures
+  share `--pl-roots-bright`, and it is 0.55 at midnight with the root colour
+  pulled 42 % (not 60 %) into the soil.
+- **The circle around the trunk was a second moon.** `.pl-menu__wash--moon` was a
+  34vmax screen-blended disc at 0.79 opacity over the canopy. Removed; the only
+  air around the body is the disc's own tight halo, which now widens with the
+  weather's fog instead of a separate beam layer. The `--pl-scene__shafts` beams
+  from the last pass are gone: they read as two spokes beside the moon.
+
+## Cleanup, mist, and the hitch that is not script (2026-11-21, fourth pass)
+
+- **The moon wash is gone, not just invisible.** Its rule went last pass; the
+  element, the `--pl-moon-dx/dy` writer and a per-second `querySelector` for a
+  node that no longer had styling are removed too.
+- **Mist is light, not a filter.** Fog now multiplies the haze band's opacity and
+  widens the moon's own halo; in mist `--pl-fog` is 0.85, the haze reads 0.87 and
+  the halo 1.43x its clear-sky value. No beam layer.
+- **The plant's light is written on the plant.** The palette writer sent every
+  property to all seven palette hosts, so the crown's grade also invalidated the
+  UI layer and the sky band. Plant properties now go to the plant element and to
+  the root runs on the soil, and nowhere else.
+- **What the once-a-second hitch is.** Long-animation-frame entries for it carry
+  `scripts: []` and the whole duration in style/paint: it is a repaint of the
+  title's layered gradients, not JavaScript. The disc's `left/top` are quantised
+  to a quarter of a percent of the arc and `--pl-wind` to 0.1 so the sky is not
+  re-rastered for an invisible change, but samples still show 6-15 frames over
+  60 ms in six seconds. **Not fixed.**
+- **Leaves on twigs.** The crown's stalks are shorter and thicker, so a blade's
+  base sits on the wood instead of beside it; and a rustle reaches 120 px and
+  pivots on the blade's base, so a leaf no longer leaves its petiole while it
+  moves.
+
+## The hitch, measured and cut (2026-11-21, fifth pass)
+
+- **The profiler named the layer.** Patching `CSSStyleDeclaration.setProperty`
+  caught `--pl-hill-far` being written **48 times in 3.5 s to eleven elements** -
+  the scene, the soil stage, the screen layer, the weather, the UI and the plant -
+  and the browser's long-animation-frame entries for those frames carried
+  `scripts: []` with the whole duration in style/paint. It was never JavaScript:
+  a hill colour four layers do not paint with was invalidating the entire menu,
+  and every tick re-rastered the title's gradient stack.
+- **The cut.** The scene's palette is split in two: sky, clouds, hills, moon,
+  rain and snow go through `skyVars`, which writes on `.pl-scene` and nowhere
+  else; the soil, root and sun colours keep the hosts that actually paint with
+  them. Measured after the change: **clear 312 frames in 5.2 s - p50 16.7,
+  p95 16.8, p99 16.9, zero frames over 50 ms**; **rain 293 frames - p95 16.8,
+  p99 33.4, zero over 50 ms**. What remains is one ~200 ms recolour when the
+  palette itself steps, once every ~28 s.
+- **The reaches are the plate's roots.** The treasure-reaching runs now draw
+  from the plate's own root palette instead of three authored tans, so at any
+  hour and in any weather both halves of the root system are the same colour.
+- **The rustle is a nudge.** 1.3 degrees at the blade's base within a 90 px
+  reach: a pass moves 44-53 groups by half a degree, where 2.7 degrees over
+  120 px made the whole crown buzz.
+- **The title's sky follows the game's.** The `/world/time` poll carries the
+  weather token and `startSkyTimers` now polls once immediately, so leaving the
+  world cannot leave the title on half a minute of stale weather. Clear weather
+  is a first-class sample on both sides.
+
+## The camera, and weather with a wind (2026-11-21, sixth pass)
+
+- **The drag was writing to nothing.** `parallaxXSelectors` was created, read on
+  every frame of a held drag, and never filled - the layer list had been rebuilt
+  once without it. Each scene layer now registers itself with its depth, and a
+  120 px drag measured **far 34.6 px, mid 59.3 px, near 98.8 px**. The
+  slow-frame gate also latched off for the rest of the visit; it is now lifted on
+  every press.
+- **Space is the camera home.** The game's own recenter key, in the title's
+  terms: composed zoom, no drag offset, hover released. Measured with a real
+  keyboard press: `scale(2.2)` -> the world transform cleared and
+  `--pl-scene-zoom 1.000`.
+- **The bodies move between layout steps.** Percentages are a layout, so the
+  discs could only be placed every ten seconds; the difference between the body
+  and its drawn position now goes out as a translate on two promoted elements
+  every frame. The sun's transform changed 1.2 px across 400 ms of a fast title
+  cycle, with no hop.
+- **Wind moves what is in the air.** `--pl-wind-speed = 1 - 0.45 * wind` shortens
+  every cloud crossing (169.7 s at wind 0.5, from 217 s) and speeds the rain.
+- **The discs hold at any zoom.** The smooth offset used to be measured
+  against a pixel baseline cached at the last layout step, so a wheel zoom
+  rescaled the arc and left the body a few pixels off until the next step. It is
+  now a difference of two percentages of the arc's own box, read back from the
+  disc: with the hour pinned, the sun's centre measured **(114.2, 258.8) at zoom
+  2.500 and (114.2, 258.8) at zoom 1.000** - delta zero.
+- **Simplified in the same change.** The cached baselines are gone (two pieces of
+  state that could go stale), the per-frame closure is one module-level
+  `placeSmooth`, the arc box is cached per zoom and pane, the two orb timers are
+  one rAF loop, `--pl-wind-speed` goes through the deduped writer, a duplicated
+  wind comment is one comment, and the legacy `'Spacebar'` key string is gone.
+- **The drag moves the foreground, at 60 fps.** The plant and the care bar ride
+  the near plane (`-153.68 px` for a 160 px pull, against `-139.71 px` for the
+  near hills and `-48.90 px` for the far ones), and the drag measured p50 16.9 ms,
+  max 33.5 ms with the parallax gate left **on**. The ground planes are excluded
+  on purpose: measured per layer, the cut soil cost 167-184 ms per moved frame
+  and the ground bleed 83 ms, while the plant and the care bar cost 16.7 ms each.
+- **A palette step no longer repaints the hills.** The hills measured 217 ms
+  median per sky step with three pane-wide gradient stacks re-rastered; they now
+  read the same 1/16-of-a-day palette as the soil, and the same A/B measures 50 ms
+  median. The plant's grade joined them on the ground clock (it was ~40 ms of
+  style recalculation per sky step over its 923 nodes), so `paletteHosts` no
+  longer hands it the sky's properties at all. Residual: ~50 ms per sky step,
+  and the hills can lag the sky by up to one ground step (~3.7 min) at dawn/dusk
+  - not viewed in a screenshot.
+- **The discs hold at high zoom with the clock running.** At zoom **3.100**, 12
+  samples over 2.6 s: the smooth offset updated every few frames in sub-pixel
+  steps and the disc's rendered centre advanced 1.63 px in steps of at most
+  0.82 px - no layout hop while the clock ran.
+- **The whole foreground moves, and settles together.** A 160 px held drag now
+  moves the ground plane **-125.35 px**, the plant **-153.21 px**, the care bar
+  with it, and the far hills **-48.75 px**; the drag measured p50 33.2 ms,
+  max 33.7 ms, no frame over 40 ms, gate `on`. On release both settle on the same
+  curve (plant -153 -> -66 -> -37 -> -16 -> -8 -> -1 px while the hills go
+  -48.7 -> -23.9 -> -13.2 -> -6.4), so nothing snaps.
+  The ground is now one composited wrapper (`.pl-menu__ground-plane`) holding the
+  cut, its bleed, the moonlight, the finds and the reaches - measured 41 fps
+  moving as one layer against 4-12 fps for the cut alone, 13 for the bleed and 43
+  for the finds. 30 fps here is the honest number; it is a blit of a pane-and-a-half
+  layer, not four re-rastered gradient stacks.
+- **Dawn and dusk with the hills on the ground clock.** Checked at hour 0.26,
+  0.755 and 0.79 (the last one has the ground palette a half step *ahead* of the
+  sky): the hills read as coherent in all three - muted lavender at dawn, warm
+  mauve under the horizon glow at dusk - with no visible seam between the hill
+  band and the sky. Rounding rather than flooring means the ground can lead or lag
+  by up to half a ground step (~30 min of in-game time) and it did not show.
+- **Simplified after the fact (same behaviour, less machinery).** The drag's two
+  host lists became one (`ParallaxHost` with a `hover` flag and the last transform
+  written), which deleted the per-layer scan, the `nearX`/`nearY` strings, the
+  `parseFloat`, `depthOf`, the `layers` map, the lazy selector resolver and its
+  cache, and both dedupe pairs. The palette lost its dead keys: `--pl-canopy-back`
+  / `--pl-canopy-front` / `--pl-frond` and `grass` were written and read by
+  nothing (they painted the removed hedge) and are gone from `TitlePalette`, the
+  four palettes and the lerp; `hillFar` left the write table because the
+  interpolated hill colour overwrites it immediately; `--pl-leaf-rim*` moved to the
+  ground clock so nothing writes to the plant from the sky palette. `groundKeys` is
+  four keys. The two `@property --pl-px/--pl-py` registrations and the three dead
+  `var(--pl-px)` transforms (haze, cloud shadow, stage) are gone. Re-measured after
+  the pass: drag still ground -114.24 / plant -139.62 / far hills -44.43 px, gate
+  `on`, both settle to exactly 0, and the HUD read `60fps · p95 33ms · worst 50ms`
+  on the reload (against `worst 200-217ms` in the same HUD before the palette work;
+  that is the palette change, not this pass).
+- **The sun and moon glide, continuously.** The orb loop reads the hour *between*
+  clock ticks (`hourAt`), so a body moves every frame instead of in one-second
+  hops. Measured at zoom 1: the moon's centre moved on 29 of 29 samples, 0.04-0.05
+  px per 100 ms.
+- **The canopy rustles, it does not switch.** The crown-wide breeze animation is
+  gone; a scripted breeze nudges one to three random blades every 2.4-6.6 s, and
+  a pass of the hand takes at most the 14 nearest blades, each with its own delay
+  (spread 0-250 ms), its own settle length and a little angle scatter. Measured:
+  blades 6-67 px from the hand moved, blades further away did not.
+- **A cloud keeps its place when the wind changes.** The crossing is a Web
+  Animation per cloud and the wind is its playback rate, so a weather tick changes
+  the pace and nothing else. Measured across rain -> clear: x 307.999 -> 313.010 ->
+  318.499 px, playbackRate 0.91.
+- **The moon reads as a light, not a sticker.** Its edge is a plain limb: no dark
+  ring at 50% alpha (removed), no blur re-rastered every frame under a moving disc
+  (the `drop-shadow` filter is gone). The surface is maria only - the crater rings
+  read as bubbles at 76 px and are gone - and the disc is lit nearly white at night
+  with one screen-blended glow: its gradient peaks just inside the rim, where the
+  disc covers it, and falls away into the air (one layer, one blend, one opacity -
+  a separate rim bloom and wide wash were two of everything). Measured at dusk
+  (0.82): the disc is at 40% opacity and the glow at 0.23, so it is a dim moon, not
+  a white lamp; at 0.97 the disc is at 1 and the glow at 0.79.
+  (![moon](screenshots/title-moon.png)).
+- **The tree stands on the ground it is drawn on.** A drag that lifts the soil
+  lifts the trunk by the same amount: the plant was registered with a 0.2 share of
+  the near plane's vertical travel while the ground plane had none, so a 100 px
+  upward drag moved the plant 19.6 px against a still soil line. Now both take 0
+  vertically - measured during a 100 px diagonal drag: plant y 0.00, ground y 0.00,
+  the plant's foot 0.00 px from the soil line (that same measurement with the old
+  0.2 registration: plant y 19.55, foot 19.55 px off the soil).
+- **One body at a time.** Each disc fades on its own height rather than on a clock
+  switch, so at the dawn/dusk swap both are at the horizon and both at zero: the
+  sun's crossfade no longer leaves the moon in the sky with it. Measured across the
+  swap: sun 0.70 -> 0.27 -> 0.00 while the moon stayed 0.00.
+- **The moon's face has detail.** Nine maria at blur 1.1 (was six at 2.0) over a
+  faint highlands lift - crisp enough to read as rock at 76 px without the bubble
+  rings. A 1-2 px grain pass went: below what a 76 px disc can show.
+- **The reaches are roots.** They leave the crown the plate draws under the trunk
+  (x 46-54, y 1-4), are the plate's thickness (half-width 0.16-0.22 against
+  0.4-0.5 before), dive to about half the find's depth before travelling, and fork:
+  two branches with two feeders each plus three short ones, in the plate's tip
+  colour (![roots](screenshots/title-roots.png)).
+- **The reaches join the tree.** They leave the crown at the soil line under the
+  trunk's foot (the layer used to be clipped six pixels below the line, so every
+  reach began in open dirt), flare to twice their width over the first tenth of the
+  run so they merge into the plate's crown, and carry a small waver instead of one
+  perfect arc. Thickness is 0.2-0.28 half-width with the plate's own taper, and the
+  forks are unchanged in kind: two branches with feeders each, plus three short ones.
+- **What the title costs per frame, measured.** Paired toggling in one page (14
+  frames per sample, three alternating rounds): moon shown 16.84 ms vs hidden
+  16.73 ms; reaches shown 33.3 vs hidden 33.2; rain/wet/splash shown 33.2 vs hidden
+  33.2; the 3D world draws 0 frames while the title is up. None of these layers is
+  the frame cost - the machine's own rate swings by 4x in blocks, and the first
+  sample after a change is always the slow one.
+- **The reaches are visible and in the plate's own paint.** Nothing on them is
+  thinner than 0.1 units (about 2 px at zoom 1), the crown is 0.34-0.42, the body is
+  the plate's cream under the plate's own depth-fade mask, and the forks are its tip
+  colour - the brown depth gradient is gone. The main run stops 4.5 units short of a
+  find and four grips off its last fifth come onto the piece, so a treasure is held
+  by branches instead of spiked by a root's end.
+- **No two maria alike.** Every patch on the moon has its own rotation and aspect
+  (![moon](screenshots/title-moon.png)).
+- **The reaches are the plate's colour, to the value.** The plate's roots resolve
+  fixed cream / tan / ink (the palette vars never reach the plant element), so the
+  reaches use those same three values at the plate's 0.3 ink, the plate's depth-fade
+  mask, and the plate's whole grade - measured equal: body `rgb(239,227,205)` vs the
+  plate's `rgb(239,227,205)`, and `brightness(0.98) saturate(0.99) sepia(0.02)
+  hue-rotate(0deg)` on both.
+- **The reaches are built to the plate's numbers.** Centripetal Catmull-Rom with
+  reflected ends, waypoints under 4 units apart dropped, and the sampled spine
+  relaxed until no bend is tighter than 58 px: tightest radius 24-53 px against the
+  plate's 42-78 (it was 1-10). Branches leave at 31 degrees rather than 66, a root
+  carries two forks with one hair each plus the four grips that hold the find, and
+  the body is 52% of its base at half way and 27% at nine tenths, against the plate's
+  56% and 9%. Path coordinates are written to two decimals: at one decimal a curve
+  through them had a corner at every sample, which no amount of smoothing fixed.
+- **The reaches follow the plate's rules by construction.** Both coordinates only
+  ever increase: the roots leave the trunk's foot on the soil line (x 48.7-51.3),
+  never rise (0.00 units of rise over all eight), never double back (0.00 units) and
+  never bend tighter than 80 px, against the plate's 42-78. That is one monotone
+  cubic through three knots - the Catmull-Rom, the waver, the waypoint filter and the
+  1200-pass relaxation are all deleted.
+- **Nothing on a reach fades out.** The body, the branches and the hairs each carry a
+  non-scaling stroke (1.4 / 0.8 / 0.6 px, divided by the camera's zoom so it survives
+  the world transform): at a 390 px phone width, where a unit is 3.9 px and the
+  tapered tip is 0.7 px, the centreline still draws at 1.4 px.
+- **Out first, then down - the plate's own profile.** A reach now leaves the trunk's
+  foot nearly level and steepens as it travels, the way a plate lateral does, instead
+  of diving first and then running flat like a spoke. It is still one monotone cubic:
+  out and down, never back, never up.
+- **Visible at every zoom.** The wheel's limit is measured at 0.550 and a 390 px phone
+  puts a unit at 3.9 px; the body keeps a 2 px centreline on screen and the branches
+  and hairs 1.2 / 1.0 px, while the depth fade now ends at 0.72 instead of the plate's
+  0.50 so the deep end of a reach is not a ghost.
+- **Zooming is not paying for the roots any more.** Measured paired at a fixed
+  zoom: the reaches layer cost up to 20 ms of the worst frame (shown 27-49 ms against
+  19-27 ms hidden). The group mask is now three fill gradients with the same ramp and
+  colours, and the layer's colour grade is dropped while the camera moves; after the
+  change shown and hidden are 23 and 22 ms.
+- **Roots are named `a_1`, `a_2`, `b_3`.** A run is a letter in burial order and each
+  branch is numbered under it, with its kind (`fork`, `grip`, `hair`) - in the data
+  (`RootRun.name`, `RootRun.branches`) and in the DOM (`data-root="a"`,
+  `data-branches="a_1 a_2 ..."`), so a rule can name the exact branch it is about.
+- **The title opens on the whole scene, not a crop.** The camera rests at the fit
+  zoom (0.55), where the world is exactly the pane's height, so the sky above the
+  crown, the soil band and the menu under it are all on screen at load; `+`/wheel
+  still move in, and `0`/Space bring it back to the fit rather than to a crop.
+- **The sun and moon no longer jump.** A body that has gone down keeps the place
+  where it set while it fades (it used to slide to the arc's top-left corner), and
+  the sky refuses to run the discs backwards when a clock tick lands behind the
+  frame-by-frame extrapolation, so the flicker on the tick rhythm is gone too.
+- **The title's hero column is centred and the whole scene is on screen**: at the
+  real pane size the column's centre is 0px from the pane's centre, and the camera
+  rests at the fit zoom where the world is exactly the pane's height.
+- **The plant stays in the ground.** The plant and the care props pan with the
+  ground plane at the same 0.9 as the soil, the finds and the reaches, so a drag no
+  longer slides the trunk off its own roots.
+- **The reaches fan instead of stacking.** Each find row gets its own lane - a deeper
+  find leaves the crown lower, dives nearer the trunk and goes out under the pieces
+  above it - so the bottom pair on each side went from 0.13 units apart to 3.95.
+- **Every reach starts below the soil line** (1.7 to 3.3 units down, deeper row
+  deeper), not on it.
+- **Rain splashes where it lands.** The landing buckets are picked by each column's
+  share of the whole field now (they were compared against raw rates, which sent
+  every ring to the leftmost wet column). Rings span the full width - 0.35% to 95%
+  measured - and so do the snow drifts.
+- **Verified: the plant, roots, finds and props pan as one.** A 120px pointer drag
+  moves the plant, the ground plane and the care props by the same 71px.
+- **The ground holds the weather, from one ruleset.** Rain fills standing water in
+  the column it lands in and pools grow while it rains; snow settles slowly and
+  drifts deepen; both drain, melt or get washed away when the sky changes. The 2D
+  title and the 3D rain system call the same pure function
+  (`packages/shared/src/weather/surfaceCover.ts`), so the two skies leave the same
+  ground.
+- **Splashes and drifts follow the live field.** The landing histogram takes the
+  wind (a drop is carried downwind for its fall time), and the rings, pools and
+  drifts are re-placed when the wind or the intensity changes instead of staying
+  where the first shower landed. Measured: 3.70-99.20% at build, 0.73-98.62% once
+  the live weather ruled.
+- **Measured ground growth on the title:** rain 3 pools (4.4-5.9% wide) then 6
+  pools (up to the 12% cap); snow 3 drifts (2.2-3.5 px) deepening to 4.1 px; clear
+  sky drains the pools to none and melts the drifts back down. 60 fps / 16.7 ms
+  with all of it running.
+- **The world's puddles were measured, not assumed.** `__pl.groundCover()` (dev
+  handle) reports the 3D ground cover: it read 0 at load, 0.956 after 21 s of the
+  scheduled rain and 1.0 after 77 s, then 0.371 once the storm had passed - the
+  same rules the title runs, filling and draining on the same rates.
+- **One ruleset, no dead knobs.** `surfaceCover` keeps the five rules it runs: the
+  unused snow-soak term, `hasCover` and the never-used `rules` override are gone,
+  and the docblock describes exactly what the code does.
+- **The title's ground has a life on it.** Four seasonal flower clumps, two
+  mushroom clusters that come up after rain, a barrel that holds what the ground
+  holds, a lamp that comes on at dusk, a mill turning on the mid ridge, birds by day
+  and bats by night, a rabbit in the near field and a worm in the cut. Every one is
+  code-drawn SVG switched by `ui/title/scenery.ts`, whose gates are pure and tested
+  (8 tests); the mushrooms puff spores and the rabbit hops when pressed. Two props
+  were cut after looking at the picture: the windsock said what the flowers' sway
+  and the mill's sails already said, at a tenth of the size, and the beetle read as
+  a smudge beside the finds.
+- **The props answer the world, not a timer.** The lane reads the palette's star
+  (day/night), the weather's rain (animals shelter), the ground's own soak from the
+  shared cover rules (mushrooms, the worm, the barrel) and the world's season number
+  (which flowers are out). Measured in the running title: day 0.38 gives blooms 1.00
+  / birds 1.00 / lamp 0.00 / rabbit 1.00; hour 0.86 gives the lamp 0.62 with its
+  glass at 0.67; and 26 s of rain gave soak 0.34, mushrooms 0.98, worm 0.57 and
+  6.9 px of water in the barrel. The gates were low enough to be reached by then -
+  at the first thresholds that shower left both the mushrooms and the worm hidden.
+- **The verge belongs to the ground it stands on.** The prop band and the soil layer
+  are registered at the ground plane's 0.9 share, so a drag slides them with the
+  soil, the plant and the finds instead of leaving them behind: measured, a 120 px
+  drag moved the outskirts and the soil `-105.23px`, the same translation as the
+  ground plane, while the near ridge took its own -116.93. The mill and the rabbit
+  live inside the mid and near layers and ride those depths. The three states are
+  photographed in `docs/screenshots/title-scenery-day.png`, `-dusk.png` and
+  `-rain.png`.

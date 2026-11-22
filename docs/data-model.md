@@ -4,11 +4,13 @@
 **Source of truth:** DESIGN.md Appendix H.
 
 Every gameplay table carries `world_id`. All item and Spore mutations must use
-row-level locks (RULE_17). The current inventory is the one exception and is a
-documented defect: it lives in memory only, so no economy code may build on it
-until T08A is completed ([`tasks/T08A.md`](./tasks/T08A.md)). Its local model
-now validates counts, stack limits and slot bounds, but there is no inventory
-table, row locking or restart survival yet.
+row-level locks (RULE_17). Two live stores break that rule today and are
+documented defects: the inventory pouch and the spore purse are in memory, and
+the shop (`ops/shop.ts`) already grants items and spends spores through them.
+The local models validate counts, stack limits, slot bounds and the purse cap,
+but there is no inventory or purse table, no row locking and no restart
+survival. That is the open half of T08A ([`tasks/T08A.md`](./tasks/T08A.md));
+T14/T29/T45 must not build on it until it is transactional.
 
 ## Locked decisions
 

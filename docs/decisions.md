@@ -1846,3 +1846,59 @@ without a resize.
 **Consequences.** The scale is correct on the first painted frame. Any future value
 that depends on the pane belongs in that one function rather than in a second resize
 listener: a listener that never fires on layout is a value that never gets set.
+
+## ADR-076 — Proposed: the planet is sized by its horizon, not by its orbit
+
+**Status: proposed — awaiting the owner's decision. This is not an accepted record, and
+`planet_radius_m` is unchanged.**
+
+**Context.** The world is a 100 km sphere with 620 m of authored ground, so the horizon
+at eye height (583 m) and the ground's rim agree and there is no visible edge. An
+Earth-sized procedural planet demo raised the question of growing it. The number a
+player feels is not the radius but `sqrt(2Rh)`: 583 m at 100 km, 1.17 km at 400 km,
+4.65 km at Earth radius. The authored ground has to reach the horizon or the relief runs
+out and a smooth body carries on. Separately, patch vertices used to be stored in the
+planet's local space, so a vertex's height was about `radius` and float32 quantised it
+at `R × 2⁻²³` — 7.8 mm at 100 km, 0.5 m at Earth radius.
+
+**Proposal.** Keep the walkable radius at 100,000 m for now. Render the orbit view as a
+body shell whose radius may differ from the simulation's. Before any increase, build the
+ring clipmap that the deleted `tile_size_m` / `tile_vertices` / `lod_distances_m` keys
+described. The next permitted size would be 200–400 km, which extends the authored ground
+to the new horizon and needs no change to the server's planar frame. Earth-size would be
+a separate product decision and would start with a reversed-Z depth experiment, not with
+terrain.
+
+**If approved.** Growing the world is priced as content — authored ground out to the
+horizon — rather than as a precision problem, because the precision fix is cheap and
+independent of size. The orbit look can be tuned without touching gameplay. Raising
+`planet_radius_m` past 400 km would mean revisiting this record, the clipmap's ring count
+and the depth range in the same change. The arithmetic and the staged plan are in
+[planet-scale.md](./planet-scale.md).
+
+**Landed while it waits (P0, 2026-11-21).** Patch and soil-slab vertices now store metres
+above the pole's tangent plane, with the radius in the mesh placement and in the collider's
+translation; the three dead tile keys were deleted from `config/terrain.json` and
+`clientConfig.ts`. Neither change depends on the size decision.
+
+## ADR-077 — Proposed: the orbit view is a camera path, not a second world
+
+**Status: proposed — awaiting the owner's decision. Orbit is still the dev action
+described below.**
+
+**Context.** Orbit is a dev action today: it saves and swaps near/far, moves the camera
+to `3R` and rebuilds `OrbitControls`. Making it a feature means a continuous descent
+from orbit to grass onto the same ground the simulation validates against. The surface
+air model is analytic and shared by every surface material; a planet limb needs a
+raymarched atmosphere with ozone, which the surface cannot afford per fragment.
+
+**Proposal.** One camera on one LOD chain. No separate orbit terrain: the patch the
+camera lands on comes from the same `terrainHeightAt` the server uses. Two air models,
+blended by altitude — the analytic model for the surface, a raymarched single-scattering
+model for the orbit camera and the limb — and a body shell that may be drawn at a radius
+larger than the simulated one, because it is a rendering object.
+
+**If approved.** A descent cannot be shipped by fading between two pictures; it needs the
+clipmap and the depth range that make a continuous chain possible. The blend factor
+becomes the one place altitude-dependent rendering is decided, so a third model
+(volumetric cloud) joins by the same rule instead of by a second mode switch.

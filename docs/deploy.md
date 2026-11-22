@@ -88,8 +88,8 @@ curl.exe http://127.0.0.1:8080/health
 curl.exe http://127.0.0.1:8080/ready
 ```
 
-Expected: both 200; `/health` shows `"database":"ok"` and `"config_files":78`;
-`/ready` shows `"ready":true`. Compose auto-loads `ops/.env`; the server itself
+Expected: both 200; `/health` shows `"database":"ok"` and `"config_files":80`
+(the count is owned by `docs/tunables.md`); `/ready` shows `"ready":true`. Compose auto-loads `ops/.env`; the server itself
 reads `process.env` directly and has no dotenv loader (ADR-011).
 
 ## 4. Start the quick tunnel

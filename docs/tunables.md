@@ -104,21 +104,21 @@ owning task fills it.
 | `prestige` | T08B | stub | 0 |
 | `profiles` | T47 | stub | 0 |
 | `relics` | T18 | stub | 0 |
-| `render` | C01 | active | 132 |
+| `render` | C01 | active | 135 |
 | `reports` | T05 | active | 5 |
 | `reproduction` | T53 | stub | 0 |
 | `reputation` | T43 | stub | 0 |
 | `resources` | T00A | draft | 50 |
-| `root_sight` | T02 | active | 28 |
+| `root_sight` | T02 | active | 30 |
 | `session` | T08 | stub | 0 |
 | `shop` | C05 | active | 4 |
 | `spectating` | T30 | stub | 0 |
 | `spectating_ui` | T36 | stub | 0 |
 | `spectator` | T34 | stub | 0 |
-| `spores` | T13 | stub | 0 |
+| `spores` | T13 | active | 6 |
 | `status` | T46 | stub | 0 |
 | `symbiosis` | T09 | stub | 0 |
-| `terrain` | T25 | active | 36 |
+| `terrain` | T25 | active | 33 |
 | `territory` | T49 | stub | 0 |
 | `tumbling` | T06 | active | 10 |
 | `tutorial` | T33 | stub | 0 |
@@ -129,11 +129,11 @@ owning task fills it.
 | `world` | T03 | active | 17 |
 
 
-Total: **80 files**; 30 populated and 50 stubs (3 of them `draft`).
+Total: **80 files**; 31 populated and 49 stubs (3 of them `draft`).
 
 **This line owns the count.** Other documents link here rather than quoting a
 number (ADR-049).
-Populated: `accounts`, `chat`, `compliance`, `controls`, `daynight`, `dev`, `emotes`, `growth`, `items`, `net_proto`, `network`, `onboarding`, `ops`, `physics`, `plant_renderer`, `render`, `reports`, `resources`, `root_sight`, `terrain`, `ui`, `water`, `weather`, `world`.
+Populated: `accounts`, `chat`, `compliance`, `controls`, `damage`, `daynight`, `dev`, `emotes`, `growth`, `items`, `mutations`, `mutation_visuals`, `net_proto`, `network`, `onboarding`, `ops`, `physics`, `plant_renderer`, `render`, `reports`, `resources`, `root_sight`, `shop`, `spores`, `terrain`, `tumbling`, `ui`, `uproot`, `water`, `weather`, `world`.
 
 ## Approved V5.4 config files (not created yet)
 
