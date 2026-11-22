@@ -17,6 +17,8 @@ describe('looking up off the ground', () => {
     dampingFactor: 0.14,
     deltaTimeS: 0.016,
     atCeiling: true,
+    handOffS: 0,
+    releaseAfterS: 0.45,
   };
 
   it('eases into the pitch instead of snapping to the drag', () => {
@@ -56,9 +58,14 @@ describe('looking up off the ground', () => {
     assert.ok(capped.appliedRad <= base.maxRad);
   });
 
-  it('holds when idle, and ignores a downward drag at the ceiling', () => {
-    const held = stepLookUpPitch({ ...base, targetRad: 0.4, appliedRad: 0.4 });
-    assert.ok(close(held.targetRad, 0.4), 'an idle view at the ceiling must not drift');
+  it('holds inside the grace period, and ignores a downward drag at the ceiling', () => {
+    const held = stepLookUpPitch({
+      ...base,
+      targetRad: 0.4,
+      appliedRad: 0.4,
+      handOffS: 0.3,
+    });
+    assert.ok(close(held.targetRad, 0.4), 'a pause between drags must not unwind the view');
     const down = stepLookUpPitch({
       ...base,
       targetRad: 0.4,
@@ -86,6 +93,36 @@ describe('looking up off the ground', () => {
     }
   });
 
+  it('eases back once the hand has been off the orbit', () => {
+    // Letting go is the release. Without it the pitch waited for a downward drag
+    // forever, so walking away left the camera tilted at the sky.
+    const released = stepLookUpPitch({
+      ...base,
+      targetRad: 1.0,
+      appliedRad: 1.0,
+      atCeiling: false,
+      handOffS: base.releaseAfterS + 0.05,
+      deltaTimeS: 0.1,
+    });
+    assert.ok(close(released.targetRad, 0.6), `target ${released.targetRad}`);
+    assert.ok(released.appliedRad < 1.0, 'the drawn pitch eases down after the target');
+  });
+
+  it('eases back at the ceiling too, so the sky view cannot stay stuck', () => {
+    // The eye stays near the soil while the player walks off, so the orbit can
+    // remain against its ceiling for the whole walk: gating the release on being
+    // free would keep exactly the stuck view this fixes.
+    const released = stepLookUpPitch({
+      ...base,
+      targetRad: 1.2,
+      appliedRad: 1.2,
+      atCeiling: true,
+      handOffS: 1,
+      deltaTimeS: 0.1,
+    });
+    assert.ok(close(released.targetRad, 0.8), `target ${released.targetRad}`);
+  });
+
   it('gives the pitch back on a downward drag', () => {
     const free = stepLookUpPitch({
       ...base,
@@ -93,6 +130,7 @@ describe('looking up off the ground', () => {
       appliedRad: 0.5,
       atCeiling: false,
       upDragRad: -0.05,
+      handOffS: 0.2,
       deltaTimeS: 0.1,
     });
     assert.ok(close(free.targetRad, 0.1), `target ${free.targetRad}`);
@@ -134,6 +172,8 @@ describe('looking up off the ground', () => {
       decayPerSecond: Number.NaN,
       dampingFactor: Number.NaN,
       deltaTimeS: Number.NaN,
+      handOffS: Number.NaN,
+      releaseAfterS: Number.NaN,
     });
     assert.ok(Number.isFinite(nan.targetRad) && Number.isFinite(nan.appliedRad));
   });

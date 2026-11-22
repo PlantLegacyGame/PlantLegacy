@@ -71,9 +71,11 @@ export function createGpuTimer(gl: WebGL2RenderingContext | null | undefined): G
       : typeof ext.endQueryEXT === 'function'
         ? (target: number) => ext.endQueryEXT?.(target)
         : null;
+  // `QUERY_RESULT_AVAILABLE` comes back as a **boolean** in WebGL2 and
+  // `QUERY_RESULT` as a number, so the return type is honestly both.
   const queryParameter =
     typeof gl.getQueryParameter === 'function'
-      ? (query: WebGLQuery, pname: number) => gl.getQueryParameter(query, pname) as number
+      ? (query: WebGLQuery, pname: number) => gl.getQueryParameter(query, pname) as number | boolean
       : typeof ext.getQueryParameterEXT === 'function'
         ? (query: WebGLQuery, pname: number) => ext.getQueryParameterEXT?.(query, pname) ?? 0
         : null;
@@ -91,7 +93,15 @@ export function createGpuTimer(gl: WebGL2RenderingContext | null | undefined): G
     const query = pending;
     try {
       const disjoint = gl.getParameter(ext.GPU_DISJOINT_EXT) as boolean;
-      const done = queryParameter(query, gl.QUERY_RESULT_AVAILABLE) !== 0;
+      // Read it for what it is. The old test was `!== 0`, and a boolean `false`
+      // passes that (`false !== 0` is true), so every query counted as finished
+      // on its very first poll: the result was read while the GPU still held it
+      // (0), the query was deleted, and a new one started next frame. That is
+      // why `readMs()` returned null on a driver whose timer queries work - a
+      // raw query in the same page reports 67.8 us. A result is ready only when
+      // the driver says `true` (or a non-zero number, for older shapes).
+      const available = queryParameter(query, gl.QUERY_RESULT_AVAILABLE);
+      const done = available === true || (typeof available === 'number' && available !== 0);
       if (!done) {
         // A disjoint event invalidates every outstanding query; drop it so the
         // next frame starts cleanly instead of waiting forever.
@@ -102,7 +112,7 @@ export function createGpuTimer(gl: WebGL2RenderingContext | null | undefined): G
         return;
       }
       if (!disjoint) {
-        const ns = queryParameter(query, gl.QUERY_RESULT);
+        const ns = queryParameter(query, gl.QUERY_RESULT) as number;
         if (Number.isFinite(ns) && ns > 0) lastMs = ns / 1e6;
       }
       gl.deleteQuery(query);

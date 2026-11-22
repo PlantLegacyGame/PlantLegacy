@@ -60,8 +60,21 @@ export interface LookUpPitchInput {
   maxRad: number;
   /** How much of the drag the pitch takes, 0..1. */
   gain: number;
-  /** How fast the pitch unwinds once the orbit is free, radians/second. */
+  /** How fast the pitch unwinds once it is released, radians/second. */
   decayPerSecond: number;
+  /**
+   * Seconds since the hand last steered the orbit; 0 while it is still down.
+   *
+   * The pitch is a held view, not a permanent one. It used to be given back only
+   * by a downward drag, so walking away left the camera tilted at the sky with
+   * nothing to bring it down again.
+   */
+  handOffS: number;
+  /**
+   * How long the hand must be off the orbit before the pitch eases back.
+   * A pause between two drags must not count as letting go.
+   */
+  releaseAfterS: number;
   /** Per-frame easing, the same number OrbitControls uses for its own glide. */
   dampingFactor: number;
   /** Frame time, seconds. */
@@ -97,20 +110,31 @@ export function stepLookUpPitch(input: LookUpPitchInput): LookUpPitchStep {
     const up = Number.isFinite(input.upDragRad) ? Math.max(0, input.upDragRad) : 0;
     const gain = Number.isFinite(input.gain) ? Math.min(1, Math.max(0, input.gain)) : 1;
     // Against the ceiling the orbit cannot take any more of the drag, so the
-    // camera does. A downward drag is the orbit's again - it can move away from
-    // the ceiling - and the pitch is given back once the orbit is free.
+    // camera does.
     if (up > 0) target = clamp(target + up * gain);
-  } else {
-    const deltaTime = Number.isFinite(input.deltaTimeS) ? Math.max(0, input.deltaTimeS) : 0;
-    const decay = Number.isFinite(input.decayPerSecond) ? Math.max(0, input.decayPerSecond) : 0;
-    // A downward drag is the request to look back down, and it gives the pitch
-    // back at the rate it was spent. Being free is *not* a request: the ceiling is
-    // solved per azimuth, so yawing on a slope moved it and unwound the pitch
-    // under a player who only turned - and with the pitch gone the camera aimed at
-    // its target again, which is the view flipping down onto the plant.
-    const down = Number.isFinite(input.upDragRad) ? Math.min(0, input.upDragRad) : 0;
-    if (down < 0) target = clamp(target - decay * deltaTime);
   }
+
+  const deltaTime = Number.isFinite(input.deltaTimeS) ? Math.max(0, input.deltaTimeS) : 0;
+  const decay = Number.isFinite(input.decayPerSecond) ? Math.max(0, input.decayPerSecond) : 0;
+  // A downward drag is the request to look back down, and it gives the pitch back
+  // at the rate it was spent. So does a hand that has left the camera: the pitch
+  // used to wait for a downward drag forever, so walking away left the view tilted
+  // at the sky with nothing to bring it back. Being free is *not* enough on its
+  // own - the ceiling is solved per azimuth, so yawing on a slope moved it under a
+  // held pitch and the view re-aimed at the plant - so the release waits
+  // `releaseAfterS` after the last drag, and a drag of any direction restarts that
+  // wait. It also applies against the ceiling: the eye stays near the soil while
+  // the player walks off, so an orbit-gated release would leave the sky view stuck
+  // exactly where the complaint was.
+  const down = Number.isFinite(input.upDragRad) ? Math.min(0, input.upDragRad) : 0;
+  const handOff = Number.isFinite(input.handOffS) ? Math.max(0, input.handOffS) : 0;
+  const releaseAfter = Number.isFinite(input.releaseAfterS)
+    ? Math.max(0, input.releaseAfterS)
+    : Number.POSITIVE_INFINITY;
+  // A downward drag *at* the ceiling is the orbit's again - it can move away from
+  // it - so the pitch answers that drag once the orbit has left the ceiling.
+  const downRelease = down < 0 && !input.atCeiling;
+  if (downRelease || handOff >= releaseAfter) target = clamp(target - decay * deltaTime);
 
   const ease = Number.isFinite(input.dampingFactor)
     ? Math.min(1, Math.max(0, input.dampingFactor))

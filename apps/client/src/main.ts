@@ -8307,8 +8307,15 @@ const CAMERA_MIN_POLAR_ANGLE = 0.0005;
  * At that angle the sky is overhead and the plant is out of frame.
  */
 const LOOK_UP_PITCH_MAX_RAD = 1.31;
-/** How fast that pitch unwinds once the orbit is free again, radians/second. */
+/** How fast that pitch unwinds once it is released, radians/second. */
 const LOOK_UP_PITCH_RETURN_RAD_PER_S = 4;
+/**
+ * How long the hand must be off the orbit before the look-up pitch eases back,
+ * seconds. It used to wait for a downward drag and never came back on its own, so
+ * walking away left the camera tilted at the sky. Short enough that leaving the
+ * view comes back with you, long enough that a pause between two drags holds it.
+ */
+const LOOK_UP_PITCH_RELEASE_AFTER_S = 0.45;
 /**
  * How much of a blocked drag the pitch takes. Handing over the whole drag made
  * looking up race compared with the orbit that led into it; a little over half
@@ -8367,10 +8374,13 @@ let controls = createControls();
 let orbitUpDragRad = 0;
 let orbitDragPointer: number | null = null;
 let orbitDragLastY = 0;
+/** When the hand last moved the orbit, for the look-up pitch's release. */
+let orbitDragLastMoveMs = 0;
 
 function trackOrbitUpDrag(): void {
   const element = renderer.domElement;
   element.addEventListener('pointerdown', (event) => {
+    orbitDragLastMoveMs = performance.now();
     if (event.pointerType !== 'mouse') return;
     // Only the buttons OrbitControls rotates with; right-drag pans (see
     // `createControls`), so it must not tilt the view.
@@ -8382,6 +8392,7 @@ function trackOrbitUpDrag(): void {
     if (orbitDragPointer !== event.pointerId) return;
     const dy = event.clientY - orbitDragLastY;
     orbitDragLastY = event.clientY;
+    orbitDragLastMoveMs = performance.now();
     // Dragging up raises the polar angle, which is the eye dropping towards the
     // soil and the view rising: `-dy` is the request to look up.
     orbitUpDragRad +=
@@ -11259,6 +11270,10 @@ function renderFrame(deltaTime: number): void {
   const upDragRad = orbitUpDragRad;
   orbitUpDragRad = 0;
   const orbitAtCeiling = controls.getPolarAngle() >= controls.maxPolarAngle - 0.02;
+  // A hand still on the orbit is 0, so holding the button keeps the pitch; a
+  // released one counts up and the view eases back down after the grace period.
+  const orbitHandOffS =
+    orbitDragPointer !== null ? 0 : Math.max(0, (performance.now() - orbitDragLastMoveMs) / 1000);
   const lookUp = stepLookUpPitch({
     targetRad: lookUpPitchTargetRad,
     appliedRad: lookUpPitchRad,
@@ -11267,6 +11282,8 @@ function renderFrame(deltaTime: number): void {
     maxRad: LOOK_UP_PITCH_MAX_RAD,
     gain: LOOK_UP_PITCH_GAIN,
     decayPerSecond: LOOK_UP_PITCH_RETURN_RAD_PER_S,
+    handOffS: orbitHandOffS,
+    releaseAfterS: LOOK_UP_PITCH_RELEASE_AFTER_S,
     // The controls' own glide, so the handover from orbit to pitch has the same
     // weight as the rotation that preceded it.
     dampingFactor: controls.dampingFactor,
