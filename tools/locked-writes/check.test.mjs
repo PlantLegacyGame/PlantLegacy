@@ -68,11 +68,30 @@ describe('checkLockedWrites', () => {
     const result = checkLockedWrites({
       files: new Map([['apps/server/src/main.ts', 'player.spores = 1;']]),
       allowed: new Map([
-        ['apps/server/src/main.ts', 'adoption'],
-        ['apps/server/src/ops/ghost.ts', 'gone'],
+        ['apps/server/src/main.ts', { count: 1, reason: 'adoption' }],
+        ['apps/server/src/ops/ghost.ts', { count: 1, reason: 'gone' }],
       ]),
     });
     assert.match(result.errors.join('\n'), /ghost\.ts.*stale entry/);
+  });
+
+  it('rejects a new direct write in a file whose count is already pinned', () => {
+    const result = checkLockedWrites({
+      files: new Map([
+        ['apps/server/src/main.ts', 'player.spores = state.spores;\nplayer.spores = 99;'],
+      ]),
+      allowed: new Map([['apps/server/src/main.ts', { count: 1, reason: 'adoption' }]]),
+    });
+    assert.match(result.errors.join('\n'), /main\.ts has 2 direct pouch or purse write\(s\)/);
+    assert.match(result.errors.join('\n'), /pins 1/);
+  });
+
+  it('rejects a file that lost one of its pinned writes', () => {
+    const result = checkLockedWrites({
+      files: new Map([['apps/server/src/main.ts', 'player.spores = state.spores;']]),
+      allowed: new Map([['apps/server/src/main.ts', { count: 3, reason: 'adoption' }]]),
+    });
+    assert.match(result.errors.join('\n'), /main\.ts has 1 direct pouch or purse write\(s\)/);
   });
 });
 

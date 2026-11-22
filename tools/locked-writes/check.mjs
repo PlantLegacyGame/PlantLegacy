@@ -17,9 +17,10 @@
  * player is what a test does.
  *
  * The files that may still hold a live copy are listed in `ALLOWED` with the
- * reason each one is safe. An assignment in any other file fails, and an entry
- * that no longer matches anything is itself an error, so the list cannot go stale
- * quietly. Aliasing (`const inv = player.inventory; inv.slots[0] = …`) is out of
+ * reason each one is safe and the number of writes pinned for it. An assignment
+ * in any other file fails; so does a different count in a listed file (a new
+ * write, or a removed one); so does an entry that no longer matches. The list
+ * cannot grow or go stale quietly. Aliasing (`const inv = player.inventory; inv.slots[0] = …`) is out of
  * reach of a text scan; the file-level list is the backstop for that.
  *
  * Wired into `pnpm test` through `check.test.mjs`; run it alone with
@@ -34,25 +35,35 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 export const repoRoot = path.resolve(here, '../..');
 export const SOURCE_DIR = 'apps/server/src';
 
-/** Files that may touch a live pouch or purse, and why each is not a bypass. */
+/**
+ * Files that may touch a live pouch or purse, why each is not a bypass, and how
+ * many direct assignments the audit found there. The count is pinned so a new
+ * write in an already-allowed file still fails and has to be looked at.
+ */
 export const ALLOWED = new Map([
   [
     'apps/server/src/main.ts',
-    'adopts the committed row after COMMIT and builds the starting kit on a new player',
+    {
+      count: 3,
+      reason: 'adopts the committed row after COMMIT and builds the starting kit on a new player',
+    },
   ],
-  ['apps/server/src/ops/inventory.ts', 'the pouch primitives themselves'],
+  ['apps/server/src/ops/inventory.ts', { count: 5, reason: 'the pouch primitives themselves' }],
   [
     'apps/server/src/ops/persistence/playerStatePersistence.ts',
-    'builds a local array while converting a row, never a live player',
+    { count: 1, reason: 'builds a local array while converting a row, never a live player' },
   ],
   [
     'apps/server/src/ops/inventoryHandlers.ts',
-    'the guest / no-store fallback when a session has no row to lock',
+    { count: 2, reason: 'the guest / no-store fallback when a session has no row to lock' },
   ],
-  ['apps/server/src/ops/shop.ts', 'the guest / unavailable-row purchase fallback'],
+  [
+    'apps/server/src/ops/shop.ts',
+    { count: 1, reason: 'the guest / unavailable-row purchase fallback' },
+  ],
   [
     'apps/server/src/ops/persistence/playerStateAudit.ts',
-    'the Postgres audit builds its own players',
+    { count: 9, reason: 'the Postgres audit builds its own players' },
   ],
 ]);
 
@@ -138,11 +149,11 @@ export function checkLockedWrites({ root = repoRoot, allowed = ALLOWED, files } 
     );
 
   const writes = [];
-  const seen = new Set();
+  const perFile = new Map();
   for (const [file, source] of sources) {
     for (const write of findDirectWrites(source, file)) {
       writes.push(write);
-      seen.add(file);
+      perFile.set(file, (perFile.get(file) ?? 0) + 1);
     }
   }
 
@@ -154,11 +165,21 @@ export function checkLockedWrites({ root = repoRoot, allowed = ALLOWED, files } 
         'PlayerStateStore.mutate (docs/tasks/T08A.md §6)',
     );
   }
-  for (const file of allowed.keys()) {
+  for (const [file, rule] of allowed) {
     if (!sources.has(file)) {
       errors.push(`allowlist entry "${file}" names no scanned source file (stale entry)`);
-    } else if (!seen.has(file)) {
+      continue;
+    }
+    const actual = perFile.get(file) ?? 0;
+    if (actual === 0) {
       errors.push(`allowlist entry "${file}" writes no pouch or purse directly (stale entry)`);
+    } else if (actual !== rule.count) {
+      errors.push(
+        `${file} has ${actual} direct pouch or purse write(s); the allowlist pins ` +
+          `${rule.count} for "${rule.reason}". A new direct write belongs in ` +
+          'PlayerStateStore.mutate (docs/tasks/T08A.md §6); if it is a legitimate ' +
+          'live-object touch, raise the pin and say why.',
+      );
     }
   }
 
@@ -168,7 +189,8 @@ export function checkLockedWrites({ root = repoRoot, allowed = ALLOWED, files } 
 function report(result) {
   const lines = [
     '',
-    `locked writes: ${result.writes.length} direct write(s) in ${result.files} source file(s)`,
+    `locked writes: ${result.writes.length} direct write(s) in ${result.files} source file(s), ` +
+      `${ALLOWED.size} allowlisted file(s) at their pinned counts`,
   ];
   lines.push(...result.errors.map((entry) => `  ${entry}`));
   lines.push(
