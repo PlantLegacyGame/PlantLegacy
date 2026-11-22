@@ -27,11 +27,11 @@ export interface PlantCommandPorts {
   fillTissue(): number;
   fillStoredResources(): { water: number; minerals: number };
   /**
-   * Grants items through the locked stored mutation. Returns the count a grant
-   * would add, so the dev command can answer in the same command; the world
-   * syncs the pouch after the commit.
+   * Grants items through the locked stored mutation. Resolves with the count the
+   * row took and rejects when the write failed, so the answer is the commit and
+   * not a prediction.
    */
-  grantItem(itemId: string, count: number): number;
+  grantItem(itemId: string, count: number): Promise<number>;
   endSeason(): { season: string | number };
   /** Tops the plant up enough to grow; false when it no longer exists. */
   prepareRootGrowth(): boolean;
@@ -191,8 +191,13 @@ export function handlePlantCommand(
         typeof action.count === 'number' && Number.isFinite(action.count)
           ? Math.floor(action.count)
           : 1;
-      const added = ports.grantItem(itemId, count);
-      ports.respond(action.type, { ok: added > 0, itemId, added });
+      // The write is a locked stored mutation, so the answer is what Postgres
+      // committed. A failed write must reach the panel as a failure instead of
+      // hearing "applied" for a grant that never landed.
+      void ports.grantItem(itemId, count).then(
+        (added) => ports.respond(action.type, { ok: added > 0, itemId, added }),
+        () => ports.respond(action.type, { ok: false, error: 'grant_failed', itemId }),
+      );
       return true;
     }
     case 'dev_end_season': {

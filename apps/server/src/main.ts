@@ -66,7 +66,7 @@ import {
   swapInventorySlots,
   useInventorySlot,
 } from './ops/inventoryHandlers.ts';
-import { grantItemUnderLock, previewItemGrant } from './ops/itemGrant.ts';
+import { grantItemUnderLock } from './ops/itemGrant.ts';
 import { loadItemsConfig } from './ops/items.ts';
 import { createLogger } from './ops/log.ts';
 import { loadMutationsConfig } from './ops/mutations/config.ts';
@@ -3285,12 +3285,11 @@ class World {
         return { water: capacity.water, minerals: capacity.minerals };
       },
       grantItem: (itemId, count) => {
-        if (!player) return 0;
-        // The reply is dev-only and answers in this command, so it is planned
-        // here; the write is the same locked path as a purchase, and the sync
-        // that follows the commit carries the pouch the row actually holds.
-        const planned = previewItemGrant(this.itemsConfig, player.inventory.slots, itemId, count);
-        void grantItemUnderLock(
+        if (!player) return Promise.reject(new Error('no_player'));
+        // The answer is what the row committed, not what the live pouch would
+        // take, so a failed grant reaches the panel as a failure. The sync runs
+        // first, so the panel adopts the committed pouch along with the answer.
+        return grantItemUnderLock(
           {
             store: this.playerStateStore,
             accountId: player.accountId ?? null,
@@ -3307,18 +3306,19 @@ class World {
             if (this.players.get(player.playerId) === player) this.adoptPlayerState(player, state);
           },
         )
-          .then(() => {
+          .then((added) => {
             if (this.players.get(player.playerId) === player) {
               sendInventorySync(this.inventoryPorts(), player);
             }
+            return added;
           })
           .catch((error: unknown) => {
             this.log.error('dev item grant failed', {
               itemId,
               error: error instanceof Error ? error.message : String(error),
             });
+            throw error;
           });
-        return planned;
       },
       endSeason: () => ({ season: this.forceSeasonEnd(this.getTick()).season }),
       prepareRootGrowth: () => {

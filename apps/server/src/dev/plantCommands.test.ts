@@ -9,6 +9,11 @@ import {
 
 const both: PlantCommandContext = { hasPlant: true, hasPlayer: true };
 
+/** The dev grant answers after its locked write settles, which is one microtask batch. */
+function flush(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve));
+}
+
 function createPorts(overrides: Partial<PlantCommandPorts> = {}) {
   const calls: string[] = [];
   const responses: Array<{ action: string; payload: Record<string, unknown> }> = [];
@@ -39,7 +44,7 @@ function createPorts(overrides: Partial<PlantCommandPorts> = {}) {
       calls.push('stored');
       return { water: 10, minerals: 5 };
     },
-    grantItem: (itemId, count) => {
+    grantItem: async (itemId, count) => {
       calls.push(`item:${itemId}:${count}`);
       return 1;
     },
@@ -197,17 +202,37 @@ describe('handlePlantCommand', () => {
     assert.deepEqual(responses[0]?.payload.rejected, ['plant_gone']);
   });
 
-  it('grants items with a whole count and answers in the same command', () => {
+  it('grants items with a whole count and answers with what the row took', async () => {
     const { ports, calls, responses } = createPorts();
-    handlePlantCommand(ports, { type: 'dev_grant_item', itemId: 'seed', count: 2.7 }, both);
+    assert.equal(
+      handlePlantCommand(ports, { type: 'dev_grant_item', itemId: 'seed', count: 2.7 }, both),
+      true,
+    );
     assert.deepEqual(calls, ['item:seed:2']);
+    await flush();
     assert.deepEqual(responses[0]?.payload, { ok: true, itemId: 'seed', added: 1 });
   });
 
-  it('reports a refused item grant as not added', () => {
-    const { ports, responses } = createPorts({ grantItem: () => 0 });
+  it('reports a refused item grant as not added', async () => {
+    const { ports, responses } = createPorts({ grantItem: async () => 0 });
     handlePlantCommand(ports, { type: 'dev_grant_item', itemId: 'ghost' }, both);
+    await flush();
     assert.equal(responses[0]?.payload.ok, false);
+  });
+
+  it('tells the dev panel a failed grant failed, instead of the count it might have added', async () => {
+    const { ports, responses } = createPorts({
+      grantItem: async () => {
+        throw new Error('the row is gone');
+      },
+    });
+    handlePlantCommand(ports, { type: 'dev_grant_item', itemId: 'seed' }, both);
+    await flush();
+    assert.deepEqual(responses[0]?.payload, {
+      ok: false,
+      error: 'grant_failed',
+      itemId: 'seed',
+    });
   });
 
   it('ends the season whether or not there is a plant', () => {

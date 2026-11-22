@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import type { ItemDefinition } from '@plant-legacy/shared/schemas';
 import { createInventory, type Inventory } from './inventory.ts';
-import { grantItemUnderLock, previewItemGrant } from './itemGrant.ts';
+import { grantItemUnderLock } from './itemGrant.ts';
 import type { ItemsConfig } from './items.ts';
 import type {
   PersistedPlayerState,
@@ -55,21 +55,6 @@ function adopt(player: LivePlayer, state: PersistedPlayerState): void {
   }).slots;
   player.spores = state.spores;
 }
-
-describe('previewItemGrant', () => {
-  it('counts what a grant would add without changing the pouch it was given', () => {
-    const slots: PersistedPlayerState['slots'] = [
-      { itemId: 'starter_fertilizer', count: 9 },
-      null,
-      null,
-      null,
-    ];
-    const before = JSON.stringify(slots);
-    assert.equal(previewItemGrant(itemsConfig, slots, 'starter_fertilizer', 3), 3);
-    assert.equal(previewItemGrant(itemsConfig, slots, 'ghost', 1), 0);
-    assert.equal(JSON.stringify(slots), before, 'the preview must not write');
-  });
-});
 
 describe('grantItemUnderLock', () => {
   it('adopts the committed pouch, not the live pouch plus the plan', async () => {

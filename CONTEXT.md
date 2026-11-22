@@ -16,8 +16,8 @@ partial: the `player_state` restart copy persists an account's pouch and purse
 locked read-modify-writes that adopt the committed row rather than the plan
 (`ops/playerStateMutations.ts`, `ops/shopPurchase.ts`); an adoption hook that
 throws is logged as a repair instead of failing a committed write. The purchase,
-item-use and award audits pass
-against Postgres, and dev item grants use the same locked write; what remains is
+item-use, award and dev-grant audits pass
+against Postgres, and a failed dev grant now answers `grant_failed`; what remains is
 the trade/mail/list systems and the duplication audit; see `docs/tasks/T08A.md`.
 
 **2026-11-20/21 batch.** The economy got its first playable slice and the title
@@ -659,8 +659,8 @@ placement), and the three unread tile keys (`tile_size_m`, `tile_vertices`,
   account's pouch and purse now load from `player_state` after a restart; guests
   still reset to the configured starting state. Pouch and purse mutations are
   locked read-modify-writes that adopt the committed row, and the Postgres
-  audit for purchases, item use and awards passes, and dev item grants go through
-  the same locked write; the open parts of T08A are the trade/mail/list systems
+  audit for purchases, item use, awards and dev grants passes; the open parts of
+  T08A are the trade/mail/list systems
   and the duplication audit, not a shop bug.
 - **A drop pays once.** `ops/dropPickup.ts` owns the rule (a live drop pays its
   kind's rate and the store removes it; unknown, expired, replayed and

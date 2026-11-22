@@ -3,9 +3,10 @@
  *
  * Not a unit test: this needs a real database, because the property under audit
  * is that a change survives the transaction and comes back the same to the next
- * reader. It drives the real `useInventorySlot` handler and the shared award
- * through a real `PlayerStateStore`, then re-loads the row so every assertion is
- * about what Postgres committed rather than what the process believes.
+ * reader. It drives the real `useInventorySlot` handler, the shared award and
+ * the dev item grant through a real `PlayerStateStore`, then re-loads the row so
+ * every assertion is about what Postgres committed rather than what the process
+ * believes.
  *
  *   DATABASE_URL=postgres://plant:plant@127.0.0.1:5432/plant_legacy \
  *     node apps/server/src/ops/persistence/playerStateAudit.ts
@@ -25,6 +26,7 @@ import {
   type InventoryPorts,
   useInventorySlot,
 } from '../inventoryHandlers.ts';
+import { grantItemUnderLock } from '../itemGrant.ts';
 import type { ItemsConfig } from '../items.ts';
 import { awardSporesStored, mutatePlayerState } from '../playerStateMutations.ts';
 import type { SporeConfig } from '../spores.ts';
@@ -306,6 +308,79 @@ async function clampedWriteAdoption(store: PlayerStateStore, ownerId: string): P
   pass('clamped write', 'plan 5000 spores / 99 stack -> row and live copy 1000 / 10');
 }
 
+/**
+ * The dev grant is a locked write too: it must land in the row, the live pouch
+ * must adopt it, and two grants in flight must stop at the stack limit instead
+ * of overshooting it.
+ */
+async function devGrantRoundTrip(store: PlayerStateStore, ownerId: string): Promise<void> {
+  await store.save(ownerId, { slots: emptySlots, spores: 0 });
+  const player = await playerFrom(store, ownerId, 'p1');
+  const context = {
+    store,
+    accountId: ownerId,
+    unavailable: false,
+    itemsConfig,
+  };
+  const adopt = (state: PersistedPlayerState): void => {
+    player.inventory.slots = toInventory(state, storeOptions).slots;
+    player.spores = state.spores;
+  };
+
+  const added = await grantItemUnderLock(
+    {
+      ...context,
+      initial: toPersistedState(player.inventory, player.spores),
+      itemId: 'starter_fertilizer',
+      count: 3,
+    },
+    adopt,
+  );
+
+  const row = await store.load(ownerId);
+  assert.ok(row);
+  assert.equal(row.slots[0]?.count, 3, 'the row must hold the grant');
+  assert.equal(added, 3, 'the grant must answer with what the row took');
+  assert.equal(player.inventory.slots[0]?.count, 3, 'the live pouch must match the row');
+  pass('dev grant round trip', '3 fertilizer in the row, and the live pouch agrees');
+
+  // A fresh pouch, then two grants at once against a stack limit of 10: the
+  // row must clamp rather than overshoot, and the live stack must read back the
+  // clamped row. Nothing here waits for the other grant before planning.
+  await store.save(ownerId, { slots: emptySlots, spores: 0 });
+  const raced = await playerFrom(store, ownerId, 'p1');
+  const racedAdopt = (state: PersistedPlayerState): void => {
+    raced.inventory.slots = toInventory(state, storeOptions).slots;
+    raced.spores = state.spores;
+  };
+  await Promise.all([
+    grantItemUnderLock(
+      {
+        ...context,
+        initial: toPersistedState(raced.inventory, raced.spores),
+        itemId: 'starter_fertilizer',
+        count: 7,
+      },
+      racedAdopt,
+    ),
+    grantItemUnderLock(
+      {
+        ...context,
+        initial: toPersistedState(raced.inventory, raced.spores),
+        itemId: 'starter_fertilizer',
+        count: 7,
+      },
+      racedAdopt,
+    ),
+  ]);
+
+  const after = await store.load(ownerId);
+  assert.ok(after);
+  assert.equal(after.slots[0]?.count, 10, 'the row clamps the stack to its limit');
+  assert.equal(raced.inventory.slots[0]?.count, 10, 'the live stack must adopt the clamped row');
+  pass('concurrent dev grants', '7 + 7 -> 10 in the row, and the live pouch agrees');
+}
+
 async function main(): Promise<void> {
   const url = process.env.DATABASE_URL;
   if (!url) {
@@ -324,6 +399,7 @@ async function main(): Promise<void> {
     await dungPaysInTheSameRow(store, ownerId);
     await concurrentAwards(store, ownerId);
     await clampedWriteAdoption(store, ownerId);
+    await devGrantRoundTrip(store, ownerId);
     console.log('OK: every locked-path assertion held against Postgres.');
   } catch (error) {
     console.error('FAIL:', error instanceof Error ? error.message : error);
