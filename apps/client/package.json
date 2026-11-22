@@ -14,6 +14,7 @@
   "dependencies": {
     "@dimforge/rapier3d-compat": "^0.21.0",
     "@plant-legacy/input": "workspace:*",
+    "@plant-legacy/shared": "workspace:*",
     "three": "^0.187.0"
   },
   "devDependencies": {

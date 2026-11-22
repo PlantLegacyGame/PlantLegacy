@@ -26,6 +26,9 @@ importers:
       '@plant-legacy/input':
         specifier: workspace:*
         version: link:../../packages/input
+      '@plant-legacy/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
       three:
         specifier: ^0.187.0
         version: 0.187.0
