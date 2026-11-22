@@ -776,13 +776,16 @@ export class DamagePipeline {
       }
     }
 
-    // Keep the broadcast transform current so clients see the crawl and roll,
-    // but do not send 20 transforms a second for a plant that is only draining.
+    // Stream the pose every tick while the body is moving, so the crawl and the
+    // roll are drawn as motion. A quarter-rate stream was the 5 Hz stepping
+    // players saw: the client draws one packet's move over one tick, so at 5 Hz
+    // it drew a fifth of each step and then stood still for four. A settled
+    // body only repeats one pose, so that one keeps the slow heartbeat.
+    const moving = !state.tumbleSettled || state.phase === 'rerooting';
+    const broadcastEveryTicks = moving ? 1 : Math.max(1, Math.round(this.options.tickRateHz / 4));
     const previous = this.lastUprootBroadcast.get(plant.id);
     const shouldBroadcast =
-      !previous ||
-      previous.phase !== state.phase ||
-      tick - previous.tick >= Math.max(1, Math.round(this.options.tickRateHz / 4));
+      !previous || previous.phase !== state.phase || tick - previous.tick >= broadcastEveryTicks;
     if (shouldBroadcast) {
       this.lastUprootBroadcast.set(plant.id, { phase: state.phase, tick });
       this.events.push({

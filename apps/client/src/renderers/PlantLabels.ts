@@ -15,8 +15,12 @@ export interface PlantLabelLayer {
   setLabel(plantId: string, text: string): void;
   /** Move a tag, in world space, above the plant's head. */
   place(plantId: string, x: number, y: number, z: number): void;
-  /** Resize a tag so it stays readable at its distance from the camera. */
-  scaleLabel(plantId: string, width: number): void;
+  /**
+   * Size a tag so its text is {@link TARGET_TEXT_PX} tall on screen, wherever the
+   * camera is. Returns the tag's world height, so the caller can stand it on top
+   * of the plant instead of through it.
+   */
+  sizeLabel(plantId: string, metresPerPixel: number): number;
   remove(plantId: string): void;
   clear(): void;
   /** Number of tags currently drawn (dev diagnostics). */
@@ -30,44 +34,52 @@ interface LabelEntry {
   text: string;
 }
 
-// 1024 px wide for a ~4 m sprite: at that ratio the text is roughly 200 px
-// per metre, so it stays sharp when the tag is close to the camera. The old
-// 640 px canvas was upscaled by the sprite and read as blurry pixels.
-const CANVAS_WIDTH = 1024;
-const CANVAS_HEIGHT = 256;
+// The plate is drawn at the canvas's own size - the transparent margins the old
+// fixed 1024 px canvas carried are gone - so every texel belongs to a glyph or
+// its border. The sprite is then sized from the distance to keep the text at
+// TARGET_TEXT_PX, which is what makes a tag readable at 30 m and does not fill
+// the view at 3 m.
 const FONT_PX = 78;
 const TEXT_PADDING_PX = 34;
 const MAX_CHARS = 30;
+/**
+ * Height of the tag's text on screen, in CSS pixels. 22 was legible but a row of
+ * tags at 25 m filled the top of the frame and overlapped each other.
+ */
+const TARGET_TEXT_PX = 15;
 
-/** Draw one tag, truncated with an ellipsis instead of shrinking. */
+/** Draw one tag into a canvas sized to the plate, truncated with an ellipsis. */
 function paintLabel(canvas: HTMLCanvasElement, text: string): void {
   const ctx = canvas.getContext('2d');
   if (!ctx) return;
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-  if (!text) return;
 
   let shown = text;
   if (shown.length > MAX_CHARS) shown = `${shown.slice(0, MAX_CHARS - 1)}…`;
-
-  ctx.font = `600 ${FONT_PX}px system-ui, -apple-system, Segoe UI, sans-serif`;
+  const font = `600 ${FONT_PX}px system-ui, -apple-system, Segoe UI, sans-serif`;
+  ctx.font = font;
   const textWidth = ctx.measureText(shown).width;
-  const width = Math.min(CANVAS_WIDTH - 8, textWidth + TEXT_PADDING_PX * 2);
+  // Resizing resets the context state (font, fill styles), so it happens before
+  // anything is drawn and the font is set again afterwards.
+  const width = Math.max(2, Math.ceil(textWidth + TEXT_PADDING_PX * 2));
   const height = FONT_PX + TEXT_PADDING_PX;
-  const left = (CANVAS_WIDTH - width) / 2;
-  const top = (CANVAS_HEIGHT - height) / 2;
+  if (canvas.width !== width) canvas.width = width;
+  if (canvas.height !== height) canvas.height = height;
+  ctx.clearRect(0, 0, width, height);
+  if (!text) return;
 
+  ctx.font = font;
   ctx.fillStyle = 'rgba(8, 16, 12, 0.82)';
   ctx.strokeStyle = 'rgba(156, 222, 126, 0.95)';
   ctx.lineWidth = 6;
   ctx.beginPath();
-  ctx.roundRect(left, top, width, height, 34);
+  ctx.roundRect(3, 3, width - 6, height - 6, height / 2 - 3);
   ctx.fill();
   ctx.stroke();
 
   ctx.fillStyle = '#f2fbec';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.fillText(shown, CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 + 3);
+  ctx.fillText(shown, width / 2, height / 2 + 3);
 }
 
 export function createPlantLabelLayer(scene: THREE.Scene): PlantLabelLayer {
@@ -97,8 +109,6 @@ export function createPlantLabelLayer(scene: THREE.Scene): PlantLabelLayer {
         return;
       }
       const canvas = document.createElement('canvas');
-      canvas.width = CANVAS_WIDTH;
-      canvas.height = CANVAS_HEIGHT;
       paintLabel(canvas, text);
       const texture = new THREE.CanvasTexture(canvas);
       texture.colorSpace = THREE.SRGBColorSpace;
@@ -118,9 +128,9 @@ export function createPlantLabelLayer(scene: THREE.Scene): PlantLabelLayer {
       });
       const sprite = new THREE.Sprite(material);
       sprite.name = `plant-label:${plantId}`;
-      // Aspect follows the canvas: 1024 x 256 is 4:1, and the transparent rows
-      // above and below the plate keep the glyphs from being squashed.
-      sprite.scale.set(4.6, 1.15, 1);
+      // A placeholder until the first `sizeLabel`: the plate's own aspect, one
+      // metre of text by default.
+      sprite.scale.set(canvas.width / FONT_PX, canvas.height / FONT_PX, 1);
       sprite.renderOrder = 60;
       sprite.visible = false;
       scene.add(sprite);
@@ -134,10 +144,18 @@ export function createPlantLabelLayer(scene: THREE.Scene): PlantLabelLayer {
       entry.sprite.visible = true;
     },
 
-    scaleLabel(plantId: string, width: number): void {
+    sizeLabel(plantId: string, metresPerPixel: number): number {
       const entry = labels.get(plantId);
-      if (!entry) return;
-      entry.sprite.scale.set(width, width * 0.275, 1);
+      if (!entry) return 0;
+      if (!Number.isFinite(metresPerPixel) || metresPerPixel <= 0) return 0;
+      // The canvas is FONT_PX tall for one line of text plus padding, so scaling
+      // by TARGET_TEXT_PX / FONT_PX makes the glyphs exactly that many screen
+      // pixels whatever the tag's distance or the canvas's width.
+      const metresPerCanvasPixel = (TARGET_TEXT_PX / FONT_PX) * metresPerPixel;
+      const width = entry.canvas.width * metresPerCanvasPixel;
+      const height = entry.canvas.height * metresPerCanvasPixel;
+      entry.sprite.scale.set(width, height, 1);
+      return height;
     },
 
     remove,

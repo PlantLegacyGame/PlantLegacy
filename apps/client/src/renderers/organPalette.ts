@@ -35,6 +35,48 @@ export const ORGAN_ROLES = {
 
 export type OrganKey = keyof typeof ORGAN_ROLES;
 
+/**
+ * The organ a node type is drawn with.
+ *
+ * A trunk is the one shoot that is bark: it was drawn with the stem material, so a
+ * plant that unlocked the woody trunk still came out green above the soil line and
+ * the bark role painted nothing at all. Stems, branches and culms stay on
+ * foliage - a young hypocotyl and a green branch are not mature wood - and only
+ * the organ a mutation calls woody takes the bark role.
+ *
+ * Anything not listed here is drawn as bark, which is what the renderer's own
+ * fallback did before this table existed.
+ */
+export const ORGAN_ROLE_BY_NODE_TYPE: Record<string, OrganKey> = {
+  root: 'root',
+  radicle: 'root',
+  lateral_root: 'root',
+  rhizome: 'root',
+  pneumatophore: 'root',
+  tuber: 'root',
+  taproot: 'root',
+  root_hair: 'root',
+  stem: 'stem',
+  branch: 'stem',
+  culm: 'stem',
+  vine: 'stem',
+  thorn: 'stem',
+  stolon: 'stem',
+  trunk: 'bark',
+  leaf: 'leaf',
+  floating_leaf: 'leaf',
+  cotyledon: 'cotyledon',
+  flower: 'flower',
+  flower_centre: 'flowerCentre',
+  spore_sac: 'spore',
+  seed: 'seed',
+};
+
+/** Which organ material paints a node type. */
+export function organRoleForNodeType(nodeType: string): OrganKey {
+  return ORGAN_ROLE_BY_NODE_TYPE[nodeType.toLowerCase()] ?? 'bark';
+}
+
 /** Every organ's hex, resolved through its role. Throws on a role it lacks. */
 export function resolveOrganColours(palette: PaletteConfig): Record<OrganKey, string> {
   const roles = paletteRoleHexes(palette);

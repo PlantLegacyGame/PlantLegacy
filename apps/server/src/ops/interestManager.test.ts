@@ -96,10 +96,30 @@ describe('InterestManager - Client registration', () => {
     assert.equal(manager.getSubscribedCellCount('player_1'), 9);
   });
 
+  it('announces the surroundings of a client that has just joined', () => {
+    // Registering already puts the client in its cell, so the first position
+    // update used to answer "same cell, nothing changed" and in-range plants
+    // were never sent: a new player saw no one until they crossed a cell.
+    const fresh = createManager();
+    fresh.registerClient('joiner', 10, 10);
+
+    assert.equal(
+      fresh.updateClientPosition('joiner', 10, 10),
+      true,
+      'the first tick after registration has to announce what is already in view',
+    );
+    assert.equal(
+      fresh.updateClientPosition('joiner', 11, 11),
+      false,
+      'and only the first one: later moves inside the cell are not crossings',
+    );
+  });
+
   it('reports a cell crossing so newly visible plants can be announced', () => {
     const fresh = createManager();
     fresh.registerClient('player_1', 10, 10);
 
+    fresh.updateClientPosition('player_1', 20, 20); // the join announcement
     assert.equal(
       fresh.updateClientPosition('player_1', 20, 20),
       false,

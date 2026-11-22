@@ -31,8 +31,11 @@ import {
   nodeHealthStatus,
 } from '../ui/plantHealth.ts';
 import { type AtmosphereParams, DEFAULT_ATMOSPHERE } from './environment/atmosphere.js';
-import { applyAtmosphereToStandardMaterial } from './environment/standardAtmosphere.js';
-import { type OrganKey, resolveOrganColours } from './organPalette.ts';
+import {
+  applyAtmosphereToStandardMaterial,
+  cloneStandaloneMaterial,
+} from './environment/standardAtmosphere.js';
+import { type OrganKey, organRoleForNodeType, resolveOrganColours } from './organPalette.ts';
 import {
   geometryKey,
   lookAppliesTo,
@@ -285,39 +288,10 @@ export function applyOrganPalette(palette: PaletteConfig): void {
 const BASE_MATERIALS: THREE.MeshStandardMaterial[] = Object.values(ORGAN_MATERIALS);
 
 function baseMaterialFor(nodeType: string): THREE.MeshStandardMaterial {
-  switch (nodeType) {
-    case 'root':
-    case 'radicle':
-    case 'lateral_root':
-    case 'rhizome':
-    case 'pneumatophore':
-    case 'tuber':
-      return rootMaterial;
-    case 'leaf':
-      return leafMaterial;
-    case 'cotyledon':
-      return cotyledonMaterial;
-    case 'stem':
-    case 'branch':
-    case 'trunk':
-    case 'culm':
-    case 'vine':
-    case 'thorn':
-    case 'stolon':
-      return stemMaterial;
-    case 'floating_leaf':
-      return leafMaterial;
-    case 'flower':
-      return flowerMaterial;
-    case 'flower_centre':
-      return flowerCentreMaterial;
-    case 'spore_sac':
-      return sporeMaterial;
-    case 'seed':
-      return seedMaterial;
-    default:
-      return barkMaterial;
-  }
+  // The table lives with the roles, so "a trunk is bark" is testable without a
+  // renderer: this switch quietly sent the trunk to the stem material, and a
+  // woody plant came out green with the bark role unused.
+  return ORGAN_MATERIALS[organRoleForNodeType(nodeType)];
 }
 
 function isRootNodeType(nodeType: string): boolean {
@@ -799,7 +773,10 @@ export class MeshPlantRenderer {
     ].join(':');
     const cached = this.materialVariants.get(key);
     if (cached) return cached;
-    const material = baseMaterialFor(nodeType).clone();
+    // `cloneStandaloneMaterial`, not `.clone()`: the base carries the atmosphere
+    // bookkeeping, and a plain copy would arrive with it flattened by JSON and
+    // throw when the patcher below wrote its uniforms.
+    const material = cloneStandaloneMaterial(baseMaterialFor(nodeType));
     applyNodeHealthLook(material, health);
     // Before the atmosphere patch, which chains whatever is already here.
     if (usesSoilRamp(nodeType)) applySoilRamp(material);
@@ -807,7 +784,7 @@ export class MeshPlantRenderer {
     // chains whatever is already attached.
     const type = nodeType.toLowerCase();
     if (type === 'leaf' || type === 'cotyledon') applyLeafTranslucency(material);
-    // `.clone()` does not carry the fog patch across, so each new variant is
+    // A copy does not carry a shader patch across, so each new variant is
     // attached to the shared atmosphere as it is created.
     applyAtmosphereToStandardMaterial(material, atmosphereParams, atmosphereSunDir);
     // Only the mutation's own organs are repainted: "variegated foliage" must

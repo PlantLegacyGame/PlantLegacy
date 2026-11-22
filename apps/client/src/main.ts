@@ -77,7 +77,7 @@ import { playerWorldY, spawnPlayer, stepPlayerVertical } from './physics/playerP
 import { plantPhysicsSync, rapierWorld } from './physics/RapierPhysicsManager.js';
 import { cavityEscapeLiftY, clampToCavity } from './player/burrowClamp.ts';
 import { aimLiftY } from './player/cameraAim.js';
-import { solveGroundCeiling } from './player/cameraOrbit.js';
+import { solveGroundCeiling, stepLookUpPitch } from './player/cameraOrbit.js';
 import { ownBodyNodes, resolveOwnAnchor } from './player/ownPlantAnchor.js';
 import { recenterOffset } from './player/recenterView.js';
 import { decideAutoOpenRootSight } from './player/rootSightAutoOpen.js';
@@ -1815,14 +1815,18 @@ function updatePlantLabelPositions(): void {
     const cx = sx / count;
     const cz = sz / count;
     const distance = camera.position.distanceTo(new THREE.Vector3(cx, topY, cz));
-    // Sprites shrink with distance. Growing them with the distance keeps the
-    // tag about the same size on screen, so a far row is still readable and a
-    // plant right in front of the camera does not fill the view.
-    const scale = Math.min(9, Math.max(2.2, distance * 0.16));
     const label = plantLabels;
     if (distance > 90) continue;
-    label.scaleLabel?.(plantId, scale);
-    label.place(plantId, cx, topY + 0.6 + scale * 0.12, cz);
+    // Size the tag in *screen* pixels rather than in metres. Growing a sprite
+    // with distance (the old 0.16 m per metre, floored at 2.2 m) only kept its
+    // plate roughly constant: a 16-character name came out under 6 screen pixels
+    // per glyph, which is a smear at native resolution and unreadable once the
+    // quality band is downscaling. A pixel size is the thing to hold constant.
+    const viewportHeightPx = Math.max(1, renderer.domElement.clientHeight);
+    const halfFovTan = Math.tan((camera.fov * Math.PI) / 360);
+    const metresPerPixel = (2 * halfFovTan * Math.max(0.1, distance)) / viewportHeightPx;
+    const tagHeight = label.sizeLabel?.(plantId, metresPerPixel) ?? 0;
+    label.place(plantId, cx, topY + 0.25 + tagHeight / 2, cz);
   }
 }
 
@@ -8192,13 +8196,28 @@ camera.lookAt(0, 0, 0);
  */
 const CAMERA_MIN_POLAR_ANGLE = 0.06;
 
+/**
+ * Ceiling on the pitch a blocked orbit may spend looking up, radians (~75°).
+ * At that angle the sky is overhead and the plant is out of frame.
+ */
+const LOOK_UP_PITCH_MAX_RAD = 1.31;
+/** How fast that pitch unwinds once the orbit is free again, radians/second. */
+const LOOK_UP_PITCH_RETURN_RAD_PER_S = 4;
+/** Extra pitch currently spent looking up off the ground, radians. */
+let lookUpPitchRad = 0;
+
 /** Settings every OrbitControls instance starts with, including rebuilt ones. */
 function createControls(): OrbitControls {
   const created = new OrbitControls(camera, renderer.domElement);
   created.enableDamping = true;
   created.dampingFactor = 0.05;
   created.enablePan = true;
-  created.screenSpacePanning = true;
+  // Ground-plane pan, not screen-plane. A screen-space pan slides the whole rig
+  // along the camera's tilted plane, so a right-drag towards the soil drove the
+  // eye into the terrain, where the ground clamp held it and the drag stopped
+  // doing anything. Panning across the ground keeps the eye's height, so the
+  // right-drag answers everywhere, including from ground level.
+  created.screenSpacePanning = false;
   // Mouse: left-drag orbits, middle-drag orbits, right-drag pans (left click
   // still selects). Touch: one-finger drag pans world, two-finger orbits/zooms.
   created.mouseButtons = {
@@ -11018,6 +11037,27 @@ function renderFrame(deltaTime: number): void {
     }
     controls.minDistance = cameraMinDistanceEased;
   }
+  // An orbit camera always looks at its target, and the target sits on the
+  // ground: once the eye is down on the soil no polar angle is left that points
+  // at the sky, so the ground ceiling stopped an upward drag dead and the view
+  // could not rise any further. Spend the rotation the ceiling swallowed as
+  // pitch on the camera itself, so the drag keeps tilting the view up.
+  const pendingOrbitPitch =
+    (controls as unknown as { _sphericalDelta?: { phi: number } })._sphericalDelta?.phi ?? 0;
+  const appliedOrbitPitch =
+    pendingOrbitPitch * (controls.enableDamping ? controls.dampingFactor : 1);
+  const orbitAtCeiling = controls.getPolarAngle() >= controls.maxPolarAngle - 0.02;
+  lookUpPitchRad = stepLookUpPitch({
+    currentRad: lookUpPitchRad,
+    blockedRad: orbitAtCeiling
+      ? controls.getPolarAngle() + appliedOrbitPitch - controls.maxPolarAngle
+      : 0,
+    releaseRad: pendingOrbitPitch < 0 ? -appliedOrbitPitch : 0,
+    atCeiling: orbitAtCeiling,
+    maxRad: LOOK_UP_PITCH_MAX_RAD,
+    decayPerSecond: LOOK_UP_PITCH_RETURN_RAD_PER_S,
+    deltaTimeS: deltaTime,
+  });
   controls.update();
   resolveCameraCollision();
   // Drops bob and fade on their own clock; the server still owns their life.
@@ -11040,7 +11080,12 @@ function renderFrame(deltaTime: number): void {
   // Lean the view up when the eye is down on the soil (see `applyCameraAim`),
   // after every clamp has placed the eye and before the dev pose, which owns its
   // own look direction.
-  if (!cavityProbe.held()) applyCameraAim();
+  if (!cavityProbe.held()) {
+    applyCameraAim();
+    // A camera looks along its local -Z: a positive turn about its own X lifts
+    // that direction towards +Y, which is up.
+    if (lookUpPitchRad > 1e-4) camera.rotateX(lookUpPitchRad);
+  }
   // ... and a held dev pose after that, because the point of holding one is to
   // look from places the rig exists to prevent, such as inside the earth.
   cavityProbe.applyHold();

@@ -57,6 +57,24 @@ describe("the world's palette", () => {
     }
   });
 
+  it('only asks for roles it lists, so a typo fails here and not at boot', () => {
+    // `worldColour` takes a string, so a misspelt role compiles: the literal a
+    // renderer passes is the only place a typo can be caught without running
+    // the game. Both directions matter - an unlisted literal breaks at boot, and
+    // a listed role nobody uses hides a stale entry.
+    const called = new Set<string>();
+    for (const path of WORLD_FILES) {
+      const source = readFileSync(new URL(path, import.meta.url), 'utf8');
+      for (const match of source.matchAll(/worldColour\(\s*'([a-z_]+)'\s*\)/g))
+        called.add(match[1]);
+    }
+    const listed: readonly string[] = WORLD_ROLES;
+    const unknown = [...called].filter((role) => !listed.includes(role));
+    const unused = WORLD_ROLES.filter((role) => !called.has(role));
+    assert.deepEqual(unknown, [], `not in WORLD_ROLES: ${unknown.join(', ')}`);
+    assert.deepEqual(unused, [], `listed but never asked for: ${unused.join(', ')}`);
+  });
+
   it('refuses a palette that lacks a world role, at boot rather than at draw', () => {
     assert.throws(() => applyWorldPalette({ ramps: palette.ramps, roles: [] }), /no role sunlight/);
   });

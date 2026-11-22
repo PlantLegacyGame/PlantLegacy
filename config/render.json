@@ -28,12 +28,12 @@
     },
     "resolution_floor": {
       "type": "number",
-      "value": 0.5,
+      "value": 0.75,
       "range": [
         0.1,
         1
       ],
-      "notes": "Minimum renderer pixel ratio relative to devicePixelRatio."
+      "notes": "Minimum renderer pixel ratio relative to devicePixelRatio. Was 0.5: on a machine that cannot reach target_fps the band sat on the floor for the whole session, so the picture - and every name tag in the 3D scene - was drawn at half resolution and upscaled."
     },
     "max_pixel_ratio": {
       "type": "number",
@@ -46,12 +46,12 @@
     },
     "camera_smoothing": {
       "type": "number",
-      "value": 0.05,
+      "value": 0.14,
       "range": [
         0,
         0.5
       ],
-      "notes": "OrbitControls dampingFactor."
+      "notes": "OrbitControls dampingFactor. Damping is per frame, so 0.05 (Three's default) is a ~0.3 s glide at 60 fps and a ~0.7 s glide at 27 fps: dragging the camera read as input lag rather than weight."
     },
     "camera_min_distance": {
       "type": "number",

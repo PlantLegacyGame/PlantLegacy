@@ -2,7 +2,12 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 import { oklchToHex } from '@plant-legacy/shared/color';
-import { ORGAN_ROLES, resolveOrganColours } from './organPalette.ts';
+import {
+  ORGAN_ROLE_BY_NODE_TYPE,
+  ORGAN_ROLES,
+  organRoleForNodeType,
+  resolveOrganColours,
+} from './organPalette.ts';
 
 const read = (path: string) => JSON.parse(readFileSync(new URL(path, import.meta.url), 'utf8'));
 
@@ -56,6 +61,34 @@ describe("the plant's organ palette", () => {
       () => resolveOrganColours({ ramps: palette.ramps, roles: [] }),
       /the palette has no role bark_shade for the bark organ/,
     );
+  });
+
+  it("paints a trunk with the bark role, not the stem's foliage", () => {
+    // The renderer used to send 'trunk' to the stem material, so a woody plant was
+    // green above the soil line and the bark role painted no organ at all.
+    assert.equal(organRoleForNodeType('trunk'), 'bark');
+    assert.notEqual(organRoleForNodeType('trunk'), organRoleForNodeType('stem'));
+  });
+
+  it('paints every organ a node type can name', () => {
+    assert.equal(organRoleForNodeType('stem'), 'stem');
+    assert.equal(organRoleForNodeType('cotyledon'), 'cotyledon');
+    assert.equal(organRoleForNodeType('leaf'), 'leaf');
+    assert.equal(organRoleForNodeType('flower'), 'flower');
+    assert.equal(organRoleForNodeType('flower_centre'), 'flowerCentre');
+    assert.equal(organRoleForNodeType('seed'), 'seed');
+    assert.equal(organRoleForNodeType('spore_sac'), 'spore');
+    assert.equal(organRoleForNodeType('lateral_root'), 'root');
+  });
+
+  it('asks for a role it actually lists, for every node type, in any case', () => {
+    const painted = new Set(organs);
+    for (const role of Object.values(ORGAN_ROLE_BY_NODE_TYPE)) {
+      assert.ok(painted.has(role), `node types ask for role ${role}, which no organ material has`);
+    }
+    assert.equal(organRoleForNodeType('Trunk'), 'bark');
+    // An organ the table has never heard of is still painted, as bark.
+    assert.equal(organRoleForNodeType('chloroplast'), 'bark');
   });
 
   it('leaves no colour literal in the mesh plant renderer', () => {

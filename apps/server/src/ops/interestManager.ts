@@ -10,6 +10,14 @@ export interface ClientInterest {
   cell: CellCoord;
   subscribedCells: Set<string>;
   entityCap: number;
+  /**
+   * False until the first tick after registration has announced the plants that
+   * are already in range. Registering puts the client in its current cell, so
+   * without this the first `updateClientPosition` reported "same cell, nothing
+   * changed" and a player who joined next to a dozen plants was never sent any
+   * of them: rivals only appeared once they walked a whole cell (64 m).
+   */
+  announced: boolean;
 }
 
 export interface EntityUpdate {
@@ -72,6 +80,7 @@ export class InterestManager {
       cell,
       subscribedCells,
       entityCap: this.entityCap,
+      announced: false,
     };
 
     this.clientInterests.set(playerId, interest);
@@ -82,10 +91,11 @@ export class InterestManager {
   }
 
   /**
-   * Move a client's interest window. Returns true only when its cell changed,
-   * which is the moment the caller has to announce plants that just became
-   * visible (a plant created while the player was elsewhere is otherwise never
-   * sent to them).
+   * Move a client's interest window. Returns true when the caller has to
+   * announce the plants in range: on the first tick after registration (the
+   * plants that were already there when the player joined) and whenever the
+   * client's cell changes (a plant created while the player was elsewhere is
+   * otherwise never sent to them).
    */
   updateClientPosition(playerId: string, x: number, z: number): boolean {
     const interest = this.clientInterests.get(playerId);
@@ -93,12 +103,16 @@ export class InterestManager {
 
     const newCell = this.getCellCoord(x, z);
     if (newCell.x === interest.cell.x && newCell.z === interest.cell.z) {
-      return false; // Same cell, no change
+      if (interest.announced) return false;
+      interest.announced = true;
+      // Same cell, but nobody has announced this player's surroundings yet.
+      return true;
     }
 
     // Update subscribed cells
     interest.cell = newCell;
     interest.subscribedCells = this.getSubscribedCells(newCell);
+    interest.announced = true;
     return true;
   }
 

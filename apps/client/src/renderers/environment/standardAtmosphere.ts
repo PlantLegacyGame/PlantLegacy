@@ -13,7 +13,7 @@
  * itself uses radial height because it spans the whole planet.
  */
 import * as THREE from 'three';
-import { type AtmosphereParams, DEFAULT_ATMOSPHERE, GLSL_ATMOSPHERE } from './atmosphere.js';
+import { type AtmosphereParams, DEFAULT_ATMOSPHERE, GLSL_ATMOSPHERE } from './atmosphere.ts';
 
 const PRELUDE = `
 varying vec3 vAtmoWorld;
@@ -63,7 +63,7 @@ export function applyAtmosphereToStandardMaterial(
 ): void {
   material.userData.atmosphereParams = params;
 
-  if (!material.userData.atmosphereAttached) {
+  if (material.userData.atmosphereAttached !== true) {
     material.userData.atmosphereAttached = true;
     // The renderer's own fog is a second air; the model replaces it.
     material.fog = false;
@@ -78,8 +78,9 @@ export function applyAtmosphereToStandardMaterial(
       uniforms.uAtmoSunPhaseG = { value: current.sunPhaseG };
       uniforms.uAtmoInScatter = { value: current.inScatter };
       uniforms.uAtmoHorizonBoost = { value: current.horizonBoost };
+      const storedSun = material.userData.atmosphereSunDir;
       uniforms.uAtmoSunDir = {
-        value: (material.userData.atmosphereSunDir as THREE.Vector3 | undefined) ?? sunDir,
+        value: storedSun instanceof THREE.Vector3 ? storedSun : sunDir,
       };
       writeUniforms(uniforms, current);
       material.userData.atmosphereUniforms = uniforms;
@@ -103,6 +104,9 @@ export function applyAtmosphereToStandardMaterial(
   }
 
   material.userData.atmosphereSunDir = sunDir;
+  // Live uniform holders exist only after a compile. A copy of a patched
+  // material would arrive with flattened ones, which `cloneStandaloneMaterial`
+  // strips where the copy is made, so nothing non-uniform gets here.
   const compiled = material.userData.atmosphereUniforms as
     | Record<string, THREE.IUniform>
     | undefined;
@@ -110,4 +114,25 @@ export function applyAtmosphereToStandardMaterial(
     compiled.uAtmoSunDir = { value: sunDir };
     writeUniforms(compiled, params);
   }
+}
+
+/**
+ * A variant of a patched material that is safe to patch again.
+ *
+ * `Material.copy` clones `userData` through `JSON.stringify`, so a copy of a
+ * patched material comes back claiming `atmosphereAttached` while its uniform
+ * holders are plain `{ x, y, z }` literals. The patcher trusted that flag, the
+ * copy's shader never got the varying, and the tail wrote to a literal - a
+ * TypeError on every rebuild of a plant carrying a pigment variant, which is
+ * how a joining rival's plant threw instead of appearing. Variants are made
+ * here, so the snapshot is dropped here: the copy is unpatched again and the
+ * patcher installs live uniforms on it.
+ */
+export function cloneStandaloneMaterial(
+  base: THREE.MeshStandardMaterial,
+): THREE.MeshStandardMaterial {
+  const material = base.clone();
+  delete material.userData.atmosphereAttached;
+  delete material.userData.atmosphereUniforms;
+  return material;
 }

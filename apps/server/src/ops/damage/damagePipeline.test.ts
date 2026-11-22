@@ -198,6 +198,29 @@ describe('damage pipeline: uproot causes', () => {
     assert.equal(state.cause, 'saturation');
   });
 
+  it('streams the crawl transform on every tick while the body is moving', () => {
+    const { plantWorld, pipeline, setWeather } = makeHarness({
+      moisture: 96,
+      uproot: { saturationSeconds: 0.2, saturationCheckIntervalS: 0.1 },
+    });
+    setWeather('thunderstorm_active');
+    const plantId = makePlant(plantWorld);
+    pipeline.tick(0.15, 1);
+    pipeline.tick(0.15, 2);
+    assert.ok(plantWorld.getPlant(plantId)?.uproot, 'the plant has to be uprooted first');
+    pipeline.drainEvents();
+
+    // The client draws one packet's move over one tick, so a quarter-rate
+    // stream made a tumbling body step five packets' worth at a time and then
+    // stand still for four ticks. Consecutive ticks have to carry the pose.
+    pipeline.tick(DT, 3);
+    const first = pipeline.drainEvents().filter((event) => event.kind === 'uproot');
+    pipeline.tick(DT, 4);
+    const second = pipeline.drainEvents().filter((event) => event.kind === 'uproot');
+    assert.equal(first.length, 1, 'the tick the body starts moving streams it');
+    assert.equal(second.length, 1, 'and so does the very next tick');
+  });
+
   it('does not uproot from saturation in ordinary rain, only in a storm', () => {
     const { plantWorld, pipeline, setWeather } = makeHarness({
       moisture: 96,
