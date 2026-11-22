@@ -1082,8 +1082,8 @@ their `notes` in `config/growth.json`.
 
 ## Not built yet
 
-The rest of the economy: Postgres-backed inventory and spore purse (T08A),
-marketplace/mail/trade (T14/T29/T45) and admin/compliance tooling. The shop, the
+The rest of the economy: the remaining T08A mutation paths (locked item use,
+slot swap and awards), marketplace/mail/trade (T14/T29/T45) and admin/compliance tooling. The shop, the
 spore purse, world drops and drop pickup are built — see "Shop, spores and the
 pouch" and "Drops, picking and the way out of the earth" below. C04 still owes
 its rebinding screen and notification log.
@@ -1535,8 +1535,10 @@ the price comes from `config/shop.json`, the balance from the purse, and the
 grant goes through `addItem` into the same pouch the hotbar and inventory panel
 read. A refusal is a `REJECT` with a reason (`insufficient_spores`,
 `inventory_full`, `unknown_item`, `shop_closed`), not a silent no-op.
-- **The purse is in memory.** It survives a reload only as far as the starting
-  balance; wiring it to Postgres is the open half of T08A, as it is for the pouch.
+- **The purse is persisted for signed-in accounts.** `player_state` holds the
+  pouch and purse, a shop purchase reads and writes them under a row lock, and
+  a restart keeps both. Item use, slot swap and awards are not yet on that
+  locked path; see [`tasks/T08A.md`](./tasks/T08A.md).
 - **Every advertised earn source now pays.** Dung on use, a mutation level, a
   kill credit, and collecting a drop (dung or fragment, exactly once: the drop
   is removed, so a replayed id finds nothing).

@@ -22,9 +22,9 @@ at **1,000,000**. The earn sources wired are: consuming dung **5**, acquiring a
 mutation **15**, kill credit **30**, and picking up a fragment drop **3**. The
 shop sells six items in two sections, priced **20–80** spores; prices and earn
 rates are `config/shop.json` and `config/spores.json`. Sessions, first-visit
-chunks and season rewards are still design intent, not earn sources yet. The
-purse is in memory, so a restart begins again from the configured starting
-balance until T08A lands.
+chunks and season rewards are still design intent, not earn sources yet. For a
+signed-in account the purse is persisted in `player_state` and a shop purchase
+reads and writes it under a row lock, so a restart keeps the balance.
 
 **What money cannot buy:** potency grades above common. Inferior and common
 boosters are purchasable with Spores and tradeable. Standard and above are
