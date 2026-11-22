@@ -1400,7 +1400,7 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
       `;
       btn.onmouseenter = () => {
         if (tab.id !== activeTab) {
-          btn.style.background = 'rgba(74,96,54,0.2)';
+          btn.style.background = 'color-mix(in srgb, var(--palette-foliage-700) 20%, transparent)';
           btn.style.color = 'var(--leaf-300)';
           btn.style.borderColor = 'var(--bark-500)';
         }
