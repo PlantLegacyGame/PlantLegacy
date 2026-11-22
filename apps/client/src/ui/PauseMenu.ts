@@ -12,6 +12,8 @@ export interface PauseMenuOptions {
   onResume: () => void;
   onSettings: () => void;
   onControls: () => void;
+  /** Opens the recent-activity log, when the world built one. */
+  onNotifications?: () => void;
   onLeaveToTitle: () => void;
 }
 
@@ -161,6 +163,12 @@ export function createPauseMenu(options: PauseMenuOptions): PauseMenuAPI {
     close();
     options.onControls();
   });
+  const notifications = options.onNotifications
+    ? button('Recent activity', null, () => {
+        close();
+        options.onNotifications?.();
+      })
+    : null;
   const leave = button(
     'Leave to title',
     null,
@@ -171,7 +179,7 @@ export function createPauseMenu(options: PauseMenuOptions): PauseMenuAPI {
     'pl-pause__btn--quiet',
   );
 
-  card.append(title, resume, settings, controls, leave);
+  card.append(title, resume, settings, controls, ...(notifications ? [notifications] : []), leave);
   backdrop.appendChild(card);
   options.mount.appendChild(backdrop);
 
@@ -190,7 +198,9 @@ export function createPauseMenu(options: PauseMenuOptions): PauseMenuAPI {
     // menu is open, and walking out of a modal dialog is a trap for keyboard and
     // screen-reader players.
     if (event.key === 'Tab') {
-      const focusable = [resume, settings, controls, leave];
+      const focusable = [resume, settings, controls, notifications, leave].filter(
+        (el): el is HTMLButtonElement => el !== null,
+      );
       const index = focusable.indexOf(document.activeElement as HTMLButtonElement);
       const step = event.shiftKey ? -1 : 1;
       const next = focusable[(index + step + focusable.length) % focusable.length];

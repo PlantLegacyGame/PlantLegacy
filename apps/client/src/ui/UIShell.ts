@@ -30,12 +30,14 @@ export interface PanelDescriptor {
 }
 
 type PanelListener = (panelId: string, open: boolean, title?: string) => void;
+type ToastListener = (options: ToastOptions) => void;
 
 export class UIShell {
   private readonly root: HTMLElement;
   private readonly layers = new Map<string, HTMLElement>();
   private readonly toasts: HTMLElement[] = [];
   private readonly panelListeners = new Set<PanelListener>();
+  private readonly toastListeners = new Set<ToastListener>();
   private textScale = 1.0;
   private toastsEnabled = true;
 
@@ -103,6 +105,7 @@ export class UIShell {
 
   toast(options: ToastOptions): void {
     if (!this.toastsEnabled) return;
+    for (const listener of this.toastListeners) listener(options);
     const el = document.createElement('div');
     el.className = `ui-toast ui-toast-${options.kind ?? 'info'}`;
     el.textContent = options.message;
@@ -149,6 +152,12 @@ export class UIShell {
         }, 200);
       }, duration);
     }
+  }
+
+  /** Called for every toast the shell actually shows; history lives elsewhere. */
+  onToast(listener: ToastListener): () => void {
+    this.toastListeners.add(listener);
+    return () => this.toastListeners.delete(listener);
   }
 
   /** Hide the toast stack, e.g. when the death screen takes over. */

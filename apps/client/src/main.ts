@@ -211,6 +211,7 @@ import {
   type MutationPanelAPI,
   type MutationStateView,
 } from './ui/MutationPanel.js';
+import { createNotificationLog, type NotificationLogAPI } from './ui/NotificationLog.js';
 import { pickNodeHit } from './ui/nodePick.js';
 import { createPauseMenu, type PauseMenuAPI } from './ui/PauseMenu.js';
 import {
@@ -3612,6 +3613,7 @@ let spectating = false;
 let lostReason: string | null = null;
 let lostStats: { cause: string; stats: PlantStatsSummary } | null = null;
 let pauseMenu: PauseMenuAPI | null = null;
+let notificationLog: NotificationLogAPI | null = null;
 let growModeBadge: HTMLDivElement | null = null;
 
 const GROW_MODE_CSS = `
@@ -3761,11 +3763,18 @@ function createWorldChrome(): void {
   // The hover tip lives in the HUD layer so a modal covers it like anything else.
   plantHoverTip = createPlantHoverTip(uiShell?.getLayer('hud') ?? document.body);
 
+  // Every toast the shell shows is also history, so a notice is readable after
+  // it has faded. Built once per page, like the rest of the chrome.
+  if (!notificationLog) {
+    notificationLog = createNotificationLog({ mount: modalMount(uiShell) });
+    uiShell?.onToast((options) => notificationLog?.record(options));
+  }
   pauseMenu = createPauseMenu({
     mount: modalMount(uiShell),
     onResume: () => {},
     onSettings: () => settingsPanel?.setOpen(true),
     onControls: () => openSettingsControls(),
+    onNotifications: () => notificationLog?.open(),
     onLeaveToTitle: () => leaveWorldToTitle(),
   });
 }

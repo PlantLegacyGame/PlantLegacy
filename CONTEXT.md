@@ -27,14 +27,16 @@ collectible (`renderers/WorldDrops.ts`, `ops/dropPickup.ts`), and the HUD keeps
 the pouch and purse on screen (`ui/Hotbar.ts`, `ui/SporeChip.ts`). Protocol v4
 adds `SHOP_PURCHASE`, `DROP_COLLECT` and `INVENTORY_SYNC.sporeBalance`; the
 pouch and purse were still in memory at that point; the `player_state` restart
-copy landed on 2026-11-22 (ADR-081), while the full T08A transaction contract
-remains open. The title scene was split into tested modules
+copy landed on 2026-11-22 (ADR-081); every pouch mutation is now a locked
+read-modify-write (purchase, item use, swap, awards, dev grant), the duplication
+audit is guarded by `tools/locked-writes`, and trade/mail/listing remain open. The title scene was split into tested modules
 (`title/growth.ts`, `plantBend.ts`, `rootGrowth.ts`, `scenery.ts`, `skyLayout.ts`,
 `styleVars.ts`, `treasures.ts`, `weather.ts`, `plantSound.ts`) so the tree, its
 roots, the weather and the palette can be checked without a browser. The palette
 is written per painting layer, the ground has its own 1/16-day clock, and the
 loop sleeps when the camera settles. Detail:
-[`docs/what-works-now.md`](./docs/what-works-now.md).
+[`docs/what-works-now.md`](./docs/what-works-now.md). C04's recent-activity log
+keeps the last 80 toasts with their times, opened from Pause.
 
 **Scope reset (2026-11-21).** One season now defaults to 90 days
 (`config/world.json`), and the single global season-end kill is replaced in the
