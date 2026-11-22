@@ -3,6 +3,11 @@ import type { WebSocket } from 'ws';
 import { type Inventory, setSlot, swapSlots } from './inventory.ts';
 import type { ItemsConfig } from './items.ts';
 import { MESSAGE_TYPE, type RejectPayload } from './net.ts';
+import {
+  type PersistedPlayerState,
+  toInventory,
+  toPersistedState,
+} from './persistence/playerStatePersistence.ts';
 import { clampPlantStorage } from './plantCapacity.ts';
 import { earnSpores, type SporeConfig } from './spores.ts';
 
@@ -42,6 +47,19 @@ export interface InventoryPorts extends InventorySyncPorts {
   log: InventoryLog;
   /** Write the restart copy after a successful pouch/purse change. */
   persist?: (player: InventoryPlayer) => void;
+  /**
+   * Apply one pouch/purse change under the account's `player_state` row lock.
+   *
+   * The change is planned against the state read inside the lock, not against
+   * the live object, so two clicks cannot spend the same item. The port commits,
+   * then copies the committed state onto the live player before resolving.
+   * Absent (tests, and a session with no store) the handler applies the same
+   * plan to the live object itself.
+   */
+  mutateState?: <T>(
+    player: InventoryPlayer,
+    apply: (current: PersistedPlayerState) => { next?: PersistedPlayerState; result: T } | null,
+  ) => Promise<T | null>;
 }
 
 export function sendInventorySync(
@@ -86,6 +104,61 @@ export function sendInventorySlotUpdate(
   });
 }
 
+/** What an item use did, so the effect is applied only after the row commits. */
+export interface ItemUseEffect {
+  water: number;
+  minerals: number;
+  energy: number;
+  category: string;
+}
+
+export type ItemUseResult =
+  | { ok: true; effect: ItemUseEffect }
+  | { ok: false; reason: 'item_gone' };
+
+/** Options for turning a stored row into a working pouch. */
+function stateOptions(ports: InventoryPorts, maxSlots: number) {
+  return {
+    itemDefinitions: ports.itemsConfig.itemDefinitions,
+    maxSlots,
+    onRepair: (message: string, meta?: Record<string, unknown>) => ports.log.warn(message, meta),
+  };
+}
+
+/**
+ * Run a change against the live object, for a session with no stored row.
+ *
+ * The same plan the locked path uses, applied to a state built from the live
+ * pouch, so a guest and an account cannot disagree about what an action means.
+ */
+function applyToLive<T>(
+  ports: InventoryPorts,
+  player: InventoryPlayer,
+  apply: (current: PersistedPlayerState) => { next?: PersistedPlayerState; result: T } | null,
+): T | null {
+  const change = apply(toPersistedState(player.inventory, player.spores));
+  if (!change) return null;
+  if (change.next) {
+    player.inventory.slots = toInventory(
+      change.next,
+      stateOptions(ports, player.inventory.maxSlots),
+    ).slots;
+    player.spores = change.next.spores;
+  }
+  return change.result;
+}
+
+/** One locked change, or the live-object equivalent when there is no row. */
+function mutateState<T>(
+  ports: InventoryPorts,
+  player: InventoryPlayer,
+  apply: (current: PersistedPlayerState) => { next?: PersistedPlayerState; result: T } | null,
+): Promise<T | null> {
+  return ports.mutateState
+    ? ports.mutateState(player, apply)
+    : Promise.resolve(applyToLive(ports, player, apply));
+}
+
 /**
  * Use one item from a slot.
  *
@@ -93,21 +166,29 @@ export function sendInventorySlotUpdate(
  * that cannot be used yet says so out loud instead of the old silent no-op
  * (gene boosters and both seed types were clicked into a void). Only the slot
  * that was clicked is decremented, so two stacks of the same item stay separate.
+ *
+ * The decrement and any spores the item pays are one change under the
+ * `player_state` row lock; the plant's resource gain is applied after the commit,
+ * so a refused change cannot leave a free handful of minerals behind.
  */
-export function useInventorySlot(
+export async function useInventorySlot(
   ports: InventoryPorts,
   player: InventoryPlayer,
   slotIndex: number,
-): void {
+): Promise<void> {
   if (slotIndex < 0 || slotIndex >= player.inventory.maxSlots) {
     ports.log.warn('Invalid inventory slot index', { playerId: player.playerId, slotIndex });
     return;
   }
 
+  // This read only answers refusals that do not depend on the row (a slot that
+  // is empty on screen, an item that is not usable, a plant that is gone). How
+  // many are left is decided under the lock.
   const slot = player.inventory.slots[slotIndex];
   if (!slot) return;
+  const itemId = slot.itemId;
 
-  const itemDef = ports.itemsConfig.itemDefinitions.get(slot.itemId);
+  const itemDef = ports.itemsConfig.itemDefinitions.get(itemId);
   if (!itemDef) return;
 
   if (itemDef.use.kind !== 'resources') {
@@ -120,60 +201,89 @@ export function useInventorySlot(
   }
 
   if (!player.plantId) return;
-  const plant = ports.getPlant(player.plantId);
-  if (!plant) return;
+  if (!ports.getPlant(player.plantId)) return;
 
   const use = itemDef.use;
-  if (use.water > 0) plant.storedWater += use.water;
-  if (use.minerals > 0) plant.storedMinerals += use.minerals;
-  if (use.energy > 0) plant.totalEnergy += use.energy;
-  clampPlantStorage(plant, ports.growthConfig());
+  const sporesBefore = player.spores;
+  const effect: ItemUseEffect = {
+    water: use.water,
+    minerals: use.minerals,
+    energy: use.energy,
+    category: itemDef.category,
+  };
 
-  // Enrich the soil under the root too: `dung_deposit` and `fertilizer_deposit`
-  // were configured but never applied, because nothing ever called these two.
-  const rootNode = plant.rootNodeId != null ? plant.nodes.get(plant.rootNodeId) : undefined;
-  if (rootNode) {
-    if (itemDef.category === 'fertilizer') ports.depositFertilizer(rootNode.x, rootNode.z);
-    else if (itemDef.category === 'dung') ports.depositDung(rootNode.x, rootNode.z);
-  }
-
-  setSlot(
-    player.inventory,
-    slotIndex,
-    slot.count > 1 ? { itemId: slot.itemId, count: slot.count - 1 } : null,
-  );
-  sendInventorySlotUpdate(ports, player, slotIndex);
-
-  // Dung is the world's own reward: consuming it pays spores, which is one of the
-  // listed ways to earn them (DESIGN T13). Paying it here means the number the
-  // shop checks is the number the HUD shows.
-  if (itemDef.category === 'dung' && ports.sporeConfig) {
-    const before = player.spores;
-    player.spores = earnSpores(
-      player.spores,
-      ports.sporeConfig.earnDung,
-      ports.sporeConfig.maxBalance,
+  const result = await mutateState<ItemUseResult>(ports, player, (current) => {
+    const inventory = toInventory(current, stateOptions(ports, player.inventory.maxSlots));
+    const held = inventory.slots[slotIndex];
+    if (!held || held.itemId !== itemId) return { result: { ok: false, reason: 'item_gone' } };
+    setSlot(
+      inventory,
+      slotIndex,
+      held.count > 1 ? { itemId, count: held.count - 1 } : null,
+      ports.itemsConfig.itemDefinitions,
     );
-    if (player.spores !== before) sendInventorySync(ports, player);
+    let spores = current.spores;
+    // Dung is the world's own reward: consuming it pays spores, and the number
+    // the shop checks is the number the HUD shows. Paid in the same row write as
+    // the consumption, so a retry cannot pay twice.
+    if (itemDef.category === 'dung' && ports.sporeConfig) {
+      spores = earnSpores(current.spores, ports.sporeConfig.earnDung, ports.sporeConfig.maxBalance);
+    }
+    return { next: toPersistedState(inventory, spores), result: { ok: true, effect } };
+  });
+
+  if (!result) return;
+  if (!result.ok) {
+    // A click that got there first took the last one. Re-send the pouch so the
+    // panel stops offering it.
+    sendInventorySync(ports, player);
+    return;
   }
 
-  ports.persist?.(player);
+  const plant = ports.getPlant(player.plantId);
+  if (plant) {
+    if (use.water > 0) plant.storedWater += use.water;
+    if (use.minerals > 0) plant.storedMinerals += use.minerals;
+    if (use.energy > 0) plant.totalEnergy += use.energy;
+    clampPlantStorage(plant, ports.growthConfig());
+
+    // Enrich the soil under the root too: `dung_deposit` and `fertilizer_deposit`
+    // were configured but never applied, because nothing ever called these two.
+    const rootNode = plant.rootNodeId != null ? plant.nodes.get(plant.rootNodeId) : undefined;
+    if (rootNode) {
+      if (itemDef.category === 'fertilizer') ports.depositFertilizer(rootNode.x, rootNode.z);
+      else if (itemDef.category === 'dung') ports.depositDung(rootNode.x, rootNode.z);
+    }
+  }
+
+  sendInventorySlotUpdate(ports, player, slotIndex);
+  // Dung pays spores, and the chip and the shop read one balance: send it when
+  // it moved, whichever path committed the change.
+  if (player.spores !== sporesBefore) sendInventorySync(ports, player);
+  // The locked port already carried the purse with the pouch; the fallback did
+  // not, so it still needs the restart write.
+  if (!ports.mutateState) ports.persist?.(player);
   ports.log.info('Item used', {
     playerId: player.playerId,
-    itemId: slot.itemId,
+    itemId,
     category: itemDef.category,
   });
 }
 
 /** Swap two slots and tell the client about both, so the panel cannot half-update. */
-export function swapInventorySlots(
+export async function swapInventorySlots(
   ports: InventoryPorts,
   player: InventoryPlayer,
   fromIndex: number,
   toIndex: number,
-): void {
-  if (!swapSlots(player.inventory, fromIndex, toIndex)) return;
+): Promise<void> {
+  const swapped = await mutateState<boolean>(ports, player, (current) => {
+    const inventory = toInventory(current, stateOptions(ports, player.inventory.maxSlots));
+    if (!swapSlots(inventory, fromIndex, toIndex)) return null;
+    return { next: toPersistedState(inventory, current.spores), result: true };
+  });
+  if (!swapped) return;
   sendInventorySlotUpdate(ports, player, fromIndex);
   sendInventorySlotUpdate(ports, player, toIndex);
-  ports.persist?.(player);
+  if (!ports.mutateState) ports.persist?.(player);
 }

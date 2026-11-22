@@ -12,6 +12,7 @@ import {
   useInventorySlot,
 } from './inventoryHandlers.ts';
 import type { ItemsConfig } from './items.ts';
+import type { PersistedPlayerState } from './persistence/playerStatePersistence.ts';
 
 const growthConfig = {
   energyCapacityFloor: 1000,
@@ -133,11 +134,11 @@ function makeHarness(defs: ItemDefinition[] = [makeDef()]) {
 }
 
 describe('useInventorySlot', () => {
-  it('applies the definition, enriches the soil and consumes the clicked slot', () => {
+  it('applies the definition, enriches the soil and consumes the clicked slot', async () => {
     const { ports, player, plant, sent, deposits } = makeHarness();
     player.inventory.slots[0] = { itemId: 'fertilizer_basic', count: 2 };
 
-    useInventorySlot(ports, player, 0);
+    await useInventorySlot(ports, player, 0);
 
     assert.equal(plant.storedMinerals, 5);
     assert.deepEqual(deposits, ['fertilizer']);
@@ -147,27 +148,27 @@ describe('useInventorySlot', () => {
     ]);
   });
 
-  it('empties the slot when the last one is used', () => {
+  it('empties the slot when the last one is used', async () => {
     const { ports, player } = makeHarness();
     player.inventory.slots[1] = { itemId: 'fertilizer_basic', count: 1 };
 
-    useInventorySlot(ports, player, 1);
+    await useInventorySlot(ports, player, 1);
 
     assert.equal(player.inventory.slots[1], null);
   });
 
-  it('decrements only the slot that was clicked, not the first stack of that item', () => {
+  it('decrements only the slot that was clicked, not the first stack of that item', async () => {
     const { ports, player } = makeHarness();
     player.inventory.slots[0] = { itemId: 'fertilizer_basic', count: 5 };
     player.inventory.slots[2] = { itemId: 'fertilizer_basic', count: 5 };
 
-    useInventorySlot(ports, player, 2);
+    await useInventorySlot(ports, player, 2);
 
     assert.equal(player.inventory.slots[0]?.count, 5);
     assert.equal(player.inventory.slots[2]?.count, 4);
   });
 
-  it('refuses an item whose use is unavailable, and leaves it in the slot', () => {
+  it('refuses an item whose use is unavailable, and leaves it in the slot', async () => {
     const booster = makeDef({
       id: 'gene_booster',
       category: 'booster',
@@ -176,7 +177,7 @@ describe('useInventorySlot', () => {
     const { ports, player, plant, sent, deposits } = makeHarness([booster]);
     player.inventory.slots[0] = { itemId: 'gene_booster', count: 1 };
 
-    useInventorySlot(ports, player, 0);
+    await useInventorySlot(ports, player, 0);
 
     assert.deepEqual(sent, [
       { type: 13, payload: { reason: 'item_not_usable', originalType: 25 } },
@@ -186,33 +187,79 @@ describe('useInventorySlot', () => {
     assert.deepEqual(deposits, []);
   });
 
-  it('warns and sends nothing for an index outside the pack', () => {
+  it('warns and sends nothing for an index outside the pack', async () => {
     const { ports, player, sent, warnings } = makeHarness();
 
-    useInventorySlot(ports, player, 9);
+    await useInventorySlot(ports, player, 9);
 
     assert.deepEqual(sent, []);
     assert.deepEqual(warnings, ['Invalid inventory slot index']);
   });
 
-  it('does nothing for an empty slot or an item the config does not know', () => {
+  it('does nothing for an empty slot or an item the config does not know', async () => {
     const { ports, player, sent } = makeHarness();
     player.inventory.slots[0] = { itemId: 'unknown_item', count: 1 };
 
-    useInventorySlot(ports, player, 0);
-    useInventorySlot(ports, player, 1);
+    await useInventorySlot(ports, player, 0);
+    await useInventorySlot(ports, player, 1);
 
     assert.deepEqual(sent, []);
     assert.deepEqual(player.inventory.slots[0], { itemId: 'unknown_item', count: 1 });
   });
+
+  it('spends the item under the row lock, then applies the effect', async () => {
+    const { ports, player, plant, sent } = makeHarness();
+    player.inventory.slots[0] = { itemId: 'fertilizer_basic', count: 2 };
+    let stored: PersistedPlayerState = {
+      slots: [{ itemId: 'fertilizer_basic', count: 2 }, null, null, null],
+      spores: 0,
+    };
+    const order: string[] = [];
+    ports.mutateState = async (who, apply) => {
+      const change = apply(stored);
+      if (!change) return null;
+      if (change.next) stored = change.next;
+      order.push('commit');
+      who.inventory.slots = stored.slots;
+      return change.result;
+    };
+
+    await useInventorySlot(ports, player, 0);
+
+    assert.deepEqual(stored.slots[0], { itemId: 'fertilizer_basic', count: 1 });
+    assert.equal(plant.storedMinerals, 5);
+    assert.deepEqual(order, ['commit']);
+    assert.deepEqual(sent[0], {
+      type: 28,
+      payload: { slotIndex: 0, itemId: 'fertilizer_basic', count: 1 },
+    });
+  });
+
+  it('refuses a use whose item another click already spent, with no effect', async () => {
+    const { ports, player, plant, sent } = makeHarness();
+    player.inventory.slots[0] = { itemId: 'fertilizer_basic', count: 1 };
+    let stored: PersistedPlayerState = { slots: [null, null, null, null], spores: 0 };
+    ports.mutateState = async (_who, apply) => {
+      const change = apply(stored);
+      if (!change) return null;
+      if (change.next) stored = change.next;
+      return change.result;
+    };
+
+    await useInventorySlot(ports, player, 0);
+
+    assert.equal(plant.storedMinerals, 0);
+    // The pouch is re-sent so the panel stops offering the spent item.
+    assert.equal(sent[0]?.type, 27);
+  });
 });
 
 describe('swapInventorySlots', () => {
-  it('swaps the two slots and reports both to the client', () => {
+  it('swaps the two slots and reports both to the client', async () => {
     const { ports, player, sent } = makeHarness();
     player.inventory.slots[0] = { itemId: 'fertilizer_basic', count: 3 };
 
-    swapInventorySlots(ports, player, 0, 3);
+    await swapInventorySlots(ports, player, 0, 3);
 
     assert.equal(player.inventory.slots[0], null);
     assert.deepEqual(player.inventory.slots[3], { itemId: 'fertilizer_basic', count: 3 });
@@ -222,11 +269,11 @@ describe('swapInventorySlots', () => {
     ]);
   });
 
-  it('ignores an out-of-range swap', () => {
+  it('ignores an out-of-range swap', async () => {
     const { ports, player, sent } = makeHarness();
     player.inventory.slots[0] = { itemId: 'fertilizer_basic', count: 3 };
 
-    swapInventorySlots(ports, player, 0, 9);
+    await swapInventorySlots(ports, player, 0, 9);
 
     assert.deepEqual(sent, []);
     assert.deepEqual(player.inventory.slots[0], { itemId: 'fertilizer_basic', count: 3 });

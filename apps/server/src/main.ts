@@ -60,6 +60,7 @@ import { buildHealthReport, isReady } from './ops/health.ts';
 import { InterestManager } from './ops/interestManager.ts';
 import { addItem, createInventory, type Inventory } from './ops/inventory.ts';
 import {
+  type InventoryPlayer,
   type InventoryPorts,
   sendInventorySync,
   swapInventorySlots,
@@ -126,7 +127,7 @@ import {
   type ShopPurchasePlan,
 } from './ops/shop.ts';
 import { type HeartbeatSocket, heartbeatTick } from './ops/socketHeartbeat.ts';
-import { loadSporeConfig, type SporeConfig } from './ops/spores.ts';
+import { earnSpores, loadSporeConfig, type SporeConfig } from './ops/spores.ts';
 import { TerrainService } from './ops/terrain.ts';
 import { createTickClock, type TickClock, tickClockStart, tickClockStop } from './ops/tickClock.ts';
 import {
@@ -826,7 +827,7 @@ class World {
             if (event.credit.kind === 'player' && event.credit.playerId) {
               const killer = this.players.get(event.credit.playerId);
               if (killer) {
-                awardSpores(this.shopPorts(), killer, this.sporeConfig.earnKill, 'kill_credit');
+                this.awardSporesLocked(killer, this.sporeConfig.earnKill, 'kill_credit');
               }
             }
             break;
@@ -1686,6 +1687,7 @@ class World {
         const live = this.players.get(player.playerId);
         if (live) this.persistPlayerState(live);
       },
+      mutateState: (player, apply) => this.mutateInventoryState(player, apply),
     };
   }
 
@@ -1754,6 +1756,109 @@ class World {
           error: error instanceof Error ? error.message : String(error),
         });
         reject('persistence_failed');
+      });
+  }
+
+  /**
+   * Award spores under the stored-state lock.
+   *
+   * A payout and a purchase must not read the same balance: the award is applied
+   * to the row read inside `SELECT ... FOR UPDATE`, and the live purse follows
+   * the committed value. Guests and a failed store keep the live path.
+   */
+  private awardSporesLocked(player: ConnectedPlayer, amount: number, reason: string): void {
+    const accountId = player.accountId;
+    const store = this.playerStateStore;
+    if (!store || !accountId || this.playerStateUnavailable.has(accountId)) {
+      awardSpores(this.shopPorts(), player, amount, reason);
+      return;
+    }
+    if (!(amount > 0)) return;
+
+    let committed: PersistedPlayerState | undefined;
+    let earned = 0;
+    void store
+      .mutate<number | null>(
+        accountId,
+        toPersistedState(player.inventory, player.spores),
+        (current) => {
+          const next = earnSpores(current.spores, amount, this.sporeConfig.maxBalance);
+          if (next === current.spores) return { result: null };
+          earned = next - current.spores;
+          committed = { slots: current.slots, spores: next };
+          return { next: committed, result: next };
+        },
+      )
+      .then((balance) => {
+        if (balance === null || !committed) return;
+        if (this.players.get(player.playerId) !== player) return;
+        const state = committed;
+        player.spores = state.spores;
+        sendInventorySync(this.inventoryPorts(), player);
+        this.log.info('Spores earned', {
+          playerId: player.playerId,
+          amount: earned,
+          reason,
+          balance: player.spores,
+        });
+      })
+      .catch((error: unknown) => {
+        this.log.error('spore award failed', {
+          accountId,
+          reason,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+  }
+
+  /**
+   * Apply one pouch/purse change under the stored-state lock, then copy the
+   * committed state back onto the live player.
+   *
+   * `mutate` reads the row inside `SELECT ... FOR UPDATE`, so two clicks cannot
+   * spend the same item, and the plant's resource gain is applied by the handler
+   * only after this resolves. A guest, a session with no store, or a row that
+   * could not be read falls back to the live object - the documented copy for
+   * those cases - and the same plan runs either way.
+   */
+  private mutateInventoryState<T>(
+    invPlayer: InventoryPlayer,
+    apply: (current: PersistedPlayerState) => { next?: PersistedPlayerState; result: T } | null,
+  ): Promise<T | null> {
+    const player = this.players.get(invPlayer.playerId);
+    const store = this.playerStateStore;
+    const accountId = player?.accountId ?? null;
+    const options = {
+      itemDefinitions: this.itemsConfig.itemDefinitions,
+      maxSlots: this.itemsConfig.inventorySlots,
+      onRepair: (message: string, meta?: Record<string, unknown>) => this.log.warn(message, meta),
+    };
+    const adopt = (state: PersistedPlayerState): void => {
+      if (!player) return;
+      player.inventory.slots = toInventory(state, options).slots;
+      player.spores = state.spores;
+    };
+
+    if (!player || !store || !accountId || this.playerStateUnavailable.has(accountId)) {
+      const change = apply(toPersistedState(invPlayer.inventory, invPlayer.spores));
+      if (!change) return Promise.resolve(null);
+      if (change.next && player) adopt(change.next);
+      return Promise.resolve(change.result);
+    }
+
+    // The plan's own `next` is what the store sanitises and commits; remember it
+    // so the live copy is replaced with the committed row, not the caller's
+    // stale view of it.
+    let committed: PersistedPlayerState | undefined;
+    return store
+      .mutate<T>(accountId, toPersistedState(player.inventory, player.spores), (current) => {
+        const change = apply(current);
+        if (change?.next) committed = change.next;
+        return change;
+      })
+      .then((result) => {
+        if (committed) adopt(committed);
+        return result;
       });
   }
 
@@ -1861,12 +1966,7 @@ class World {
               // A mutation level is a mutation gained, and the config pays for it.
               // `earn_mutation` was declared and never paid before this, so the
               // HUD only ever showed dung and kill earnings.
-              awardSpores(
-                this.shopPorts(),
-                player,
-                this.sporeConfig.earnMutation,
-                'mutation_level',
-              );
+              this.awardSporesLocked(player, this.sporeConfig.earnMutation, 'mutation_level');
               this.sendMutationState(player);
             } else {
               this.send(player.ws, MESSAGE_TYPE.ERROR, {
@@ -2321,21 +2421,38 @@ class World {
           // is removed, an unknown or already-spent id pays nothing.
           const pickup = pickupDrop(this.damagePipeline, this.sporeConfig, collector, request?.id);
           if (!pickup.ok || !pickup.kind) break;
-          awardSpores(this.shopPorts(), collector, pickup.amount, `drop_${pickup.kind}`);
+          this.awardSporesLocked(collector, pickup.amount, `drop_${pickup.kind}`);
           break;
         }
         case MESSAGE_TYPE.INVENTORY_SLOT_USE: {
           const payload2 = payload as { slotIndex: number };
           const player2 = this.players.get(playerId);
           if (!player2) break;
-          useInventorySlot(this.inventoryPorts(), player2, payload2.slotIndex);
+          void useInventorySlot(this.inventoryPorts(), player2, payload2.slotIndex).catch(
+            (error: unknown) => {
+              this.log.error('item use failed', {
+                playerId,
+                error: error instanceof Error ? error.message : String(error),
+              });
+            },
+          );
           break;
         }
         case MESSAGE_TYPE.INVENTORY_SLOT_SWAP: {
           const payload2 = payload as { fromIndex: number; toIndex: number };
           const player2 = this.players.get(playerId);
           if (!player2) break;
-          swapInventorySlots(this.inventoryPorts(), player2, payload2.fromIndex, payload2.toIndex);
+          void swapInventorySlots(
+            this.inventoryPorts(),
+            player2,
+            payload2.fromIndex,
+            payload2.toIndex,
+          ).catch((error: unknown) => {
+            this.log.error('slot swap failed', {
+              playerId,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          });
           break;
         }
         default: {
