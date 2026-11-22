@@ -40,7 +40,7 @@ Honest list. No feature promises (T42, RULE_13). Updated at every gate.
   "Drops, picking and the way out of the earth" and "Shop, spores and the pouch"
   sections below. The `player_state` restart copy landed on 2026-11-22 and every
   pouch and purse mutation is now a row-locked read-modify-write; the remaining
-  T08A gap is the duplication audit; `items.json` owns the flags (ADR-082).
+  T08A gap is trade, mail and listing; `items.json` owns the flags (ADR-082).
 - One-command local start (`pnpm dev`) and a strict verify chain (`pnpm verify`).
 - **T03P networking gate:** two tabs, one server, server-authoritative
   plant state over WebSocket + JSON at 20 Hz. WASD/arrows pan the camera.
@@ -1131,7 +1131,7 @@ their `notes` in `config/growth.json`.
 
 ## Not built yet
 
-The rest of the economy: the T08A duplication audit, marketplace/mail/trade
+The rest of the economy: marketplace/mail/trade
 (T14/T29/T45) and admin/compliance tooling. The shop, the
 spore purse, world drops and drop pickup are built — see "Shop, spores and the
 pouch" and "Drops, picking and the way out of the earth" below. C04 still owes
@@ -1158,8 +1158,8 @@ slot swap, spore award, dev grant) reads and writes the row inside one lock, and
 disconnect and shutdown save it. A buy → restart → reconnect check passed
 against a temporary Postgres database, and two concurrent 80-spore purchases
 against 120 spores left one success, one refusal and 40 spores after restart. It
-is still **not the whole T08A contract**: the duplication audit has not run and
-the trade/mail/list systems do not exist. Guests have no restart copy. Treat it
+is still **not the whole T08A contract**: trade, mail and listing do not exist
+yet. Guests have no restart copy. Treat it
 as a restart copy, not as the finished economy; details
 in [`docs/tasks/T08A.md`](./tasks/T08A.md).
 
@@ -1192,8 +1192,8 @@ T06 still needs its in-browser checklist. **C04 is partial**: health, damage,
 reroot, Inspect/Inventory, Settings and death stats are in; rebinding and the
 notification log are not. **T08A** is partial: the `player_state` restart copy
 persists an account's pouch and purse across a server restart and every pouch
-mutation is row-locked, but the duplication audit is still open. That is next,
-then the ADR-044 burial fix. AL-01 (benchmark, six fixed poses, GPU
+mutation is row-locked; the duplication audit passed on 2026-11-22. Trade, mail
+and listing are next, then the ADR-044 burial fix. AL-01 (benchmark, six fixed poses, GPU
 timing, zero-alloc audit) and AL-03 (GPU-band quality controller, replacing the
 CPU-fps-based `QualityController`) follow, per ADR-050. Shared depth between the
 WebGPU

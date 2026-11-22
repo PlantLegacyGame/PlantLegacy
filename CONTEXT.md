@@ -18,7 +18,7 @@ locked read-modify-writes that adopt the committed row rather than the plan
 throws is logged as a repair instead of failing a committed write. The purchase,
 item-use, award and dev-grant audits pass
 against Postgres, and a failed dev grant now answers `grant_failed`; what remains is
-the trade/mail/list systems and the duplication audit; see `docs/tasks/T08A.md`.
+the trade/mail/list systems; the duplication audit passed. See `docs/tasks/T08A.md`.
 
 **2026-11-20/21 batch.** The economy got its first playable slice and the title
 got its performance pass. Spores are the server-owned currency (`ops/spores.ts`),
@@ -543,8 +543,8 @@ enforcement changes.
 
 ## 8. Not built yet
 
-The rest of the economy — `item_flags.json` ownership and the duplication audit
-in T08A, marketplace/mail/trade (T14/T29/T45) and admin/compliance tooling. The T06 damage pipeline is
+The rest of the economy — marketplace/mail/trade (T14/T29/T45) and
+admin/compliance tooling; `item_flags.json` ownership and the duplication audit are settled. The T06 damage pipeline is
 implemented and drop pickup is now live; reroot controls and the damage HUD
 belong to T51/C04. Chat, emotes and reports are implemented; the pouch and purse
 are exercised by the shop and now have an account-scoped restart copy in
@@ -661,7 +661,7 @@ placement), and the three unread tile keys (`tile_size_m`, `tile_vertices`,
   locked read-modify-writes that adopt the committed row, and the Postgres
   audit for purchases, item use, awards and dev grants passes; the open parts of
   T08A are the trade/mail/list systems
-  and the duplication audit, not a shop bug.
+  alone, not a shop bug.
 - **A drop pays once.** `ops/dropPickup.ts` owns the rule (a live drop pays its
   kind's rate and the store removes it; unknown, expired, replayed and
   plantless requests pay nothing), the damage pipeline owns removal, and

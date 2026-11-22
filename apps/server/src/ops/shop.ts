@@ -15,7 +15,7 @@ import { addItem, type Inventory } from './inventory.ts';
 import { sendInventorySync } from './inventoryHandlers.ts';
 import type { ItemsConfig } from './items.ts';
 import { MESSAGE_TYPE } from './net.ts';
-import { earnSpores, type SporeConfig, spendSpores } from './spores.ts';
+import { type SporeConfig, spendSpores } from './spores.ts';
 
 export interface ShopEntry {
   id: string;
@@ -133,25 +133,4 @@ export function purchaseShopItem(ports: ShopPorts, player: ShopPlayer, itemId: s
     balance: player.spores,
   });
   return true;
-}
-
-/** Award spores from a non-shop source and keep the client's balance honest. */
-export function awardSpores(
-  ports: ShopPorts,
-  player: ShopPlayer,
-  amount: number,
-  reason: string,
-): void {
-  if (amount <= 0) return;
-  const before = player.spores;
-  player.spores = earnSpores(player.spores, amount, ports.sporeConfig.maxBalance);
-  if (player.spores === before) return;
-  sendInventorySync({ itemsConfig: ports.itemsConfig, send: ports.send }, player);
-  ports.persist?.(player);
-  ports.log.info('Spores earned', {
-    playerId: player.playerId,
-    amount: player.spores - before,
-    reason,
-    balance: player.spores,
-  });
 }

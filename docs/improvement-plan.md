@@ -17,7 +17,7 @@ state), RULE_20 (no rarity), RULE_23 (account-bound flags), one task at a time,
 2. **Postgres.** Resolved 2026-11-22: a local compose stack and test database
    were available. The T08A restart copy was verified by buy → restart →
    reconnect, and every pouch and purse mutation is a row-locked
-   read-modify-write; the duplication audit is still open.
+   read-modify-write; the duplication audit passed on 2026-11-22.
 3. **Wire compatibility.** Resolved 2026-11-21: breaking changes are allowed
    until the first public alpha. The wire is v4 today. Wave 1-B turned out
    additive (new config key, fewer messages, no payload change), so it needed no
@@ -285,7 +285,7 @@ make `DEV_RESPONSE` dispatch meaningful or remove it.
   disconnect, session replacement and shutdown. Buy → restart → reconnect, a
   two-concurrent-purchase audit, and the item-use, award, clamped-write and
   dev-grant checks in `playerStateAudit.ts` were verified against a local
-  Postgres. Still open: the duplication audit and the trade/mail/list systems.
+  Postgres. Still open: the trade/mail/list systems.
   Config ownership is resolved (ADR-082); see `docs/tasks/T08A.md`.
 - **5-B Season-end burial (ADR-044)** — dead biomass becomes an organic-matter
   field and edits/voids persist.
