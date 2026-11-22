@@ -167,6 +167,88 @@ describe('PlayerStateStore', () => {
     assert.equal(upsert.params[2], 77);
   });
 
+  it('reads inside the row lock and writes the next state', async () => {
+    const queries: Array<{ sql: string; params: unknown[] }> = [];
+    const client = {
+      query: async (sql: string, params: unknown[] = []) => {
+        queries.push({ sql, params });
+        if (sql.startsWith('SELECT')) {
+          return { rows: [{ slots: [{ itemId: 'dung', count: 1 }], spores: '10' }] };
+        }
+        return { rows: [] };
+      },
+      release: () => {},
+    };
+    const pool = { connect: async () => client } as unknown as Pool;
+    const store = new PlayerStateStore(pool, options);
+    const result = await store.mutate(
+      'acct_one',
+      { slots: [null, null, null, null], spores: 5 },
+      (current) => ({
+        next: { slots: [{ itemId: 'dung', count: 2 }], spores: current.spores + 1 },
+        result: current.spores,
+      }),
+    );
+
+    assert.equal(result, 10);
+    assert.deepEqual(
+      queries.map((query) => query.sql.split(/\s+/)[0]),
+      ['BEGIN', 'INSERT', 'SELECT', 'INSERT', 'COMMIT'],
+    );
+    const writes = queries.filter((query) => query.sql.startsWith('INSERT'));
+    assert.equal(writes.length, 2);
+    assert.equal(writes[0]?.params[2], 5);
+    assert.equal(writes[1]?.params[2], 11);
+  });
+
+  it('rolls back a refused mutation without writing the change', async () => {
+    const queries: string[] = [];
+    const client = {
+      query: async (sql: string) => {
+        queries.push(sql);
+        if (sql.startsWith('SELECT')) return { rows: [{ slots: [], spores: 0 }] };
+        return { rows: [] };
+      },
+      release: () => {},
+    };
+    const pool = { connect: async () => client } as unknown as Pool;
+    const store = new PlayerStateStore(pool, options);
+    const result = await store.mutate('acct_one', { slots: [], spores: 0 }, () => ({
+      result: 'refused' as const,
+    }));
+
+    assert.equal(result, 'refused');
+    assert.equal(queries.filter((sql) => sql.startsWith('INSERT')).length, 1);
+    assert.equal(queries.at(-1), 'ROLLBACK');
+  });
+
+  it('serialises writes for one owner so commits follow call order', async () => {
+    const order: string[] = [];
+    let started = 0;
+    const pool = {
+      connect: async () => ({
+        query: async (sql: string) => {
+          if (sql === 'BEGIN') {
+            started += 1;
+            order.push(`begin${started}`);
+            await new Promise((resolve) => setTimeout(resolve, 5));
+          }
+          if (sql === 'COMMIT') {
+            order.push(`commit${started}`);
+          }
+          return { rows: [] };
+        },
+        release: () => {},
+      }),
+    } as unknown as Pool;
+    const store = new PlayerStateStore(pool, options);
+    await Promise.all([
+      store.save('acct_one', { slots: [], spores: 1 }),
+      store.save('acct_one', { slots: [], spores: 2 }),
+    ]);
+    assert.deepEqual(order, ['begin1', 'commit1', 'begin2', 'commit2']);
+  });
+
   it('rolls back and releases the connection when the write fails', async () => {
     const queries: string[] = [];
     let released = false;

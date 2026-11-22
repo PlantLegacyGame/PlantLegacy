@@ -130,14 +130,16 @@ function clampSpores(
  * The only reader and writer of `player_state`.
  *
  * `save` is a transaction: it locks the account row with `SELECT ... FOR UPDATE`
- * and then upserts. The in-memory player remains the live copy between saves;
- * the row is the restart copy. A read-modify-write transaction that loads inside
- * the lock will be needed when two sessions can mutate one account at the same
- * time; the single-active-player rule currently prevents that.
+ * and then upserts. `mutate` is the read-modify-write variant: it seeds and
+ * locks the row, reads the current pouch and purse inside the lock, lets the
+ * caller apply one change, and writes the result before commit. A refusal
+ * rolls back without touching the row.
  */
 export class PlayerStateStore {
   readonly #pool: Pool;
   readonly #options: PlayerStateStoreOptions;
+  /** One in-flight write per owner, so commits follow call order. */
+  readonly #writeQueues = new Map<string, Promise<unknown>>();
 
   constructor(pool: Pool, options: PlayerStateStoreOptions) {
     this.#pool = pool;
@@ -157,14 +159,104 @@ export class PlayerStateStore {
     };
   }
 
-  async save(ownerId: string, state: PersistedPlayerState): Promise<void> {
+  /**
+   * Apply one change to the stored state under a row lock.
+   *
+   * `initial` seeds a missing row. The callback receives the state read inside
+   * the lock, not the caller's stale copy, so two purchases in flight cannot
+   * both spend the same spores. Return `null`, or a result with no `next`, to
+   * refuse the change; the transaction rolls back and the row is untouched.
+   */
+  mutate<T>(
+    ownerId: string,
+    initial: PersistedPlayerState,
+    apply: (current: PersistedPlayerState) => { next?: PersistedPlayerState; result: T } | null,
+  ): Promise<T | null> {
+    return this.#serialize(ownerId, () => this.#mutateNow(ownerId, initial, apply));
+  }
+
+  async #mutateNow<T>(
+    ownerId: string,
+    initial: PersistedPlayerState,
+    apply: (current: PersistedPlayerState) => { next?: PersistedPlayerState; result: T } | null,
+  ): Promise<T | null> {
+    const seedSlots = sanitizeSlots(initial.slots, this.#options);
+    const seedSpores = clampSpores(initial.spores, this.#options.maxSpores, this.#options.onRepair);
+    const client = await this.#pool.connect();
+    try {
+      await client.query('BEGIN');
+      // Create the row if it is missing, so the following SELECT always has a
+      // row to lock. Two first writes serialise on the unique key instead of
+      // both reading "no row" and racing.
+      await client.query(
+        `INSERT INTO player_state (owner_id, slots, spores, updated_at)
+         VALUES ($1, $2::jsonb, $3, NOW())
+         ON CONFLICT (owner_id) DO NOTHING`,
+        [ownerId, JSON.stringify(seedSlots), seedSpores],
+      );
+      const result = await client.query<{ slots: unknown; spores: unknown }>(
+        'SELECT slots, spores FROM player_state WHERE owner_id = $1 FOR UPDATE',
+        [ownerId],
+      );
+      const row = result.rows[0];
+      const current: PersistedPlayerState = row
+        ? {
+            slots: sanitizeSlots(row.slots, this.#options),
+            spores: clampSpores(row.spores, this.#options.maxSpores, this.#options.onRepair),
+          }
+        : { slots: seedSlots, spores: seedSpores };
+
+      const change = apply(current);
+      if (!change) {
+        await client.query('ROLLBACK');
+        return null;
+      }
+      if (!change.next) {
+        await client.query('ROLLBACK');
+        return change.result;
+      }
+
+      const slots = sanitizeSlots(change.next.slots, this.#options);
+      const spores = clampSpores(
+        change.next.spores,
+        this.#options.maxSpores,
+        this.#options.onRepair,
+      );
+      await client.query(
+        `INSERT INTO player_state (owner_id, slots, spores, updated_at)
+         VALUES ($1, $2::jsonb, $3, NOW())
+         ON CONFLICT (owner_id) DO UPDATE
+           SET slots = EXCLUDED.slots,
+               spores = EXCLUDED.spores,
+               updated_at = NOW()`,
+        [ownerId, JSON.stringify(slots), spores],
+      );
+      await client.query('COMMIT');
+      return change.result;
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => {
+        // The connection may already be gone; the original error is the one
+        // the caller needs to see.
+      });
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  save(ownerId: string, state: PersistedPlayerState): Promise<void> {
+    return this.#serialize(ownerId, () => this.#saveNow(ownerId, state));
+  }
+
+  async #saveNow(ownerId: string, state: PersistedPlayerState): Promise<void> {
     const slots = sanitizeSlots(state.slots, this.#options);
     const spores = clampSpores(state.spores, this.#options.maxSpores, this.#options.onRepair);
     const client = await this.#pool.connect();
     try {
       await client.query('BEGIN');
-      // Lock the account row before writing, so two writers cannot interleave
-      // their pouch and purse. A missing row is locked by the INSERT itself.
+      // Lock the account row before writing. A missing row is created by the
+      // upsert; same-owner writes are serialised by #serialize, so a stale
+      // writer cannot overtake a newer one inside this process.
       await client.query('SELECT owner_id FROM player_state WHERE owner_id = $1 FOR UPDATE', [
         ownerId,
       ]);
@@ -187,5 +279,16 @@ export class PlayerStateStore {
     } finally {
       client.release();
     }
+  }
+
+  #serialize<T>(ownerId: string, work: () => Promise<T>): Promise<T> {
+    const previous = this.#writeQueues.get(ownerId) ?? Promise.resolve();
+    const run = previous.then(work);
+    const settled = run.catch(() => {});
+    this.#writeQueues.set(ownerId, settled);
+    void settled.finally(() => {
+      if (this.#writeQueues.get(ownerId) === settled) this.#writeQueues.delete(ownerId);
+    });
+    return run;
   }
 }

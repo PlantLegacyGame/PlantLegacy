@@ -68,6 +68,40 @@ export interface ShopPorts {
 }
 
 /**
+ * Validate and apply a purchase to an inventory.
+ *
+ * Pure in the sense that it touches nothing but the inventory and the balance
+ * it is given, so the same check can run against a live player or against the
+ * state read inside a `player_state` row lock. On success the item is already
+ * in `inventory`; on refusal nothing changed.
+ */
+export type ShopPurchasePlan =
+  | { ok: true; spores: number; inventory: Inventory }
+  | { ok: false; reason: string };
+
+export function planShopPurchase(
+  ports: Pick<ShopPorts, 'itemsConfig' | 'shopConfig' | 'sporeConfig'>,
+  inventory: Inventory,
+  spores: number,
+  itemId: string,
+): ShopPurchasePlan {
+  if (!ports.shopConfig.enabled) return { ok: false, reason: 'shop_closed' };
+  const entry = ports.shopConfig.items.find((item) => item.id === itemId);
+  if (!entry) return { ok: false, reason: 'unknown_item' };
+
+  const definition = ports.itemsConfig.itemDefinitions.get(entry.id);
+  if (!definition) return { ok: false, reason: 'unknown_item' };
+
+  const nextBalance = spendSpores(spores, entry.price, ports.sporeConfig.maxBalance);
+  if (nextBalance === null) return { ok: false, reason: 'insufficient_spores' };
+
+  const added = addItem(inventory, entry.id, 1, ports.itemsConfig.itemDefinitions);
+  if (added <= 0) return { ok: false, reason: 'inventory_full' };
+
+  return { ok: true, spores: nextBalance, inventory };
+}
+
+/**
  * Buy one item with spores.
  *
  * Refusals are explicit (`REJECT` with a machine reason the client can put in a
@@ -85,26 +119,17 @@ export function purchaseShopItem(ports: ShopPorts, player: ShopPlayer, itemId: s
     return false;
   };
 
-  if (!ports.shopConfig.enabled) return reject('shop_closed');
+  const plan = planShopPurchase(ports, player.inventory, player.spores, itemId);
+  if (!plan.ok) return reject(plan.reason);
+
+  player.spores = plan.spores;
   const entry = ports.shopConfig.items.find((item) => item.id === itemId);
-  if (!entry) return reject('unknown_item');
-
-  const definition = ports.itemsConfig.itemDefinitions.get(entry.id);
-  if (!definition) return reject('unknown_item');
-
-  const nextBalance = spendSpores(player.spores, entry.price, ports.sporeConfig.maxBalance);
-  if (nextBalance === null) return reject('insufficient_spores');
-
-  const added = addItem(player.inventory, entry.id, 1, ports.itemsConfig.itemDefinitions);
-  if (added <= 0) return reject('inventory_full');
-
-  player.spores = nextBalance;
   sendInventorySync({ itemsConfig: ports.itemsConfig, send: ports.send }, player);
   ports.persist?.(player);
   ports.log.info('Shop purchase', {
     playerId: player.playerId,
-    itemId: entry.id,
-    price: entry.price,
+    itemId,
+    price: entry?.price ?? 0,
     balance: player.spores,
   });
   return true;

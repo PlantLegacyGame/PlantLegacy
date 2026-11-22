@@ -118,9 +118,11 @@ import {
 import {
   awardSpores,
   loadShopConfig,
+  planShopPurchase,
   purchaseShopItem,
   type ShopConfig,
   type ShopPorts,
+  type ShopPurchasePlan,
 } from './ops/shop.ts';
 import { loadSporeConfig, type SporeConfig } from './ops/spores.ts';
 import { TerrainService } from './ops/terrain.ts';
@@ -1167,7 +1169,10 @@ class World {
       blocked: new Set<string>(),
       chatTimestamps: [],
     };
-    if (!restored) this.persistPlayerState(player);
+    // Do not write the starting kit here. A connect-time save races the first
+    // purchase: it can capture the starting purse, lose the row lock because the
+    // row does not exist yet, and then overwrite the purchase with stale state.
+    // The row is created by the first mutation, or by the shutdown flush.
     return player;
   }
 
@@ -1652,6 +1657,74 @@ class World {
         if (live) this.persistPlayerState(live);
       },
     };
+  }
+
+  /**
+   * Buy an item under the stored-state lock.
+   *
+   * The live object is still the fast path for guests and for a session whose
+   * row could not be read. An account with a row reads the pouch and purse
+   * inside the row lock, applies the purchase there, and only then copies the
+   * committed result back onto the live player. Two purchases in flight cannot
+   * both spend the same spores.
+   */
+  private purchaseShopItem(player: ConnectedPlayer, itemId: string): void {
+    const accountId = player.accountId;
+    const store = this.playerStateStore;
+    if (!store || !accountId || this.playerStateUnavailable.has(accountId)) {
+      purchaseShopItem(this.shopPorts(), player, itemId);
+      return;
+    }
+
+    const reject = (reason: string): void => {
+      if (this.players.get(player.playerId) !== player) return;
+      this.send(player.ws, MESSAGE_TYPE.REJECT, {
+        reason,
+        originalType: MESSAGE_TYPE.SHOP_PURCHASE,
+      });
+    };
+
+    void store
+      .mutate<ShopPurchasePlan>(
+        accountId,
+        toPersistedState(player.inventory, player.spores),
+        (current) => {
+          const inventory = toInventory(current, {
+            itemDefinitions: this.itemsConfig.itemDefinitions,
+            maxSlots: this.itemsConfig.inventorySlots,
+            onRepair: (message, meta) => this.log.warn(message, { accountId, ...meta }),
+          });
+          const plan = planShopPurchase(this.shopPorts(), inventory, current.spores, itemId);
+          if (!plan.ok) return { result: plan };
+          return { next: toPersistedState(plan.inventory, plan.spores), result: plan };
+        },
+      )
+      .then((plan) => {
+        if (!plan) return;
+        if (this.players.get(player.playerId) !== player) return;
+        if (!plan.ok) {
+          reject(plan.reason);
+          return;
+        }
+        player.inventory.slots = plan.inventory.slots;
+        player.spores = plan.spores;
+        sendInventorySync(this.inventoryPorts(), player);
+        const entry = this.shopConfig.items.find((item) => item.id === itemId);
+        this.log.info('Shop purchase', {
+          playerId: player.playerId,
+          itemId,
+          price: entry?.price ?? 0,
+          balance: player.spores,
+        });
+      })
+      .catch((error: unknown) => {
+        this.log.error('shop purchase failed', {
+          accountId,
+          itemId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        reject('persistence_failed');
+      });
   }
 
   /** The shop handlers' view, including the write-back after a payout. */
@@ -2206,7 +2279,7 @@ class World {
           const request = payload as { itemId: string };
           const buyer = this.players.get(playerId);
           if (!buyer) break;
-          purchaseShopItem(this.shopPorts(), buyer, String(request.itemId ?? ''));
+          this.purchaseShopItem(buyer, String(request.itemId ?? ''));
           break;
         }
         case MESSAGE_TYPE.DROP_COLLECT: {
