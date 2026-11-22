@@ -101,8 +101,9 @@ RULE_8 (clarified [V5.4], approved 2026-11-09): The planet is one
         Between seasons, deep time
         passes and the same planet transforms. A season-end calamity is
         a burial, not a wipe: it kills the plants it reaches and lays
-        their traces under sediment; survivors carry on, and the planet
-        is never regenerated from scratch or restored to a blank state.
+        their traces under sediment; plants it does not reach remain, and
+        the planet is never regenerated from scratch or restored to a blank
+        state.
 
 RULE_9: Everything should produce social possibility. If a system could
         not, in principle, produce a moment someone tells their friend
@@ -261,7 +262,7 @@ RULE_31: FREE-FIRST OPS. Choose free hosting and free assets first, and
 | Ledger | Edit and ownership history attached to any named thing. |
 | Tombstone | Public record left when a ledger entry is erased: who erased it and when. |
 | Season | Tunable default of ninety real days. |
-| Season-end calamity | The final and largest of a season's placed calamities (T20). It is survivable; plants that live carry into the next season. Only a plant that actually produced a propagule leaves lineage when it dies. |
+| Season-end calamity | The final and largest of a season's placed calamities (T20). It is survivable; survivor carry-over into the next season is the proposed default (Part 16 item 15). Only a plant that actually produced a propagule leaves lineage when it dies. |
 | Season Relic | Tradeable stylized model of planet at season end. Post-MVP. |
 | Deep time | Millions of years between seasons. |
 | Heirloom seed | Blank-vessel inventory item. Produced by seed production from a mature flower (T06A) or a mid-season death grant (T06A). Spending it starts a descendant whose mutation set comes from the owner's latest death record. Tradeable and mailable per flags. |
@@ -673,7 +674,7 @@ non-local server rejects dev endpoints; a normal player cannot reach the panel.
 
 | Task | Produces (Outputs) | Consumes (Inputs) | Consumed By (Downstream) |
 |------|-------------------|-------------------|--------------------------|
-| **T20** | Same planet across seasons, rule-based deep-time transformation (drift/erosion/volcanism/sea level/biome), scars fossilize, replayable time-lapse, **many placed and survivable calamities through a 90-day season**, final cataclysm, survivors carry over, lineage via produced propagules only, season rewards for standard+ boosters | T06A (death pipeline), T07 (weather), T16 (ledger), T13A (rewards) | **T18** (season relics), **T39** (climate memory), **T48** (minimap aggregation), **C05** (season screen) |
+| **T20** | Same planet across seasons, rule-based deep-time transformation (drift/erosion/volcanism/sea level/biome), scars fossilize, replayable time-lapse, **many placed and survivable calamities through a 90-day season**, final cataclysm, proposed survivor carry-over, lineage via produced propagules only, season rewards for standard+ boosters | T06A (death pipeline), T07 (weather), T16 (ledger), T13A (rewards) | **T18** (season relics), **T39** (climate memory), **T48** (minimap aggregation), **C05** (season screen) |
 | **C05** | Login/sign-up, spawn/archetype select, inventory, ledger viewer, death/heirloom screen, season countdown/time-lapse, settings, reconnect, **empty shells** for marketplace/mail/guild | C01, C04, T08A, T16, T06A, T20, T08C, T12 | **C09** (touch layout), **C07** (app wrappers) |
 
 ### Launch Readiness (Phase 4-6 / Gate 3)
@@ -1313,7 +1314,7 @@ Each spec is a block. Feed one to the AI at a time. Every AI session returns imp
 - Player-created scars fossilize and may reappear as landmarks, mineral deposits, faint mutation traces.
 - Season length tunable default **90 real days**. Calamities are scheduled through the season, not only at its boundary. Players can pre-build/queue next seed during the season and the finale.
 - **Calamities are placed events.** Each has a shape (point, circle, ring, capsule, path, polygon or global), centre/path, magnitude, duration, warning and aftermath. Natural events come from a seeded per-world deck with forecasts; dev events can be aimed from the dev panel. See [`docs/calamities.md`](./docs/calamities.md).
-- **Calamities are survivable.** Exposure falls off across the zone and feeds the T06 damage pipeline. A plant may lose parts, be uprooted, be buried or die; survival depends on traits, morphology, terrain/shelter and a small seeded luck factor. The final cataclysm is the largest event, not an automatic wipe. Plants that survive it persist into the next season.
+- **Calamities are survivable.** Exposure falls off across the zone and feeds the T06 damage pipeline. A plant may lose parts, be uprooted, be buried or die; survival depends on traits, morphology, terrain/shelter and a small seeded luck factor. The final cataclysm is the largest event, not an automatic wipe. Survivor carry-over into the next season is the proposed default (Part 16 item 15).
 - **Lineage is reproductive.** A plant that dies passes on lineage only through a propagule it actually produced: seed, bulb, tuber, rhizome, spore or another configured equivalent. **[V5.3] `calamity_grant_seed=false` default (Part 5, T06A).** A plant with no propagule ends its lineage; the player starts next season on Path 1, which is never an account punishment.
 - **Time accelerates after a calamity.** A short recovery window runs at a higher simulation scale; the inter-season transformation runs as a replayable deep-time time-lapse. The server tick rate does not change.
 - A calamity is a **burial, not a wipe** (RULE_8): the death pipeline converts structural biomass into the organic-matter soil field, player-made terrain edits and voids persist, and the next season runs on the same transformed planet. No code path regenerates the world or returns it to a blank state.
@@ -1321,11 +1322,11 @@ Each spec is a block. Feed one to the AI at a time. Every AI session returns imp
 - No relic drop in MVP; relic T18 post-MVP.
 - No pre-build decision left open; pre-build supported.
 
-**Acceptance.** Same planet across seasons. Transformation works. Scars can fossilize/reappear. Replayable time-lapse. Event scheduled/replayable. Players can pre-build/queue next seed. Season length tunable at 90 days. At least one natural and one dev-triggered zoned calamity. Exposure falls off across a zone and a plant can survive it. The final cataclysm is survivable and survivors persist. Dead plants run the T06A pipeline; only a produced propagule grants lineage. Season reward for standard+ boosters works. No relic drop MVP.
+**Acceptance.** Same planet across seasons. Transformation works. Scars can fossilize/reappear. Replayable time-lapse. Event scheduled/replayable. Players can pre-build/queue next seed. Season length tunable at 90 days. At least one natural and one dev-triggered zoned calamity. Exposure falls off across a zone and a plant can survive it. The final cataclysm is survivable; survivor carry-over is decided before implementation (Part 16 item 15). Dead plants run the T06A pipeline; only a produced propagule grants lineage. Season reward for standard+ boosters works. No relic drop MVP.
 
 **Config.** Season length default 90 days tunable. Calamity definitions, zone defaults, natural deck, warning lead times, exposure/falloff, survival caps and recovery time scales in `calamities.json`. Years/sec time-lapse, fossilization chance and transformation parameters in `deep_time.json`. Season reward table.
 
-**AI prompt.** "Build T20 deep time/season. Same planet across seasons. Rule-based transformation. Scars fossilize. Replayable time-lapse. Season length tunable default 90 days. Many placed calamities through the season: natural seeded deck plus dev-triggered, each with a shape, zone, magnitude, warning and aftermath. Exposure falls off and feeds T06; a plant can survive, lose parts, be uprooted or die; the final cataclysm is survivable and survivors persist. Death runs T06A; lineage only through a propagule the plant actually produced (seed, bulb, tuber, rhizome, spore); `calamity_grant_seed` default false. Recovery time scale after an event, deep time between seasons. Season reward for standard+ boosters. No relic drop MVP. All config in `calamities.json` and `deep_time.json`."
+**AI prompt.** "Build T20 deep time/season. Same planet across seasons. Rule-based transformation. Scars fossilize. Replayable time-lapse. Season length tunable default 90 days. Many placed calamities through the season: natural seeded deck plus dev-triggered, each with a shape, zone, magnitude, warning and aftermath. Exposure falls off and feeds T06; a plant can survive, lose parts, be uprooted or die; the final cataclysm is survivable; survivor carry-over per Part 16 item 15. Death runs T06A; lineage only through a propagule the plant actually produced (seed, bulb, tuber, rhizome, spore); `calamity_grant_seed` default false. Recovery time scale after an event, deep time between seasons. Season reward for standard+ boosters. No relic drop MVP. All config in `calamities.json` and `deep_time.json`."
 
 ### C05 · Menus and Screens — `config/ui.json`
 *(See Part 4, B4 for full spec. Depends on C01, C04, T08A, T16, T06A, T20, T08C, T12.)*
@@ -1663,7 +1664,7 @@ before treating an entry as open._
 - Mail for system messages, player mail, Gift Bundle delivery.
 - Spore store UI MVP; real-money integration later.
 - No permanent unlock from session end. No battle-royale session end.
-- Many placed calamities run through a 90-day season; the final cataclysm is the largest and is survivable. Survivors carry into the next season. Lineage comes only from a propagule the plant actually produced.
+- Many placed calamities run through a 90-day season; the final cataclysm is the largest and is survivable. Survivor carry-over into the next season is the proposed default (Part 16 item 15). Lineage comes only from a propagule the plant actually produced.
 - Prestige only from non-consensual drains; weather/herbivore kills credit no one.
 
 **V5.3 / V5.3.1 locked decisions.**
@@ -1694,7 +1695,7 @@ before treating an entry as open._
 **V5.4 extension decisions (approved 2026-11-09; see Part 16).**
 
 - Reactive non-sapient fauna are allowed in multiplayer. Intelligent NPCs remain campaign-only. Fauna may have needs and reflexes; they may not converse, pursue story goals, exercise judgment, form factions, or plan.
-- There are no world resets. A season-end calamity buries the plants it kills under sediment; it does not wipe or regenerate the planet, and plants that survive it carry into the next season.
+- There are no world resets. A season-end calamity buries the plants it kills under sediment; it does not wipe or regenerate the planet. Whether a plant it does not kill carries into the next season is the proposed default in Part 16 item 15.
 - The damage pipeline is target-agnostic and covers plant and fauna damage, with a single record shape.
 - Material simulation runs on a decoupled cellular-automaton cadence inside the existing tick budget. It does not raise the 20 Hz gameplay tick.
 - Volumetric terrain is stored as sparse binary chunks, never as per-voxel database rows.

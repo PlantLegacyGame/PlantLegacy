@@ -871,8 +871,8 @@ transformations.
 
 **Amended 2026-11-21 (ADR-078).** A calamity no longer kills every plant by
 definition. The burial rule applies to the plants a calamity actually kills;
-plants that survive it persist into the next season, and their biomass is not
-converted until they die.
+their biomass is not converted until they die. Whether a survivor carries into
+the next season is the proposed default in Part 16 item 15.
 
 ---
 
@@ -1931,8 +1931,9 @@ magnitude, duration and aftermath. Exposure is computed per plant and part,
 falls off across the zone, and feeds the existing T06 damage pipeline. A plant
 can lose parts, be uprooted, be buried or die; survival depends on traits,
 morphology, terrain/shelter and a small seeded luck factor. The final cataclysm
-closes the season but is not an automatic wipe: survivors persist into the next
-season. Death still runs T06A and still buries biomass as organic matter
+closes the season but is not an automatic wipe: survivors are not killed by it,
+and carry-over into the next season is the proposed default (Part 16 item 15).
+Death still runs T06A and still buries biomass as organic matter
 (ADR-044). Lineage exists only through a produced propagule (seed, bulb, tuber,
 rhizome, spore or configured equivalent); `calamity_grant_seed` stays false.
 After a calamity, a recovery window runs the simulation clock faster; after the
@@ -1946,7 +1947,8 @@ is replaced. `world_state.last_calamity_at` now means the last event of any size
 not only the season boundary. The single death queue stays the hook. The work is
 not in the current roadmap arithmetic; the gate dates must be extended (Part 16
 item 4). The mechanics still open are listed in `calamities.md` §11 and DESIGN
-Part 16 items 15–19.
+Part 16 items 15–19; the most consequential is whether a survivor carries into
+the next season.
 
 ---
 
