@@ -14,7 +14,9 @@ v2 `MUTATION_STATE`/`MUTATION_SHED`, twelve visual signatures). **T06** damage, 
 partial: the `player_state` restart copy persists an account's pouch and purse
 (2026-11-22, ADR-081), and purchases, item use, slot swaps and spore awards are
 locked read-modify-writes that adopt the committed row rather than the plan
-(`ops/playerStateMutations.ts`). The purchase, item-use and award audits pass
+(`ops/playerStateMutations.ts`, `ops/shopPurchase.ts`); an adoption hook that
+throws is logged as a repair instead of failing a committed write. The purchase,
+item-use and award audits pass
 against Postgres; what remains is the dev-grant path and the trade/mail/list
 systems; see `docs/tasks/T08A.md`.
 

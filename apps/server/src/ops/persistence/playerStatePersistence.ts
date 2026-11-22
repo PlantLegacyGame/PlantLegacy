@@ -170,7 +170,9 @@ export class PlayerStateStore {
    * `onCommitted` receives the state **as written**, after the commit: the
    * caller's plan may have been clamped (a stack above its limit, a purse above
    * the maximum), and adopting the plan instead would leave the live copy ahead
-   * of the row it is supposed to mirror.
+   * of the row it is supposed to mirror. A hook that throws is reported to the
+   * repair sink and swallowed - the commit already happened, so it must not be
+   * turned into a failed write.
    */
   mutate<T>(
     ownerId: string,
@@ -241,7 +243,7 @@ export class PlayerStateStore {
       await client.query('COMMIT');
       // What the row holds, not what the caller asked for. `slots` and `spores`
       // are the sanitised values the upsert wrote.
-      onCommitted?.({ slots, spores });
+      this.#adoptCommitted({ slots, spores }, onCommitted);
       return change.result;
     } catch (error) {
       await client.query('ROLLBACK').catch(() => {
@@ -251,6 +253,34 @@ export class PlayerStateStore {
       throw error;
     } finally {
       client.release();
+    }
+  }
+
+  /**
+   * Hand the committed state to the caller's hook, safely.
+   *
+   * The row is durable by the time this runs. A hook that throws (a live copy
+   * that could not be rebuilt, a listener that misbehaves) is a post-commit
+   * problem to log, not evidence the write failed: letting it escape would run
+   * the catch path, roll back an already-committed transaction and report
+   * `persistence_failed` for a purchase the database took.
+   */
+  #adoptCommitted(
+    state: PersistedPlayerState,
+    onCommitted?: (state: PersistedPlayerState) => void,
+  ): void {
+    if (!onCommitted) return;
+    try {
+      onCommitted(state);
+    } catch (error) {
+      try {
+        this.#options.onRepair?.('a committed player state could not be adopted', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      } catch {
+        // A logger that throws must not undo the guarantee this method exists
+        // for: the row is committed, so nothing here may fail the caller.
+      }
     }
   }
 

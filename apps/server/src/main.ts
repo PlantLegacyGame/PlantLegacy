@@ -118,14 +118,8 @@ import {
   seasonSnapshot,
   seasonUpdatePayload,
 } from './ops/seasonClock.ts';
-import {
-  loadShopConfig,
-  planShopPurchase,
-  purchaseShopItem,
-  type ShopConfig,
-  type ShopPorts,
-  type ShopPurchasePlan,
-} from './ops/shop.ts';
+import { loadShopConfig, purchaseShopItem, type ShopConfig, type ShopPorts } from './ops/shop.ts';
+import { purchaseUnderLock } from './ops/shopPurchase.ts';
 import { type HeartbeatSocket, heartbeatTick } from './ops/socketHeartbeat.ts';
 import { loadSporeConfig, type SporeConfig } from './ops/spores.ts';
 import { TerrainService } from './ops/terrain.ts';
@@ -1716,22 +1710,17 @@ class World {
       });
     };
 
-    void mutatePlayerState<ShopPurchasePlan>(
+    void purchaseUnderLock(
       {
         store,
         accountId,
         unavailable: false,
         initial: toPersistedState(player.inventory, player.spores),
-      },
-      (current) => {
-        const inventory = toInventory(current, {
-          itemDefinitions: this.itemsConfig.itemDefinitions,
-          maxSlots: this.itemsConfig.inventorySlots,
-          onRepair: (message, meta) => this.log.warn(message, { accountId, ...meta }),
-        });
-        const plan = planShopPurchase(this.shopPorts(), inventory, current.spores, itemId);
-        if (!plan.ok) return { result: plan };
-        return { next: toPersistedState(plan.inventory, plan.spores), result: plan };
+        itemsConfig: this.itemsConfig,
+        shopConfig: this.shopConfig,
+        sporeConfig: this.sporeConfig,
+        itemId,
+        onRepair: (message, meta) => this.log.warn(message, { accountId, ...meta }),
       },
       (state) => {
         if (this.players.get(player.playerId) === player) this.adoptPlayerState(player, state);

@@ -240,6 +240,35 @@ describe('PlayerStateStore', () => {
     });
   });
 
+  it('does not fail a committed write when the adoption hook throws', async () => {
+    const repairs: string[] = [];
+    const client = {
+      query: async (sql: string) => {
+        if (sql.startsWith('SELECT')) return { rows: [{ slots: [], spores: 900 }] };
+        return { rows: [] };
+      },
+      release: () => {},
+    };
+    const pool = { connect: async () => client } as unknown as Pool;
+    const store = new PlayerStateStore(pool, {
+      ...options,
+      onRepair: (message) => repairs.push(message),
+    });
+
+    const result = await store.mutate(
+      'acct_one',
+      { slots: [], spores: 900 },
+      () => ({ next: { slots: [], spores: 901 }, result: 'committed' as const }),
+      () => {
+        throw new Error('the live copy could not be rebuilt');
+      },
+    );
+
+    assert.equal(result, 'committed', 'a post-commit hook must not fail the write');
+    assert.equal(repairs.length, 1);
+    assert.match(repairs[0] ?? '', /could not be adopted/);
+  });
+
   it('does not hand back a state for a refused mutation', async () => {
     const client = {
       query: async (sql: string) => {
