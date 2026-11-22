@@ -8415,6 +8415,10 @@ let lookUpPitchRad = 0;
 /** Settings every OrbitControls instance starts with, including rebuilt ones. */
 function createControls(): OrbitControls {
   const created = new OrbitControls(camera, renderer.domElement);
+  // OrbitControls writes `cursor: auto` straight onto the canvas, and an inline
+  // declaration beats the themed `html[data-pl-cursor] canvas` rule, so the leaf
+  // theme never reached the scene. The canvas owns no cursor of its own: CSS does.
+  renderer.domElement.style.removeProperty('cursor');
   created.enableDamping = true;
   created.dampingFactor = 0.05;
   created.enablePan = true;

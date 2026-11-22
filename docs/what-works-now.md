@@ -520,7 +520,11 @@ Honest list. No feature promises (T42, RULE_13). Updated at every gate.
   shapes on soil. The skull got a jaw, cheekbones and teeth; the watering can became
   a can with a raised spout and a rose; the feed sack got a tied paper top and a leaf
   label; the leaf cursors got a stem into the hot spot and a bright inner edge, and
-  fall back to the system pointer under forced colours.
+  fall back to the system pointer under forced colours. On 2026-11-22 they also
+  reached the scene: OrbitControls' inline `cursor: auto` on the canvas was
+  clearing the themed rule, so only DOM panels showed a leaf; each leaf now ships
+  as a PNG in front of its SVG because Chromium drops a refused cursor image
+  without an error and silently shows the Windows arrow.
 - **Title screen (2026-11-19):** the scene drags as one picture. The near
   foreground and the cloud shadows read the far layer's own offset (published as
   `--pl-scene-x/y`), so grass pans further than hills instead of standing still
