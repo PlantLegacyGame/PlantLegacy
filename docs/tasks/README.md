@@ -21,15 +21,15 @@ design document.
 6. A partial task stays `[ ]` and its record states exactly which acceptance
    criteria are met. Do not mark a slice as the whole task.
 
-## Current priority (2026-11-21)
+## Current priority (2026-11-22)
 
 `pnpm verify` is green. Work order is fixed by ADR-023, amended by ADR-026
 through ADR-029, ADR-041/ADR-048 and the 2026-11-21 scope choices (ADR-080):
 
 1. **T08A** — finish the inventory contract. The `player_state` restart copy
-   landed 2026-11-22 (buy → restart → reconnect verified); the locked
-   read-modify-write mutation path, `item_flags.json` and the config ownership
-   decision remain. Record: [T08A.md](./T08A.md).
+   and row-locked write landed 2026-11-22 (buy → restart → reconnect verified);
+   the read-modify-write mutation path and the formal duplication audit remain.
+   Config ownership is resolved (ADR-082). Record: [T08A.md](./T08A.md).
 2. **C04 closeout** — rebinding screen, notification log and one real-device
    pass. Record: [C04.md](./C04.md).
 3. **ADR-044 burial** — dead biomass becomes organic matter.
@@ -42,7 +42,9 @@ through ADR-029, ADR-041/ADR-048 and the 2026-11-21 scope choices (ADR-080):
 The 90-day, zoned calamity director is designed in
 [`docs/calamities.md`](../calamities.md) and ADR-078, but it is **not** in this
 work order until persistence, C04 and the burial fix land. The pre-alpha
-single-player itch.io demo is designed in ADR-079; its packaging is open.
+single-player itch.io demo is designed in ADR-079 and packaged as a
+downloadable build that bundles the existing server. The calendar baseline is
+**40 / 84 / 130 weeks** (DESIGN Part 16 item 4).
 
 Specs for every task in this list are in [`DESIGN.md` Part 11](../../DESIGN.md).
 

@@ -135,7 +135,7 @@ RULE_15: Data files first, code second, for boosters, genes, and all
          content. Schemas land before implementation.
 
 RULE_16 (amended [V5.3], needs approval): Gates stay fixed once set,
-         but the dates are re-baselined to weeks 24 / 52 / 80 because
+         but the dates were originally re-baselined to weeks 24 / 52 / 80 because
          v5.2's arithmetic left out all client work, accounts, hosting
          and UI. Weeks 13, 36 and 67 become checkpoints (see Part 4).
          If you prefer to keep 13/26/52, use the Compressed Plan in
@@ -262,7 +262,7 @@ RULE_31: FREE-FIRST OPS. Choose free hosting and free assets first, and
 | Ledger | Edit and ownership history attached to any named thing. |
 | Tombstone | Public record left when a ledger entry is erased: who erased it and when. |
 | Season | Tunable default of ninety real days. |
-| Season-end calamity | The final and largest of a season's placed calamities (T20). It is survivable; survivor carry-over into the next season is the proposed default (Part 16 item 15). Only a plant that actually produced a propagule leaves lineage when it dies. |
+| Season-end calamity | The final and largest of a season's placed calamities (T20). It is survivable; a survivor may carry into the next season and keeps its position, damage and mutations. Only a plant that actually produced a propagule leaves lineage when it dies. |
 | Season Relic | Tradeable stylized model of planet at season end. Post-MVP. |
 | Deep time | Millions of years between seasons. |
 | Heirloom seed | Blank-vessel inventory item. Produced by seed production from a mature flower (T06A) or a mid-season death grant (T06A). Spending it starts a descendant whose mutation set comes from the owner's latest death record. Tradeable and mailable per flags. |
@@ -322,10 +322,12 @@ RULE_31: FREE-FIRST OPS. Choose free hosting and free assets first, and
 
 Task IDs: **T** = game system from v5.2, **C** = client task, **O** = operations task, **H** = hardening task. Weeks are inclusive.
 
-**Scope reset 2026-11-21.** The owner asked for longer gates than the week
-numbers below, and the 90-day season plus the calamity director add work not yet
-in this table. Treat every week number here as the old baseline, not a
-commitment, until Part 16 item 4 is answered.
+**Scope reset 2026-11-21 / revised 2026-11-22.** The owner asked for longer
+gates, twice, and the 90-day season plus the calamity director and the
+downloadable demo add work not yet in this table. The calendar baseline is now
+**Gate 1 W40, Gate 2 W84, Gate 3 W130**. The task rows below keep their original
+effort-week numbers as the build order; they are not calendar commitments, and
+the gaps to the new gates are schedule room for the added scope.
 
 ### Phase 0 — Foundation (Gate 1 run-up)
 | # | Task | Weeks | Depends on | Notes |
@@ -351,7 +353,7 @@ commitment, until Part 16 item 4 is answered.
 | 15 | **T08A** Inventory | W20 | T03, T08C | Item flags, bundles, `spore_balance`, duplication audit. |
 | 16 | **C04** HUD and controls v1 | W21–22 | C01, T00A, T07, T08A, T05, T06 | Desktop-first. **Checkpoint 7 (W22):** the full loop is playable. |
 | — | **Gate 1 playtest** (50 players) | W23 | all above | Real people, real notes. |
-| — | **Buffer and fixes** | W24 | | **GATE 1 = end of W24.** |
+| — | **Buffer and fixes** | W24 | | Original gate: end of W24. **Revised Gate 1: W40.** |
 
 ### Phase 2–3 — Economy, Identity, History, Inheritance (Gate 2, week 52)
 | # | Task | Weeks | Depends on | Notes |
@@ -373,7 +375,7 @@ commitment, until Part 16 item 4 is answered.
 | 31 | **C02b** Merged into C02 | — | C02, T03, T04 | All LOD, mutation signatures, IK now in unified C02. No separate week. |
 | 32 | **O02** Migrations, backups, restore drill | W50 | O01, T03 | |
 | — | **Gate 2 playtest** (shortened full season cycle) | W51 | all above | **Checkpoint 15 (W51).** |
-| — | **Buffer and fixes** | W52 | | **GATE 2 = end of W52.** |
+| — | **Buffer and fixes** | W52 | | Original gate: end of W52. **Revised Gate 2: W84.** |
 
 ### Phase 4–6 — Social Economy, Growth, Launch (Gate 3, week 80)
 | # | Task | Weeks | Depends on | Notes |
@@ -396,7 +398,7 @@ commitment, until Part 16 item 4 is answered.
 | 48 | **H01** Hardening, load, restore drill | W74–76 | all Gate 3 tasks except the real-money Spore switch | Bots from 50 → 500 → 2,000 clients. |
 | 49 | **Real-money Spore switch** | W77 | T13, T40, T41, T42 | Cut and ship "coming soon" if late. **Checkpoint 24 (W77).** |
 | — | **Gate 3 playtest** (public-alpha candidate) | W78 | all above except the real-money switch if cut | Explicit playtest week. **Checkpoint 25 (W78).** |
-| — | **Buffer and public-alpha launch prep** | W79–80 | | **GATE 3 = end of W80 (public alpha).** |
+| — | **Buffer and public-alpha launch prep** | W79–80 | | Original gate: end of W80. **Revised Gate 3: W130 (public alpha).** |
 
 **Check of the arithmetic.** Gate 1: 22 task-weeks + 1 playtest + 1 buffer = 24. Gate 2: 24 task-weeks + 1 + 1 = 26 (W25–50, C02b merged into C02 saves 2 weeks). Gate 3: 25 task-weeks + 1 playtest + 2 buffer = 28 (W53–80). Total 78 weeks. Task-weeks overall: 22 + 24 + 25 = 71. Gate 1's 22 task-weeks include the 2 weeks of Phase 0 (tasks 1–2).
 
@@ -404,9 +406,9 @@ commitment, until Part 16 item 4 is answered.
 
 ### B3.1 Gates (fixed once approved, RULE_16)
 - **Gate 0 (end W2):** two-tab server-authoritative cubes; server rejects teleport, speed, out-of-bounds; protocol note; manual checklist. Cut: nothing.
-- **Gate 1 (end W24):** 50-player core-loop playtest. The core loop is: read resources, grow, compete, be damaged, be seen, talk.
-- **Gate 2 (end W52):** vertical slice with economy floor, history, inheritance, and one shortened season cycle.
-- **Gate 3 (end W80):** public alpha; explicit playtest at W78; W79–80 buffer and launch prep.
+- **Gate 1 (revised end W40; original W24):** 50-player core-loop playtest. The core loop is: read resources, grow, compete, be damaged, be seen, talk.
+- **Gate 2 (revised end W84; original W52):** vertical slice with economy floor, history, inheritance, and one shortened season cycle.
+- **Gate 3 (revised end W130; original W80):** public alpha; the explicit playtest and launch-prep buffer move to the end of the new window.
 
 ### B3.2 Checkpoints (demonstrable progress at least every 4 weeks, RULE_28)
 | CP | Week | You can show |
@@ -674,7 +676,7 @@ non-local server rejects dev endpoints; a normal player cannot reach the panel.
 
 | Task | Produces (Outputs) | Consumes (Inputs) | Consumed By (Downstream) |
 |------|-------------------|-------------------|--------------------------|
-| **T20** | Same planet across seasons, rule-based deep-time transformation (drift/erosion/volcanism/sea level/biome), scars fossilize, replayable time-lapse, **many placed and survivable calamities through a 90-day season**, final cataclysm, proposed survivor carry-over, lineage via produced propagules only, season rewards for standard+ boosters | T06A (death pipeline), T07 (weather), T16 (ledger), T13A (rewards) | **T18** (season relics), **T39** (climate memory), **T48** (minimap aggregation), **C05** (season screen) |
+| **T20** | Same planet across seasons, rule-based deep-time transformation (drift/erosion/volcanism/sea level/biome), scars fossilize, replayable time-lapse, **many placed and survivable calamities through a 90-day season**, final cataclysm, survivor carry-over, lineage via produced propagules only, season rewards for standard+ boosters | T06A (death pipeline), T07 (weather), T16 (ledger), T13A (rewards) | **T18** (season relics), **T39** (climate memory), **T48** (minimap aggregation), **C05** (season screen) |
 | **C05** | Login/sign-up, spawn/archetype select, inventory, ledger viewer, death/heirloom screen, season countdown/time-lapse, settings, reconnect, **empty shells** for marketplace/mail/guild | C01, C04, T08A, T16, T06A, T20, T08C, T12 | **C09** (touch layout), **C07** (app wrappers) |
 
 ### Launch Readiness (Phase 4-6 / Gate 3)
@@ -809,7 +811,7 @@ T00+O01 (Foundation)
 | **T04** | `mutations.json` | Mutation triggers/effects/maintenance/visuals, **adaptive pressure** (8 categories → tag weights), events | Mutation visual signatures (C02), gene pool weights |
 | **T05** | `chat.json`, `emotes.json`, `reports.json` | Proximity/world chat, emote wheel, report/block (context snapshots, rate limits) | Chat panel, report dialog |
 | **T06** | `uproot.json`, `damage.json`, `tumbling.json`, `fragments.json` | State machine, damage pipeline (4 sources), kill credit, dung, fragments/remains, reroot crawl | Damage UI, death screen, reroot controls |
-| **T08A** | `inventory.json`, `item_flags.json` | Row-locked inventory, `spore_balance`, item flags, bundles, fragments, offspring seeds, duplication audit | Inventory UI, `spore_balance` HUD |
+| **T08A** | `items.json` | Row-locked inventory, purse, item flags, bundles, fragments, offspring seeds, duplication audit | Inventory UI, spore HUD |
 | **C04** | `ui.json`, `controls.json` | Context dock, rebinding, text-size, resource tooltips, hint card, chat panel, report dialog | HUD, growth selection UI |
 | **T16** | `ledger.json` | Permanent ledger (edit/ownership), tombstones, cold storage, gene/fragment provenance, review entries | Ledger viewer, naming history |
 | **T17** | `naming.json` | Naming on all objects, tooltips/inspection/marketplace/chat, ledger persistence | Naming UI |
@@ -1107,14 +1109,15 @@ Each spec is a block. Feed one to the AI at a time. Every AI session returns imp
 
 **AI prompt.** "Build uproot/tumble/damage with MVP reroot crawl, one damage pipeline for all four sources, kill credit, dung drops, fragment drops and remains, events. All values in config."
 
-### T08A · Inventory — `config/inventory.json`, `config/item_flags.json`
+### T08A · Inventory — `config/items.json`
+*(`config/inventory.json` and `config/item_flags.json` are deprecated stubs; ADR-082.)*
 **Depends on:** T03, **T08C**.
 
-**Must support.** Server-authoritative inventory per player per World. Every mutation is a transaction with Postgres row-level locking. No in-memory inventories. UI reads; never writes counts. Item types in MVP: boosters, gene items, heirloom seeds, Starter Packs, Gift Bundles, essence, dung, fertilizer, gene stabilization, mail attachments, **[V5.3] fragments, offspring seeds**. `spore_balance` first-class and transaction-safe. Item flags (RULE_23) on every item definition: `tradeable`, `mailable`, `listable`, `account_bound`. Central validator enforces; T14, T45, T29 call it. Gift Bundle operations: `bundle_create(items[])` consumes tradeable source items and creates one Gift Bundle item recording contents; `bundle_open(bundle)` consumes bundle and grants contents. Both transactions. Contents may not include Starter Packs or any account-bound item. No rarity field. Duplication-audit test: two concurrent requests for same item cannot both succeed.
+**Must support.** Server-authoritative inventory per player per World. Every mutation is a transaction with Postgres row-level locking. No unpersisted inventories: the live pouch is a write-through copy of the `player_state` row. UI reads; never writes counts. Item types in MVP: boosters, gene items, heirloom seeds, Starter Packs, Gift Bundles, essence, dung, fertilizer, gene stabilization, mail attachments, **[V5.3] fragments, offspring seeds**. The Spore purse is transaction-safe in the same `player_state` row (ADR-081). Item flags (RULE_23) on every item definition: `tradeable`, `mailable`, `listable`, `account_bound`. Central validator enforces; T14, T45, T29 call it. Gift Bundle operations: `bundle_create(items[])` consumes tradeable source items and creates one Gift Bundle item recording contents; `bundle_open(bundle)` consumes bundle and grants contents. Both transactions. Contents may not include Starter Packs or any account-bound item. No rarity field. Duplication-audit test: two concurrent requests for same item cannot both succeed.
 
 **Acceptance.** All above, plus flag validator rejects account-bound item in bundle, listing, or attachment.
 
-**Config.** Starting item set. Stack limits 1–10,000. Transaction timeout 1–30 s. Row-lock strategy documented. Item definitions with flags.
+**Config.** `items.json`: starting item set, slot count, stack limits 1–10,000, item definitions with flags. Transaction timeout 1–30 s. Row-lock strategy documented in ADR-081.
 
 **AI prompt.** "Build row-locked inventory with `spore_balance`, item flags and central validator, bundle create/open transactions, fragment and offspring seed categories. Include duplication-audit test. No rarity field."
 
@@ -1314,7 +1317,7 @@ Each spec is a block. Feed one to the AI at a time. Every AI session returns imp
 - Player-created scars fossilize and may reappear as landmarks, mineral deposits, faint mutation traces.
 - Season length tunable default **90 real days**. Calamities are scheduled through the season, not only at its boundary. Players can pre-build/queue next seed during the season and the finale.
 - **Calamities are placed events.** Each has a shape (point, circle, ring, capsule, path, polygon or global), centre/path, magnitude, duration, warning and aftermath. Natural events come from a seeded per-world deck with forecasts; dev events can be aimed from the dev panel. See [`docs/calamities.md`](./docs/calamities.md).
-- **Calamities are survivable.** Exposure falls off across the zone and feeds the T06 damage pipeline. A plant may lose parts, be uprooted, be buried or die; survival depends on traits, morphology, terrain/shelter and a small seeded luck factor. The final cataclysm is the largest event, not an automatic wipe. Survivor carry-over into the next season is the proposed default (Part 16 item 15).
+- **Calamities are survivable.** Exposure falls off across the zone and feeds the T06 damage pipeline. A plant may lose parts, be uprooted, be buried or die; survival depends on traits, morphology, terrain/shelter and being outside the zone. There is no luck roll; identical plants in identical positions get identical exposure. The final cataclysm is the largest event, not an automatic wipe. A survivor may carry into the next season and keeps its position, damage and mutations, with normal recovery.
 - **Lineage is reproductive.** A plant that dies passes on lineage only through a propagule it actually produced: seed, bulb, tuber, rhizome, spore or another configured equivalent. **[V5.3] `calamity_grant_seed=false` default (Part 5, T06A).** A plant with no propagule ends its lineage; the player starts next season on Path 1, which is never an account punishment.
 - **Time accelerates after a calamity.** A short recovery window runs at a higher simulation scale; the inter-season transformation runs as a replayable deep-time time-lapse. The server tick rate does not change.
 - A calamity is a **burial, not a wipe** (RULE_8): the death pipeline converts structural biomass into the organic-matter soil field, player-made terrain edits and voids persist, and the next season runs on the same transformed planet. No code path regenerates the world or returns it to a blank state.
@@ -1322,11 +1325,11 @@ Each spec is a block. Feed one to the AI at a time. Every AI session returns imp
 - No relic drop in MVP; relic T18 post-MVP.
 - No pre-build decision left open; pre-build supported.
 
-**Acceptance.** Same planet across seasons. Transformation works. Scars can fossilize/reappear. Replayable time-lapse. Event scheduled/replayable. Players can pre-build/queue next seed. Season length tunable at 90 days. At least one natural and one dev-triggered zoned calamity. Exposure falls off across a zone and a plant can survive it. The final cataclysm is survivable; survivor carry-over is decided before implementation (Part 16 item 15). Dead plants run the T06A pipeline; only a produced propagule grants lineage. Season reward for standard+ boosters works. No relic drop MVP.
+**Acceptance.** Same planet across seasons. Transformation works. Scars can fossilize/reappear. Replayable time-lapse. Event scheduled/replayable. Players can pre-build/queue next seed. Season length tunable at 90 days. At least one natural and one dev-triggered zoned calamity. Exposure falls off across a zone and a plant can survive it. The final cataclysm is survivable; survivors may carry into the next season with their position, damage and mutations. Dead plants run the T06A pipeline; only a produced propagule grants lineage. Season reward for standard+ boosters works. No relic drop MVP.
 
 **Config.** Season length default 90 days tunable. Calamity definitions, zone defaults, natural deck, warning lead times, exposure/falloff, survival caps and recovery time scales in `calamities.json`. Years/sec time-lapse, fossilization chance and transformation parameters in `deep_time.json`. Season reward table.
 
-**AI prompt.** "Build T20 deep time/season. Same planet across seasons. Rule-based transformation. Scars fossilize. Replayable time-lapse. Season length tunable default 90 days. Many placed calamities through the season: natural seeded deck plus dev-triggered, each with a shape, zone, magnitude, warning and aftermath. Exposure falls off and feeds T06; a plant can survive, lose parts, be uprooted or die; the final cataclysm is survivable; survivor carry-over per Part 16 item 15. Death runs T06A; lineage only through a propagule the plant actually produced (seed, bulb, tuber, rhizome, spore); `calamity_grant_seed` default false. Recovery time scale after an event, deep time between seasons. Season reward for standard+ boosters. No relic drop MVP. All config in `calamities.json` and `deep_time.json`."
+**AI prompt.** "Build T20 deep time/season. Same planet across seasons. Rule-based transformation. Scars fossilize. Replayable time-lapse. Season length tunable default 90 days. Many placed calamities through the season: natural seeded deck plus dev-triggered, each with a shape, zone, magnitude, warning and aftermath. Exposure falls off and feeds T06; a plant can survive, lose parts, be uprooted or die; the final cataclysm is survivable and survivors may carry into the next season; there is no luck roll, and exposure is deterministic. Death runs T06A; lineage only through a propagule the plant actually produced (seed, bulb, tuber, rhizome, spore); `calamity_grant_seed` default false. Recovery time scale after an event, deep time between seasons. Season reward for standard+ boosters. No relic drop MVP. All config in `calamities.json` and `deep_time.json`."
 
 ### C05 · Menus and Screens — `config/ui.json`
 *(See Part 4, B4 for full spec. Depends on C01, C04, T08A, T16, T06A, T20, T08C, T12.)*
@@ -1664,7 +1667,7 @@ before treating an entry as open._
 - Mail for system messages, player mail, Gift Bundle delivery.
 - Spore store UI MVP; real-money integration later.
 - No permanent unlock from session end. No battle-royale session end.
-- Many placed calamities run through a 90-day season; the final cataclysm is the largest and is survivable. Survivor carry-over into the next season is the proposed default (Part 16 item 15). Lineage comes only from a propagule the plant actually produced.
+- Many placed calamities run through a 90-day season; the final cataclysm is the largest and is survivable. A survivor may carry into the next season with its position, damage and mutations. Lineage comes only from a propagule the plant actually produced.
 - Prestige only from non-consensual drains; weather/herbivore kills credit no one.
 
 **V5.3 / V5.3.1 locked decisions.**
@@ -1676,7 +1679,7 @@ before treating an entry as open._
 - Everything free-first: free static hosting, one free VM for server + Postgres, free assets. Docker-based for portability.
 - Heirloom seeds are produced from the player's own plant (flower → seed), plus a mid-season death grant. Season-end calamity does not grant a seed by default.
 - Genes can be extracted from fragments, remains, or the player's own living plant, then sold, traded, or grafted.
-- Whole-number weeks only. Gates re-baselined to weeks 24 / 52 / 80 (pending approval); week 13 becomes a checkpoint.
+- Whole-number weeks only. Gates were re-baselined to weeks 24 / 52 / 80; revised on 2026-11-22 to 40 / 84 / 130. Week 13 becomes a checkpoint.
 - Proximity chat and world chat are both MVP. The Gate 1 cut list no longer lists world chat.
 - Scale model: many Worlds, each with a 10,000-player design target; account service is global.
 - Performance target: 60 fps on target devices, low battery drain, adaptive quality.
@@ -1695,7 +1698,7 @@ before treating an entry as open._
 **V5.4 extension decisions (approved 2026-11-09; see Part 16).**
 
 - Reactive non-sapient fauna are allowed in multiplayer. Intelligent NPCs remain campaign-only. Fauna may have needs and reflexes; they may not converse, pursue story goals, exercise judgment, form factions, or plan.
-- There are no world resets. A season-end calamity buries the plants it kills under sediment; it does not wipe or regenerate the planet. Whether a plant it does not kill carries into the next season is the proposed default in Part 16 item 15.
+- There are no world resets. A season-end calamity buries the plants it kills under sediment; it does not wipe or regenerate the planet. A plant it does not kill may carry into the next season and keeps its position, damage and mutations.
 - The damage pipeline is target-agnostic and covers plant and fauna damage, with a single record shape.
 - Material simulation runs on a decoupled cellular-automaton cadence inside the existing tick budget. It does not raise the 20 Hz gameplay tick.
 - Volumetric terrain is stored as sparse binary chunks, never as per-voxel database rows.
@@ -2366,7 +2369,7 @@ as `ADR-nnn`, which is the current ruling where the two differ.
 | D-08 | Add a thunderstorm column to the booster condition matrix. | Gap closed |
 | D-09 | Heirloom seeds are produced from the player's own plant (flower → seed), plus a death grant. | User answer |
 | D-10 | Genes can be extracted from anything in inventory (fragments of plants, remains, own plant), then sold, traded, or grafted. New task T51. | User answer |
-| D-11 | Whole-number weeks only. Schedule re-run with client work included; gates re-baselined to weeks 24 / 52 / 80 (needs approval). Week 13 becomes a visible checkpoint. | User answer |
+| D-11 | Whole-number weeks only. Schedule re-run with client work included; gates re-baselined to weeks 24 / 52 / 80 (later revised to 40 / 84 / 130 on 2026-11-22). Week 13 becomes a visible checkpoint. | User answer |
 | D-12 | Proximity chat and world chat are both MVP. The Gate 1 cut list no longer lists world chat. | User answer |
 | D-13 | Scale model: many Worlds, each with a 10,000-player design target; account service is global. Online players must not feel offline simulation. | User answer + design |
 | D-14 | Performance target: 60 fps on target devices, low battery drain, adaptive quality. | User answer |
@@ -2778,29 +2781,27 @@ Free tiers change often. These were checked in November 2026 and must be re-chec
 
 # Part 16 — Open Decisions Needing Approval
 
-Items 1–3 and 6–8 were answered by the owner on 2026-11-21 and are kept here
-as the record. Item 4 is still open: the owner asked for **longer** gates but has
-not chosen the new week numbers. Item 5 is partly answered by the pre-alpha
-scope (donations only, no paid Spores); the country/storefront, age gate and
-terms still need a decision before public registration. Items 15–19 are new
-mechanics opened by the 90-day calamity direction.
+Items 1–4 and 6–19 were answered by the owner on 2026-11-21 and 2026-11-22 and
+are kept here as the record. Item 5 is partly answered by the pre-alpha scope
+(donations only, no paid Spores); the country/storefront, age gate and terms
+still need a decision before public registration.
 
 1. **Calamity seed rule — resolved.** Keep the default: no automatic seed at season end. Lineage exists only through a propagule the plant actually produced and queued or dropped (seed, bulb, tuber, rhizome, spore, equivalent). A plant with no propagule ends its lineage.
 2. **Graft balance — resolved.** Keep grafting, with limits. Genes bought with Spores may be grafted; the cap is the configured per-plant/gene limit, not a prior-carry restriction.
 3. **Offspring seed trading — resolved.** Offspring seeds are account-bound until planted, as the safe default.
-4. **Gate dates — open.** The owner asked for longer than 24 / 52 / 80 weeks. Proposed baseline: 32 / 68 / 104 weeks. Do not treat the old week numbers in Part 13 as commitments until this is answered.
+4. **Gate dates — resolved.** The owner asked for longer than 24 / 52 / 80 and longer than the proposed 32 / 68 / 104. Planning baseline: **40 / 84 / 130 weeks**. The task-level W numbers in Part 13 remain the original build order, not calendar commitments.
 5. **Age gate and legal — partly resolved.** Pre-alpha is guest-play, browser-first, donations only, no paid Spores, single-player demo on itch.io. Minimum age, terms, privacy policy and payment provider still depend on country and storefront; decide before public registration or any paid product.
 6. **`spore_sac` function — resolved.** It emits spores used for cross-pollination range in T53 (Beta).
 7. **Worker threads — resolved.** Defer until profiling shows the single thread cannot hold the tick budget.
 8. **Accessibility extras — resolved.** Opt in to the cheap parts: non-colour cues, reduced motion, text alternatives for sound cues.
 
-**New open items from the 2026-11-21 calamity direction.**
+**Calamity mechanics — resolved 2026-11-22.**
 
-15. **Final cataclysm survival.** Should a plant that survives the final cataclysm carry into the next season? Recommendation: yes; otherwise "some people survive all the calamities" has no meaning.
-16. **Time acceleration.** Does the clock speed up after every calamity, only after the finale, or both? Recommendation: a short recovery window after every event, plus a large inter-season deep-time pass; never change the server tick rate.
-17. **Luck.** How large is the seeded variance around the deterministic exposure result? Recommendation: small, dev-visible, and never able to reverse an obviously lethal or obviously safe outcome.
-18. **Single-player demo packaging.** HTML5 build with a local simulation in a worker, or a downloadable build that bundles the existing server? This is an architecture choice; see [`docs/calamities.md`](./docs/calamities.md) §11.
-19. **Survivor state.** Does a survivor keep damage, mutations and position into the next season? Recommendation: yes, with normal recovery; the next season is a continuation, not a reset.
+15. **Final cataclysm survival — resolved.** A plant that survives the final cataclysm may carry into the next season. It is not forced to; it is allowed to remain.
+16. **Time acceleration — resolved.** A short recovery window after every event, plus a large inter-season deep-time pass. The server tick rate does not change.
+17. **Luck — resolved: none.** There is no luck variable. Mutations, morphology, terrain, shelter and being outside the zone decide survival; identical plants in identical positions get identical exposure.
+18. **Single-player demo packaging — resolved.** The first demo is a downloadable build that bundles the existing server. HTML5 local simulation is a later option.
+19. **Survivor state — resolved.** A survivor keeps position, damage and mutations, with normal recovery. The next season is a continuation, not a reset.
 
 **V5.4 extension approvals — resolved 2026-11-09.**
 
@@ -3463,11 +3464,11 @@ Deliberate config decisions, not omissions.
 
 **Gate 0 / Phase 0:** T00, O01, T03P
 
-**Gate 1 / Phase 1 (end W24):** C01, T00A, T01, C02, T03, T08C, T02, T07, C03, T05, T04, T06, T08A, C04
+**Gate 1 / Phase 1 (revised end W40; original W24):** C01, T00A, T01, C02, T03, T08C, T02, T07, C03, T05, T04, T06, T08A, C04
 
-**Gate 2 / Phase 2–3 (end W52):** T08, T08B, T16, T17, T15, T13, T51, T06A, T13A, T14, T12, T10, T20 partial, C05, O02
+**Gate 2 / Phase 2–3 (revised end W84; original W52):** T08, T08B, T16, T17, T15, T13, T51, T06A, T13A, T14, T12, T10, T20 partial, C05, O02
 
-**Gate 3 / Phase 4–6 (end W80):** T43, T44, T45, T50, T46, T23, T24, T25, T26, T40, T41, T42, C06, C09, C07, H01, real-money switch
+**Gate 3 / Phase 4–6 (revised end W130; original W80):** T43, T44, T45, T50, T46, T23, T24, T25, T26, T40, T41, T42, C06, C09, C07, H01, real-money switch
 
 **Beta / post-alpha:** T09, T11, T13B, T18, T19, T21, T22, T27, T28, T29, T30, T34, T35, T36, T37, T38, T39, T47, T48, T31, T49, **T53**, T32, T33
 

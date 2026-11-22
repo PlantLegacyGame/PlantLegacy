@@ -871,8 +871,8 @@ transformations.
 
 **Amended 2026-11-21 (ADR-078).** A calamity no longer kills every plant by
 definition. The burial rule applies to the plants a calamity actually kills;
-their biomass is not converted until they die. Whether a survivor carries into
-the next season is the proposed default in Part 16 item 15.
+their biomass is not converted until they die. A survivor may carry into the
+next season with its position, damage and mutations (Part 16 item 19).
 
 ---
 
@@ -1919,7 +1919,7 @@ Details and the event catalogue are in [`calamities.md`](./calamities.md).
 **Context.** The shipped season boundary runs one global event and kills every
 plant still standing. The owner wants a season to contain many calamities, some
 natural and some triggered from the dev panel; each calamity must be aimable or
-have a zone of influence; a plant must be able to survive by luck or by having
+have a zone of influence; a plant must be able to survive by having the right evolved body or by being outside the affected zone;
 the right evolved body; and a season must last 90 real days rather than 36. The
 owner also confirmed the existing rule that a plant only passes on lineage
 through a propagule it actually produced, with no automatic calamity seed.
@@ -1930,9 +1930,11 @@ placed from a dev-panel catalogue with a shape, centre/path, radius or width,
 magnitude, duration and aftermath. Exposure is computed per plant and part,
 falls off across the zone, and feeds the existing T06 damage pipeline. A plant
 can lose parts, be uprooted, be buried or die; survival depends on traits,
-morphology, terrain/shelter and a small seeded luck factor. The final cataclysm
-closes the season but is not an automatic wipe: survivors are not killed by it,
-and carry-over into the next season is the proposed default (Part 16 item 15).
+morphology, terrain/shelter and being outside the zone. There is no luck roll.
+The final cataclysm
+closes the season but is not an automatic wipe: a survivor may carry into the
+next season and keeps its position, damage and mutations, with normal recovery.
+
 Death still runs T06A and still buries biomass as organic matter
 (ADR-044). Lineage exists only through a produced propagule (seed, bulb, tuber,
 rhizome, spore or configured equivalent); `calamity_grant_seed` stays false.
@@ -1945,17 +1947,17 @@ with a new config file, zone math, protocol messages, dev-panel aiming and a
 catalogue of events. The old acceptance sentence "calamity kills every plant"
 is replaced. `world_state.last_calamity_at` now means the last event of any size,
 not only the season boundary. The single death queue stays the hook. The work is
-not in the current roadmap arithmetic; the gate dates must be extended (Part 16
-item 4). The mechanics still open are listed in `calamities.md` §11 and DESIGN
-Part 16 items 15–19; the most consequential is whether a survivor carries into
-the next season.
+not in the old roadmap arithmetic; the gate baseline is now 40 / 84 / 130 weeks
+(Part 16 item 4). The settled mechanics are listed in `calamities.md` §11.
+
+
 
 ---
 
 ## ADR-079 — Pre-alpha is a donation-supported single-player itch.io demo
 
-**Status:** accepted 2026-11-21. Packaging is still open (DESIGN Part 16 item
-18).
+**Status:** accepted 2026-11-21; packaging settled 2026-11-22 as a downloadable
+build that bundles the existing server (DESIGN Part 16 item 18).
 
 **Context.** The owner chose to keep the pre-alpha browser-first and guest-play,
 with no registration and no paid Spores, but to add donations as the payment
@@ -1966,18 +1968,18 @@ host waits for donation funding.
 **Decision.** Pre-alpha distribution is a single-player demo on itch.io. It is
 free to play; donations are the only money path. Donations grant no Spores, no
 items, no advantage and no account status. There is no real-money Spore switch,
-no paid item and no registration requirement in the demo. The demo is
-desktop-browser first; touch layout remains groundwork for a later release, not
-a pre-alpha promise. Staging remains a named Cloudflare Tunnel with a persistent
+no paid item and no registration requirement in the demo. The first demo is a
+downloadable desktop build that bundles the existing server; touch layout remains
+groundwork for a later release, not a pre-alpha promise. Staging remains a named Cloudflare Tunnel with a persistent
 free host when funding allows. The legal gate (country, storefront, age, terms,
 privacy) still applies before public registration or any paid product.
 
-**Consequences.** The itch.io page needs a download or HTML5 build, a donation
-link, and an honest "what works now" list. The single-player mode is a real
-architecture choice: an HTML5 local simulation in a worker, or a downloadable
-build that bundles the existing server. Choosing the former preserves reach but
-duplicates simulation authority; choosing the latter reuses server code but is a
-desktop package. Do not wire itch.io donations into the Spore economy. The
+**Consequences.** The itch.io page needs a download, a donation
+link, and an honest "what works now" list. The packaging choice is settled for
+the first demo: a downloadable build that bundles the existing server. It
+reuses the server's authority and ships sooner; an HTML5 local simulation in a
+worker is a later option if reach matters more than speed.
+Do not wire itch.io donations into the Spore economy. The
 real-money switch stays out of alpha, so T40/T41/T42 are not launch blockers for
 the demo; they remain blockers for a paid public alpha.
 
@@ -1994,7 +1996,7 @@ choosing numbers.
 | # | Choice | Ruling |
 |---|---|---|
 | 1 | Inventory and purse persistence | Do it now. T08A is the next implementation: server-owned inventory and Spore balance, row-locked, one transaction per buy/use/drop. |
-| 2 | Next milestone | C04 closeout, then one real-device pass, then ADR-044 burial, then W6 water slices 1–2. |
+| 2 | Next milestone | Finish T08A (read-modify-write path and duplication audit), then C04 closeout and one real-device pass, then ADR-044 burial, then W6 water slices 1–2. |
 | 3 | Commit and push | Commit now. The two local commits exist; push is blocked on GitHub authentication, not on the repository. |
 | 4 | Calamity seed | No automatic seed; only a propagule the plant actually produced. Recorded in ADR-078. |
 | 5 | Pre-alpha legal and money | Donations only, single-player itch.io demo, no paid Spores, no registration. Recorded in ADR-079. |
@@ -2004,7 +2006,7 @@ choosing numbers.
 | 9 | Mobile | Not in pre-alpha. Keep the touch/control work and document desktop-first. |
 | 10 | Staging | Named Cloudflare Tunnel and a persistent free host when donations arrive. Quick tunnel is dev-only. |
 | 11 | Accessibility | Opt in to the cheap parts: non-colour cues, reduced motion, text alternatives for sound. |
-| 12 | Gate dates | Longer than 24 / 52 / 80 weeks. Exact numbers open; proposed 32 / 68 / 104 (Design Part 16 item 4). |
+| 12 | Gate dates | Longer than 24 / 52 / 80 and longer than 32 / 68 / 104. Baseline now 40 / 84 / 130 weeks (Design Part 16 item 4). |
 | 13 | Scale and protocol | Pre-alpha target 50–100 concurrent; design hooks for 10k. Breaking protocol changes are allowed until the first public alpha; the wire is v4 today. |
 | 14 | Post-MVP defaults | Keep grafting with caps; offspring seeds account-bound until planted; `spore_sac` is a cross-pollination range emitter at T53; defer worker threads until profiling. |
 | 15 | Licence | Keep UNLICENSED/private until public alpha. |
@@ -2015,7 +2017,7 @@ by `pnpm verify:ci` but not on `origin/main`; the push must be retried after
 GitHub authentication. The next
 implementation is T08A persistence, not the calamity director; the calamity
 direction is recorded and designed but waits for the persistence hole to close.
-The old 24 / 52 / 80 schedule is a baseline, not a promise. No paid Spores, no
+The gate baseline is 40 / 84 / 130 weeks; task-week numbers in DESIGN are the original build order, not calendar promises. No paid Spores, no
 real-money switch and no mobile build in pre-alpha.
 
 ## ADR-081 — The pouch and the purse share one `player_state` row
@@ -2031,8 +2033,9 @@ committed if a later write fails.
 
 **Decision.** One `player_state` row per account holds `slots` (JSONB) and
 `spores` (BIGINT). `owner_id` is the account id, not the plant id, so a new seed
-keeps the pouch and purse. The row is the lock; a mutation is one upsert that
-takes it. `main.ts` loads the row before a HELLO creates or reclaims a player,
+keeps the pouch and purse. The row is the lock; a mutation is a transaction
+that locks it (`SELECT ... FOR UPDATE`) and upserts. `main.ts` loads the row
+before a HELLO creates or reclaims a player,
 writes it after shop purchases, spore awards, item use, slot swaps, dev grants
 and disconnect, and flushes every live account on shutdown. A row that cannot be
 read suppresses writes for that session rather than being overwritten with the
@@ -2041,6 +2044,32 @@ starting kit.
 **Consequences.** The restart copy is atomic at the row level and cannot
 half-commit a purchase. It is **not** the full T08A contract: the live inventory
 is still mutated in memory and written back, rather than read-modify-write inside
-one transaction; guests have no row; `item_flags.json` is still a stub; and the
-`items.json` vs `inventory.json` ownership is unresolved. The row is the restart
-copy, not the economy. T14/T29/T45 still wait for the locked mutation path.
+one transaction; guests have no row; and the formal duplication audit is still
+owed. `items.json` owns the flags (ADR-082). The row is the restart
+copy, not the economy. T14/T29/T45 still wait for the read-modify-write path.
+
+## ADR-082 — `items.json` is the single item catalogue
+
+**Status:** accepted 2026-11-22. Resolves T08A's config-ownership drift.
+
+**Context.** DESIGN T08A names `config/inventory.json` and
+`config/item_flags.json`, but the code has read `config/items.json` since the
+first inventory slice. `items.json` already holds the definitions, stack
+limits, starting inventory, slot count, effect values and all four RULE_23 flags,
+and `loadItemsConfig` rejects an account-bound item that is also tradeable,
+mailable or listable. The two named files were empty stubs with no readers, so
+there were three places a future flag could be written and only one that did
+anything.
+
+**Decision.** `config/items.json` is the single source for item definitions,
+flags, stack limits, starting inventory and inventory slot count.
+`config/inventory.json` and `config/item_flags.json` are marked `deprecated`, keep
+their empty `values`, and have no readers. They may be deleted in a later
+config-count cleanup; until then they are documentation of a name that moved,
+not a second source.
+
+**Consequences.** The flag invariant is enforced at load and by the config
+validator, so T08A's flag requirement is met without a second flag table.
+DESIGN's T08A heading and config line now name `items.json`. A future item
+category or flag belongs in `items.json` and in the shared item schema, not in a
+deprecated stub.

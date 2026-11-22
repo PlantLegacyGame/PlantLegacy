@@ -15,13 +15,14 @@ checklist.
 The pre-alpha release is a **free single-player demo on itch.io**. Donations are
 the only money path; they grant no Spores, items, advantage or account status.
 There is no registration, no paid Spore purchase and no real-money switch in the
-demo. The demo is desktop-browser first; mobile is post-alpha.
+demo. The demo is desktop-first; mobile is post-alpha.
 
-The packaging is still open (DESIGN Part 16 item 18): an HTML5 build with a local
-simulation in a worker, or a downloadable build that bundles the existing server.
-Pick one before building the demo; do not ship a demo that silently depends on
-the staging tunnel. The itch.io page needs the donation link and the honest
-"what works now" list from [`what-works-now.md`](./what-works-now.md).
+The packaging is settled (DESIGN Part 16 item 18): the first demo is a
+**downloadable build that bundles the existing server**, so it reuses the
+server's authority and does not depend on the staging tunnel. An HTML5 local
+simulation in a worker is a later option if reach matters more than shipping
+speed. The itch.io page needs the donation link and the honest "what works now"
+list from [`what-works-now.md`](./what-works-now.md).
 
 ## Environments
 

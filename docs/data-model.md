@@ -6,7 +6,7 @@
 Every gameplay table carries `world_id`. All item and Spore mutations must use
 row-level locks (RULE_17). The pouch and purse now have a restart copy in
 `player_state`, keyed by account id. The live copy is still the connected
-player; each change is written back with one upsert, and the row is the lock.
+player; each change is written back in a transaction that locks the row and upserts, and the row is the lock.
 This is a persistence slice, not the whole of T08A: a full read-modify-write
 transaction, `item_flags.json`, and the `items.json` vs
 `inventory.json`/`item_flags.json` ownership decision are still open. See
@@ -138,9 +138,9 @@ never the whole ground.
 ### Not in the database yet
 
 - **The rest of the inventory contract.** `player_state` persists the pouch and
-  purse, but `item_flags.json` is still a stub, every mutation is not yet a
-  single read-modify-write transaction, and the config ownership in §3 of
-  [`tasks/T08A.md`](./tasks/T08A.md) is unresolved.
+  purse in a row-locked transaction, and `items.json` owns the flags (ADR-082).
+  Every mutation is not yet a single read-modify-write transaction, and the
+  formal duplication audit is still owed; see [`tasks/T08A.md`](./tasks/T08A.md).
 - **Reports.** Held in a bounded in-memory queue until T40 adds a table.
 - **Fauna, materials, water bodies, world objects.** Arrive with T54–T58.
 

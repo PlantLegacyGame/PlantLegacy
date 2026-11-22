@@ -1,9 +1,11 @@
 # Calamities
 
-**Status:** direction accepted by the owner on 2026-11-21; the mechanics below
-are a proposal, not shipped behaviour. No calamity director, zone system or
+**Status:** direction and core mechanics accepted by the owner on 2026-11-21
+and 2026-11-22; not shipped behaviour. No calamity director, zone system or
 natural schedule exists in the build yet. `config/world.json` now defaults a
-season to 90 real days (ADR-078).
+season to 90 real days (ADR-078). The settled rules are survivor carry-over,
+time acceleration, no luck roll, survivor state, downloadable demo packaging and
+the revised gate baseline.
 
 This document replaces the old single "season-end calamity" model. It is the
 working spec for the calamity system and the source for the slices that will
@@ -121,10 +123,11 @@ the plant, bury the crown, or kill it. The same event can leave one plant dead,
 one uprooted and one almost untouched.
 
 Survival is a check against the plant's remaining structure and reserves, not a
-single dice roll. A small **seeded luck factor** per plant and event can decide a
-close call; it must never turn a clearly lethal hit into a survival or the other
-way round. The dev panel can show the exposure and the projected outcome; players
-get a risk description, not a hidden numeric promise.
+dice roll. There is **no luck variable**: exposure, the zone, the plant's
+mutations and morphology, the terrain and shelter decide the result. Two identical
+plants in the same place get the same outcome. The dev panel can show the
+exposure and the projected outcome; players get a risk description, not a hidden
+numeric promise.
 
 Mitigations should be readable from the plant the player already grew:
 
@@ -360,31 +363,27 @@ season can end with survivors, and the next season starts on the transformed
 planet with those survivors present.
 
 **C4 — demo tuning.** A single-player demo preset: shorter season, smaller
-catalogue, no accounts, no network. This depends on the demo packaging decision
-(Part 16, item 18).
+catalogue, no accounts, no network. The packaging is settled: a downloadable build that bundles the
+existing server.
 
-## 11. Open mechanics
+## 11. Settled mechanics and the remaining schedule question
 
-These are the questions that need an owner answer before C0 is more than a
-prototype. Recommendations are proposals, not decisions.
+The owner answered these on 2026-11-22. They are decisions, not proposals.
 
-1. **Can a plant survive the final cataclysm and carry into the next season?**
-   Recommendation: yes. The owner's "some people can survive all the calamities"
-   only works if the finale is survivable. The alternative is a guaranteed wipe
-   with a survivor flag, which contradicts the direction.
-2. **What exactly speeds up after a calamity?** Recommendation: a short recovery
-   window after every event, plus the large inter-season deep-time pass. Do not
-   change the server tick rate.
-3. **How much luck?** Recommendation: a small seeded variance around the
-   deterministic exposure result, visible to dev tools and never a hidden
-   coin-flip on an obviously lethal hit.
-4. **Does a survivor keep its damage and mutations?** Recommendation: yes, with
-   normal recovery; the next season is a continuation, not a reset.
-5. **Single-player demo packaging.** Recommendation: an HTML5 build with a local
-   simulation in a worker if reach matters; a downloadable build that bundles the
-   existing server if correctness and speed matter more. This is a real
-   architecture choice, not a packaging detail.
-6. **Gate dates.** The owner asked for longer gates than 24 / 52 / 80 weeks. The
-   exact weeks are still open (Part 16, item 4). Recommendation: 32 / 68 / 104
-   weeks, with the calamity director and demo treated as new work rather than
-   squeezed into the old buffer.
+1. **Survivor carry-over.** A plant that survives the final cataclysm can carry
+   into the next season. It is not forced to; it is allowed to remain.
+2. **Time acceleration.** A short recovery window runs after every event, and a
+   large inter-season deep-time pass runs after the finale. The server tick rate
+   does not change.
+3. **No luck.** There is no luck variable. Survival comes from mutations,
+   morphology, terrain, shelter and being outside the zone. Identical plants in
+   identical positions get identical exposure.
+4. **Survivor state.** A survivor keeps its position, damage and mutations, with
+   normal recovery. The next season is a continuation, not a reset.
+5. **Demo packaging.** The first single-player demo is a downloadable build that
+   bundles the existing server. An HTML5 local-simulation build is a later
+   option, not the first release.
+6. **Gate dates.** The owner asked for longer than 24 / 52 / 80 and longer than
+   the proposed 32 / 68 / 104. The planning baseline is now **40 / 84 / 130
+   weeks**. Task-level week numbers in DESIGN are the original build order, not
+   the new calendar.

@@ -1108,7 +1108,7 @@ loads it before a HELLO and writes it after purchases, spore awards, item use,
 slot swaps, dev grants and disconnect. A buy → restart → reconnect check passed
 against a temporary Postgres database. It is still **not the whole T08A
 contract**: the live inventory is mutated in memory and written back with one
-upsert rather than a read-modify-write transaction, `item_flags.json` is a stub,
+upsert inside a row-locked transaction rather than a read-modify-write transaction,
 and the `items.json` vs `inventory.json` ownership is unresolved. Guests have no
 restart copy. Treat it as a restart copy, not as the finished economy; details
 in [`docs/tasks/T08A.md`](./tasks/T08A.md).
@@ -1142,7 +1142,7 @@ T06 still needs its in-browser checklist. **C04 is partial**: health, damage,
 reroot, Inspect/Inventory, Settings and death stats are in; rebinding and the
 notification log are not. **T08A** is partial: the `player_state` restart copy now persists an account's
 pouch and purse across a server restart, but the read-modify-write transaction,
-`item_flags.json` and the config ownership decision are still open. Those are
+the read-modify-write path and duplication audit are still open. Those are
 next, then the ADR-044 burial fix. AL-01 (benchmark, six fixed poses, GPU
 timing, zero-alloc audit) and AL-03 (GPU-band quality controller, replacing the
 CPU-fps-based `QualityController`) follow, per ADR-050. Shared depth between the
