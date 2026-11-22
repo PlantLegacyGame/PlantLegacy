@@ -8802,8 +8802,9 @@ async function handleWelcome(payload: unknown): Promise<void> {
     const reloaded = await loadControlsConfig(httpOrigin);
     if (reloaded.bindings && Object.keys(reloaded.bindings).length > 0) {
       controlsConfig = reloaded;
-      inputBus?.setBindings(currentBindings());
-      settingsPanel?.setBindings(currentBindings());
+      const next = currentBindings();
+      inputBus?.setBindings(next);
+      settingsPanel?.setBindings(next);
       syncActionBarKeys();
       console.debug('[PlantLegacy] Controls config reloaded from server', {
         actionCount: Object.keys(reloaded.bindings).length,
@@ -10095,12 +10096,7 @@ function handleGrowthOptionsResult(payload: unknown): void {
     return; // Stale response for a previous selection
   }
   if (response.error || !response.options) {
-    const reason =
-      response.error === 'node_not_found'
-        ? 'That node is no longer part of your plant.'
-        : response.error === 'plant_mismatch'
-          ? 'Plant mismatch - refresh to sync.'
-          : 'Could not load growth options.';
+    const reason = response.error ? refusalCopy(response.error) : 'Could not load growth options.';
     hideGrowthSelection();
     setDetail(reason);
     uiShell?.toast({ message: reason, kind: 'error', durationMs: 5000 });
@@ -10116,67 +10112,28 @@ function handleGrowthOptionsResult(payload: unknown): void {
   });
 }
 
+/**
+ * The two germination refusals quote the tile the seed was asked to sprout in.
+ * Every other reason is in `ui/refusalCopy.ts`, including the growth ones.
+ */
+function germinationNotice(reason: string): string {
+  const conditions = growthSelectionMachine.conditions;
+  const numbers = conditions
+    ? ` (tile moisture ${conditions.moisture.toFixed(1)} / needs ${conditions.minMoisture}, light ${conditions.light.toFixed(1)} / needs ${conditions.minLight})`
+    : '';
+  const died = reason === 'germination_failed_conditions' ? ' - the seed died' : '';
+  return `Germination failed: light or moisture was below the threshold${numbers}${died}.`;
+}
+
 function handleReject(payload: unknown): void {
   const reject = payload as RejectPayload;
-  // Quantify the germination gate: the last known tile readings and
-  // thresholds are already in the growth state machine.
-  const germConditions = growthSelectionMachine.conditions;
-  const germinationNumbers = germConditions
-    ? ` (tile moisture ${germConditions.moisture.toFixed(1)} / needs ${germConditions.minMoisture}, light ${germConditions.light.toFixed(1)} / needs ${germConditions.minLight})`
-    : '';
   const readableReason =
-    reject.reason === 'item_not_usable'
-      ? 'That item cannot be used yet - open the inventory to read why'
-      : reject.reason === 'growth_on_cooldown'
-        ? 'Cooldown (0.5s) - wait a moment to grow'
-        : reject.reason === 'insufficient_biomass' ||
-            reject.reason === 'insufficient_biomass_for_node'
-          ? 'Insufficient biomass to grow'
-          : reject.reason === 'cannot_cross_layer'
-            ? 'Cannot cross layer directly'
-            : reject.reason === 'insufficient_energy_for_node' ||
-                reject.reason === 'insufficient_energy'
-              ? 'Not enough energy - grow leaves to photosynthesize'
-              : reject.reason === 'insufficient_energy_for_germination'
-                ? 'Not enough energy to germinate'
-                : reject.reason === 'Roots must grow mostly downward' ||
-                    reject.reason === 'Roots must grow downward' ||
-                    reject.reason ===
-                      'Root growth must trend below the selected node (can arc near surface, but not mostly upward)' ||
-                    reject.reason === 'Root growth direction too horizontal'
-                  ? 'Root direction too shallow/horizontal - trace a route that ends clearly below the node (it can arc near the surface)'
-                  : reject.reason === 'Cotyledons must grow upward'
-                    ? 'Cotyledon direction too low - drag upward/outward'
-                    : reject.reason === 'germination_failed_conditions'
-                      ? `Germination failed: light or moisture was below the threshold${germinationNumbers} - the seed died.`
-                      : reject.reason === 'germination_conditions_not_met'
-                        ? `Germination failed: light or moisture was below the threshold${germinationNumbers}.`
-                        : reject.reason === 'plant_not_found'
-                          ? 'Plant not found - refresh to get a new seed'
-                          : reject.reason === 'plant_mismatch'
-                            ? 'Plant mismatch - refresh to sync'
-                            : reject.reason === 'parent_node_not_found'
-                              ? 'Parent node not found - plant may have changed'
-                              : reject.reason === 'out_of_bounds'
-                                ? 'Growth would go out of world bounds'
-                                : reject.reason === 'invalid_direction'
-                                  ? 'Growth direction is invalid for this node type'
-                                  : reject.reason === 'max_nodes_reached'
-                                    ? 'Plant has reached maximum node limit'
-                                    : reject.reason === 'invalid_parent_for_cotyledon'
-                                      ? 'Cotyledons can only grow from seed crown or root crown'
-                                      : reject.reason === 'radicle_only_from_seed'
-                                        ? 'Radicle can only grow from a seed'
-                                        : reject.reason === 'radicle_required_before_cotyledon'
-                                          ? 'Must sprout a radicle before adding cotyledons'
-                                          : reject.reason === 'establish_seed_before_stem'
-                                            ? 'Must establish seed (radicle + 2 cotyledons) before growing stem'
-                                            : reject.reason === 'max_cotyledons_reached'
-                                              ? 'Maximum cotyledons (2) already reached'
-                                              : refusalCopy(reject.reason);
+    reject.reason === 'germination_failed_conditions' ||
+    reject.reason === 'germination_conditions_not_met'
+      ? germinationNotice(reject.reason)
+      : refusalCopy(reject.reason);
   console.warn('[PlantLegacy] REJECT received:', reject);
-  setDetail(readableReason);
-  uiShell?.toast({ message: readableReason, kind: 'error', durationMs: 5000 });
+  notify(readableReason, 'error', 5000);
 }
 
 function handleError(payload: unknown): void {
@@ -10186,7 +10143,6 @@ function handleError(payload: unknown): void {
   // `report_received` arrives as ERROR on purpose (a confirmation), so it must
   // not be shown in the error colour.
   const message = error.message?.trim() || refusalCopy(error.code);
-  setDetail(message);
   notify(message, error.code === 'report_received' ? 'info' : 'error', 4000);
   if (error.code === 'SESSION_REPLACED') {
     // The same account opened somewhere else and the server kicked this
@@ -10221,12 +10177,7 @@ function handleDevResponse(payload: unknown): void {
   const ok = response.ok ?? response.success ?? true;
   const failure = response.error ?? response.message;
   const msg = ok ? 'Dev command applied' : refusalCopy(String(failure ?? 'unknown'));
-  setDetail(msg);
-  uiShell?.toast({
-    message: msg,
-    kind: ok ? 'state' : 'error',
-    durationMs: 3000,
-  });
+  notify(msg, ok ? 'state' : 'error', 3000);
 }
 
 function handlePlantSync(payload: unknown): void {

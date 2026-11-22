@@ -408,6 +408,9 @@ export function createSettingsPanel(options: SettingsPanelOptions): SettingsPane
   function setOpen(next: boolean): void {
     if (open === next) return;
     open = next;
+    // A capture cannot outlive the sheet: reopening should not be waiting for a
+    // key the player pressed after closing it.
+    if (!next) capturing = null;
     backdrop.classList.toggle('is-open', next);
     if (next) {
       // Come to the front of the layer it shares. The title screen is mounted on
