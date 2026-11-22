@@ -147,6 +147,7 @@ import { WorldDrops } from './renderers/WorldDrops.js';
 import { resolveDrawnNodePosition } from './renderers/webgpu/PlantMeshBuilder.js';
 import { isWebGPUSupported, WebGPUDevice } from './renderers/webgpu/WebGPUDevice.js';
 import { WebGPURenderer } from './renderers/webgpu/WebGPURenderer.js';
+import { applyWorldPalette } from './renderers/worldPalette.ts';
 import { type LocalProfile, loadProfile, saveProfile } from './state/localProfile.js';
 import { type ActionBarAPI, createActionBar } from './ui/ActionBar.js';
 import { type ContextHintAPI, createContextHint } from './ui/ContextHint.js';
@@ -3933,6 +3934,9 @@ async function initC01(): Promise<void> {
   // The plant reads the same file: nine organ materials, painted once before
   // the renderer can build an organ.
   applyOrganPalette(paletteConfig);
+  // And the world: the sun, the sky fill and the water, before any of the
+  // shaders that use them are built.
+  applyWorldPalette(paletteConfig);
 
   // Build UI shell
   uiShell = createUIShell(uiConfig);

@@ -27,6 +27,11 @@ Machine-readable source: the files themselves. The validator is
 
 - `value` **is** the default.
 - Numeric entries require `range: [min, max]`, `min < max`.
+- Value types: `number`, `integer`, `boolean`, `string`, `enum`, `array`,
+  `schema_array`, `matrix`, `object`, `color` (`#rrggbb` or `#rrggbbaa`) and
+  `palette_role`. A `palette_role` entry names a role from
+  `config/palette.json` (`water_deep`) rather than a colour, so the palette owns
+  the value; the validator rejects a role the palette does not define.
 - `status`: `stub` → declared, empty; `draft` → populated but not final;
   `active` → owned and used; `deprecated` → kept for migration only.
 - A file's `_meta.system` must equal its filename.

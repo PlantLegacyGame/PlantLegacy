@@ -8,23 +8,23 @@ import {
 } from '../renderers/environment/waterFieldTuning.ts';
 
 describe('water tuning from config', () => {
-  it('reads the three water colours as data', () => {
+  it('reads the three water colours as palette roles', () => {
     const tuning = parseWaterTuning({
-      water_deep_color: '#123456',
-      water_shallow_color: '#abcdef',
-      water_sky_color: '#AABBCC',
+      water_deep_color: 'water_deep',
+      water_shallow_color: 'water_shallow',
+      water_sky_color: 'sky_horizon',
     });
     assert.deepEqual(tuning.colors, {
-      deep: '#123456',
-      shallow: '#abcdef',
-      sky: '#AABBCC',
+      deep: 'water_deep',
+      shallow: 'water_shallow',
+      sky: 'sky_horizon',
     });
   });
 
-  it('falls back per colour instead of painting black', () => {
+  it('falls back per colour instead of painting nothing', () => {
     const tuning = parseWaterTuning({
-      water_deep_color: 'teal',
-      water_shallow_color: '#12',
+      water_deep_color: '#163a45',
+      water_shallow_color: 'Water Deep',
       // sky omitted
     });
     assert.deepEqual(tuning.colors, DEFAULT_WATER_COLORS);

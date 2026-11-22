@@ -31,6 +31,7 @@ import {
   SEGMENT_TEXELS,
 } from './plant/sdfBuffers.js';
 import { SDF_FRAGMENT_SHADER, SDF_VERTEX_SHADER } from './plant/sdfShaders.js';
+import { worldColour } from './worldPalette.ts';
 
 export type { PlantNodeData } from './plant/plantNodeData.js';
 
@@ -328,7 +329,7 @@ class PlantRenderer {
       uAtmoSunPhaseG: new THREE.Uniform(0.72),
       uAtmoInScatter: new THREE.Uniform(0.6),
       uAtmoHorizonBoost: new THREE.Uniform(0.4),
-      uSunColor: new THREE.Uniform(new THREE.Color(0xffffee)),
+      uSunColor: new THREE.Uniform(worldColour('sunlight')),
       uSunIntensity: new THREE.Uniform(1.4),
     };
 

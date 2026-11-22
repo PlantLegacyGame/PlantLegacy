@@ -19,6 +19,7 @@ import * as THREE from 'three';
 import type { RenderConfig } from '../config/clientConfig.js';
 import type { ClientWeatherState, ClientWeatherStateMachine } from './ClientWeatherStateMachine.js';
 import { type AtmosphereParams, atmosphereFromConfig } from './environment/atmosphere.js';
+import { worldColour } from './worldPalette.ts';
 
 /**
  * Sun + ambient + sky fill at midday, measured in-game (sun elevation 0.52 with
@@ -191,7 +192,7 @@ export class EnvironmentRenderer {
    * the same air, fog and sun as on the bank.
    */
   private underwater: UnderwaterState | null = null;
-  private readonly underwaterTint = new THREE.Color(0x0d2a33);
+  private readonly underwaterTint = worldColour('water_deep');
   /** Height ramp of the water table, read by the soil shader. */
   private waterTableTexture: THREE.DataTexture | null = null;
   private waterTableData: Uint8Array | null = null;

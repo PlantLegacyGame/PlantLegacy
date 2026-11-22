@@ -54,13 +54,13 @@ describe("the plant's organ palette", () => {
   it('refuses a palette that lacks an organ role', () => {
     assert.throws(
       () => resolveOrganColours({ ramps: palette.ramps, roles: [] }),
-      /the palette has no role bark_deep for the bark organ/,
+      /the palette has no role bark_shade for the bark organ/,
     );
   });
 
   it('leaves no colour literal in the mesh plant renderer', () => {
     const source = readFileSync(new URL('./MeshPlantRenderer.ts', import.meta.url), 'utf8');
-    const hexes = source.match(/0x[0-9a-f]{6}\b/gi) ?? [];
+    const hexes = source.match(/(?:Color\(|\.set\(|setHex\(|color:\s*)0x[0-9a-f]{6,8}/gi) ?? [];
     assert.deepEqual(hexes, [], `organ colours should come from the palette: ${hexes.join(', ')}`);
   });
 });

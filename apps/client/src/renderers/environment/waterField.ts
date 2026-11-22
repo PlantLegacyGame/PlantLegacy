@@ -37,6 +37,7 @@ import {
   SurfaceWaterGrid,
 } from '@plant-legacy/shared/world';
 import * as THREE from 'three';
+import { worldColour } from '../worldPalette.ts';
 import type { WaterSurfaceOverPoint } from './underwater.js';
 import {
   DEFAULT_WATER_COLORS,
@@ -206,8 +207,8 @@ const WET_FULL_DEPTH_M = 0.02;
 export function createWaterField(
   surfaceYAt: (x: number, z: number) => number,
   tuning: Partial<WaterFieldTuning> = {},
-  /** Colour of damp, waterlogged soil. Falls back to a dark earth brown. */
-  wetGroundColor: THREE.Color = new THREE.Color(0x2b2318),
+  /** Colour of damp, waterlogged soil. */
+  wetGroundColor: THREE.Color = worldColour('soil_wet'),
   /** The stream carved into the terrain field, if the world has one. */
   river: RiverField | null = null,
   /** Body/shallow/sky colours; `config/water.json` owns them. */
@@ -365,11 +366,11 @@ export function createWaterField(
   const depthAttr = new THREE.BufferAttribute(new Float32Array(positionAttr.count), 1);
   geometry.setAttribute('aWater', depthAttr);
 
-  /** Paint one material with the configured water colours. */
+  /** Paint one material with the configured water roles. */
   const paintWater = (water: WaterMaterial): void => {
-    water.deepColor.set(colors.deep);
-    water.shallowColor.set(colors.shallow);
-    water.skyColor.set(colors.sky);
+    water.deepColor.copy(worldColour(colors.deep));
+    water.shallowColor.copy(worldColour(colors.shallow));
+    water.skyColor.copy(worldColour(colors.sky));
   };
 
   // Where the square grids end. The surface sheet spans `extent` around the
@@ -894,7 +895,7 @@ export function createWaterField(
         // still darkens with the weather.
         (water.material.uniforms.uSkyColor.value as THREE.Color)
           .copy(params.skyColor)
-          .lerp(SKY_TINT, 0.4);
+          .lerp(skyTintColor(), 0.4);
       }
     },
   };
@@ -934,4 +935,5 @@ export function createWaterField(
 }
 
 /** Colour water is lifted towards, so overcast reflections stay legible. */
-const SKY_TINT = new THREE.Color(0x9ecfe4);
+let skyTint: THREE.Color | null = null;
+const skyTintColor = () => (skyTint ??= worldColour('water_shallow'));

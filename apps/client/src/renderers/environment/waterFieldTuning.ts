@@ -7,6 +7,7 @@
  * failed on Vite-only `.js` specifiers, so the type and its defaults moved here.
  * `waterField.ts` re-exports them so existing importers keep working.
  */
+import { isPaletteRoleName } from '@plant-legacy/shared/color';
 
 /**
  * The water's own colours, from `config/water.json`.
@@ -24,10 +25,15 @@ export interface WaterColors {
   sky: string;
 }
 
+/**
+ * Palette role names, not hexes: A01 keeps every colour value in
+ * `config/palette.json`, so `config/water.json` chooses which role paints each
+ * of the three water surfaces and the renderer looks the role up.
+ */
 export const DEFAULT_WATER_COLORS: WaterColors = {
-  deep: '#163a45',
-  shallow: '#5aa3b0',
-  sky: '#9ecfe4',
+  deep: 'water_deep',
+  shallow: 'water_body',
+  sky: 'water_shallow',
 };
 
 export interface WaterFieldTuning {
@@ -199,11 +205,9 @@ export function sheetFadeRange(
  * colour rather than painting black.
  */
 
-/** Read a `#rrggbb` entry, falling back rather than painting black. */
-function readColor(value: unknown, fallback: string): string {
-  return typeof value === 'string' && /^#[0-9a-f]{6}$/i.test(value.trim())
-    ? value.trim()
-    : fallback;
+/** Read a palette role name, falling back rather than painting nothing. */
+function readRole(value: unknown, fallback: string): string {
+  return isPaletteRoleName(value) ? value : fallback;
 }
 
 export function parseWaterTuning(data: Record<string, unknown>): Partial<WaterFieldTuning> {
@@ -247,9 +251,9 @@ export function parseWaterTuning(data: Record<string, unknown>): Partial<WaterFi
     seaWaveScaleM: num('sea_wave_scale_m', fallback.seaWaveScaleM ?? 5.5),
     seaFoamWidthM: num('sea_foam_width_m', fallback.seaFoamWidthM ?? 0.9),
     colors: {
-      deep: readColor(data.water_deep_color, DEFAULT_WATER_COLORS.deep),
-      shallow: readColor(data.water_shallow_color, DEFAULT_WATER_COLORS.shallow),
-      sky: readColor(data.water_sky_color, DEFAULT_WATER_COLORS.sky),
+      deep: readRole(data.water_deep_color, DEFAULT_WATER_COLORS.deep),
+      shallow: readRole(data.water_shallow_color, DEFAULT_WATER_COLORS.shallow),
+      sky: readRole(data.water_sky_color, DEFAULT_WATER_COLORS.sky),
     } satisfies WaterColors,
   };
 }

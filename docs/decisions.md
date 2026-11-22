@@ -1295,7 +1295,10 @@ the meshes are built from.
 4. **The colours are data.** `water_deep_color`, `water_shallow_color` and
    `water_sky_color` in `config/water.json` paint every water material in one
    pass (`paintWater`), and the underwater tint reads the same deep colour, so the
-   sheet, the river, the table and the medium cannot drift apart (W3).
+   sheet, the river, the table and the medium cannot drift apart (W3). Since A01
+   they are `palette_role` entries naming `water_deep`, `water_body` and
+   `water_shallow`: the config picks the role, `config/palette.json` owns the hex,
+   and the validator rejects a role the palette does not define.
 
 **Consequences.** The view now changes the moment the eye crosses a water surface,
 and the tint, fog and light all come from the same depth, so a shallow dive and a

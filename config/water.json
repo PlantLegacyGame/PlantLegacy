@@ -95,18 +95,18 @@
       "notes": "Metres of water that halve the light reaching the bottom of a body. At 1.6 m the river channel (0.9 m of water) was already two-thirds absorbed and the whole stream read as a black plate under a clear noon; 1.0 m still darkens a deep pit but keeps a stream readable as water."
     },
     "water_deep_color": {
-      "type": "color",
-      "value": "#163a45",
-      "notes": "Body colour of deep water: the medium seen underwater, the tint the fog takes when the eye is submerged, and the deep end of every sheet. One value for all three so a pond cannot be blue from above and green from inside. Not #0d2a33: that is darker than any daylight water and made a channel read as a hole in the ground."
+      "type": "palette_role",
+      "value": "water_deep",
+      "notes": "Palette role for the body colour of deep water: the medium seen underwater, the tint the fog takes when the eye is submerged, and the deep end of every sheet. One role for all three so a pond cannot be blue from above and green from inside. The hex lives in config/palette.json with every other colour."
     },
     "water_shallow_color": {
-      "type": "color",
-      "value": "#4f93a3",
+      "type": "palette_role",
+      "value": "water_body",
       "notes": "Colour of water a few centimetres deep, before absorption has taken the redness out of it."
     },
     "water_sky_color": {
-      "type": "color",
-      "value": "#9ecfe4",
+      "type": "palette_role",
+      "value": "water_shallow",
       "notes": "Colour the sheet reflects at a grazing angle, and the bright inside of the Snell window seen from under the surface."
     },
     "wet_ground_opacity": {

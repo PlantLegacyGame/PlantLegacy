@@ -1,3 +1,4 @@
+import { isPaletteRoleName } from '../color/index.ts';
 import { violatesAccountBoundInvariant } from '../schemas/item.ts';
 import type { ConfigFile, ValidationIssue } from './types.ts';
 import { CONFIG_SCHEMA, CONFIG_VALUE_TYPES } from './types.ts';
@@ -384,6 +385,15 @@ function validateEntry(path: string, entry: unknown, push: Push): void {
         push(`${path}.value`, 'entry.color_invalid', 'Color entry needs "#rrggbb" or "#rrggbbaa".');
       }
       return;
+    case 'palette_role':
+      if (!isPaletteRoleName(entry.value)) {
+        push(
+          `${path}.value`,
+          'entry.palette_role_invalid',
+          'Palette role entry needs a role name such as "water_deep", not a colour.',
+        );
+      }
+      return;
     case 'object':
       if (!isRecord(entry.value)) {
         push(`${path}.value`, 'entry.value_invalid', 'Object entry needs an object "value".');
@@ -536,6 +546,36 @@ export function validateCrossFieldRules(configs: Map<string, ConfigFile>): Valid
   // nothing consumes (there is no server-side avatar, so no movement to bound),
   // so both the key and this rule are gone: a rule against a deleted tunable was
   // a permanent pass with a reassuring code name.
+
+  // --- Palette roles (any file) -------------------------------------------
+  // A `palette_role` entry names a role; `config/palette.json` defines them. A
+  // typo is caught here, where there is a message, instead of painting nothing
+  // in the game - the failure a role name exists to prevent.
+  const paletteRoles = (configs.get('palette')?.values as Record<string, unknown> | undefined)
+    ?.roles;
+  const roleList = isRecord(paletteRoles) ? paletteRoles.value : undefined;
+  if (Array.isArray(roleList)) {
+    const names = new Set(
+      roleList.flatMap((role) =>
+        isRecord(role) && typeof role.name === 'string' ? [role.name] : [],
+      ),
+    );
+    for (const [system, file] of configs) {
+      for (const [key, entry] of Object.entries(file.values ?? {})) {
+        if (!isRecord(entry) || entry.type !== 'palette_role' || typeof entry.value !== 'string') {
+          continue;
+        }
+        if (!names.has(entry.value)) {
+          push(
+            system,
+            key,
+            'config.palette_role_unknown',
+            `${system}.${key} names palette role "${entry.value}", which palette.json does not define.`,
+          );
+        }
+      }
+    }
+  }
 
   return issues;
 }

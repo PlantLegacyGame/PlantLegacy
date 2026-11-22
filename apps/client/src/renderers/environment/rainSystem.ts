@@ -20,6 +20,7 @@ import { mulberry32 } from '@plant-legacy/shared/math';
 import { stepSurfaceCover } from '@plant-legacy/shared/weather';
 import * as THREE from 'three';
 import type { RenderConfig } from '../../config/clientConfig.js';
+import { worldColour } from '../worldPalette.ts';
 
 export type PrecipitationMode = 'rain' | 'snow';
 
@@ -402,7 +403,7 @@ export function createRainSystem(
       uWidth: { value: config.rainStreakWidth * 2 },
       // A cool grey, tinted by the light the drops fall through: water is not a
       // cyan light source, and adding it to the frame made every shower glow.
-      uColor: { value: new THREE.Color(0xc4d0d8) },
+      uColor: { value: worldColour('sky_horizon') },
       uOpacity: { value: 0.6 },
       uLight: { value: 1 },
       uSlant: { value: config.rainSlant },
@@ -462,7 +463,7 @@ export function createRainSystem(
     uniforms: {
       uTime: { value: 0 },
       uSpread: { value: 0.17 },
-      uColor: { value: new THREE.Color(0xc4d0d8) },
+      uColor: { value: worldColour('sky_horizon') },
       uOpacity: { value: 0.5 },
       uLight: { value: 1 },
       uHole: { value: new THREE.Vector3(0, 0, 0) },
@@ -610,8 +611,8 @@ export function createRainSystem(
     uniforms: {
       // Puddle water is the sky it reflects, pulled toward the soil it sits in, so
       // it never reads as a grey sticker on brown dirt.
-      uWaterColor: { value: new THREE.Color(0x2c4d5c) },
-      uSnowColor: { value: new THREE.Color(0xdfe8ef) },
+      uWaterColor: { value: worldColour('water_deep') },
+      uSnowColor: { value: worldColour('sky_horizon') },
       uSnow: { value: 0 },
       uLight: { value: 1 },
       uHole: { value: new THREE.Vector3(0, 0, 0) },
@@ -807,8 +808,8 @@ export function createRainSystem(
       patchMaterial.uniforms.uSnow.value = isSnow ? 1 : 0;
       splashMesh.visible = visible && splashesRequested && !isSnow;
       // Snow is white whatever the hour; rain takes the light.
-      (material.uniforms.uColor.value as THREE.Color).set(isSnow ? 0xe8eef4 : 0xc4d0d8);
-      (splashMaterial.uniforms.uColor.value as THREE.Color).set(0xc4d0d8);
+      (material.uniforms.uColor.value as THREE.Color).copy(worldColour('sky_horizon'));
+      (splashMaterial.uniforms.uColor.value as THREE.Color).copy(worldColour('sky_horizon'));
     },
     follow(position: THREE.Vector3) {
       // Follow the eye horizontally; the vertical span is set from the ground in
@@ -839,7 +840,7 @@ export function createRainSystem(
       const dim = Math.max(0.08, Math.min(1, level));
       const drop = material.uniforms.uColor.value as THREE.Color;
       // Snow keeps most of its own colour under moonlight; rain goes with the light.
-      if (mode === 'snow') drop.set(0xe8eef4).multiplyScalar(0.55 + 0.45 * dim);
+      if (mode === 'snow') drop.copy(worldColour('sky_horizon')).multiplyScalar(0.55 + 0.45 * dim);
       else drop.copy(color);
       material.uniforms.uLight.value = dim;
       (splashMaterial.uniforms.uColor.value as THREE.Color).copy(color);
@@ -853,7 +854,7 @@ export function createRainSystem(
       // light the pools were dark discs punched into the ground.
       (patchMaterial.uniforms.uWaterColor.value as THREE.Color)
         .copy(color)
-        .lerp(new THREE.Color(0x8fb3c4), 0.42)
+        .lerp(worldColour('water_shallow'), 0.42)
         .multiplyScalar(0.62 + 0.38 * dim);
       patchMaterial.uniforms.uLight.value = Math.max(0.25, dim);
     },

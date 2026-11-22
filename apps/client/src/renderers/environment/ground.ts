@@ -11,6 +11,7 @@
 import * as THREE from 'three';
 import type { RenderConfig } from '../../config/clientConfig.js';
 import { getTerrainParams } from '../terrain/terrainState.js';
+import { worldColour } from '../worldPalette.ts';
 import { type AtmosphereParams, DEFAULT_ATMOSPHERE, GLSL_ATMOSPHERE } from './atmosphere.js';
 import { cavityDepthM } from './cavity/profile.ts';
 import { applySoilFragmentShader, applySoilVertexShader } from './ground/shaderOverrides.ts';
@@ -286,11 +287,11 @@ export function createGround(
     shader.uniforms.uSoilMineralStrength = { value: config.soilMineralStrength };
     shader.uniforms.uSoilMoisture = { value: 0.2 };
     shader.uniforms.uSunDir = { value: new THREE.Vector3(0, 1, 0) };
-    shader.uniforms.uSunColor = { value: new THREE.Color(0xffffee) };
+    shader.uniforms.uSunColor = { value: worldColour('sunlight') };
     shader.uniforms.uSunIntensity = { value: 1.0 };
     // A sky fill keeps slopes readable when the sun is low or below the
     // horizon; without it the hills flatten into one dark sheet at night.
-    shader.uniforms.uGroundSkyColor = { value: new THREE.Color(0x70879a) };
+    shader.uniforms.uGroundSkyColor = { value: worldColour('sky_bounce') };
     shader.uniforms.uGroundSkyIntensity = { value: 0.4 };
     // Resource grid uniforms for per-tile ground lighting
     shader.uniforms.uResourceGrid = { value: null };

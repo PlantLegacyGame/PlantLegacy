@@ -110,16 +110,11 @@
         { "name": "soil_wet", "ramp": "soil", "step": 900, "use": "damp soil and the stain a shore leaves" },
         { "name": "bark_mid", "ramp": "bark", "step": 500, "use": "stems and branches" },
         { "name": "bark_shade", "ramp": "bark", "step": 700, "use": "underside of a limb" },
-        { "name": "bark_deep", "ramp": "bark", "step": 900, "use": "the trunk and the heart of a limb" },
         { "name": "bark_pale", "ramp": "bark", "step": 300, "use": "roots and the pale wood below the soil line" },
         { "name": "leaf_lit", "ramp": "foliage", "step": 300, "use": "sunlit blade" },
         { "name": "leaf_body", "ramp": "foliage", "step": 500, "use": "the plant's base colour" },
         { "name": "leaf_shade", "ramp": "foliage", "step": 700, "use": "blade in shadow" },
         { "name": "leaf_sprout", "ramp": "foliage", "step": 100, "use": "new growth and the rim of a tip" },
-        { "name": "stem_young", "ramp": "foliage", "step": 700, "use": "young shoots and hypocotyls, green-brown rather than wood" },
-        { "name": "leaf_seed", "ramp": "foliage", "step": 300, "use": "cotyledons, the fleshy seed leaves" },
-        { "name": "seed_coat", "ramp": "soil", "step": 700, "use": "the shell a seed opens from" },
-        { "name": "spore", "ramp": "soil", "step": 500, "use": "spore sacs and the dust they shed" },
         { "name": "water_shallow", "ramp": "water", "step": 300, "use": "a film of water over soil" },
         { "name": "water_body", "ramp": "water", "step": 500, "use": "the body colour of a pool" },
         { "name": "water_deep", "ramp": "water", "step": 700, "use": "absorption at depth" },
@@ -137,7 +132,9 @@
         { "name": "ink_pale", "ramp": "ink", "step": 100, "use": "a pale neutral surface, cooler than paper" },
         { "name": "accent_sprout", "ramp": "foliage", "step": 300, "use": "new growth in the interface and the plant's tender parts" },
         { "name": "accent_sky", "ramp": "sky", "step": 500, "use": "the informational accent, read as distance" },
-        { "name": "accent_soil", "ramp": "soil", "step": 500, "use": "earth in an icon or a chart" }
+        { "name": "accent_soil", "ramp": "soil", "step": 500, "use": "earth in an icon or a chart" },
+        { "name": "sunlight", "ramp": "soil", "step": 100, "use": "the sun's own colour, on a lit edge and wherever a shader adds light" },
+        { "name": "sky_bounce", "ramp": "sky", "step": 500, "use": "sky light falling back onto the ground, so a slope stays readable under cloud" }
       ]
     }
   }

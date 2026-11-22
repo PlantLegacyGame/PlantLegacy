@@ -22,6 +22,7 @@
  * the valley the water actually runs down instead of a world axis.
  */
 import * as THREE from 'three';
+import { worldColour } from '../worldPalette.ts';
 
 const WATER_VERTEX_SHADER = /* glsl */ `
   attribute float aWater;
@@ -369,11 +370,11 @@ export interface WaterMaterialOptions {
 export function createWaterMaterial(options: WaterMaterialOptions = {}): WaterMaterial {
   // Teal, not ink. #0d2a33 is darker than any water seen in daylight and made
   // a deep channel read as a hole in the ground.
-  const deepColor = new THREE.Color(0x163a45);
-  const shallowColor = new THREE.Color(0x5aa3b0);
-  const skyColor = new THREE.Color(0x9ecfe4);
+  const deepColor = worldColour('water_deep');
+  const shallowColor = worldColour('water_body');
+  const skyColor = worldColour('water_shallow');
   const sunDir = new THREE.Vector3(0.4, 0.8, 0.3);
-  const sunColor = new THREE.Color(0xfff3d6);
+  const sunColor = worldColour('sunlight');
   const material = new THREE.ShaderMaterial({
     uniforms: {
       uTime: { value: 0 },

@@ -20,6 +20,7 @@ export const CONFIG_VALUE_TYPES = [
   'schema_array',
   'matrix',
   'color',
+  'palette_role',
   'object',
 ] as const;
 
@@ -113,6 +114,17 @@ export interface ColorEntry {
   notes?: string;
 }
 
+/**
+ * A name from `config/palette.json`, not a colour. A01: the palette owns every
+ * value, so a tint that the world may retune still names a role (`water_deep`)
+ * instead of quoting a hex the palette would not know about.
+ */
+export interface PaletteRoleEntry {
+  type: 'palette_role';
+  value: string;
+  notes?: string;
+}
+
 export interface ObjectEntry {
   type: 'object';
   value: Record<string, unknown>;
@@ -128,6 +140,7 @@ export type ConfigEntry =
   | SchemaArrayEntry
   | MatrixEntry
   | ColorEntry
+  | PaletteRoleEntry
   | ObjectEntry;
 
 export interface ConfigFile {

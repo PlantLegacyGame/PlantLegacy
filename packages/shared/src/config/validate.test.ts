@@ -224,3 +224,35 @@ describe('extended-1 config validation', () => {
     });
   });
 });
+
+describe('palette role entries', () => {
+  it('accepts a role name and rejects a colour', () => {
+    assert.deepEqual(
+      validateConfig('sample', base({ tint: { type: 'palette_role', value: 'water_deep' } })),
+      [],
+    );
+    assert.ok(
+      codes('sample', base({ tint: { type: 'palette_role', value: '#163a45' } })).includes(
+        'entry.palette_role_invalid',
+      ),
+    );
+  });
+
+  it('rejects a role the palette does not define', () => {
+    const file = (system: string, values: Record<string, unknown>) =>
+      ({
+        _meta: { system, version: '1.0', schema: 'extended-1' },
+        values,
+      }) as unknown as ConfigFile;
+    const issues = validateCrossFieldRules(
+      new Map([
+        ['palette', file('palette', { roles: { type: 'array', value: [{ name: 'water_deep' }] } })],
+        [
+          'water',
+          file('water', { water_deep_color: { type: 'palette_role', value: 'water_drip' } }),
+        ],
+      ]),
+    );
+    assert.ok(issues.some((i) => i.code === 'config.palette_role_unknown'));
+  });
+});

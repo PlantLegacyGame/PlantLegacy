@@ -28,6 +28,7 @@
  * which is what gives it a shallow-to-deep gradient and a foam line on the shore.
  */
 import * as THREE from 'three';
+import { worldColour } from '../worldPalette.ts';
 import {
   DEFAULT_WATER_COLORS,
   type WaterColors,
@@ -106,9 +107,9 @@ export function createOcean(
   // with it; without it the ocean had neither a waterline nor a foam band and
   // ended in the dome's own outline.
   const material = createWaterMaterial({ edgeFade: true });
-  material.deepColor.set(colors.deep);
-  material.shallowColor.set(colors.shallow);
-  material.skyColor.set(colors.sky);
+  material.deepColor.copy(worldColour(colors.deep));
+  material.shallowColor.copy(worldColour(colors.shallow));
+  material.skyColor.copy(worldColour(colors.sky));
   const uniforms = material.material.uniforms;
   uniforms.uOpacity.value = 0.94;
   uniforms.uOceanMode.value = 1;

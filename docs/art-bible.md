@@ -95,16 +95,11 @@ The name a surface should ask for, so no material quotes a step directly.
 | `soil_wet` | `soil.900` | `#2c1e16` | damp soil and the stain a shore leaves |
 | `bark_mid` | `bark.500` | `#9a7866` | stems and branches |
 | `bark_shade` | `bark.700` | `#60473a` | underside of a limb |
-| `bark_deep` | `bark.900` | `#291f1b` | the trunk and the heart of a limb |
 | `bark_pale` | `bark.300` | `#c8b2a7` | roots and the pale wood below the soil line |
 | `leaf_lit` | `foliage.300` | `#a7c194` | sunlit blade |
 | `leaf_body` | `foliage.500` | `#609047` | the plant's base colour |
 | `leaf_shade` | `foliage.700` | `#315925` | blade in shadow |
 | `leaf_sprout` | `foliage.100` | `#dfe9d4` | new growth and the rim of a tip |
-| `stem_young` | `foliage.700` | `#315925` | young shoots and hypocotyls, green-brown rather than wood |
-| `leaf_seed` | `foliage.300` | `#a7c194` | cotyledons, the fleshy seed leaves |
-| `seed_coat` | `soil.700` | `#66442c` | the shell a seed opens from |
-| `spore` | `soil.500` | `#a27553` | spore sacs and the dust they shed |
 | `water_shallow` | `water.300` | `#99bfc6` | a film of water over soil |
 | `water_body` | `water.500` | `#4a8b9a` | the body colour of a pool |
 | `water_deep` | `water.700` | `#245461` | absorption at depth |
@@ -123,20 +118,35 @@ The name a surface should ask for, so no material quotes a step directly.
 | `accent_sprout` | `foliage.300` | `#a7c194` | new growth in the interface and the plant's tender parts |
 | `accent_sky` | `sky.500` | `#6a839a` | the informational accent, read as distance |
 | `accent_soil` | `soil.500` | `#a27553` | earth in an icon or a chart |
+| `sunlight` | `soil.100` | `#eee2d8` | the sun's own colour, on a lit edge and wherever a shader adds light |
+| `sky_bounce` | `sky.500` | `#6a839a` | sky light falling back onto the ground, so a slope stays readable under cloud |
 <!-- palette:end -->
 
 ### The plant
 
 `renderers/organPalette.ts` is where the organism picks the palette up, by role:
-trunk on `bark_deep`, young shoots on `stem_young`, roots on `bark_pale` (pale
+trunk on `bark_shade`, young shoots on `leaf_shade`, roots on `bark_pale` (pale
 bark, so the soil line does not split one organ in two), leaf on `leaf_body`, the
-seed leaf on `leaf_seed`, the bloom on `flower` with a `flower_centre` centre,
-seed on `seed_coat` and spore on `spore`. Those plant roles were added to the
-palette for this, because the rule is that no material quotes a step directly.
-The nine organ materials are created colourless and painted once at boot, so a
-palette that fails to load stops the mesh plant renderer instead of letting it
-fall back to a compiled-in second set of colours; health and mutation tints
-multiply on top of these base colours.
+seed leaf on `leaf_lit`, the bloom on `flower` with a `flower_centre` centre,
+spore on `soil_mid` and seed on `soil_shade`. Only three of those are plant-only
+roles: the rest were already names for the paint, and reusing them is the point
+of a role map - a shoot is foliage, a spore is earth. The nine organ materials
+are created colourless and painted once at boot, so a palette that fails to load
+stops the mesh plant renderer instead of letting it fall back to a compiled-in
+second set of colours; health and mutation tints multiply on top of these base
+colours.
+
+### The world
+
+Light is not paint, so the palette gained two roles for it: `sunlight` (the sun's
+own colour, on a lit edge and wherever a shader adds light) and `sky_bounce` (sky
+light falling back onto the ground, which keeps a slope readable under a low or
+absent sun). `renderers/worldPalette.ts` resolves those once at boot together
+with `water_shallow`, `water_body`, `water_deep`, the damp `soil_wet` and the
+precipitation `sky_horizon`, and the soil shader, the plant shader, the water
+material, the rain and the underwater tint all take their colours from it - none
+of those files carries a hex.
+
 
 ## Organism Anatomy & Visual Fusion (C02 / T02)
 
@@ -187,9 +197,11 @@ Water is a medium, not a decal (ADR-062). Two looks have to agree:
    the sky's: fog collapses to a few metres, direct sun is eaten with depth, and
    there is no horizon.
 
-Rule: the colours are `water_deep_color`, `water_shallow_color` and
-`water_sky_color` in `config/water.json`, and one set paints the medium, the fog
-and every sheet, so a pond cannot be blue from above and green from inside.
+Rule: the colours are the roles `water_deep`, `water_body` and `water_shallow`,
+named by `water_deep_color`, `water_shallow_color` and `water_sky_color` in
+`config/water.json` - `palette_role` entries, so the config chooses which paint
+and the palette owns the hex. One set paints the medium, the fog and every
+sheet, so a pond cannot be blue from above and green from inside.
 
 Rule: **water has no straight edge.** The sheets are square grids, so their alpha
 falls off radially as well as with distance (`sheet_edge_fade`); a lid of water

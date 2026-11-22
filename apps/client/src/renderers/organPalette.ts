@@ -16,17 +16,21 @@
 import type { PaletteConfig } from '../config/clientConfig.js';
 import { paletteRoleHexes } from '../config/paletteColours.ts';
 
-/** The role that paints each organ. */
+/**
+ * The role that paints each organ. Where the palette already names the paint -
+ * a shoot is foliage, a spore is earth - the organ uses that role rather than a
+ * second name for the same step.
+ */
 export const ORGAN_ROLES = {
-  bark: 'bark_deep',
-  stem: 'stem_young',
+  bark: 'bark_shade',
+  stem: 'leaf_shade',
   root: 'bark_pale',
   leaf: 'leaf_body',
-  cotyledon: 'leaf_seed',
+  cotyledon: 'leaf_lit',
   flower: 'flower',
   flowerCentre: 'flower_centre',
-  spore: 'spore',
-  seed: 'seed_coat',
+  spore: 'soil_mid',
+  seed: 'soil_shade',
 } as const satisfies Record<string, string>;
 
 export type OrganKey = keyof typeof ORGAN_ROLES;
