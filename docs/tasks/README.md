@@ -28,7 +28,8 @@ through ADR-029, ADR-041/ADR-048 and the 2026-11-21 scope choices (ADR-080):
 
 1. **T08A** — finish the inventory contract. The `player_state` restart copy
    and row-locked write landed 2026-11-22 (buy → restart → reconnect verified);
-   the read-modify-write mutation path and the formal duplication audit remain.
+   the shop purchase is now a locked read-modify-write. Item use, slot swap and
+   spore awards still need that path; the two-purchase audit passed.
    Config ownership is resolved (ADR-082). Record: [T08A.md](./T08A.md).
 2. **C04 closeout** — rebinding screen, notification log and one real-device
    pass. Record: [C04.md](./C04.md).
@@ -73,7 +74,7 @@ Specs for every task in this list are in [`DESIGN.md` Part 11](../../DESIGN.md).
 | T05 | Communication | `[x]` Proximity/world chat, data-driven emotes, block and report. Record written retrospectively 2026-11-14; report entry points on non-chat surfaces await T14/T43/T08A/T29 | [T05.md](./T05.md) |
 | T04 | Mutation | `[~]` **Partial.** Data-driven table (36 mutations), adaptive pressure over 8 categories with decay, scaled maintenance that can kill, shedding with cooldown and penalty, `mutation_acquired`/`mutation_shed`, PLNT v2, protocol v2 messages, 12 visual signatures, unlocked node types, size/growth-speed/diet effects. **Open:** translocation (post-MVP locomotion); `movement.reroot_speed` is consumed by T06 since 2026-11-15 | [T04.md](./T04.md) |
 | T06 | Uproot, damage, tumbling | `[~]` Implemented server-side: four-source damage pipeline, saturation/gust/collapse/structural uproot, reroot crawl and starvation, deterministic tumbling, kill credit, world drops, protocol 37–43, PLNT v3, client redraw and dev buttons. **Open:** in-browser checklist not run; T02 substrate multiplier is still 1.0. Drop collection is live (`DROP_COLLECT`, `ops/dropPickup.ts`); persistence of the pouch/purse is T08A | [T06.md](./T06.md) |
-| T08A | Inventory | `[~]` **Partial; restart copy in, full transaction contract open.** `player_state` persists pouch and purse per account, loaded before HELLO and written after mutations/disconnect/shutdown; verified by buy → server restart → reconnect. Still open: read-modify-write transaction per action, `item_flags.json`, config ownership, concurrent-mutation test | [T08A.md](./T08A.md) |
+| T08A | Inventory | `[~]` **Partial; restart copy and locked purchase in, other mutations open.** `player_state` persists pouch and purse per account, loaded before HELLO and written after mutations/disconnect/shutdown; verified by buy → server restart → reconnect and a two-concurrent-purchase audit. Still open: item use, slot swap and awards are not yet read-modify-write. `items.json` owns the flags (ADR-082) | [T08A.md](./T08A.md) |
 | — | Bugfix: camera, environment, growth | `[x]` Unindexed run of fixes; record kept as evidence | [bugfix-camera-environment-growth.md](./bugfix-camera-environment-growth.md) |
 
 ## Approved V5.4 tasks (not started)

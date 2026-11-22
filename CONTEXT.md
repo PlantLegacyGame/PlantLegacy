@@ -12,8 +12,8 @@ from one shared field, exact trimesh colliders) and **T04** (data-driven
 mutations, adaptive pressure, maintenance/shedding, PLNT v2 snapshots, protocol
 v2 `MUTATION_STATE`/`MUTATION_SHED`, twelve visual signatures). **T06** damage, uproot and tumbling is implemented: one four-source damage pipeline (weather, tool, scripted herbivore swarm, terrain collapse/landing), uproot from sustained saturation, a height-scaled storm gust, a collapse or accumulated structural damage, a steered reroot crawl with a starvation failure, deterministic tumbling, kill credit, fragment/remains/dung world drops, protocol 37–43 and PLNT v3 snapshots (ADR-055, ADR-056). The in-browser checklist is outstanding; drop pickup is now live (2026-11-20, `ops/dropPickup.ts`) — see `docs/tasks/T06.md`. **T08A** inventory is
 partial: the `player_state` restart copy now persists an account's pouch and
-purse (2026-11-22, ADR-081), but the full read-modify-write transaction,
-the read-modify-write path and duplication audit are still open; see
+purse (2026-11-22, ADR-081) and a shop purchase is a locked read-modify-write,
+the other mutation paths are still open and the purchase audit passed; see
 `docs/tasks/T08A.md`.
 
 **2026-11-20/21 batch.** The economy got its first playable slice and the title

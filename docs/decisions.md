@@ -1996,7 +1996,7 @@ choosing numbers.
 | # | Choice | Ruling |
 |---|---|---|
 | 1 | Inventory and purse persistence | Do it now. T08A is the next implementation: server-owned inventory and Spore balance, row-locked, one transaction per buy/use/drop. |
-| 2 | Next milestone | Finish T08A (read-modify-write path and duplication audit), then C04 closeout and one real-device pass, then ADR-044 burial, then W6 water slices 1–2. |
+| 2 | Next milestone | Finish T08A (move item use, slot swap and awards onto the locked path), then C04 closeout and one real-device pass, then ADR-044 burial, then W6 water slices 1–2. |
 | 3 | Commit and push | Commit now. The two local commits exist; push is blocked on GitHub authentication, not on the repository. |
 | 4 | Calamity seed | No automatic seed; only a propagule the plant actually produced. Recorded in ADR-078. |
 | 5 | Pre-alpha legal and money | Donations only, single-player itch.io demo, no paid Spores, no registration. Recorded in ADR-079. |
@@ -2033,20 +2033,23 @@ committed if a later write fails.
 
 **Decision.** One `player_state` row per account holds `slots` (JSONB) and
 `spores` (BIGINT). `owner_id` is the account id, not the plant id, so a new seed
-keeps the pouch and purse. The row is the lock; a mutation is a transaction
-that locks it (`SELECT ... FOR UPDATE`) and upserts. `main.ts` loads the row
-before a HELLO creates or reclaims a player,
+keeps the pouch and purse. The row is the lock; a write is a transaction that
+locks it (`SELECT ... FOR UPDATE`) and upserts, and a shop purchase uses the
+read-modify-write form that reads the current row inside the lock. `main.ts`
+loads the row before a HELLO creates or reclaims a player,
 writes it after shop purchases, spore awards, item use, slot swaps, dev grants
 and disconnect, and flushes every live account on shutdown. A row that cannot be
 read suppresses writes for that session rather than being overwritten with the
 starting kit.
 
 **Consequences.** The restart copy is atomic at the row level and cannot
-half-commit a purchase. It is **not** the full T08A contract: the live inventory
-is still mutated in memory and written back, rather than read-modify-write inside
-one transaction; guests have no row; and the formal duplication audit is still
-owed. `items.json` owns the flags (ADR-082). The row is the restart
-copy, not the economy. T14/T29/T45 still wait for the read-modify-write path.
+half-commit a purchase, and a shop purchase now reads the row, applies the
+purchase and writes the result inside one lock. It is **not** the full T08A
+contract: item use, slot swap and spore awards still mutate the live inventory
+and save afterwards; guests have no row; and the purchase audit does not cover
+them. `items.json` owns the flags (ADR-082). The row is the restart
+copy, and the purchase path is the first locked mutation. T14/T29/T45 still wait
+for every mutation to use that path.
 
 ## ADR-082 — `items.json` is the single item catalogue
 

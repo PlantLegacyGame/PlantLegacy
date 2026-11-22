@@ -39,8 +39,8 @@ Honest list. No feature promises (T42, RULE_13). Updated at every gate.
   deeper-node pick rule and optional leaf cursors. The detailed records are the
   "Drops, picking and the way out of the earth" and "Shop, spores and the pouch"
   sections below. The `player_state` restart copy landed on 2026-11-22; the
-  remaining T08A gaps are the locked read-modify-write transaction,
-  `item_flags.json` and config ownership.
+  remaining T08A gaps are the locked read-modify-write path for item use, slot
+  swap and awards; `items.json` owns the flags (ADR-082).
 - One-command local start (`pnpm dev`) and a strict verify chain (`pnpm verify`).
 - **T03P networking gate:** two tabs, one server, server-authoritative
   plant state over WebSocket + JSON at 20 Hz. WASD/arrows pan the camera.
@@ -1107,10 +1107,11 @@ accounts** (2026-11-22): `player_state` holds one row per account, `main.ts`
 loads it before a HELLO and writes it after purchases, spore awards, item use,
 slot swaps, dev grants and disconnect. A buy → restart → reconnect check passed
 against a temporary Postgres database. It is still **not the whole T08A
-contract**: the live inventory is mutated in memory and written back with one
-upsert inside a row-locked transaction rather than a read-modify-write transaction,
-and the `items.json` vs `inventory.json` ownership is unresolved. Guests have no
-restart copy. Treat it as a restart copy, not as the finished economy; details
+contract**: a shop purchase reads, changes and writes the row inside one lock,
+and two concurrent 80-spore purchases against 120 spores leave one success, one
+refusal and 40 spores after restart; item use, slot swap and spore awards still
+mutate the live inventory and save afterwards. Guests have no restart copy. Treat it as a restart copy, not
+as the finished economy; details
 in [`docs/tasks/T08A.md`](./tasks/T08A.md).
 
 **Calamities are still one global event (2026-11-21).** The season now defaults
@@ -1141,8 +1142,8 @@ Communication, T04 Mutation and T06 damage, uproot and tumbling are implemented;
 T06 still needs its in-browser checklist. **C04 is partial**: health, damage,
 reroot, Inspect/Inventory, Settings and death stats are in; rebinding and the
 notification log are not. **T08A** is partial: the `player_state` restart copy now persists an account's
-pouch and purse across a server restart, but the read-modify-write transaction,
-the read-modify-write path and duplication audit are still open. Those are
+pouch and purse across a server restart and the shop purchase is row-locked, but
+the other mutation paths and duplication audit are still open. Those are
 next, then the ADR-044 burial fix. AL-01 (benchmark, six fixed poses, GPU
 timing, zero-alloc audit) and AL-03 (GPU-band quality controller, replacing the
 CPU-fps-based `QualityController`) follow, per ADR-050. Shared depth between the
