@@ -38,7 +38,9 @@ Honest list. No feature promises (T42, RULE_13). Updated at every gate.
   the day before gives the same world a hover tip that names the exact part, a
   deeper-node pick rule and optional leaf cursors. The detailed records are the
   "Drops, picking and the way out of the earth" and "Shop, spores and the pouch"
-  sections below; the remaining economy gap is Postgres persistence (T08A).
+  sections below. The `player_state` restart copy landed on 2026-11-22; the
+  remaining T08A gaps are the locked read-modify-write transaction,
+  `item_flags.json` and config ownership.
 - One-command local start (`pnpm dev`) and a strict verify chain (`pnpm verify`).
 - **T03P networking gate:** two tabs, one server, server-authoritative
   plant state over WebSocket + JSON at 20 Hz. WASD/arrows pan the camera.
@@ -1100,14 +1102,16 @@ flood (W2). Caustics, god rays, foam and a swim/wade camera are the rest of the
 plan's water slice. The earth is still a carved skin plus a cavity bowl rather than
 a volume, so Root Sight has no strata to cut through (A1).
 
-**Inventory caveat.** An inventory does exist in code — item definitions in
-`config/items.json`, a stacking model in `ops/inventory.ts`, and protocol 24–28 —
-but it is **in-memory**: no Postgres table, no row-locked transactions, and
-`item_flags.json` is still a stub. The local model now rejects invalid counts,
-enforces stack limits and the account-bound flag invariant, and has 11 tests;
-that does not make it persistent. DESIGN T08A forbids in-memory inventories, so
-treat it as scaffolding, not as the economy, until T08A is completed. Details and
-the full deviation list: [`docs/tasks/T08A.md`](./tasks/T08A.md).
+**Inventory caveat.** The pouch and purse are **persisted for signed-in
+accounts** (2026-11-22): `player_state` holds one row per account, `main.ts`
+loads it before a HELLO and writes it after purchases, spore awards, item use,
+slot swaps, dev grants and disconnect. A buy → restart → reconnect check passed
+against a temporary Postgres database. It is still **not the whole T08A
+contract**: the live inventory is mutated in memory and written back with one
+upsert rather than a read-modify-write transaction, `item_flags.json` is a stub,
+and the `items.json` vs `inventory.json` ownership is unresolved. Guests have no
+restart copy. Treat it as a restart copy, not as the finished economy; details
+in [`docs/tasks/T08A.md`](./tasks/T08A.md).
 
 **Calamities are still one global event (2026-11-21).** The season now defaults
 to 90 days in `config/world.json`, but the shipped boundary still runs the old
@@ -1136,9 +1140,10 @@ Per the audited priority order (ADR-023), amended by ADR-048 and **ADR-050**: T0
 Communication, T04 Mutation and T06 damage, uproot and tumbling are implemented;
 T06 still needs its in-browser checklist. **C04 is partial**: health, damage,
 reroot, Inspect/Inventory, Settings and death stats are in; rebinding and the
-notification log are not. **T08A** is partial: the local inventory is hardened and tested, but Postgres
-saving, row locks and restart survival are not implemented. Those are next, then
-the ADR-044 burial fix. AL-01 (benchmark, six fixed poses, GPU
+notification log are not. **T08A** is partial: the `player_state` restart copy now persists an account's
+pouch and purse across a server restart, but the read-modify-write transaction,
+`item_flags.json` and the config ownership decision are still open. Those are
+next, then the ADR-044 burial fix. AL-01 (benchmark, six fixed poses, GPU
 timing, zero-alloc audit) and AL-03 (GPU-band quality controller, replacing the
 CPU-fps-based `QualityController`) follow, per ADR-050. Shared depth between the
 WebGPU

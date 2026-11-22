@@ -10,8 +10,11 @@ over this file whenever they disagree.
 emotes, block and report), **C03b** (inner detail + 620 m outer ground patch
 from one shared field, exact trimesh colliders) and **T04** (data-driven
 mutations, adaptive pressure, maintenance/shedding, PLNT v2 snapshots, protocol
-v2 `MUTATION_STATE`/`MUTATION_SHED`, twelve visual signatures). **T06** damage, uproot and tumbling is implemented: one four-source damage pipeline (weather, tool, scripted herbivore swarm, terrain collapse/landing), uproot from sustained saturation, a height-scaled storm gust, a collapse or accumulated structural damage, a steered reroot crawl with a starvation failure, deterministic tumbling, kill credit, fragment/remains/dung world drops, protocol 37–43 and PLNT v3 snapshots (ADR-055, ADR-056). The in-browser checklist is outstanding; drop pickup is now live (2026-11-20, `ops/dropPickup.ts`) — see `docs/tasks/T06.md`. **T08A** inventory
-is partial and non-compliant — in-memory only; see `docs/tasks/T08A.md`.
+v2 `MUTATION_STATE`/`MUTATION_SHED`, twelve visual signatures). **T06** damage, uproot and tumbling is implemented: one four-source damage pipeline (weather, tool, scripted herbivore swarm, terrain collapse/landing), uproot from sustained saturation, a height-scaled storm gust, a collapse or accumulated structural damage, a steered reroot crawl with a starvation failure, deterministic tumbling, kill credit, fragment/remains/dung world drops, protocol 37–43 and PLNT v3 snapshots (ADR-055, ADR-056). The in-browser checklist is outstanding; drop pickup is now live (2026-11-20, `ops/dropPickup.ts`) — see `docs/tasks/T06.md`. **T08A** inventory is
+partial: the `player_state` restart copy now persists an account's pouch and
+purse (2026-11-22, ADR-081), but the full read-modify-write transaction,
+`item_flags.json` and the config ownership decision are still open; see
+`docs/tasks/T08A.md`.
 
 **2026-11-20/21 batch.** The economy got its first playable slice and the title
 got its performance pass. Spores are the server-owned currency (`ops/spores.ts`),
@@ -19,8 +22,9 @@ the shop checks and grants purchases (`ops/shop.ts`), drops are visible and
 collectible (`renderers/WorldDrops.ts`, `ops/dropPickup.ts`), and the HUD keeps
 the pouch and purse on screen (`ui/Hotbar.ts`, `ui/SporeChip.ts`). Protocol v4
 adds `SHOP_PURCHASE`, `DROP_COLLECT` and `INVENTORY_SYNC.sporeBalance`; the
-pouch and purse are still in memory, so Postgres persistence remains the open
-half of T08A. The title scene was split into tested modules
+pouch and purse were still in memory at that point; the `player_state` restart
+copy landed on 2026-11-22 (ADR-081), while the full T08A transaction contract
+remains open. The title scene was split into tested modules
 (`title/growth.ts`, `plantBend.ts`, `rootGrowth.ts`, `scenery.ts`, `skyLayout.ts`,
 `styleVars.ts`, `treasures.ts`, `weather.ts`, `plantSound.ts`) so the tree, its
 roots, the weather and the palette can be checked without a browser. The palette
@@ -532,12 +536,13 @@ enforcement changes.
 
 ## 8. Not built yet
 
-The rest of the economy — Postgres-backed inventory and purse (T08A),
-marketplace/mail/trade (T14/T29/T45) and admin/compliance tooling. The T06 damage
-pipeline is implemented and drop pickup is now live; reroot controls and the
-damage HUD belong to T51/C04. Chat, emotes and reports are implemented; inventory
-and the spore purse exist and are exercised by the shop, but both are in memory —
-see [`docs/tasks/T08A.md`](./docs/tasks/T08A.md).
+The rest of the economy — the locked read-modify-write inventory transaction,
+`item_flags.json` and config ownership (T08A), marketplace/mail/trade
+(T14/T29/T45) and admin/compliance tooling. The T06 damage pipeline is
+implemented and drop pickup is now live; reroot controls and the damage HUD
+belong to T51/C04. Chat, emotes and reports are implemented; the pouch and purse
+are exercised by the shop and now have an account-scoped restart copy in
+`player_state` — see [`docs/tasks/T08A.md`](./docs/tasks/T08A.md).
 
 **V5.4 extension program (approved 2026-11-09, not built; ADR-047 schedules T54/C11 before volumetric terrain):** T54 reactive fauna, T55 material simulation, T56 volumetric terrain, C10 terrain/material rendering, T57 parametric terrain features, T58 world-object streaming, T59 ecological succession, C11 fauna rendering, O04 cloud-native orchestration. Nothing in this list exists in code. See `DESIGN.md` Parts 11 and 16 for the specs and the index of what is approved.
 
@@ -644,9 +649,10 @@ placement), and the three unread tile keys (`tile_size_m`, `tile_vertices`,
   (`starting_balance`, `earn_*`, `max_balance` in `config/spores.json`),
   `ops/shop.ts` owns the catalogue and the one purchase path, and the balance
   rides on `INVENTORY_SYNC.sporeBalance` (protocol v4). The client never invents
-  a balance or a price: `SHOP_PURCHASE { itemId }` is all it sends. Both the
-  purse and the pouch are in memory, so a reload resets them to the configured
-  starting state; that is the open half of T08A, not a shop bug.
+  a balance or a price: `SHOP_PURCHASE { itemId }` is all it sends. A signed-in
+  account's pouch and purse now load from `player_state` after a restart; guests
+  still reset to the configured starting state. The full read-modify-write
+  transaction is the open half of T08A, not a shop bug.
 - **A drop pays once.** `ops/dropPickup.ts` owns the rule (a live drop pays its
   kind's rate and the store removes it; unknown, expired, replayed and
   plantless requests pay nothing), the damage pipeline owns removal, and

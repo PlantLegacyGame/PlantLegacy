@@ -1,22 +1,23 @@
 # Data model
 
-**Status:** reference. `world_plants` and `world_events` (T03), `accounts`, `sessions` and `rate_limits` (T08C), `world_state` (T03 season calendar) and the three terrain tables (T25) exist; the rest arrive with their owning tasks.
+**Status:** reference. `world_plants` and `world_events` (T03), `accounts`, `sessions` and `rate_limits` (T08C), `world_state` (T03 season calendar), the three terrain tables (T25) and `player_state` (T08A partial) exist; the rest arrive with their owning tasks.
 **Source of truth:** DESIGN.md Appendix H.
 
 Every gameplay table carries `world_id`. All item and Spore mutations must use
-row-level locks (RULE_17). Two live stores break that rule today and are
-documented defects: the inventory pouch and the spore purse are in memory, and
-the shop (`ops/shop.ts`) already grants items and spends spores through them.
-The local models validate counts, stack limits, slot bounds and the purse cap,
-but there is no inventory or purse table, no row locking and no restart
-survival. That is the open half of T08A ([`tasks/T08A.md`](./tasks/T08A.md));
-T14/T29/T45 must not build on it until it is transactional.
+row-level locks (RULE_17). The pouch and purse now have a restart copy in
+`player_state`, keyed by account id. The live copy is still the connected
+player; each change is written back with one upsert, and the row is the lock.
+This is a persistence slice, not the whole of T08A: a full read-modify-write
+transaction, `item_flags.json`, and the `items.json` vs
+`inventory.json`/`item_flags.json` ownership decision are still open. See
+[`tasks/T08A.md`](./tasks/T08A.md). T14/T29/T45 must not build on it until
+those are closed.
 
 ## Locked decisions
 
 - A plant's node graph is a compact binary snapshot (`bytea`) plus a short
   append-only event log, compacted periodically. Never one row per node.
-- `spore_balances` is a first-class row-locked table, not a column on accounts.
+- One `player_state` row owns an account's pouch and purse; the row is the lock. It is not a column on `accounts`. This replaces the earlier "separate `spore_balances` table" line with ADR-081, because a purchase changes the item and the price together and one row cannot half-commit.
 - `death_records` is written at every death from the MVP onward:
   `{plant_id, parent_seed_id, genes[], season, owner_id}`.
 - Ledger erasure removes content and leaves a tombstone; nothing is silently
@@ -112,6 +113,14 @@ never the whole ground.
 | `terrain_edits` | `(world_id, id)` | Append-only: `tick`, `actor_plant_id`, `kind`, position, `radius_m`, `volume_m3`. Indexed by `(world_id, tick)` |
 | `terrain_voids` | `(world_id, id)` | Position, `radius_m`, `volume_m3`, `stability`; a void collapses when dry and loose |
 
+### `player_state` (T08A, partial)
+| Column | Type | Notes |
+|---|---|---|
+| `owner_id` | `text` | PK. The account id, not the plant id: a new seed keeps the pouch and purse |
+| `slots` | `jsonb` | Array of `{ itemId, count }` or `null`; length is the configured slot count after sanitising |
+| `spores` | `bigint` | Non-negative; clamped to `spores.max_balance` on read and write |
+| `updated_at` | `timestamptz` | |
+
 ### Migrations
 
 `apps/server/src/ops/persistence/`, applied in order:
@@ -124,11 +133,14 @@ never the whole ground.
 | `004_rate_limits_unique_constraint.sql` | `(ip_address, endpoint)` unique key for the atomic upsert |
 | `005_create_world_state_table.sql` | `world_state` |
 | `006_create_terrain_tables.sql` | `terrain_chunks`, `terrain_edits`, `terrain_voids` |
+| `007_create_player_state_table.sql` | `player_state` |
 
 ### Not in the database yet
 
-- **Inventory.** The shipped inventory is in memory only — no table, no row
-  locks — which violates DESIGN T08A. See [`tasks/T08A.md`](./tasks/T08A.md).
+- **The rest of the inventory contract.** `player_state` persists the pouch and
+  purse, but `item_flags.json` is still a stub, every mutation is not yet a
+  single read-modify-write transaction, and the config ownership in §3 of
+  [`tasks/T08A.md`](./tasks/T08A.md) is unresolved.
 - **Reports.** Held in a bounded in-memory queue until T40 adds a table.
 - **Fauna, materials, water bodies, world objects.** Arrive with T54–T58.
 

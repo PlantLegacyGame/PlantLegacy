@@ -2015,3 +2015,30 @@ implementation is T08A persistence, not the calamity director; the calamity
 direction is recorded and designed but waits for the persistence hole to close.
 The old 24 / 52 / 80 schedule is a baseline, not a promise. No paid Spores, no
 real-money switch and no mobile build in pre-alpha.
+
+## ADR-081 — The pouch and the purse share one `player_state` row
+
+**Status:** accepted 2026-11-22. Supersedes the "separate `spore_balances`
+table" line in `docs/data-model.md`.
+
+**Context.** T08A requires a server-authoritative inventory with row-level
+locking. The data model also locked `spore_balances` as a first-class row-locked
+table. A shop purchase changes both the item and the price in one user action;
+two tables would need two locks and a transaction that can still leave one half
+committed if a later write fails.
+
+**Decision.** One `player_state` row per account holds `slots` (JSONB) and
+`spores` (BIGINT). `owner_id` is the account id, not the plant id, so a new seed
+keeps the pouch and purse. The row is the lock; a mutation is one upsert that
+takes it. `main.ts` loads the row before a HELLO creates or reclaims a player,
+writes it after shop purchases, spore awards, item use, slot swaps, dev grants
+and disconnect, and flushes every live account on shutdown. A row that cannot be
+read suppresses writes for that session rather than being overwritten with the
+starting kit.
+
+**Consequences.** The restart copy is atomic at the row level and cannot
+half-commit a purchase. It is **not** the full T08A contract: the live inventory
+is still mutated in memory and written back, rather than read-modify-write inside
+one transaction; guests have no row; `item_flags.json` is still a stub; and the
+`items.json` vs `inventory.json` ownership is unresolved. The row is the restart
+copy, not the economy. T14/T29/T45 still wait for the locked mutation path.

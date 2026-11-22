@@ -14,8 +14,9 @@ state), RULE_20 (no rarity), RULE_23 (account-bound flags), one task at a time,
 
 1. **Order.** Default plan runs foundations (Wave 1) before the visible HUD
    (Wave 2). Say the word to pull C04 HUD forward.
-2. **Postgres.** Is a local `DATABASE_URL` / compose stack available? T08A
-   inventory and most auth verification cannot be proven without it.
+2. **Postgres.** Resolved 2026-11-22: a local compose stack and test database
+   were available. The T08A restart copy was verified by buy → restart →
+   reconnect; the locked read-modify-write mutation path is still open.
 3. **Wire compatibility.** Resolved 2026-11-21: breaking changes are allowed
    until the first public alpha. The wire is v4 today. Wave 1-B turned out
    additive (new config key, fewer messages, no payload change), so it needed no
@@ -276,10 +277,13 @@ make `DEV_RESPONSE` dispatch meaningful or remove it.
 
 ## Wave 5 — Conditional (blocked on director decisions / DB)
 
-- **5-A T08A Postgres inventory** — Postgres is not available yet. The local
-  inventory was hardened and tested on 2026-11-15 (counts, stack limits, slot
-  bounds, account-bound invariant); Postgres saving, row locks and restart
-  survival remain `[~]` in `docs/tasks/T08A.md`.
+- **5-A T08A Postgres inventory** — the `player_state` restart copy landed on
+  2026-11-22 (ADR-081): one row per account holds the pouch and purse, loaded
+  before HELLO and written after purchases, spore awards, item use, slot swaps,
+  dev grants, disconnect and shutdown. Buy → restart → reconnect was verified
+  against a temporary Postgres database. Still open: one read-modify-write
+  transaction per action, `item_flags.json`, config ownership, and a
+  concurrent-mutation test; see `docs/tasks/T08A.md`.
 - **5-B Season-end burial (ADR-044)** — dead biomass becomes an organic-matter
   field and edits/voids persist.
 - **5-C Measurement baseline (AL-01)** — six poses, GPU timing, zero-alloc audit;
