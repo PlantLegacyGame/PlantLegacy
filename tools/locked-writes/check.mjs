@@ -70,11 +70,15 @@ export const ALLOWED = new Map([
 /**
  * One assignment to a purse or a pouch.
  *
- * `=` only: `==`, `===`, `!=` and `<=` are reads, and so is a plain `.spores`
- * mention. Compound assignments (`+=`) count, because they write too.
+ * Every writing operator counts: plain `=`, the compound forms including
+ * `**=`, `??=`, `&&=` and `||=`, and the update forms `++`/`--`. A comparison
+ * (`==`, `===`, `!=`, `<=`) and a plain `.spores` mention are reads. The
+ * receiver and operator may be split across lines: `player.spores` newline
+ * `= 1` is the same write, and the scan is on the whole blanked file, not one
+ * line at a time.
  */
 const DIRECT_WRITE =
-  /(?:\.spores\b|\.slots\b(?:\[[^\]\n]*\])?|\bslots\[[^\]\n]*\])\s*(?:[+\-*/%|&^]|<<|>>>?)?\s*=(?!=)/;
+  /(?:\.spores\b|\.slots\b(?:\[[^\]\n]*\])?|\bslots\[[^\]\n]*\])\s*(?:(?:\*\*|<<|>>>?|&&|\|\||\?\?|[-+*/%|&^])\s*=\s*|=(?!=)|\+\+|--)/;
 
 /** Blank quoted text in already-comment-free code, keeping every line break. */
 function blankLiterals(text) {
@@ -113,11 +117,17 @@ function blankLiterals(text) {
 export function findDirectWrites(source, file = '<source>') {
   const text = blankLiterals(codeText(source));
   const writes = [];
-  text.split('\n').forEach((line, index) => {
-    if (DIRECT_WRITE.test(line)) {
-      writes.push({ file, line: index + 1, text: line.trim() });
-    }
-  });
+  const pattern = new RegExp(DIRECT_WRITE.source, 'g');
+  let match = pattern.exec(text);
+  while (match !== null) {
+    const lineStart = text.lastIndexOf('\n', match.index) + 1;
+    const lineEnd = text.indexOf('\n', match.index);
+    const line = text.slice(0, match.index).split('\n').length;
+    // Report the original line, so a finding can be read as it was written.
+    const shown = source.slice(lineStart, lineEnd === -1 ? source.length : lineEnd);
+    writes.push({ file, line, text: shown.trim() });
+    match = pattern.exec(text);
+  }
   return writes;
 }
 

@@ -8,11 +8,14 @@ import { checkLockedWrites, findDirectWrites } from './check.mjs';
 const here = path.dirname(fileURLToPath(import.meta.url));
 
 describe('findDirectWrites', () => {
-  it('flags a purse or pouch assignment, including its compound form', () => {
+  it('flags a purse or pouch assignment, including its compound forms', () => {
     const writes = findDirectWrites(
       [
         'player.spores = 10;',
         'player.spores += 3;',
+        'player.spores ??= 5;',
+        'player.spores **= 2;',
+        'player.spores++;',
         'inventory.slots[2] = { itemId: "seed", count: 1 };',
         'player.inventory.slots = next;',
         'slots[0] = null;',
@@ -20,8 +23,13 @@ describe('findDirectWrites', () => {
     );
     assert.deepEqual(
       writes.map((write) => write.line),
-      [1, 2, 3, 4, 5],
+      [1, 2, 3, 4, 5, 6, 7, 8],
     );
+  });
+
+  it('flags an assignment whose receiver and operator are split across lines', () => {
+    const [write] = findDirectWrites('const before = 1;\nplayer.spores\n  = 10;');
+    assert.equal(write.line, 2);
   });
 
   it('does not flag reads, comparisons or a mention in prose', () => {

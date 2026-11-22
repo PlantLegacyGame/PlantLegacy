@@ -236,6 +236,7 @@ import {
   type PlayerPanelsAPI,
 } from './ui/PlayerPanels.js';
 import type { PlantStatsSummary } from './ui/plantStats.js';
+import { refusalCopy } from './ui/refusalCopy.js';
 import {
   clockChip,
   DEFAULT_VITAL_THRESHOLDS,
@@ -10107,9 +10108,9 @@ function handleReject(payload: unknown): void {
                                             ? 'Must establish seed (radicle + 2 cotyledons) before growing stem'
                                             : reject.reason === 'max_cotyledons_reached'
                                               ? 'Maximum cotyledons (2) already reached'
-                                              : reject.reason;
+                                              : refusalCopy(reject.reason);
   console.warn('[PlantLegacy] REJECT received:', reject);
-  setDetail(`Growth Notice: ${readableReason}`);
+  setDetail(readableReason);
   uiShell?.toast({ message: readableReason, kind: 'error', durationMs: 5000 });
 }
 
