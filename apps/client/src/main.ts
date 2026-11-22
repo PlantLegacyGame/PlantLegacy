@@ -108,6 +108,7 @@ import {
   createRootSightUniforms,
 } from './renderers/environment/rootSightUniforms.js';
 import { aimDirectionFromScreenDrag } from './renderers/growthAimMath.js';
+import { applyOrganPalette } from './renderers/MeshPlantRenderer.ts';
 import { createPlantLabelLayer } from './renderers/PlantLabels.js';
 import { DEFAULT_CONFIG, PlantRenderer } from './renderers/PlantRenderer.js';
 import { toClientSpace } from './renderers/plant/clientSpace.js';
@@ -3929,6 +3930,9 @@ async function initC01(): Promise<void> {
   // tokens resolve through those roles to --pl-theme-*, so the stylesheet names
   // paper or a ladder step and never a hex.
   applyPaletteCssVars(paletteConfig, uiConfig.theme);
+  // The plant reads the same file: nine organ materials, painted once before
+  // the renderer can build an organ.
+  applyOrganPalette(paletteConfig);
 
   // Build UI shell
   uiShell = createUIShell(uiConfig);

@@ -95,10 +95,16 @@ The name a surface should ask for, so no material quotes a step directly.
 | `soil_wet` | `soil.900` | `#2c1e16` | damp soil and the stain a shore leaves |
 | `bark_mid` | `bark.500` | `#9a7866` | stems and branches |
 | `bark_shade` | `bark.700` | `#60473a` | underside of a limb |
+| `bark_deep` | `bark.900` | `#291f1b` | the trunk and the heart of a limb |
+| `bark_pale` | `bark.300` | `#c8b2a7` | roots and the pale wood below the soil line |
 | `leaf_lit` | `foliage.300` | `#a7c194` | sunlit blade |
 | `leaf_body` | `foliage.500` | `#609047` | the plant's base colour |
 | `leaf_shade` | `foliage.700` | `#315925` | blade in shadow |
 | `leaf_sprout` | `foliage.100` | `#dfe9d4` | new growth and the rim of a tip |
+| `stem_young` | `foliage.700` | `#315925` | young shoots and hypocotyls, green-brown rather than wood |
+| `leaf_seed` | `foliage.300` | `#a7c194` | cotyledons, the fleshy seed leaves |
+| `seed_coat` | `soil.700` | `#66442c` | the shell a seed opens from |
+| `spore` | `soil.500` | `#a27553` | spore sacs and the dust they shed |
 | `water_shallow` | `water.300` | `#99bfc6` | a film of water over soil |
 | `water_body` | `water.500` | `#4a8b9a` | the body colour of a pool |
 | `water_deep` | `water.700` | `#245461` | absorption at depth |
@@ -109,6 +115,8 @@ The name a surface should ask for, so no material quotes a step directly.
 | `ui_ground` | `soil.900` | `#2c1e16` | the HUD's dark ground |
 | `accent_life` | `foliage.500` | `#609047` | health, growth, the plant's own accent |
 | `accent_hazard` | `ember.500` | `#c45e3d` | harm, drought and warnings |
+| `flower` | `ember.300` | `#e6a68e` | petals, the plant's one warm bloom |
+| `flower_centre` | `ember.100` | `#faded2` | the pale centre of a bloom |
 | `ui_panel` | `bark.900` | `#291f1b` | the dark chrome a panel sits on |
 | `ink_dim` | `ink.300` | `#bdb6af` | secondary text and hairlines |
 | `ink_pale` | `ink.100` | `#e7e4e1` | a pale neutral surface, cooler than paper |
@@ -116,6 +124,19 @@ The name a surface should ask for, so no material quotes a step directly.
 | `accent_sky` | `sky.500` | `#6a839a` | the informational accent, read as distance |
 | `accent_soil` | `soil.500` | `#a27553` | earth in an icon or a chart |
 <!-- palette:end -->
+
+### The plant
+
+`renderers/organPalette.ts` is where the organism picks the palette up, by role:
+trunk on `bark_deep`, young shoots on `stem_young`, roots on `bark_pale` (pale
+bark, so the soil line does not split one organ in two), leaf on `leaf_body`, the
+seed leaf on `leaf_seed`, the bloom on `flower` with a `flower_centre` centre,
+seed on `seed_coat` and spore on `spore`. Those plant roles were added to the
+palette for this, because the rule is that no material quotes a step directly.
+The nine organ materials are created colourless and painted once at boot, so a
+palette that fails to load stops the mesh plant renderer instead of letting it
+fall back to a compiled-in second set of colours; health and mutation tints
+multiply on top of these base colours.
 
 ## Organism Anatomy & Visual Fusion (C02 / T02)
 

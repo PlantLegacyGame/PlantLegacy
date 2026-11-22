@@ -23,6 +23,7 @@ import {
 } from '@plant-legacy/shared/growth';
 import { hash01 } from '@plant-legacy/shared/math';
 import * as THREE from 'three';
+import type { PaletteConfig } from '../config/clientConfig.js';
 import {
   type NodeHealthLook,
   type NodeHealthStatus,
@@ -31,6 +32,7 @@ import {
 } from '../ui/plantHealth.ts';
 import { type AtmosphereParams, DEFAULT_ATMOSPHERE } from './environment/atmosphere.js';
 import { applyAtmosphereToStandardMaterial } from './environment/standardAtmosphere.js';
+import { type OrganKey, resolveOrganColours } from './organPalette.ts';
 import {
   geometryKey,
   lookAppliesTo,
@@ -197,7 +199,6 @@ const atmosphereSunDir = new THREE.Vector3(0, 1, 0);
 
 // Material cache shared across instances
 const barkMaterial: THREE.MeshStandardMaterial = new THREE.MeshStandardMaterial({
-  color: 0x3d2b1f,
   roughness: 0.8,
   metalness: 0.1,
   flatShading: false,
@@ -205,20 +206,17 @@ const barkMaterial: THREE.MeshStandardMaterial = new THREE.MeshStandardMaterial(
 const rootMaterial: THREE.MeshStandardMaterial = new THREE.MeshStandardMaterial({
   // Roots are pale bark, not dark wood: the title screen's root plate is bone by
   // the surface, and a root that changes material at the soil line is two organs.
-  color: 0xb9a488,
   roughness: 0.88,
   metalness: 0.02,
   flatShading: false,
 });
 const stemMaterial: THREE.MeshStandardMaterial = new THREE.MeshStandardMaterial({
   // Young hypocotyls and branches are green-brown, not mature tree bark.
-  color: 0x526b38,
   roughness: 0.78,
   metalness: 0.02,
   flatShading: false,
 });
 const leafMaterial: THREE.MeshStandardMaterial = new THREE.MeshStandardMaterial({
-  color: 0x4a7c59,
   roughness: 0.7,
   metalness: 0.0,
   flatShading: false,
@@ -226,51 +224,65 @@ const leafMaterial: THREE.MeshStandardMaterial = new THREE.MeshStandardMaterial(
 });
 const cotyledonMaterial: THREE.MeshStandardMaterial = new THREE.MeshStandardMaterial({
   // Fleshy, yellow-green seed leaves catch light differently from true leaves.
-  color: 0x7fa24d,
   roughness: 0.58,
   metalness: 0.0,
   flatShading: false,
   side: THREE.DoubleSide,
 });
 const flowerMaterial: THREE.MeshStandardMaterial = new THREE.MeshStandardMaterial({
-  color: 0xd98aaa,
   roughness: 0.62,
   metalness: 0.0,
   flatShading: false,
   side: THREE.DoubleSide,
 });
 const flowerCentreMaterial: THREE.MeshStandardMaterial = new THREE.MeshStandardMaterial({
-  color: 0xe6c45f,
   roughness: 0.74,
   metalness: 0.0,
   flatShading: false,
 });
 const sporeMaterial: THREE.MeshStandardMaterial = new THREE.MeshStandardMaterial({
-  color: 0xa88752,
   roughness: 0.85,
   metalness: 0.0,
   flatShading: false,
 });
 
 const seedMaterial: THREE.MeshStandardMaterial = new THREE.MeshStandardMaterial({
-  color: 0x8a6d4d,
   roughness: 0.9,
   metalness: 0.0,
   flatShading: false,
 });
 
+/**
+ * A01: each material is colourless here and painted once by
+ * {@link applyOrganPalette} from the roles in `organPalette.ts`, so a palette
+ * that fails to load stops the plant renderer instead of quietly falling back
+ * to a second, compiled-in set of organ colours.
+ */
+const ORGAN_MATERIALS = {
+  bark: barkMaterial,
+  stem: stemMaterial,
+  root: rootMaterial,
+  leaf: leafMaterial,
+  cotyledon: cotyledonMaterial,
+  flower: flowerMaterial,
+  flowerCentre: flowerCentreMaterial,
+  spore: sporeMaterial,
+  seed: seedMaterial,
+} as const satisfies Record<OrganKey, THREE.MeshStandardMaterial>;
+
+let organPaletteApplied = false;
+
+/** Paint every organ material from the palette. Call once, before any plant. */
+export function applyOrganPalette(palette: PaletteConfig): void {
+  const colours = resolveOrganColours(palette);
+  for (const organ of Object.keys(ORGAN_MATERIALS) as OrganKey[]) {
+    ORGAN_MATERIALS[organ].color.set(colours[organ]);
+  }
+  organPaletteApplied = true;
+}
+
 /** Every uncloned organ material, so a single call can patch all of them. */
-const BASE_MATERIALS: THREE.MeshStandardMaterial[] = [
-  barkMaterial,
-  rootMaterial,
-  stemMaterial,
-  leafMaterial,
-  cotyledonMaterial,
-  flowerMaterial,
-  flowerCentreMaterial,
-  sporeMaterial,
-  seedMaterial,
-];
+const BASE_MATERIALS: THREE.MeshStandardMaterial[] = Object.values(ORGAN_MATERIALS);
 
 function baseMaterialFor(nodeType: string): THREE.MeshStandardMaterial {
   switch (nodeType) {
@@ -695,6 +707,11 @@ export class MeshPlantRenderer {
   }
 
   constructor(scene: THREE.Scene, quality: Partial<MeshQualityConfig> = {}) {
+    if (!organPaletteApplied) {
+      throw new Error(
+        'MeshPlantRenderer: call applyOrganPalette(palette) before building the plant',
+      );
+    }
     this.quality = { ...DEFAULT_MESH_QUALITY, ...quality };
     this.scene = scene;
     this.scene.add(this.meshGroup);
