@@ -77,12 +77,6 @@ export interface QualityState {
   lastChangeMs: number;
   /** True when the last sample was a real GPU measurement. */
   gpuMeasured: boolean;
-  /**
-   * True once any real GPU sample has been seen. A driver that reports GPU
-   * timing does not stop reporting it, so this only ever latches on. It gates
-   * supersampling: without a measurement, native resolution is the ceiling.
-   */
-  gpuTimingSeen: boolean;
   /** Exponentially smoothed cost in ms, 0 before the first sample. */
   smoothedCostMs: number;
   /** Time of the first sample, 0 before it. Anchors the warm-up window. */
@@ -102,7 +96,6 @@ export function createQualityState(_config?: QualityConfig): QualityState {
     drawDistanceScale: 1,
     lastChangeMs: 0,
     gpuMeasured: false,
-    gpuTimingSeen: false,
     smoothedCostMs: 0,
     firstSampleMs: 0,
     overBudgetSinceMs: 0,
@@ -113,18 +106,21 @@ export function createQualityState(_config?: QualityConfig): QualityState {
  * The pixel ratio the renderer should actually use.
  *
  * The band's `pixelScale` multiplies the tier's base ratio, and the effective
- * value is clamped to the configured floor and ceiling. Without GPU timing the
- * ceiling is native (1.0): estimated timing cannot prove headroom, so it must
- * not supersample. That is what stops a 60 Hz display from sawtoothing between
- * a degraded ratio and a tier base of 1.25 that is above native.
+ * value is clamped to the configured floor and the display's own density.
+ *
+ * The ceiling is native, never `maxPixelRatio` on its own. Above native the
+ * extra pixels are supersampling: real GPU time for detail the screen cannot
+ * resolve. Measured on this machine, the band climbing to 2.0 on a 1.425
+ * display put the GPU at 12-16 ms and the frame rate at 57-59 fps with long
+ * frames, while the same scene at 1.425 held a flat 60 with none (AL-03
+ * Follow-up 5). `maxPixelRatio` stays the absolute bound for a display whose
+ * own density is that high.
  */
 export function effectivePixelRatio(state: QualityState, config: QualityConfig): number {
   const tiers = config.qualityTiers.length > 0 ? config.qualityTiers : DEFAULT_TIERS;
   const tier = tiers[Math.min(Math.max(0, state.tier), tiers.length - 1)];
   const base = Math.max(0.01, tier.pixelRatio);
-  const ceiling = state.gpuTimingSeen
-    ? config.maxPixelRatio
-    : Math.min(config.maxPixelRatio, nativeRatio(config));
+  const ceiling = Math.min(config.maxPixelRatio, nativeRatio(config));
   return clamp(base * state.pixelScale, config.resolutionFloor, ceiling);
 }
 
@@ -146,7 +142,6 @@ export function nextQualityState(
   const gpuMeasured = sample.gpuMs !== null && sample.gpuMs > 0;
   const cost = gpuMeasured ? (sample.gpuMs as number) : sample.frameMs;
   state.gpuMeasured = gpuMeasured;
-  if (gpuMeasured) state.gpuTimingSeen = true;
 
   // Smooth the input: one hitch (a garbage collection, a shader build, a
   // texture upload) must not spend detail. The EMA is deliberately slow, and
@@ -233,14 +228,18 @@ export function nextQualityState(
   const hasHeadroom = Number.isFinite(smoothCost) && smoothCost <= budgetMin;
   if (!hasHeadroom || !changed) return state;
 
-  // Without a real GPU measurement, hitting vsync is not proof of headroom, so
-  // estimated mode may not render above native resolution and may not promote a
-  // tier on that evidence. The ceiling is expressed as a scale, so it is
-  // relative to the tier base: a medium tier (base 1.25) tops out at 0.8, not
-  // at 1.0, or the effective ratio would still be above native.
-  const recoveryCeiling = gpuMeasured
-    ? maxScale
-    : Math.min(maxScale, Math.min(config.maxPixelRatio, nativeRatio(config)) / tierBase);
+  // Recovery stops at the display's own density, measured or estimated. Past
+  // native the pixels are supersampling, and a frame that spends its headroom
+  // on them is a frame that cannot hold the target rate: the band used to
+  // climb to the configured maximum (2.0 on a 1.425 display), cross the cost
+  // band and drop back, over and over. The ceiling is expressed as a scale, so
+  // it is relative to the tier base: a medium tier (base 1.25) tops out at 0.8,
+  // not at 1.0, or the effective ratio would still be above native. Without a
+  // real measurement a tier is still never promoted on vsync alone.
+  const recoveryCeiling = Math.min(
+    maxScale,
+    Math.max(minScale, Math.min(config.maxPixelRatio, nativeRatio(config)) / tierBase),
+  );
 
   // Keep the state honest when the ceiling drops (a tier change or the first
   // estimated sample after a measured one).

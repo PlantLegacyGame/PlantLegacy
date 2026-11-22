@@ -143,15 +143,15 @@ test('estimated timing recovers once the target rate is reached again', () => {
 
 test('the levers are bounded relative to the tier pixel ratio', () => {
   const state = createQualityState(CONFIG);
-  // Medium tier base 1.25: ceiling scale is 1.5 / 1.25 = 1.2.
+  // Medium tier base 1.25 on a 1x display: the ceiling scale is 1 / 1.25 = 0.8.
   state.tier = 1;
-  state.pixelScale = 1.2;
+  state.pixelScale = 0.8;
   state.drawDistanceScale = 0.9;
   state.lastChangeMs = 0;
   nextQualityState(state, { frameMs: 5, gpuMs: 5, triangles: 1000 }, CONFIG, 1000);
   // At the ceiling, further headroom goes to draw distance, not above the
-  // configured maximum pixel ratio.
-  assert.equal(state.pixelScale, 1.2);
+  // display's density.
+  assert.equal(state.pixelScale, 0.8);
   assert.ok(state.drawDistanceScale > 0.9);
   assert.equal(state.tier, 1);
 });
@@ -168,12 +168,36 @@ test('estimated timing never recovers above native on any tier', () => {
   assert.ok(effectivePixelRatio(state, CONFIG) <= 1 + 1e-9);
 });
 
-test('a measured GPU sample may use the full pixel ratio range', () => {
-  const state = createQualityState(CONFIG);
-  state.tier = 1;
-  state.gpuTimingSeen = true;
-  assert.ok(effectivePixelRatio(state, CONFIG) > 1);
-  assert.ok(effectivePixelRatio(state, CONFIG) <= CONFIG.maxPixelRatio);
+test('a measured GPU sample does not supersample above the display', () => {
+  const config: QualityConfig = { ...CONFIG, maxPixelRatio: 2, nativePixelRatio: 1.425 };
+  const state = createQualityState(config);
+  state.tier = 2; // base 1.5, so a full scale would be 1.5 and clamped
+  state.pixelScale = 1.5;
+  assert.ok(effectivePixelRatio(state, config) <= 1.425 + 1e-9);
+});
+
+test('measured recovery stops at the display density, not the configured ceiling', () => {
+  const config: QualityConfig = { ...CONFIG, maxPixelRatio: 2, nativePixelRatio: 1.425 };
+  const state = createQualityState(config);
+  state.tier = 2; // base 1.5: the native ceiling is a scale of 0.95
+  state.pixelScale = 0.6;
+  state.lastChangeMs = 0;
+  let clock = 1000;
+  for (let i = 0; i < 60; i++) {
+    nextQualityState(state, { frameMs: 5, gpuMs: 5, triangles: 1000 }, config, clock);
+    clock += config.holdMs;
+  }
+  const ratio = effectivePixelRatio(state, config);
+  assert.ok(ratio <= 1.425 + 1e-9, `recovered to ${ratio}, past the display`);
+  assert.ok(ratio > 1.4, `recovered only to ${ratio}`);
+});
+
+test('a display whose own density is 2x may use 2x', () => {
+  const config: QualityConfig = { ...CONFIG, maxPixelRatio: 2, nativePixelRatio: 2 };
+  const state = createQualityState(config);
+  state.tier = 2;
+  state.pixelScale = 1.5;
+  assert.equal(effectivePixelRatio(state, config), 2);
 });
 
 const SMOOTH_CONFIG: QualityConfig = { ...CONFIG, warmupMs: 4000, smoothing: 0.12 };

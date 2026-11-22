@@ -42,7 +42,7 @@
         1,
         4
       ],
-      "notes": "Maximum renderer pixel ratio."
+      "notes": "Maximum renderer pixel ratio. The band never recovers past the display's own density, so this is the absolute bound: on a 150% display it stops at 1.5 and on a 2x display it may use 2."
     },
     "camera_smoothing": {
       "type": "number",
