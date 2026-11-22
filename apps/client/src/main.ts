@@ -8477,7 +8477,7 @@ if (isDevMode) {
       return lookUpPitchTargetRad;
     },
     journal: () => loadJournal(sessionJournalStorage).entries,
-    frameStats: () => frameStatsOf(frameBudget, renderBudget),
+    frameStats: () => frameStatsOf(frameBudget),
     renderFrame: (deltaTime) => renderFrame(deltaTime),
     renderer,
     scene,
@@ -10974,14 +10974,12 @@ let measuredFps = 60;
 /** The last four seconds of frame pacing, so "it stutters" can be measured. */
 const frameBudget = new FrameBudget(240);
 /**
- * Distribution of `renderFrame` cost, not frame intervals: the animation loop
- * only records intervals when it is actually animating, and a hidden tab never
- * animates. Feeding the CPU time as both numbers puts the percentiles that
- * matter (`p50Ms`/`p95Ms`/`worstMs`) on the cost itself.
+ * The cost side of that one budget. Recorded from both loops, because a hidden
+ * tab only draws on a timer - and drawing is what costs, whether or not anything
+ * is animating.
  */
-const renderBudget = new FrameBudget(240);
 function recordRenderCost(cpuMs: number): void {
-  renderBudget.record(cpuMs, cpuMs);
+  frameBudget.recordCost(cpuMs);
 }
 
 /**
@@ -11599,7 +11597,7 @@ function animate(): void {
   recordRenderCost(performance.now() - frameStart);
   // Interval and our own work in that interval: a long frame with little of our
   // code in it is the GPU (see `__pl.frameStats()`), not the loop.
-  frameBudget.record(frameIntervalMs, performance.now() - frameStart);
+  frameBudget.record(frameIntervalMs);
 }
 
 // ---- Account presence ----------------------------------------------------
