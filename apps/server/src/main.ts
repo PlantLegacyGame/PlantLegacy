@@ -1130,12 +1130,16 @@ class World {
     playerId: string,
     plantId: string,
     accountId: string | undefined,
+    giveStartingKit = true,
   ): ConnectedPlayer {
     const restored = accountId ? this.restoredPlayerStates.get(accountId) : undefined;
     if (accountId) this.restoredPlayerStates.delete(accountId);
 
     const inventory = createInventory(this.itemsConfig.inventorySlots);
-    let spores = this.sporeConfig.startingBalance;
+    // A guest reclaim has no saved row. Giving it the starting kit again would
+    // let a reconnect farm starter items and spores; the old behaviour was an
+    // empty pouch, so keep that and start the purse at zero.
+    let spores = giveStartingKit ? this.sporeConfig.startingBalance : 0;
     if (restored) {
       const loaded = toInventory(restored, {
         itemDefinitions: this.itemsConfig.itemDefinitions,
@@ -1144,7 +1148,7 @@ class World {
       });
       inventory.slots = loaded.slots;
       spores = restored.spores;
-    } else {
+    } else if (giveStartingKit) {
       for (const item of this.itemsConfig.startingInventory) {
         addItem(inventory, item.itemId, item.count, this.itemsConfig.itemDefinitions);
       }
@@ -1556,7 +1560,7 @@ class World {
 
     this.registerClientAtPlant(newPlayerId, plant);
 
-    const player = this.createConnectedPlayer(ws, newPlayerId, plant.id, undefined);
+    const player = this.createConnectedPlayer(ws, newPlayerId, plant.id, undefined, false);
     this.players.set(newPlayerId, player);
 
     const welcome = this.buildWelcome(newPlayerId, plant);
