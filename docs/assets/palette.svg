@@ -1,0 +1,117 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="680" height="478"
+     viewBox="0 0 680 478" role="img" aria-labelledby="palette-title">
+  <title id="palette-title">Plant Legacy palette ramps (OKLCH, hexes derived)</title>
+  <rect width="100%" height="100%" fill="#14180f"/>
+  <text x="12" y="45" fill="#efe9d8" font-family="ui-monospace, monospace" font-size="12">soil</text>
+  <rect x="116" y="12" width="104" height="58" rx="3" fill="#eee2d8" stroke="#efe9d8" stroke-opacity="0.18"/>
+  <text x="124" y="30" fill="#14180f" font-family="ui-monospace, monospace" font-size="12">100</text>
+  <text x="124" y="58" fill="#14180f" font-family="ui-monospace, monospace" font-size="12">#eee2d8</text>
+  <rect x="228" y="12" width="104" height="58" rx="3" fill="#ceb19b" stroke="#efe9d8" stroke-opacity="0.18"/>
+  <text x="236" y="30" fill="#14180f" font-family="ui-monospace, monospace" font-size="12">300</text>
+  <text x="236" y="58" fill="#14180f" font-family="ui-monospace, monospace" font-size="12">#ceb19b</text>
+  <rect x="340" y="12" width="104" height="58" rx="3" fill="#a27553" stroke="#efe9d8" stroke-opacity="0.18"/>
+  <text x="348" y="30" fill="#efe9d8" font-family="ui-monospace, monospace" font-size="12">500</text>
+  <text x="348" y="58" fill="#efe9d8" font-family="ui-monospace, monospace" font-size="12">#a27553</text>
+  <rect x="452" y="12" width="104" height="58" rx="3" fill="#66442c" stroke="#efe9d8" stroke-opacity="0.18"/>
+  <text x="460" y="30" fill="#efe9d8" font-family="ui-monospace, monospace" font-size="12">700</text>
+  <text x="460" y="58" fill="#efe9d8" font-family="ui-monospace, monospace" font-size="12">#66442c</text>
+  <rect x="564" y="12" width="104" height="58" rx="3" fill="#2c1e16" stroke="#efe9d8" stroke-opacity="0.18"/>
+  <text x="572" y="30" fill="#efe9d8" font-family="ui-monospace, monospace" font-size="12">900</text>
+  <text x="572" y="58" fill="#efe9d8" font-family="ui-monospace, monospace" font-size="12">#2c1e16</text>
+  <text x="12" y="111" fill="#efe9d8" font-family="ui-monospace, monospace" font-size="12">bark</text>
+  <rect x="116" y="78" width="104" height="58" rx="3" fill="#ece2dd" stroke="#efe9d8" stroke-opacity="0.18"/>
+  <text x="124" y="96" fill="#14180f" font-family="ui-monospace, monospace" font-size="12">100</text>
+  <text x="124" y="124" fill="#14180f" font-family="ui-monospace, monospace" font-size="12">#ece2dd</text>
+  <rect x="228" y="78" width="104" height="58" rx="3" fill="#c8b2a7" stroke="#efe9d8" stroke-opacity="0.18"/>
+  <text x="236" y="96" fill="#14180f" font-family="ui-monospace, monospace" font-size="12">300</text>
+  <text x="236" y="124" fill="#14180f" font-family="ui-monospace, monospace" font-size="12">#c8b2a7</text>
+  <rect x="340" y="78" width="104" height="58" rx="3" fill="#9a7866" stroke="#efe9d8" stroke-opacity="0.18"/>
+  <text x="348" y="96" fill="#efe9d8" font-family="ui-monospace, monospace" font-size="12">500</text>
+  <text x="348" y="124" fill="#efe9d8" font-family="ui-monospace, monospace" font-size="12">#9a7866</text>
+  <rect x="452" y="78" width="104" height="58" rx="3" fill="#60473a" stroke="#efe9d8" stroke-opacity="0.18"/>
+  <text x="460" y="96" fill="#efe9d8" font-family="ui-monospace, monospace" font-size="12">700</text>
+  <text x="460" y="124" fill="#efe9d8" font-family="ui-monospace, monospace" font-size="12">#60473a</text>
+  <rect x="564" y="78" width="104" height="58" rx="3" fill="#291f1b" stroke="#efe9d8" stroke-opacity="0.18"/>
+  <text x="572" y="96" fill="#efe9d8" font-family="ui-monospace, monospace" font-size="12">900</text>
+  <text x="572" y="124" fill="#efe9d8" font-family="ui-monospace, monospace" font-size="12">#291f1b</text>
+  <text x="12" y="177" fill="#efe9d8" font-family="ui-monospace, monospace" font-size="12">foliage</text>
+  <rect x="116" y="144" width="104" height="58" rx="3" fill="#dfe9d4" stroke="#efe9d8" stroke-opacity="0.18"/>
+  <text x="124" y="162" fill="#14180f" font-family="ui-monospace, monospace" font-size="12">100</text>
+  <text x="124" y="190" fill="#14180f" font-family="ui-monospace, monospace" font-size="12">#dfe9d4</text>
+  <rect x="228" y="144" width="104" height="58" rx="3" fill="#a7c194" stroke="#efe9d8" stroke-opacity="0.18"/>
+  <text x="236" y="162" fill="#14180f" font-family="ui-monospace, monospace" font-size="12">300</text>
+  <text x="236" y="190" fill="#14180f" font-family="ui-monospace, monospace" font-size="12">#a7c194</text>
+  <rect x="340" y="144" width="104" height="58" rx="3" fill="#609047" stroke="#efe9d8" stroke-opacity="0.18"/>
+  <text x="348" y="162" fill="#efe9d8" font-family="ui-monospace, monospace" font-size="12">500</text>
+  <text x="348" y="190" fill="#efe9d8" font-family="ui-monospace, monospace" font-size="12">#609047</text>
+  <rect x="452" y="144" width="104" height="58" rx="3" fill="#315925" stroke="#efe9d8" stroke-opacity="0.18"/>
+  <text x="460" y="162" fill="#efe9d8" font-family="ui-monospace, monospace" font-size="12">700</text>
+  <text x="460" y="190" fill="#efe9d8" font-family="ui-monospace, monospace" font-size="12">#315925</text>
+  <rect x="564" y="144" width="104" height="58" rx="3" fill="#162614" stroke="#efe9d8" stroke-opacity="0.18"/>
+  <text x="572" y="162" fill="#efe9d8" font-family="ui-monospace, monospace" font-size="12">900</text>
+  <text x="572" y="190" fill="#efe9d8" font-family="ui-monospace, monospace" font-size="12">#162614</text>
+  <text x="12" y="243" fill="#efe9d8" font-family="ui-monospace, monospace" font-size="12">water</text>
+  <rect x="116" y="210" width="104" height="58" rx="3" fill="#d8e8ea" stroke="#efe9d8" stroke-opacity="0.18"/>
+  <text x="124" y="228" fill="#14180f" font-family="ui-monospace, monospace" font-size="12">100</text>
+  <text x="124" y="256" fill="#14180f" font-family="ui-monospace, monospace" font-size="12">#d8e8ea</text>
+  <rect x="228" y="210" width="104" height="58" rx="3" fill="#99bfc6" stroke="#efe9d8" stroke-opacity="0.18"/>
+  <text x="236" y="228" fill="#14180f" font-family="ui-monospace, monospace" font-size="12">300</text>
+  <text x="236" y="256" fill="#14180f" font-family="ui-monospace, monospace" font-size="12">#99bfc6</text>
+  <rect x="340" y="210" width="104" height="58" rx="3" fill="#4a8b9a" stroke="#efe9d8" stroke-opacity="0.18"/>
+  <text x="348" y="228" fill="#efe9d8" font-family="ui-monospace, monospace" font-size="12">500</text>
+  <text x="348" y="256" fill="#efe9d8" font-family="ui-monospace, monospace" font-size="12">#4a8b9a</text>
+  <rect x="452" y="210" width="104" height="58" rx="3" fill="#245461" stroke="#efe9d8" stroke-opacity="0.18"/>
+  <text x="460" y="228" fill="#efe9d8" font-family="ui-monospace, monospace" font-size="12">700</text>
+  <text x="460" y="256" fill="#efe9d8" font-family="ui-monospace, monospace" font-size="12">#245461</text>
+  <rect x="564" y="210" width="104" height="58" rx="3" fill="#14242a" stroke="#efe9d8" stroke-opacity="0.18"/>
+  <text x="572" y="228" fill="#efe9d8" font-family="ui-monospace, monospace" font-size="12">900</text>
+  <text x="572" y="256" fill="#efe9d8" font-family="ui-monospace, monospace" font-size="12">#14242a</text>
+  <text x="12" y="309" fill="#efe9d8" font-family="ui-monospace, monospace" font-size="12">sky</text>
+  <rect x="116" y="276" width="104" height="58" rx="3" fill="#dee6eb" stroke="#efe9d8" stroke-opacity="0.18"/>
+  <text x="124" y="294" fill="#14180f" font-family="ui-monospace, monospace" font-size="12">100</text>
+  <text x="124" y="322" fill="#14180f" font-family="ui-monospace, monospace" font-size="12">#dee6eb</text>
+  <rect x="228" y="276" width="104" height="58" rx="3" fill="#a9bac8" stroke="#efe9d8" stroke-opacity="0.18"/>
+  <text x="236" y="294" fill="#14180f" font-family="ui-monospace, monospace" font-size="12">300</text>
+  <text x="236" y="322" fill="#14180f" font-family="ui-monospace, monospace" font-size="12">#a9bac8</text>
+  <rect x="340" y="276" width="104" height="58" rx="3" fill="#6a839a" stroke="#efe9d8" stroke-opacity="0.18"/>
+  <text x="348" y="294" fill="#efe9d8" font-family="ui-monospace, monospace" font-size="12">500</text>
+  <text x="348" y="322" fill="#efe9d8" font-family="ui-monospace, monospace" font-size="12">#6a839a</text>
+  <rect x="452" y="276" width="104" height="58" rx="3" fill="#3e4f60" stroke="#efe9d8" stroke-opacity="0.18"/>
+  <text x="460" y="294" fill="#efe9d8" font-family="ui-monospace, monospace" font-size="12">700</text>
+  <text x="460" y="322" fill="#efe9d8" font-family="ui-monospace, monospace" font-size="12">#3e4f60</text>
+  <rect x="564" y="276" width="104" height="58" rx="3" fill="#1c2229" stroke="#efe9d8" stroke-opacity="0.18"/>
+  <text x="572" y="294" fill="#efe9d8" font-family="ui-monospace, monospace" font-size="12">900</text>
+  <text x="572" y="322" fill="#efe9d8" font-family="ui-monospace, monospace" font-size="12">#1c2229</text>
+  <text x="12" y="375" fill="#efe9d8" font-family="ui-monospace, monospace" font-size="12">ember</text>
+  <rect x="116" y="342" width="104" height="58" rx="3" fill="#faded2" stroke="#efe9d8" stroke-opacity="0.18"/>
+  <text x="124" y="360" fill="#14180f" font-family="ui-monospace, monospace" font-size="12">100</text>
+  <text x="124" y="388" fill="#14180f" font-family="ui-monospace, monospace" font-size="12">#faded2</text>
+  <rect x="228" y="342" width="104" height="58" rx="3" fill="#e6a68e" stroke="#efe9d8" stroke-opacity="0.18"/>
+  <text x="236" y="360" fill="#14180f" font-family="ui-monospace, monospace" font-size="12">300</text>
+  <text x="236" y="388" fill="#14180f" font-family="ui-monospace, monospace" font-size="12">#e6a68e</text>
+  <rect x="340" y="342" width="104" height="58" rx="3" fill="#c45e3d" stroke="#efe9d8" stroke-opacity="0.18"/>
+  <text x="348" y="360" fill="#efe9d8" font-family="ui-monospace, monospace" font-size="12">500</text>
+  <text x="348" y="388" fill="#efe9d8" font-family="ui-monospace, monospace" font-size="12">#c45e3d</text>
+  <rect x="452" y="342" width="104" height="58" rx="3" fill="#7e311d" stroke="#efe9d8" stroke-opacity="0.18"/>
+  <text x="460" y="360" fill="#efe9d8" font-family="ui-monospace, monospace" font-size="12">700</text>
+  <text x="460" y="388" fill="#efe9d8" font-family="ui-monospace, monospace" font-size="12">#7e311d</text>
+  <rect x="564" y="342" width="104" height="58" rx="3" fill="#351811" stroke="#efe9d8" stroke-opacity="0.18"/>
+  <text x="572" y="360" fill="#efe9d8" font-family="ui-monospace, monospace" font-size="12">900</text>
+  <text x="572" y="388" fill="#efe9d8" font-family="ui-monospace, monospace" font-size="12">#351811</text>
+  <text x="12" y="441" fill="#efe9d8" font-family="ui-monospace, monospace" font-size="12">ink</text>
+  <rect x="116" y="408" width="104" height="58" rx="3" fill="#e7e4e1" stroke="#efe9d8" stroke-opacity="0.18"/>
+  <text x="124" y="426" fill="#14180f" font-family="ui-monospace, monospace" font-size="12">100</text>
+  <text x="124" y="454" fill="#14180f" font-family="ui-monospace, monospace" font-size="12">#e7e4e1</text>
+  <rect x="228" y="408" width="104" height="58" rx="3" fill="#bdb6af" stroke="#efe9d8" stroke-opacity="0.18"/>
+  <text x="236" y="426" fill="#14180f" font-family="ui-monospace, monospace" font-size="12">300</text>
+  <text x="236" y="454" fill="#14180f" font-family="ui-monospace, monospace" font-size="12">#bdb6af</text>
+  <rect x="340" y="408" width="104" height="58" rx="3" fill="#897e74" stroke="#efe9d8" stroke-opacity="0.18"/>
+  <text x="348" y="426" fill="#efe9d8" font-family="ui-monospace, monospace" font-size="12">500</text>
+  <text x="348" y="454" fill="#efe9d8" font-family="ui-monospace, monospace" font-size="12">#897e74</text>
+  <rect x="452" y="408" width="104" height="58" rx="3" fill="#534b44" stroke="#efe9d8" stroke-opacity="0.18"/>
+  <text x="460" y="426" fill="#efe9d8" font-family="ui-monospace, monospace" font-size="12">700</text>
+  <text x="460" y="454" fill="#efe9d8" font-family="ui-monospace, monospace" font-size="12">#534b44</text>
+  <rect x="564" y="408" width="104" height="58" rx="3" fill="#24211e" stroke="#efe9d8" stroke-opacity="0.18"/>
+  <text x="572" y="426" fill="#efe9d8" font-family="ui-monospace, monospace" font-size="12">900</text>
+  <text x="572" y="454" fill="#efe9d8" font-family="ui-monospace, monospace" font-size="12">#24211e</text>
+</svg>

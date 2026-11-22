@@ -97,6 +97,7 @@ owning task fills it.
 | `onboarding` | T00A | active | 3 |
 | `ops` | O01 | active | 17 |
 | `paid_spawn` | T21 | stub | 0 |
+| `palette` | C03 | draft | 2 |
 | `parasitism` | T10 | stub | 0 |
 | `persistence` | T26 | stub | 0 |
 | `physics` | C02c | active | 14 |
@@ -129,11 +130,11 @@ owning task fills it.
 | `world` | T03 | active | 17 |
 
 
-Total: **80 files**; 31 populated and 49 stubs (3 of them `draft`, 2 `deprecated`).
+Total: **81 files**; 32 populated and 49 stubs (4 of them `draft`, 2 `deprecated`).
 
 **This line owns the count.** Other documents link here rather than quoting a
 number (ADR-049).
-Populated: `accounts`, `chat`, `compliance`, `controls`, `damage`, `daynight`, `dev`, `emotes`, `growth`, `items`, `mutations`, `mutation_visuals`, `net_proto`, `network`, `onboarding`, `ops`, `physics`, `plant_renderer`, `render`, `reports`, `resources`, `root_sight`, `shop`, `spores`, `terrain`, `tumbling`, `ui`, `uproot`, `water`, `weather`, `world`.
+Populated: `accounts`, `chat`, `compliance`, `controls`, `damage`, `daynight`, `dev`, `emotes`, `growth`, `items`, `mutations`, `mutation_visuals`, `net_proto`, `network`, `onboarding`, `ops`, `palette`, `physics`, `plant_renderer`, `render`, `reports`, `resources`, `root_sight`, `shop`, `spores`, `terrain`, `tumbling`, `ui`, `uproot`, `water`, `weather`, `world`.
 
 ## Approved V5.4 config files (not created yet)
 

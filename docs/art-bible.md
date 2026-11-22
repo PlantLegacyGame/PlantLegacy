@@ -30,6 +30,72 @@ rim light on plants, aerial-perspective fog.
 - *Direction only:* cascaded or contact shadows. There is one shadow map,
   refreshed on a timer.
 
+## Palette
+
+The colour source of truth for A01 is `config/palette.json`: seven ramps authored
+in OKLCH (lightness, chroma, hue) on one lightness ladder, plus a `roles` map that
+names the step each surface should ask for. Nothing quotes a hex directly - the
+swatches below, and every hex in them, are generated from that file by
+`tools/palette`.
+
+Why OKLCH: a step means the same value in every material, so the ground, a stem
+and the HUD cannot drift apart a shade at a time; and the hue can drift along the
+ramp without breaking it - warm at the light end, cool in shadow, which is pillar
+1 (light is the hero) written in data instead of in taste. The second table is
+the one to build against: a surface asks for a role, never for a step.
+
+`pnpm palette:write` regenerates this section and `docs/assets/palette.svg`;
+`pnpm verify` fails when either is stale, and `node tools/palette/build.mjs`
+rejects a step outside sRGB rather than documenting a clipped hex.
+
+![Palette ramps: one row per material, one cell per step](./assets/palette.svg)
+
+<!-- palette:start -->
+### Ramps
+
+One lightness ladder (0.92 / 0.78 / 0.60 / 0.42 / 0.25) across every material:
+step 100 is the lightest, 900 the darkest, and the hue drifts toward the warm
+end at the top of the ramp and the cool end in shadow. The hexes are derived,
+never authored.
+
+| Ramp | Use | 100 | 300 | 500 | 700 | 900 |
+|---|---|---|---|---|---|---|
+| `soil` | ground, cut faces, the pit wall and every dust the world kicks up | `#eee2d8` | `#ceb19b` | `#a27553` | `#66442c` | `#2c1e16` |
+| `bark` | stems, branches and the woody rim of a junction | `#ece2dd` | `#c8b2a7` | `#9a7866` | `#60473a` | `#291f1b` |
+| `foliage` | blades, sprouts, the lit side of a canopy and the plant's own glow | `#dfe9d4` | `#a7c194` | `#609047` | `#315925` | `#162614` |
+| `water` | the sheet, the body of a pool and the medium under it | `#d8e8ea` | `#99bfc6` | `#4a8b9a` | `#245461` | `#14242a` |
+| `sky` | the dome, fog and the horizon line the eye reads height against | `#dee6eb` | `#a9bac8` | `#6a839a` | `#3e4f60` | `#1c2229` |
+| `ember` | heat, hazard and the one warm accent the interface may use | `#faded2` | `#e6a68e` | `#c45e3d` | `#7e311d` | `#351811` |
+| `ink` | outlines and the seams between organs; warm near-neutral, never black | `#e7e4e1` | `#bdb6af` | `#897e74` | `#534b44` | `#24211e` |
+
+### Roles
+
+The name a surface should ask for, so no material quotes a step directly.
+
+| Role | Step | Hex | Use |
+|---|---|---|---|
+| `soil_lit` | `soil.300` | `#ceb19b` | ground facing the sun |
+| `soil_mid` | `soil.500` | `#a27553` | ground in plain light |
+| `soil_shade` | `soil.700` | `#66442c` | ground under the canopy or in a pit |
+| `soil_wet` | `soil.900` | `#2c1e16` | damp soil and the stain a shore leaves |
+| `bark_mid` | `bark.500` | `#9a7866` | stems and branches |
+| `bark_shade` | `bark.700` | `#60473a` | underside of a limb |
+| `leaf_lit` | `foliage.300` | `#a7c194` | sunlit blade |
+| `leaf_body` | `foliage.500` | `#609047` | the plant's base colour |
+| `leaf_shade` | `foliage.700` | `#315925` | blade in shadow |
+| `leaf_sprout` | `foliage.100` | `#dfe9d4` | new growth and the rim of a tip |
+| `water_shallow` | `water.300` | `#99bfc6` | a film of water over soil |
+| `water_body` | `water.500` | `#4a8b9a` | the body colour of a pool |
+| `water_deep` | `water.700` | `#245461` | absorption at depth |
+| `sky_horizon` | `sky.100` | `#dee6eb` | the horizon band and distant fog |
+| `sky_zenith` | `sky.700` | `#3e4f60` | overhead, before the sun tints it |
+| `ink_line` | `ink.900` | `#24211e` | every outline |
+| `paper` | `soil.100` | `#eee2d8` | panel fill where the interface must sit on the world |
+| `ui_ground` | `soil.900` | `#2c1e16` | the HUD's dark ground |
+| `accent_life` | `foliage.500` | `#609047` | health, growth, the plant's own accent |
+| `accent_hazard` | `ember.500` | `#c45e3d` | harm, drought and warnings |
+<!-- palette:end -->
+
 ## Organism Anatomy & Visual Fusion (C02 / T02)
 
 Plants in Plant Legacy are living organisms, not collections of intersecting geometric blocks:

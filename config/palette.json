@@ -1,0 +1,130 @@
+{
+  "_meta": {
+    "system": "palette",
+    "version": "0.1.0",
+    "schema": "extended-1",
+    "owner_task": "C03",
+    "status": "draft",
+    "notes": "A01 colour source of truth. Steps are authored in OKLCH (lightness 0..1, chroma, hue degrees); the hexes in docs/art-bible.md are derived from these numbers by tools/palette and must never be hand-edited. One lightness ladder (0.92 / 0.78 / 0.60 / 0.42 / 0.25) across every material so a step number means the same value everywhere; hue drifts warm at the light end and cool in shadow (art-bible pillar 1: light is the hero)."
+  },
+  "values": {
+    "ramps": {
+      "type": "schema_array",
+      "schema": {
+        "name": "string",
+        "use": "string",
+        "steps": "array"
+      },
+      "value": [
+        {
+          "name": "soil",
+          "use": "ground, cut faces, the pit wall and every dust the world kicks up",
+          "steps": [
+            { "step": 100, "l": 0.92, "c": 0.019, "h": 62 },
+            { "step": 300, "l": 0.78, "c": 0.045, "h": 60 },
+            { "step": 500, "l": 0.6, "c": 0.075, "h": 58 },
+            { "step": 700, "l": 0.42, "c": 0.06, "h": 56 },
+            { "step": 900, "l": 0.25, "c": 0.026, "h": 54 }
+          ]
+        },
+        {
+          "name": "bark",
+          "use": "stems, branches and the woody rim of a junction",
+          "steps": [
+            { "step": 100, "l": 0.92, "c": 0.013, "h": 50 },
+            { "step": 300, "l": 0.78, "c": 0.03, "h": 49 },
+            { "step": 500, "l": 0.6, "c": 0.05, "h": 48 },
+            { "step": 700, "l": 0.42, "c": 0.04, "h": 47 },
+            { "step": 900, "l": 0.25, "c": 0.018, "h": 45 }
+          ]
+        },
+        {
+          "name": "foliage",
+          "use": "blades, sprouts, the lit side of a canopy and the plant's own glow",
+          "steps": [
+            { "step": 100, "l": 0.92, "c": 0.029, "h": 128 },
+            { "step": 300, "l": 0.78, "c": 0.069, "h": 132 },
+            { "step": 500, "l": 0.6, "c": 0.115, "h": 136 },
+            { "step": 700, "l": 0.42, "c": 0.092, "h": 139 },
+            { "step": 900, "l": 0.25, "c": 0.04, "h": 142 }
+          ]
+        },
+        {
+          "name": "water",
+          "use": "the sheet, the body of a pool and the medium under it",
+          "steps": [
+            { "step": 100, "l": 0.92, "c": 0.018, "h": 205 },
+            { "step": 300, "l": 0.78, "c": 0.042, "h": 210 },
+            { "step": 500, "l": 0.6, "c": 0.07, "h": 214 },
+            { "step": 700, "l": 0.42, "c": 0.056, "h": 218 },
+            { "step": 900, "l": 0.25, "c": 0.025, "h": 222 }
+          ]
+        },
+        {
+          "name": "sky",
+          "use": "the dome, fog and the horizon line the eye reads height against",
+          "steps": [
+            { "step": 100, "l": 0.92, "c": 0.011, "h": 238 },
+            { "step": 300, "l": 0.78, "c": 0.027, "h": 242 },
+            { "step": 500, "l": 0.6, "c": 0.045, "h": 246 },
+            { "step": 700, "l": 0.42, "c": 0.036, "h": 249 },
+            { "step": 900, "l": 0.25, "c": 0.016, "h": 252 }
+          ]
+        },
+        {
+          "name": "ember",
+          "use": "heat, hazard and the one warm accent the interface may use",
+          "steps": [
+            { "step": 100, "l": 0.92, "c": 0.035, "h": 44 },
+            { "step": 300, "l": 0.78, "c": 0.084, "h": 41 },
+            { "step": 500, "l": 0.6, "c": 0.14, "h": 38 },
+            { "step": 700, "l": 0.42, "c": 0.112, "h": 36 },
+            { "step": 900, "l": 0.25, "c": 0.049, "h": 34 }
+          ]
+        },
+        {
+          "name": "ink",
+          "use": "outlines and the seams between organs; warm near-neutral, never black",
+          "steps": [
+            { "step": 100, "l": 0.92, "c": 0.005, "h": 70 },
+            { "step": 300, "l": 0.78, "c": 0.012, "h": 68 },
+            { "step": 500, "l": 0.6, "c": 0.02, "h": 67 },
+            { "step": 700, "l": 0.42, "c": 0.016, "h": 66 },
+            { "step": 900, "l": 0.25, "c": 0.007, "h": 64 }
+          ]
+        }
+      ]
+    },
+    "roles": {
+      "type": "schema_array",
+      "schema": {
+        "name": "string",
+        "ramp": "string",
+        "step": "integer",
+        "use": "string"
+      },
+      "value": [
+        { "name": "soil_lit", "ramp": "soil", "step": 300, "use": "ground facing the sun" },
+        { "name": "soil_mid", "ramp": "soil", "step": 500, "use": "ground in plain light" },
+        { "name": "soil_shade", "ramp": "soil", "step": 700, "use": "ground under the canopy or in a pit" },
+        { "name": "soil_wet", "ramp": "soil", "step": 900, "use": "damp soil and the stain a shore leaves" },
+        { "name": "bark_mid", "ramp": "bark", "step": 500, "use": "stems and branches" },
+        { "name": "bark_shade", "ramp": "bark", "step": 700, "use": "underside of a limb" },
+        { "name": "leaf_lit", "ramp": "foliage", "step": 300, "use": "sunlit blade" },
+        { "name": "leaf_body", "ramp": "foliage", "step": 500, "use": "the plant's base colour" },
+        { "name": "leaf_shade", "ramp": "foliage", "step": 700, "use": "blade in shadow" },
+        { "name": "leaf_sprout", "ramp": "foliage", "step": 100, "use": "new growth and the rim of a tip" },
+        { "name": "water_shallow", "ramp": "water", "step": 300, "use": "a film of water over soil" },
+        { "name": "water_body", "ramp": "water", "step": 500, "use": "the body colour of a pool" },
+        { "name": "water_deep", "ramp": "water", "step": 700, "use": "absorption at depth" },
+        { "name": "sky_horizon", "ramp": "sky", "step": 100, "use": "the horizon band and distant fog" },
+        { "name": "sky_zenith", "ramp": "sky", "step": 700, "use": "overhead, before the sun tints it" },
+        { "name": "ink_line", "ramp": "ink", "step": 900, "use": "every outline" },
+        { "name": "paper", "ramp": "soil", "step": 100, "use": "panel fill where the interface must sit on the world" },
+        { "name": "ui_ground", "ramp": "soil", "step": 900, "use": "the HUD's dark ground" },
+        { "name": "accent_life", "ramp": "foliage", "step": 500, "use": "health, growth, the plant's own accent" },
+        { "name": "accent_hazard", "ramp": "ember", "step": 500, "use": "harm, drought and warnings" }
+      ]
+    }
+  }
+}
