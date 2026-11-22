@@ -804,7 +804,7 @@ Honest list. No feature promises (T42, RULE_13). Updated at every gate.
   pause menu (Resume, Settings, Controls, Leave to title), hints are contextual
   and once-per-session, and HUD type has a config floor (`ui.hud_font_small_px`,
   `ui.hud_font_secondary_px`) instead of bottoming out at 9.3px.
-- **C04 HUD and panels (2026-11-15):** top-centre body-state panel shows health words when rooted (Healthy/Stressed/Withering/Dying) and the phase otherwise, with biomass and its derived rate, health against the uproot ceiling, mutation count and upkeep, and `Day N · clock` with the weather forecast. Damage pulses an edge vignette and writes one factual toast. While uprooted, a D-pad and WASD/arrow keys steer the camera-relative crawl. `I` opens Inspect on the left (body stats, mutations, per-node health) and Inventory on the right, with the world visible between. Settings has Settings/Controls tabs (text size, reduced motion, a key list that rebinds a key in place and resets to the config). The HUD also shows energy, water and minerals against capacity and node count, keeps mutation energy and biomass bills separate, and Inspect adds mutation kind, share bars, totals and growth-pressure bars. The death screen repeats the detailed stats and the toast stack is cleared. Growth parts start at their minimum radius and thicken with biomass; damage and drought recompute radius so tissue visibly thins, canopy is shed before roots, and unhealed stem damage decays after a delay. Text updates cap at 10 Hz. Server sends `structure` in STATE/KEYFRAME, structural damage with PLANT_DAMAGE and `dayNumber` with WEATHER_UPDATE. Pause → Recent activity lists the last 80 toasts with their times. Record: `docs/tasks/C04.md`.
+- **C04 HUD and panels (2026-11-15):** top-centre body-state panel shows health words when rooted (Healthy/Stressed/Withering/Dying) and the phase otherwise, with biomass and its derived rate, health against the uproot ceiling, mutation count and upkeep, and `Day N · clock` with the weather forecast. Damage pulses an edge vignette and writes one factual toast. While uprooted, a D-pad and WASD/arrow keys steer the camera-relative crawl. `I` opens Inspect on the left (body stats, mutations, per-node health) and Inventory on the right, with the world visible between. Settings has Settings/Controls tabs (text size, reduced motion, a key list that rebinds a key in place and resets to the config). The HUD also shows energy, water and minerals against capacity and node count, keeps mutation energy and biomass bills separate, and Inspect adds mutation kind, share bars, totals and growth-pressure bars. The death screen repeats the detailed stats and the toast stack is cleared. Growth parts start at their minimum radius and thicken with biomass; damage and drought recompute radius so tissue visibly thins, canopy is shed before roots, and unhealed stem damage decays after a delay. Text updates cap at 10 Hz. Server sends `structure` in STATE/KEYFRAME, structural damage with PLANT_DAMAGE and `dayNumber` with WEATHER_UPDATE. Pause → Recent activity lists the last 80 toasts with their times. The in-browser UI pass ran on 2026-11-22 (pause, Settings/Controls incl. rebinding, Inspect/Inventory, Hints, death stats, Recent activity); it fixed an id-derived inventory name, stale Settings chips, an unclickable death card and a retired empty hint box. Record: `docs/tasks/C04.md`.
 - Staging client on GitHub Pages, with the API served from the local compose
   stack through a tunnel.
 
@@ -1134,8 +1134,8 @@ their `notes` in `config/growth.json`.
 The rest of the economy: marketplace/mail/trade
 (T14/T29/T45) and admin/compliance tooling. The shop, the
 spore purse, world drops and drop pickup are built — see "Shop, spores and the
-pouch" and "Drops, picking and the way out of the earth" below. C04 now has a
-per-device rebinding screen; only the in-browser checklist is outstanding.
+pouch" and "Drops, picking and the way out of the earth" below. C04's UI
+checklist ran on 2026-11-22; its damage/uproot/reroot rows belong to T06.
 
 **Touch is a second producer, not a second interface.** Orbit, pan, pinch zoom,
 tap-to-select, the reroot pad, the action bar and every panel work on a finger
@@ -1188,9 +1188,10 @@ The renderer interpolates node positions between ticks (`render/PlantInterpolati
 
 Per the audited priority order (ADR-023), amended by ADR-048 and **ADR-050**: T05
 Communication, T04 Mutation and T06 damage, uproot and tumbling are implemented;
-T06 still needs its in-browser checklist. **C04 is partial**: health, damage,
-reroot, Inspect/Inventory, Settings, death stats, the recent-activity log and
-per-device key rebinding are in; the in-browser checklist is not. **T08A** is partial: the `player_state` restart copy
+T06 still needs its in-browser checklist. **C04 is done (2026-11-22)**: health,
+damage, reroot, Inspect/Inventory, Settings, death stats, the recent-activity log
+and per-device key rebinding are in and passed the UI checklist; the death card
+now also gets the whole screen to itself. **T08A** is partial: the `player_state` restart copy
 persists an account's pouch and purse across a server restart and every pouch
 mutation is row-locked; the duplication audit passed on 2026-11-22. Trade, mail
 and listing are next, then the ADR-044 burial fix. AL-01 (benchmark, six fixed poses, GPU

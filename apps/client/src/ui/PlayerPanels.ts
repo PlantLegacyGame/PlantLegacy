@@ -860,8 +860,11 @@ export function createPlayerPanels(options: PlayerPanelsOptions = {}): PlayerPan
       button.innerHTML =
         `<span class="pl-slot__key">${i === 9 ? '0' : i + 1}</span>` +
         `<span class="pl-slot__name"></span><span class="pl-slot__count"></span>`;
+      // The server's item name wins over the pretty id (`essence_growth` is
+      // "Growth Essence", not "Essence Growth"), matching the hotbar and detail.
+      const gridDefinition = slot ? definitions.get(slot.itemId) : undefined;
       (button.querySelector('.pl-slot__name') as HTMLElement).textContent = slot
-        ? prettyItemId(slot.itemId)
+        ? (gridDefinition?.name ?? prettyItemId(slot.itemId))
         : 'Empty';
       (button.querySelector('.pl-slot__count') as HTMLElement).textContent = slot
         ? `\u00D7${slot.count}`

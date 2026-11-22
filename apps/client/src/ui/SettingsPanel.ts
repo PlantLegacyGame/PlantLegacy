@@ -487,6 +487,7 @@ export function createSettingsPanel(options: SettingsPanelOptions): SettingsPane
       currentTextScale = percent / 100;
       scaleValue.textContent = `${percent}%`;
       options.onTextScale?.(currentTextScale);
+      renderChips();
     });
     const scaleWrap = document.createElement('div');
     scaleWrap.append(scale, scaleValue);
@@ -503,6 +504,7 @@ export function createSettingsPanel(options: SettingsPanelOptions): SettingsPane
       currentReducedMotion = reduced.checked;
       document.documentElement.dataset.reducedMotion = String(currentReducedMotion);
       options.onReducedMotion?.(currentReducedMotion);
+      renderChips();
     });
     rows.push({
       label: 'Reduce motion',

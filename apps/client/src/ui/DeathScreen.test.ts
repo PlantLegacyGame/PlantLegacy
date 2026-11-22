@@ -27,7 +27,7 @@ const stats: PlantStatsSummary = {
 test('the death card leads with what killed the plant', () => {
   const rows = deathStatRows({ cause: 'dehydration', reason: 'The soil dried out.', stats });
   assert.equal(rows[0][0], 'Cause');
-  assert.equal(rows[0][1], 'dehydration');
+  assert.equal(rows[0][1], 'Dehydration');
 });
 
 test('the rows come from the shared stat owner, not a second copy', () => {

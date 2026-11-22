@@ -6162,9 +6162,8 @@ function setGrowthPanelOpen(open: boolean): void {
     detailElement.style.display =
       open || !detailVisible ? 'none' : detailBody.textContent ? 'block' : 'none';
   }
-  if (hintCardElement) {
-    hintCardElement.style.display = open ? 'none' : '';
-  }
+  // `#hint-card` is retired (contextual hints replaced it) and stays hidden for
+  // good: un-hiding it here left an empty 12px box on screen after panels closed.
 }
 
 hintCardElement = document.createElement('div');
@@ -7308,6 +7307,11 @@ function handleOwnPlantLoss(cause?: string, source?: string): void {
   // it offers is to stay: the player who spent an hour on this plant is allowed to
   // watch the weather over the place it stood instead of being cut to a menu.
   if (died) {
+    // The death card is the only thing to answer: a pause menu, Settings or a
+    // side panel opened a frame before death must not sit on top of it.
+    pauseMenu?.close();
+    settingsPanel?.setOpen(false);
+    playerPanels?.setOpen(false);
     deathScreen?.destroy();
     deathScreen = createDeathScreen(
       {

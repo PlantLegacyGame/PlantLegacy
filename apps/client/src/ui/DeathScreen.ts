@@ -48,6 +48,9 @@ const STYLE = `
     padding: 18px;
     background: radial-gradient(120% 90% at 50% 45%, rgba(6, 8, 5, 0.42), rgba(4, 5, 3, 0.74));
     animation: pl-death-in 240ms ease;
+    /* The modal UI layer is a pass-through; without this the scrim and both
+       buttons inherit pointer-events: none and cannot be clicked. */
+    pointer-events: auto;
   }
   .pl-death {
     width: min(420px, 92vw);
@@ -148,7 +151,9 @@ function installStyles(): void {
 
 /** The stat grid, built from the one owner of those rows. */
 export function deathStatRows(input: DeathScreenInput): Array<[string, string]> {
-  return [['Cause', input.cause.replace(/_/g, ' ')], ...plantStatRows(input.stats)];
+  const words = input.cause.replace(/_/g, ' ').trim();
+  const cause = words ? words[0].toUpperCase() + words.slice(1) : words;
+  return [['Cause', cause], ...plantStatRows(input.stats)];
 }
 
 export function createDeathScreen(
