@@ -63,18 +63,18 @@ export interface LookUpPitchInput {
   /** How fast the pitch unwinds once it is released, radians/second. */
   decayPerSecond: number;
   /**
-   * Seconds since the hand last steered the orbit; 0 while it is still down.
+   * Metres the framing point (the orbit target) has moved horizontally since
+   * the pitch was last given back.
    *
-   * The pitch is a held view, not a permanent one. It used to be given back only
-   * by a downward drag, so walking away left the camera tilted at the sky with
-   * nothing to bring it down again.
+   * The pitch is a held view, and it belongs to the framing it was set for. It
+   * must not unwind on a timer: standing still and looking up is a pose the
+   * player asked for, and re-aiming it with no input read as the camera
+   * correcting itself. It must not wait for a downward drag either, or walking
+   * away leaves the view tilted at the sky. Travel is the honest trigger.
    */
-  handOffS: number;
-  /**
-   * How long the hand must be off the orbit before the pitch eases back.
-   * A pause between two drags must not count as letting go.
-   */
-  releaseAfterS: number;
+  travelM: number;
+  /** Travel after which the pitch eases back, metres. Non-positive disables it. */
+  releaseAfterM: number;
   /** Per-frame easing, the same number OrbitControls uses for its own glide. */
   dampingFactor: number;
   /** Frame time, seconds. */
@@ -117,24 +117,26 @@ export function stepLookUpPitch(input: LookUpPitchInput): LookUpPitchStep {
   const deltaTime = Number.isFinite(input.deltaTimeS) ? Math.max(0, input.deltaTimeS) : 0;
   const decay = Number.isFinite(input.decayPerSecond) ? Math.max(0, input.decayPerSecond) : 0;
   // A downward drag is the request to look back down, and it gives the pitch back
-  // at the rate it was spent. So does a hand that has left the camera: the pitch
-  // used to wait for a downward drag forever, so walking away left the view tilted
-  // at the sky with nothing to bring it back. Being free is *not* enough on its
-  // own - the ceiling is solved per azimuth, so yawing on a slope moved it under a
-  // held pitch and the view re-aimed at the plant - so the release waits
-  // `releaseAfterS` after the last drag, and a drag of any direction restarts that
-  // wait. It also applies against the ceiling: the eye stays near the soil while
-  // the player walks off, so an orbit-gated release would leave the sky view stuck
-  // exactly where the complaint was.
+  // at the rate it was spent. So does walking the framing away: the pitch used to
+  // wait for a downward drag forever, so walking off left the view tilted at the
+  // sky. Neither a timer nor "the orbit is free" is a safe trigger. A timer
+  // re-aimed a pose the player had deliberately left (reported 2026-11-22), and
+  // freedom is not enough - the ceiling is solved per azimuth, so yawing on a
+  // slope moved it under a held pitch and the view re-aimed at the plant. Travel
+  // is the one signal that means the view the pitch was set for is gone.
   const down = Number.isFinite(input.upDragRad) ? Math.min(0, input.upDragRad) : 0;
-  const handOff = Number.isFinite(input.handOffS) ? Math.max(0, input.handOffS) : 0;
-  const releaseAfter = Number.isFinite(input.releaseAfterS)
-    ? Math.max(0, input.releaseAfterS)
-    : Number.POSITIVE_INFINITY;
+  const travel = Number.isFinite(input.travelM) ? Math.max(0, input.travelM) : 0;
+  const releaseAfter =
+    Number.isFinite(input.releaseAfterM) && input.releaseAfterM > 0
+      ? input.releaseAfterM
+      : Number.POSITIVE_INFINITY;
   // A downward drag *at* the ceiling is the orbit's again - it can move away from
   // it - so the pitch answers that drag once the orbit has left the ceiling.
   const downRelease = down < 0 && !input.atCeiling;
-  if (downRelease || handOff >= releaseAfter) target = clamp(target - decay * deltaTime);
+  // The framing moved on: this pitch was set for a view the player is no longer
+  // framing, so it gives back at the rate it was spent. Standing still, or only
+  // yawing, changes no travel and holds the pose exactly as it was left.
+  if (downRelease || travel >= releaseAfter) target = clamp(target - decay * deltaTime);
 
   const ease = Number.isFinite(input.dampingFactor)
     ? Math.min(1, Math.max(0, input.dampingFactor))

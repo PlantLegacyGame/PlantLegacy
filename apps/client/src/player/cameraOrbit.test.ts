@@ -17,8 +17,8 @@ describe('looking up off the ground', () => {
     dampingFactor: 0.14,
     deltaTimeS: 0.016,
     atCeiling: true,
-    handOffS: 0,
-    releaseAfterS: 0.45,
+    travelM: 0,
+    releaseAfterM: 1,
   };
 
   it('eases into the pitch instead of snapping to the drag', () => {
@@ -58,14 +58,16 @@ describe('looking up off the ground', () => {
     assert.ok(capped.appliedRad <= base.maxRad);
   });
 
-  it('holds inside the grace period, and ignores a downward drag at the ceiling', () => {
+  it('holds while the framing has not moved, and ignores a downward drag at the ceiling', () => {
+    // Letting go is not a release: the pose must survive with no input at all, or
+    // the camera appears to correct itself after the player stops dragging.
     const held = stepLookUpPitch({
       ...base,
       targetRad: 0.4,
       appliedRad: 0.4,
-      handOffS: 0.3,
+      travelM: 0.9,
     });
-    assert.ok(close(held.targetRad, 0.4), 'a pause between drags must not unwind the view');
+    assert.ok(close(held.targetRad, 0.4), 'standing still must not unwind the view');
     const down = stepLookUpPitch({
       ...base,
       targetRad: 0.4,
@@ -93,15 +95,27 @@ describe('looking up off the ground', () => {
     }
   });
 
-  it('eases back once the hand has been off the orbit', () => {
-    // Letting go is the release. Without it the pitch waited for a downward drag
-    // forever, so walking away left the camera tilted at the sky.
+  it('holds indefinitely with no input, however long the player waits', () => {
+    // The reported bug: look up near the plant, let go, and the view re-aimed
+    // itself a second later for no reason. Ten seconds of still frames must not
+    // move the pitch by a measurable amount.
+    let state = { targetRad: 0.7, appliedRad: 0.7 };
+    for (let frame = 0; frame < 600; frame += 1) {
+      state = stepLookUpPitch({ ...base, ...state, travelM: 0 });
+    }
+    assert.ok(close(state.targetRad, 0.7), `target drifted to ${state.targetRad}`);
+    assert.ok(close(state.appliedRad, 0.7, 1e-3), `applied drifted to ${state.appliedRad}`);
+  });
+
+  it('eases back once the framing point has moved', () => {
+    // Walking or panning away is the release. Without it the pitch waited for a
+    // downward drag forever, so leaving left the camera tilted at the sky.
     const released = stepLookUpPitch({
       ...base,
       targetRad: 1.0,
       appliedRad: 1.0,
       atCeiling: false,
-      handOffS: base.releaseAfterS + 0.05,
+      travelM: base.releaseAfterM + 0.2,
       deltaTimeS: 0.1,
     });
     assert.ok(close(released.targetRad, 0.6), `target ${released.targetRad}`);
@@ -117,7 +131,7 @@ describe('looking up off the ground', () => {
       targetRad: 1.2,
       appliedRad: 1.2,
       atCeiling: true,
-      handOffS: 1,
+      travelM: 2,
       deltaTimeS: 0.1,
     });
     assert.ok(close(released.targetRad, 0.8), `target ${released.targetRad}`);
@@ -130,7 +144,7 @@ describe('looking up off the ground', () => {
       appliedRad: 0.5,
       atCeiling: false,
       upDragRad: -0.05,
-      handOffS: 0.2,
+      travelM: 0,
       deltaTimeS: 0.1,
     });
     assert.ok(close(free.targetRad, 0.1), `target ${free.targetRad}`);
@@ -172,8 +186,8 @@ describe('looking up off the ground', () => {
       decayPerSecond: Number.NaN,
       dampingFactor: Number.NaN,
       deltaTimeS: Number.NaN,
-      handOffS: Number.NaN,
-      releaseAfterS: Number.NaN,
+      travelM: Number.NaN,
+      releaseAfterM: Number.NaN,
     });
     assert.ok(Number.isFinite(nan.targetRad) && Number.isFinite(nan.appliedRad));
   });

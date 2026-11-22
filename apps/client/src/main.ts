@@ -8310,12 +8310,19 @@ const LOOK_UP_PITCH_MAX_RAD = 1.31;
 /** How fast that pitch unwinds once it is released, radians/second. */
 const LOOK_UP_PITCH_RETURN_RAD_PER_S = 4;
 /**
- * How long the hand must be off the orbit before the look-up pitch eases back,
- * seconds. It used to wait for a downward drag and never came back on its own, so
- * walking away left the camera tilted at the sky. Short enough that leaving the
- * view comes back with you, long enough that a pause between two drags holds it.
+ * How far the framing point has to move before the look-up pitch eases back, in
+ * metres.
+ *
+ * A timer was wrong: the pitch held a pose and then re-aimed it with no input, so
+ * the camera appeared to correct itself whenever the player let go near the plant
+ * and looked up. Waiting for a downward drag was wrong the other way - walking
+ * away left the view stuck at the sky. The pitch belongs to the framing it was
+ * set for, so it gives back once that framing has actually moved this far.
  */
-const LOOK_UP_PITCH_RELEASE_AFTER_S = 0.45;
+const LOOK_UP_PITCH_RELEASE_TRAVEL_M = 1;
+/** Where the orbit target stood when the look-up pitch was last given back. */
+let lookUpPitchAnchorX = 0;
+let lookUpPitchAnchorZ = 0;
 /**
  * How much of a blocked drag the pitch takes. Handing over the whole drag made
  * looking up race compared with the orbit that led into it; a little over half
@@ -8374,13 +8381,10 @@ let controls = createControls();
 let orbitUpDragRad = 0;
 let orbitDragPointer: number | null = null;
 let orbitDragLastY = 0;
-/** When the hand last moved the orbit, for the look-up pitch's release. */
-let orbitDragLastMoveMs = 0;
 
 function trackOrbitUpDrag(): void {
   const element = renderer.domElement;
   element.addEventListener('pointerdown', (event) => {
-    orbitDragLastMoveMs = performance.now();
     if (event.pointerType !== 'mouse') return;
     // Only the buttons OrbitControls rotates with; right-drag pans (see
     // `createControls`), so it must not tilt the view.
@@ -8392,7 +8396,6 @@ function trackOrbitUpDrag(): void {
     if (orbitDragPointer !== event.pointerId) return;
     const dy = event.clientY - orbitDragLastY;
     orbitDragLastY = event.clientY;
-    orbitDragLastMoveMs = performance.now();
     // Dragging up raises the polar angle, which is the eye dropping towards the
     // soil and the view rising: `-dy` is the request to look up.
     orbitUpDragRad +=
@@ -11270,10 +11273,19 @@ function renderFrame(deltaTime: number): void {
   const upDragRad = orbitUpDragRad;
   orbitUpDragRad = 0;
   const orbitAtCeiling = controls.getPolarAngle() >= controls.maxPolarAngle - 0.02;
-  // A hand still on the orbit is 0, so holding the button keeps the pitch; a
-  // released one counts up and the view eases back down after the grace period.
-  const orbitHandOffS =
-    orbitDragPointer !== null ? 0 : Math.max(0, (performance.now() - orbitDragLastMoveMs) / 1000);
+  // The pose the pitch belongs to. While no pitch is held, the anchor follows the
+  // framing, so the next look-up is measured from wherever the player stands. A
+  // held pitch keeps its anchor: standing still (or only yawing) moves nothing, so
+  // the view stays exactly as it was left, while walking or panning the framing a
+  // metre gives it back.
+  if (lookUpPitchRad <= 1e-4 && lookUpPitchTargetRad <= 1e-4) {
+    lookUpPitchAnchorX = controls.target.x;
+    lookUpPitchAnchorZ = controls.target.z;
+  }
+  const lookUpTravelM = Math.hypot(
+    controls.target.x - lookUpPitchAnchorX,
+    controls.target.z - lookUpPitchAnchorZ,
+  );
   const lookUp = stepLookUpPitch({
     targetRad: lookUpPitchTargetRad,
     appliedRad: lookUpPitchRad,
@@ -11282,8 +11294,8 @@ function renderFrame(deltaTime: number): void {
     maxRad: LOOK_UP_PITCH_MAX_RAD,
     gain: LOOK_UP_PITCH_GAIN,
     decayPerSecond: LOOK_UP_PITCH_RETURN_RAD_PER_S,
-    handOffS: orbitHandOffS,
-    releaseAfterS: LOOK_UP_PITCH_RELEASE_AFTER_S,
+    travelM: lookUpTravelM,
+    releaseAfterM: LOOK_UP_PITCH_RELEASE_TRAVEL_M,
     // The controls' own glide, so the handover from orbit to pitch has the same
     // weight as the rotation that preceded it.
     dampingFactor: controls.dampingFactor,
