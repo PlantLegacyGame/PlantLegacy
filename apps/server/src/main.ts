@@ -445,12 +445,27 @@ class World {
     if (state) this.send(player.ws, MESSAGE_TYPE.MUTATION_STATE, state);
   }
 
+  /**
+   * A plant's owner as other players read them.
+   *
+   * Name tags carried `ownerId.slice(0, 6)`, which a player cannot read: for a
+   * guest it is a random id prefix, for an account an opaque id. The display
+   * name is the player's own sanitised one; a plant whose owner is not connected
+   * has no name to send, so the field stays optional and the client falls back
+   * to the id rather than inventing one.
+   */
+  private ownerNameFor(ownerId: string): string | undefined {
+    const name = this.players.get(ownerId)?.displayName?.trim();
+    return name ? name : undefined;
+  }
+
   /** Full plant snapshot for PLANT_CREATED, mirroring the WELCOME node shape. */
   private plantCreatedPayload(plant: import('@plant-legacy/shared/growth').Plant) {
     return {
       plant: {
         id: plant.id,
         ownerId: plant.ownerId,
+        ownerName: this.ownerNameFor(plant.ownerId),
         rootNodeId: plant.rootNodeId,
         totalBiomass: plant.totalBiomass,
         totalEnergy: plant.totalEnergy,
@@ -1965,6 +1980,7 @@ class World {
             plants: syncPlants.map((p) => ({
               id: p.id,
               ownerId: p.ownerId,
+              ownerName: this.ownerNameFor(p.ownerId),
               rootNodeId: p.rootNodeId,
               totalBiomass: p.totalBiomass,
               totalEnergy: p.totalEnergy,

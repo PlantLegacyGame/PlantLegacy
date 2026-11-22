@@ -400,6 +400,15 @@ export interface PlantSyncPayload {
   plants: Array<{
     id: string;
     ownerId: string;
+    /**
+     * The owner's display name, when the owner is here to have one.
+     *
+     * Remote clients used to draw `ownerId.slice(0, 6)`, which is a random
+     * prefix for a guest and an opaque id for an account: nothing a player can
+     * read. An offline plant's row does not carry a name, so the field stays
+     * optional and the client falls back to the id.
+     */
+    ownerName?: string;
     rootNodeId: string | null;
     totalBiomass: number;
     totalEnergy: number;

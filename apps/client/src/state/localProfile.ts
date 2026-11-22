@@ -32,10 +32,22 @@ export interface LocalProfile {
 
 export const PROFILE_KEY = 'plantlegacy:profile';
 
+/**
+ * Largest avatar this profile will load back, in characters of data URL.
+ *
+ * Uploads are shrunk to 128 px before they are stored (`MainMenu.storeAvatar`),
+ * so a real avatar is a few kilobytes. The ceiling exists for values written by
+ * an older build, when the picked file's own data URL went into storage: loading
+ * one of those back is megabytes of base64 parsed on boot for a 30 px circle.
+ */
+export const MAX_AVATAR_DATA_URL = 256 * 1024;
+
 /** Only data URLs are accepted back: a stored `javascript:` URL is not an image. */
 function readAvatar(value: unknown): string | null {
   if (typeof value !== 'string') return null;
-  return value.startsWith('data:image/') ? value : null;
+  if (!value.startsWith('data:image/')) return null;
+  if (value.length > MAX_AVATAR_DATA_URL) return null;
+  return value;
 }
 
 export function loadProfile(storage: ProfileStorage): LocalProfile {

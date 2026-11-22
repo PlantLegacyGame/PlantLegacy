@@ -1,7 +1,13 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { loadProfile, PROFILE_KEY, type ProfileStorage, saveProfile } from './localProfile.ts';
+import {
+  loadProfile,
+  MAX_AVATAR_DATA_URL,
+  PROFILE_KEY,
+  type ProfileStorage,
+  saveProfile,
+} from './localProfile.ts';
 
 function memoryStorage(initial?: Record<string, string>): ProfileStorage {
   const data = new Map<string, string>(Object.entries(initial ?? {}));
@@ -60,6 +66,15 @@ describe('local profile', () => {
     const storage = memoryStorage();
     saveProfile(storage, { avatar: 'data:image/png;base64,AAA' });
     saveProfile(storage, { avatar: null });
+    assert.equal(loadProfile(storage).avatar, null);
+  });
+
+  it('refuses an avatar bigger than the one this build writes', () => {
+    // An older build stored the picked file's own data URL, so a photo left
+    // megabytes in this bucket and was parsed again on every boot.
+    const storage = memoryStorage();
+    const huge = `data:image/png;base64,${'A'.repeat(MAX_AVATAR_DATA_URL)}`;
+    saveProfile(storage, { avatar: huge });
     assert.equal(loadProfile(storage).avatar, null);
   });
 

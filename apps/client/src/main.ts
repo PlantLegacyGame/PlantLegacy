@@ -1797,6 +1797,27 @@ function plantLabelLayer(): ReturnType<typeof createPlantLabelLayer> | null {
   return plantLabels;
 }
 
+/**
+ * The tag over a rival's plant: what it expresses, and whose it is.
+ *
+ * The owner half is the player's display name. It used to be
+ * `ownerId.slice(0, 6)`, which for a guest is a random id prefix and for an
+ * account an opaque one - a tag a player could not read and nobody could match
+ * to a person. The id prefix is only the fallback for a plant whose owner is not
+ * connected, because that plant has no name to send.
+ */
+function rivalTagLabel(
+  ownerId: string,
+  ownerName: string | undefined,
+  mutations: string[] | undefined,
+): string {
+  const mutationTag = mutations?.[0] ?? '';
+  // Gallery plants are named after their mutation only: repeating an id on
+  // every tag buried the names in clutter.
+  if (ownerId.startsWith('gallery:')) return mutationTag;
+  return `${mutationTag} · ${ownerName?.trim() || ownerId.slice(0, 6)}`;
+}
+
 /** Keep each rival's tag above the highest point of its body. */
 function updatePlantLabelPositions(): void {
   if (!plantLabels) return;
@@ -1855,6 +1876,14 @@ let webgpuRenderer: WebGPURenderer | null = null;
 let webgpuDevice: WebGPUDevice | null = null;
 let webgpuCanvas: HTMLCanvasElement | null = null;
 let useWebGPU = false;
+/**
+ * True once a live WebGPU device has been lost.
+ *
+ * The renderer must not try WebGPU again on the same page after that: the
+ * device is gone for this session, and re-initialising it would lose it again
+ * (or worse, loop). The WebGL plant renderer takes over instead.
+ */
+let webgpuRetired = false;
 let renderConfig: RenderConfig | null = null;
 let shopConfig: ShopConfig = { enabled: true, title: 'Shop', currencyName: '', sections: [] };
 
@@ -5597,7 +5626,7 @@ async function initPlantRenderer(): Promise<void> {
   await loadGrowthGeometryConfig(httpOrigin);
 
   // Try WebGPU renderer first (with automatic fallback to SDF)
-  if (renderConfig?.webgpuEnabled && isWebGPUSupported()) {
+  if (renderConfig?.webgpuEnabled && isWebGPUSupported() && !webgpuRetired) {
     let canvasEl: HTMLCanvasElement | null = null;
     try {
       canvasEl = document.createElement('canvas');
@@ -5670,8 +5699,15 @@ async function initPlantRenderer(): Promise<void> {
           device.setDeviceLostCallback((reason) => {
             console.error('WebGPU device lost:', reason);
             device.setDeviceLostCallback(() => {});
+            // A lost device is a renderer failure, not a world failure. This used
+            // to reload the page, which threw away the plant, the camera and the
+            // socket: a full reboot in the middle of play, for a driver hiccup or
+            // a texture upload the device could not take. Retire WebGPU for this
+            // session and let the WebGL plant renderer take over.
+            webgpuRetired = true;
             disposeWebGPU();
-            window.location.reload();
+            notify('Graphics device reset; switched to the fallback renderer', 'info', 5000);
+            void initPlantRenderer();
           });
           webgpuDevice = device;
           webgpuRenderer = gpuRenderer;
@@ -6311,7 +6347,10 @@ function createResourceReadout(): void {
   }
 
   resourceReadoutElement.append(clock, vitalsWeatherEl, vitalsRowsEl);
-  layer.appendChild(resourceReadoutElement);
+  // The layer is `pointer-events: none` and each child opts in; going through
+  // the shell is what does the opting in. A direct append left a readout that
+  // looked right and could not be hovered (D2's class of bug).
+  uiShell?.attachTo('hud', resourceReadoutElement);
   updateVitalsClock();
 }
 
@@ -7451,7 +7490,9 @@ function createChatUI(): void {
     `;
     document.head.appendChild(chatStyle);
   }
-  hudLayer.appendChild(chatContainer);
+  // Same opt-in as every other HUD child: appended through the shell, not
+  // straight onto a `pointer-events: none` layer.
+  uiShell?.attachTo('hud', chatContainer);
 }
 
 function toggleChat(open?: boolean): void {
@@ -7834,7 +7875,7 @@ function createReportDialog(): void {
   card.appendChild(btnRow);
 
   dialog.appendChild(card);
-  modalLayer.appendChild(dialog);
+  uiShell?.attachTo('modal', dialog);
   reportDialogEl = dialog;
 }
 
@@ -8240,6 +8281,48 @@ function createControls(): OrbitControls {
 
 let controls = createControls();
 
+/**
+ * Vertical drag in radians of orbit pitch, positive when the player drags up.
+ *
+ * The look-up pitch needs the part of a drag the polar ceiling swallowed, and
+ * OrbitControls only publishes the clamped angle. Its mapping is no secret
+ * (`2π · dy / clientHeight · rotateSpeed`), so this records the drag from the
+ * pointer itself instead of reading the controls' private spherical delta: a
+ * private field is what a three.js release renames without warning, and the
+ * feature would then fail silently.
+ */
+let orbitUpDragRad = 0;
+let orbitDragPointer: number | null = null;
+let orbitDragLastY = 0;
+
+function trackOrbitUpDrag(): void {
+  const element = renderer.domElement;
+  element.addEventListener('pointerdown', (event) => {
+    if (event.pointerType !== 'mouse') return;
+    // Only the buttons OrbitControls rotates with; right-drag pans (see
+    // `createControls`), so it must not tilt the view.
+    if (event.button !== 0 && event.button !== 1) return;
+    orbitDragPointer = event.pointerId;
+    orbitDragLastY = event.clientY;
+  });
+  element.addEventListener('pointermove', (event) => {
+    if (orbitDragPointer !== event.pointerId) return;
+    const dy = event.clientY - orbitDragLastY;
+    orbitDragLastY = event.clientY;
+    // Dragging up raises the polar angle, which is the eye dropping towards the
+    // soil and the view rising: `-dy` is the request to look up.
+    orbitUpDragRad +=
+      (-dy * 2 * Math.PI * controls.rotateSpeed) / Math.max(1, element.clientHeight);
+  });
+  const release = (event: PointerEvent) => {
+    if (orbitDragPointer === event.pointerId) orbitDragPointer = null;
+  };
+  element.addEventListener('pointerup', release);
+  element.addEventListener('pointercancel', release);
+}
+
+trackOrbitUpDrag();
+
 // The explicit handles every extracted subsystem is given, instead of reaching
 // into this module's 250-odd bindings. Getters for anything that is replaced
 // during a session (the controls are rebuilt when the surface normal moves).
@@ -8293,11 +8376,22 @@ if (isDevMode) {
          * ground under the eye is already above the target.
          */
         cameraProbe: () => Record<string, number>;
+        /** Extra pitch the camera is spending looking up off the ground. */
+        lookUpPitch: number;
       };
     }
   ).__pl = {
     camera,
-    controls,
+    // A getter, not a snapshot: `controls` is rebuilt when the surface normal
+    // moves (`rebuildControls`), and the old handle kept pointing at the
+    // instance the render loop had abandoned - a dev check could then read a
+    // camera pose that no longer existed.
+    get controls() {
+      return controls;
+    },
+    get lookUpPitch() {
+      return lookUpPitchRad;
+    },
     scene,
     setCamera: (px, py, pz, tx, ty, tz) => {
       cameraFocusTween = null;
@@ -9928,6 +10022,8 @@ function handlePlantSync(payload: unknown): void {
     plants: Array<{
       id: string;
       ownerId: string;
+      /** The owner's display name, when the owner is connected. */
+      ownerName?: string;
       appearance?: { petalCount: number; leafScale: number; seedScale: number };
       pigment?: {
         visualSignature: number;
@@ -10026,12 +10122,10 @@ function handlePlantSync(payload: unknown): void {
     if (isOwn) {
       plantLabels?.remove(plant.id);
     } else {
-      const mutationTag = (plant.mutations ?? [])[0] ?? '';
-      // Gallery plants are named after their mutation only: repeating
-      // the id on every tag buried the names in clutter.
-      const gallery = plant.ownerId.startsWith('gallery:');
-      const ownerTag = gallery ? '' : ` · ${plant.ownerId.slice(0, 6)}`;
-      plantLabelLayer()?.setLabel(plant.id, `${mutationTag}${ownerTag}`);
+      plantLabelLayer()?.setLabel(
+        plant.id,
+        rivalTagLabel(plant.ownerId, plant.ownerName, plant.mutations),
+      );
     }
     if (isOwn && !plantId) {
       plantId = plant.id;
@@ -10206,6 +10300,8 @@ function handlePlantCreated(payload: unknown): void {
     plant: {
       id: string;
       ownerId: string;
+      /** The owner's display name, when the owner is connected. */
+      ownerName?: string;
       rootNodeId: string | null;
       totalBiomass: number;
       totalUpkeep: number;
@@ -10286,6 +10382,12 @@ function handlePlantCreated(payload: unknown): void {
   }
   otherPlayerPlants.set(created.plant.id, otherPlant);
   if (created.plant.ownerId) plantOwners.set(created.plant.id, created.plant.ownerId);
+  // Tag it now, not at the next full sync: a rival that sprouts beside the
+  // player used to stand there nameless for up to the sync interval.
+  plantLabelLayer()?.setLabel(
+    created.plant.id,
+    rivalTagLabel(created.plant.ownerId, created.plant.ownerName, undefined),
+  );
   // Update renderer with all plants
   if (plantRenderer) {
     const otherNodes: PlantNodeData[] = [];
@@ -10467,6 +10569,11 @@ async function connect(): Promise<void> {
 
   ws.onopen = () => {
     connecting = false;
+    // A probe from the previous connection must not be timed against this one:
+    // a ping sent before a drop left `pingSentAt` set, and twelve seconds later
+    // the dot claimed "Connection unstable" on a link that had just reconnected
+    // cleanly.
+    pingSentAt = null;
     console.log('[PlantLegacy] WebSocket OPEN - connected to server');
     setStatus('Connected', 'ok');
     setDetail('WebSocket connected, sending HELLO...');
@@ -10588,6 +10695,8 @@ async function connect(): Promise<void> {
   };
 
   ws.onclose = (event) => {
+    // No pong can arrive for a probe sent on this socket any more.
+    pingSentAt = null;
     if (suppressReconnect) {
       // Signing out closes the socket on purpose. The retry below would connect
       // straight back as a guest, which looks exactly like being signed in.
@@ -11040,19 +11149,14 @@ function renderFrame(deltaTime: number): void {
   // An orbit camera always looks at its target, and the target sits on the
   // ground: once the eye is down on the soil no polar angle is left that points
   // at the sky, so the ground ceiling stopped an upward drag dead and the view
-  // could not rise any further. Spend the rotation the ceiling swallowed as
-  // pitch on the camera itself, so the drag keeps tilting the view up.
-  const pendingOrbitPitch =
-    (controls as unknown as { _sphericalDelta?: { phi: number } })._sphericalDelta?.phi ?? 0;
-  const appliedOrbitPitch =
-    pendingOrbitPitch * (controls.enableDamping ? controls.dampingFactor : 1);
+  // could not rise any further. Spend that drag as pitch on the camera itself,
+  // so the view keeps tilting up from the soil.
+  const upDragRad = orbitUpDragRad;
+  orbitUpDragRad = 0;
   const orbitAtCeiling = controls.getPolarAngle() >= controls.maxPolarAngle - 0.02;
   lookUpPitchRad = stepLookUpPitch({
     currentRad: lookUpPitchRad,
-    blockedRad: orbitAtCeiling
-      ? controls.getPolarAngle() + appliedOrbitPitch - controls.maxPolarAngle
-      : 0,
-    releaseRad: pendingOrbitPitch < 0 ? -appliedOrbitPitch : 0,
+    upDragRad,
     atCeiling: orbitAtCeiling,
     maxRad: LOOK_UP_PITCH_MAX_RAD,
     decayPerSecond: LOOK_UP_PITCH_RETURN_RAD_PER_S,
@@ -12027,14 +12131,16 @@ bootEntryFlow();
 setInterval(() => {
   if (ws && ws.readyState === WebSocket.OPEN) {
     const now = performance.now();
-    // Only track one in-flight probe: if it is still unanswered after 12 s the
-    // link has stalled, so light the dot red and start a fresh probe.
+    // One probe in flight at a time, and every send starts a new one. The old
+    // shape only stamped the clock when nothing was pending, so a probe that
+    // never answered kept its five-second-old timestamp and the *next* pong was
+    // measured from it - reporting the interval as the round trip, and leaving
+    // the dot reading "slow connection" on a link that was fine. A probe that
+    // has outlived `stallMs` is a stalled link, so say so and start fresh.
     if (pingSentAt !== null && now - pingSentAt > networkConfig.stallMs) {
       setStatus('Connection unstable', 'down');
-      pingSentAt = now;
-    } else if (pingSentAt === null) {
-      pingSentAt = now;
     }
+    pingSentAt = now;
     ws.send(JSON.stringify({ type: MESSAGE_TYPE.PING, payload: {} }));
   }
 }, 5000);

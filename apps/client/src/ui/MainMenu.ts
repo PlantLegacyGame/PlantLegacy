@@ -2912,24 +2912,64 @@ export class MainMenu {
     input.addEventListener('change', () => {
       const file = input.files?.[0];
       if (!file) return;
-      // 512 KB keeps the data URL inside a localStorage quota that is shared with
-      // the session, and is still more pixels than a 64 px avatar needs.
-      if (file.size > 512 * 1024) {
-        this.showError('That image is larger than 512 KB.');
+      // A ceiling on what gets decoded at all. The picture is shrunk to the size
+      // an avatar is drawn at before it is stored (see `storeAvatar`), so this is
+      // only a guard against handing the decoder something pathological.
+      if (file.size > 8 * 1024 * 1024) {
+        this.showError('That image is larger than 8 MB.');
         return;
       }
       const reader = new FileReader();
       reader.addEventListener('load', () => {
         const url = typeof reader.result === 'string' ? reader.result : null;
-        if (!url) return;
-        this.avatar = url;
-        this.renderProfileButton();
-        this.renderPopover();
-        this.options.onProfileChange?.({ avatar: url });
+        if (url) this.storeAvatar(url);
       });
+      reader.addEventListener('error', () => this.showError('That file could not be read.'));
       reader.readAsDataURL(file);
     });
     input.click();
+  }
+
+  /**
+   * Shrink a picked picture to the size an avatar is drawn at, then store that.
+   *
+   * The file's own data URL used to be stored and drawn as-is: a phone photo is
+   * several megabytes of base64 in a localStorage bucket shared with the
+   * session, and a texture the compositor has to upload while the game is
+   * rendering. Choosing one was enough to make the device unhappy. 128 px is
+   * more than the largest avatar slot draws, so nothing visible is lost, and the
+   * stored URL is a few kilobytes.
+   */
+  private storeAvatar(url: string): void {
+    const image = new Image();
+    image.addEventListener('error', () => this.showError('That file is not an image we can use.'));
+    image.addEventListener('load', () => {
+      const size = 128;
+      const canvas = document.createElement('canvas');
+      canvas.width = size;
+      canvas.height = size;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+      // Cover crop: fill the square from the middle instead of squashing it.
+      const width = Math.max(1, image.width);
+      const height = Math.max(1, image.height);
+      const scale = Math.max(size / width, size / height);
+      ctx.drawImage(
+        image,
+        (size - width * scale) / 2,
+        (size - height * scale) / 2,
+        width * scale,
+        height * scale,
+      );
+      // WebP keeps a 128 px photo near a kilobyte; a browser without it encodes
+      // PNG instead, which is still small at this size.
+      const small = canvas.toDataURL('image/webp', 0.9);
+      this.avatar = small;
+      this.renderProfileButton();
+      this.renderPopover();
+      this.options.onProfileChange?.({ avatar: small });
+    });
+    image.src = url;
   }
 
   private togglePopover(): void {

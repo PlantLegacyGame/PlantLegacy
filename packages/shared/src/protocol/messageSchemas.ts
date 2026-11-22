@@ -432,6 +432,9 @@ export const MESSAGE_SCHEMAS: Record<number, Record<string, FieldRule>> = {
         fields: {
           id: { type: 'string', required: true },
           ownerId: { type: 'string', required: true },
+          // The owner's display name for the tag over their plant, when they
+          // are connected. Optional: an offline plant has only its id.
+          ownerName: { type: 'string', required: false },
           rootNodeId: { type: 'string', required: false, nullable: true }, // null for ungerminated plants
           totalBiomass: { type: 'number', required: true },
           totalEnergy: { type: 'number', required: true },
@@ -452,6 +455,9 @@ export const MESSAGE_SCHEMAS: Record<number, Record<string, FieldRule>> = {
       fields: {
         id: { type: 'string', required: true },
         ownerId: { type: 'string', required: true },
+        // Same display name as PLANT_SYNC, so a rival that sprouts next to the
+        // player is tagged without waiting for the next full sync.
+        ownerName: { type: 'string', required: false },
         rootNodeId: { type: 'string', required: false, nullable: true }, // null for ungerminated plants
         totalBiomass: { type: 'number', required: true },
         totalEnergy: { type: 'number', required: true },

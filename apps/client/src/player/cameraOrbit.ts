@@ -33,21 +33,24 @@ export interface GroundCeilingInput {
 }
 
 /**
- * Extra upward pitch the polar ceiling swallowed this frame, radians.
+ * Extra pitch the camera spends looking up once the orbit is against its
+ * ceiling.
  *
  * An orbit camera always looks at its target, and the target sits on the
  * ground, so once the eye is down on the soil no polar angle is left that
  * points at the sky: the ground ceiling stops the orbit and an upward drag ends
- * there. This spends that blocked rotation on the camera's own pitch instead,
- * so the drag keeps tilting the view up from the soil.
+ * there. This spends that drag on the camera's own pitch instead, so the view
+ * keeps tilting up from the soil.
+ *
+ * The drag is measured by the caller from its own pointer tracking, in the same
+ * radians OrbitControls uses (`2π · dy / clientHeight · rotateSpeed`), rather
+ * than read out of the controls' private spherical delta.
  */
 export interface LookUpPitchInput {
   /** Extra pitch already spent, radians. */
   currentRad: number;
-  /** Upward orbit rotation this frame that the polar limit swallowed, radians. */
-  blockedRad: number;
-  /** Downward rotation the player is dragging for this frame, radians. */
-  releaseRad: number;
+  /** Upward pitch the player dragged for this frame, radians (negative = down). */
+  upDragRad: number;
   /** Whether the orbit is against its ceiling. */
   atCeiling: boolean;
   /** Ceiling for the extra pitch itself, radians. */
@@ -63,16 +66,16 @@ export function stepLookUpPitch(input: LookUpPitchInput): number {
   const current = Number.isFinite(input.currentRad)
     ? Math.min(max, Math.max(0, input.currentRad))
     : 0;
-  const blocked = Number.isFinite(input.blockedRad) ? Math.max(0, input.blockedRad) : 0;
-  const release = Number.isFinite(input.releaseRad) ? Math.max(0, input.releaseRad) : 0;
-  if (input.atCeiling && blocked > 0) return Math.min(max, current + blocked);
+  if (input.atCeiling) {
+    const up = Number.isFinite(input.upDragRad) ? input.upDragRad : 0;
+    // Against the ceiling the orbit cannot take any more of the drag, so the
+    // camera does. A downward drag is the orbit's again - it can move away from
+    // the ceiling - and the pitch is given back once the orbit is free.
+    return up > 0 ? Math.min(max, current + up) : current;
+  }
   const deltaTime = Number.isFinite(input.deltaTimeS) ? Math.max(0, input.deltaTimeS) : 0;
   const decay = Number.isFinite(input.decayPerSecond) ? Math.max(0, input.decayPerSecond) : 0;
-  // Against the ceiling and not dragging, the view holds where the player left
-  // it; only a downward drag gives the pitch back there. A free orbit unwinds on
-  // its own, so the camera is not left looking at the sky after a zoom out.
-  const giveBack = release + (input.atCeiling ? 0 : decay * deltaTime);
-  return Math.max(0, current - giveBack);
+  return Math.max(0, current - decay * deltaTime);
 }
 
 export function solveGroundCeiling(input: GroundCeilingInput): number {

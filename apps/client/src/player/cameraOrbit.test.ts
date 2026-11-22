@@ -7,14 +7,14 @@ const close = (a: number, b: number, epsilon = 1e-9) => Math.abs(a - b) <= epsil
 const clearsBelow = (horizon: number) => (angle: number) => angle <= horizon;
 
 describe('looking up off the ground', () => {
-  const base = { releaseRad: 0, maxRad: 1.31, decayPerSecond: 4, deltaTimeS: 0.016 };
+  const base = { upDragRad: 0, maxRad: 1.31, decayPerSecond: 4, deltaTimeS: 0.016 };
 
-  it('spends rotation the polar ceiling swallowed as pitch on the camera', () => {
-    const once = stepLookUpPitch({ ...base, currentRad: 0, blockedRad: 0.08, atCeiling: true });
+  it('spends an upward drag the ceiling swallowed as pitch on the camera', () => {
+    const once = stepLookUpPitch({ ...base, currentRad: 0, upDragRad: 0.08, atCeiling: true });
     assert.ok(close(once, 0.08));
     // The drag keeps pushing and the pitch keeps growing, instead of the view
     // stopping the moment the ground is touched.
-    const twice = stepLookUpPitch({ ...base, currentRad: once, blockedRad: 0.08, atCeiling: true });
+    const twice = stepLookUpPitch({ ...base, currentRad: once, upDragRad: 0.08, atCeiling: true });
     assert.ok(close(twice, 0.16));
   });
 
@@ -22,36 +22,28 @@ describe('looking up off the ground', () => {
     const capped = stepLookUpPitch({
       ...base,
       currentRad: 1.3,
-      blockedRad: 0.5,
+      upDragRad: 0.5,
       atCeiling: true,
     });
     assert.equal(capped, base.maxRad);
   });
 
-  it('holds the pitch while the player is not dragging', () => {
-    const held = stepLookUpPitch({ ...base, currentRad: 0.4, blockedRad: 0, atCeiling: true });
+  it('holds the pitch when idle or dragging down against the ceiling', () => {
+    const held = stepLookUpPitch({ ...base, currentRad: 0.4, atCeiling: true });
     assert.ok(close(held, 0.4), 'an idle view against the ceiling must not drift back');
+    const down = stepLookUpPitch({ ...base, currentRad: 0.4, upDragRad: -0.3, atCeiling: true });
+    assert.ok(close(down, 0.4), "a downward drag at the ceiling is the orbit's, not the pitch's");
   });
 
-  it('gives the pitch back when the drag turns downward', () => {
-    const back = stepLookUpPitch({
-      ...base,
-      currentRad: 0.3,
-      blockedRad: 0,
-      releaseRad: 0.2,
-      atCeiling: true,
-    });
-    assert.ok(close(back, 0.1));
+  it('never returns a negative or over-ceiling pitch', () => {
     assert.equal(
-      stepLookUpPitch({
-        ...base,
-        currentRad: 0.1,
-        blockedRad: 0,
-        releaseRad: 0.5,
-        atCeiling: true,
-      }),
+      stepLookUpPitch({ ...base, currentRad: 0.5, atCeiling: false, deltaTimeS: 10 }),
       0,
-      'a downward drag cannot push the view below the target',
+      'a long free frame unwinds to the target, never past it',
+    );
+    assert.ok(
+      stepLookUpPitch({ ...base, currentRad: 99, atCeiling: false }) <= base.maxRad,
+      'a pitch above the ceiling starts from the ceiling, not from 99',
     );
   });
 
@@ -59,7 +51,6 @@ describe('looking up off the ground', () => {
     const free = stepLookUpPitch({
       ...base,
       currentRad: 0.5,
-      blockedRad: 0,
       atCeiling: false,
       deltaTimeS: 0.1,
     });
