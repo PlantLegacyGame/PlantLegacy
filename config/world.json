@@ -33,9 +33,9 @@
     },
     "season_length_days": {
       "type": "number",
-      "value": 36,
+      "value": 90,
       "range": [1, 365],
-      "description": "Real days per season. At the end of a season the calamity takes every plant still standing and the next season begins (DESIGN: 36)."
+      "description": "Real days per season. Calamities run through the season and the final one closes it; the next season begins on the same planet (DESIGN: 90, ADR-078)."
     },
 
     "detailed_plant_budget": {

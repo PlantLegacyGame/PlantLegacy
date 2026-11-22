@@ -153,6 +153,7 @@ together.
 | How the built system actually works | [`CONTEXT.md`](./CONTEXT.md), [`docs/protocol.md`](./docs/protocol.md), [`docs/data-model.md`](./docs/data-model.md), [`docs/state-machines-and-invariants.md`](./docs/state-machines-and-invariants.md) |
 | Config files: owner, status, value count | [`docs/tunables.md`](./docs/tunables.md) — values live in `config/` |
 | What is built, what is not, known gaps | [`docs/what-works-now.md`](./docs/what-works-now.md) |
+| The 90-day season, calamity catalogue, zones and dev-panel aiming | [`docs/calamities.md`](./docs/calamities.md) — direction accepted, not built |
 | What happened, when | [`docs/history.md`](./docs/history.md) — append-only, not current state |
 | What comes next | [`docs/tasks/README.md`](./docs/tasks/README.md) — the ordered backlog; renderer work is ranked in [`docs/abyssal-garden-source-analysis.md`](./docs/abyssal-garden-source-analysis.md) Part II §15 |
 | What to fix in the built system, in order | [`docs/improvement-plan.md`](./docs/improvement-plan.md) |
@@ -169,7 +170,7 @@ Supporting references: [`docs/controls.md`](./docs/controls.md) (bindings),
 [`docs/what-spores-are.md`](./docs/what-spores-are.md) (the currency, including
 what is live today),
 [`docs/planet-scale.md`](./docs/planet-scale.md) (the horizon arithmetic and the
-proposed 200–400 km step),
+accepted 200–400 km direction, gated on the P1 clipmap),
 [`docs/abyssal-garden-source-analysis.md`](./docs/abyssal-garden-source-analysis.md) (Abyssal Garden source analysis and what to take from it),
 [`ATTRIBUTION.md`](./ATTRIBUTION.md) (asset licences).
 

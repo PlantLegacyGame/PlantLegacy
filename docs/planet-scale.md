@@ -1,10 +1,12 @@
 # Planet scale and the orbit view
 
-**Status:** proposal, 2026-11-21, awaiting the owner's decision on the size
-question. ADR-076 and ADR-077 are proposals, not accepted records. The P0
-groundwork is built (§6); every other section describes something that is not.
+**Status:** direction accepted 2026-11-21, not authorized for build. ADR-076 and
+ADR-077 are accepted as direction; keep the planet at 100 km and authorize only
+the P1 ring clipmap when it becomes a milestone. The P0 groundwork is built (§6);
+every other section describes something that is not.
 
-**Related:** [decisions.md](./decisions.md) proposed ADR-076 and ADR-077,
+**Related:** [decisions.md](./decisions.md) accepted ADR-076 and ADR-077 as
+direction,
 [partitioning-lod.md](./partitioning-lod.md) (plant tiers, not restated here),
 [CONTEXT.md](../CONTEXT.md) §9 (what the planet is today),
 [tasks/T25.md](./tasks/T25.md) (the ground field).

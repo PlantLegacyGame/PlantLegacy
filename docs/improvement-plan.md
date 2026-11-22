@@ -16,10 +16,10 @@ state), RULE_20 (no rarity), RULE_23 (account-bound flags), one task at a time,
    (Wave 2). Say the word to pull C04 HUD forward.
 2. **Postgres.** Is a local `DATABASE_URL` / compose stack available? T08A
    inventory and most auth verification cannot be proven without it.
-3. **Wire compatibility.** Pre-alpha assumption: `PROTOCOL_VERSION` may be
-   bumped and message cadence/shape changed. If old clients must keep working,
-   Wave 1-B becomes additive only. *1-B turned out additive (new config key,
-   fewer messages, no payload change), so no bump was needed.*
+3. **Wire compatibility.** Resolved 2026-11-21: breaking changes are allowed
+   until the first public alpha. The wire is v4 today. Wave 1-B turned out
+   additive (new config key, fewer messages, no payload change), so it needed no
+   bump; the calamity director will need one.
 
 ## Audit snapshot — verified 2026-11-15
 

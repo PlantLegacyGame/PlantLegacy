@@ -21,18 +21,27 @@ design document.
 6. A partial task stays `[ ]` and its record states exactly which acceptance
    criteria are met. Do not mark a slice as the whole task.
 
-## Current priority (2026-11-14)
+## Current priority (2026-11-21)
 
 `pnpm verify` is green. Work order is fixed by ADR-023, amended by ADR-026
-through ADR-029 and by ADR-041/ADR-048:
+through ADR-029, ADR-041/ADR-048 and the 2026-11-21 scope choices (ADR-080):
 
-1. **T06** — damage, uproot and tumbling (ADR-051/ADR-052). **Done** except the in-browser checklist; record: [T06.md](./T06.md).
-2. **C04** — HUD and panels landed (health words, reroot controls, Inspect/Inventory, Settings/Controls, death stats); rebinding and the notification log remain. Record: [C04.md](./C04.md).
-3. **T08A** Postgres inventory, then the ADR-044 burial fix.
-4. AL-01 then AL-03 — client measurement, per **ADR-050** (gameplay first).
-5. Atmosphere, audio and scatter polish (Wave 0 after measurement).
-6. Remaining C02b work. Shared depth is **not** a C02b blocker: ADR-041 gates it
+1. **T08A** — Postgres inventory and the row-locked Spore purse. This is the
+   chosen next implementation; the in-memory pouch and purse are the largest
+   correctness hole. Record: [T08A.md](./T08A.md).
+2. **C04 closeout** — rebinding screen, notification log and one real-device
+   pass. Record: [C04.md](./C04.md).
+3. **ADR-044 burial** — dead biomass becomes organic matter.
+4. **W6 water slices 1–2** — the accepted ADR-065 rebuild.
+5. AL-01 then AL-03 — client measurement, per **ADR-050** (gameplay first).
+6. Atmosphere, audio and scatter polish (Wave 0 after measurement).
+7. Remaining C02b work. Shared depth is **not** a C02b blocker: ADR-041 gates it
    on volumetric terrain (T56).
+
+The 90-day, zoned calamity director is designed in
+[`docs/calamities.md`](../calamities.md) and ADR-078, but it is **not** in this
+work order until persistence, C04 and the burial fix land. The pre-alpha
+single-player itch.io demo is designed in ADR-079; its packaging is open.
 
 Specs for every task in this list are in [`DESIGN.md` Part 11](../../DESIGN.md).
 
@@ -60,7 +69,7 @@ Specs for every task in this list are in [`DESIGN.md` Part 11](../../DESIGN.md).
 | D01 | Dev settings engine | `[x]` `?dev=1` gate, server `/dev/config` endpoints, `config/dev.json`, DevPanel wired to server, persistence switch wired to disconnect logic, key binding added | [D01.md](./D01.md) |
 | T05 | Communication | `[x]` Proximity/world chat, data-driven emotes, block and report. Record written retrospectively 2026-11-14; report entry points on non-chat surfaces await T14/T43/T08A/T29 | [T05.md](./T05.md) |
 | T04 | Mutation | `[~]` **Partial.** Data-driven table (36 mutations), adaptive pressure over 8 categories with decay, scaled maintenance that can kill, shedding with cooldown and penalty, `mutation_acquired`/`mutation_shed`, PLNT v2, protocol v2 messages, 12 visual signatures, unlocked node types, size/growth-speed/diet effects. **Open:** translocation (post-MVP locomotion); `movement.reroot_speed` is consumed by T06 since 2026-11-15 | [T04.md](./T04.md) |
-| T06 | Uproot, damage, tumbling | `[~]` Implemented server-side: four-source damage pipeline, saturation/gust/collapse/structural uproot, reroot crawl and starvation, deterministic tumbling, kill credit, world drops, protocol 37–43, PLNT v3, client redraw and dev buttons. **Open:** in-browser checklist not run; T02 substrate multiplier is still 1.0; drop pickup is T51/T08A | [T06.md](./T06.md) |
+| T06 | Uproot, damage, tumbling | `[~]` Implemented server-side: four-source damage pipeline, saturation/gust/collapse/structural uproot, reroot crawl and starvation, deterministic tumbling, kill credit, world drops, protocol 37–43, PLNT v3, client redraw and dev buttons. **Open:** in-browser checklist not run; T02 substrate multiplier is still 1.0. Drop collection is live (`DROP_COLLECT`, `ops/dropPickup.ts`); persistence of the pouch/purse is T08A | [T06.md](./T06.md) |
 | T08A | Inventory | `[~]` **Partial; Postgres saving not implemented.** In-memory inventory hardened and tested (stacking, invalid counts, slot bounds, RULE_23 flag invariant); no inventory table, row locks or restart survival | [T08A.md](./T08A.md) |
 | — | Bugfix: camera, environment, growth | `[x]` Unindexed run of fixes; record kept as evidence | [bugfix-camera-environment-growth.md](./bugfix-camera-environment-growth.md) |
 

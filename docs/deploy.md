@@ -1,12 +1,27 @@
 # Deploy and environments
 
 **Status:** O01 shipped the pipeline. Staging is a GitHub Pages client plus the
-local Docker compose stack exposed through a **Cloudflare quick tunnel** — no VM
-and no credit card. A persistent host is deferred.
+local Docker compose stack. The quick tunnel is dev-only; the accepted path is a
+**named Cloudflare Tunnel** with a persistent free host once donation funding
+arrives (ADR-079, ADR-080). The pre-alpha release is a single-player itch.io
+demo, not the staging multiplayer server.
 
 This is the single operations document: environments, the command-by-command
 first deploy, daily start/stop, troubleshooting, secrets and the security
 checklist.
+
+## Pre-alpha demo (itch.io)
+
+The pre-alpha release is a **free single-player demo on itch.io**. Donations are
+the only money path; they grant no Spores, items, advantage or account status.
+There is no registration, no paid Spore purchase and no real-money switch in the
+demo. The demo is desktop-browser first; mobile is post-alpha.
+
+The packaging is still open (DESIGN Part 16 item 18): an HTML5 build with a local
+simulation in a worker, or a downloadable build that bundles the existing server.
+Pick one before building the demo; do not ship a demo that silently depends on
+the staging tunnel. The itch.io page needs the donation link and the honest
+"what works now" list from [`what-works-now.md`](./what-works-now.md).
 
 ## Environments
 
@@ -187,10 +202,11 @@ until O02 adds a supervisor and backup/restore drill.
 - [ ] `ops/.env` and `STAGING_SERVER_ORIGIN` are updated together when the
       tunnel URL changes.
 
-## 9. Persistent host (deferred)
+## 9. Persistent host (accepted, waiting on donations)
 
 A VM or a named tunnel removes the dependency on the local PC and the rotating
-URL. **Not required** for the current staging setup.
+URL. A named tunnel is the accepted staging path; a persistent free host follows
+when donation funding arrives. The quick tunnel stays a development convenience.
 
 - **Named Cloudflare tunnel (free, fixed URL):** Zero Trust → Networks → Tunnels
   → create → `cloudflared service install <token>`. Set

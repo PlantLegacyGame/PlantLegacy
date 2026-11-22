@@ -14,7 +14,7 @@ You are a plant. Not a character controlling a plant — you are the organism. Y
 This is not a game about growing the biggest plant. It is about being a particular plant in a world larger and older than you, full of other players who want what you want.
 
 ## 1.2 The Two Worlds
-**Multiplayer** is a shared planet. Ten thousand players per World is a design target, not an MVP acceptance test. One season defaults to thirty-six real days, tunable. Your plant persists across sessions. Logging out is not safety: the world simulates offline and you can die while offline.
+**Multiplayer** is a shared planet. Ten thousand players per World is a design target, not an MVP acceptance test. One season defaults to ninety real days, tunable. Your plant persists across sessions. Logging out is not safety: the world simulates offline and you can die while offline.
 
 **Death and inheritance.** When your plant dies, you have three paths:
 1. New seed, no inherited mutations.
@@ -100,9 +100,9 @@ RULE_8 (clarified [V5.4], approved 2026-11-09): The planet is one
         continuous world across seasons. There are no world resets.
         Between seasons, deep time
         passes and the same planet transforms. A season-end calamity is
-        a burial, not a wipe: it kills plants and lays their traces
-        under sediment; the planet is never regenerated from scratch or
-        restored to a blank state.
+        a burial, not a wipe: it kills the plants it reaches and lays
+        their traces under sediment; survivors carry on, and the planet
+        is never regenerated from scratch or restored to a blank state.
 
 RULE_9: Everything should produce social possibility. If a system could
         not, in principle, produce a moment someone tells their friend
@@ -248,7 +248,7 @@ RULE_31: FREE-FIRST OPS. Choose free hosting and free assets first, and
 | **[V5.4]** Material cell | One cell in the T55 simulation grid: material id, mass, temperature, moisture and state flags. Updated by cellular-automaton rules at a decoupled cadence. |
 | **[V5.4]** Volumetric terrain chunk | A sparse 3D block of terrain occupancy/material data (T56) that can represent overhangs, arches, caves and stacked layers. Persisted as a binary snapshot. |
 | **[V5.4]** World object | Any server-owned, streamed entity in T58: plant, fauna, terrain feature, fragment, structure, seed or other config-defined type. Behaviour is a config-defined state machine, never uploaded code. |
-| **[V5.4]** Calamity burial | The season-end event (T20) that kills plants and lays their traces under sediment. It is not a world reset; the planet and its history persist. |
+| **[V5.4]** Calamity burial | A calamity that kills plants lays their traces under sediment (T20). It is not a world reset; the planet and its history persist. |
 | **[V5.4]** Succession | The T59 process by which bare or degraded ground passes through pioneer, grass, shrub and forest stages, and by which dead matter becomes soil again. |
 | **[V5.4]** Parametric terrain feature | A T57 surface/sweep/carve primitive defined by control points, radius, taper, noise and blend parameters. General capability, not a named structure. |
 | Spore | Currency. Earned by play, purchasable with real money. No artificial earn cap. Consumed in-game currency, not stored value. |
@@ -260,8 +260,8 @@ RULE_31: FREE-FIRST OPS. Choose free hosting and free assets first, and
 | Marketplace | UI panel for listing and buying items. UI-only; physical markets are player-run and emergent. |
 | Ledger | Edit and ownership history attached to any named thing. |
 | Tombstone | Public record left when a ledger entry is erased: who erased it and when. |
-| Season | Tunable default of thirty-six real days. |
-| Season-end calamity | Inter-season deep-time transformation (T20). Every plant dies in it. Only lineage carries over through a queued heirloom seed. |
+| Season | Tunable default of ninety real days. |
+| Season-end calamity | The final and largest of a season's placed calamities (T20). It is survivable; plants that live carry into the next season. Only a plant that actually produced a propagule leaves lineage when it dies. |
 | Season Relic | Tradeable stylized model of planet at season end. Post-MVP. |
 | Deep time | Millions of years between seasons. |
 | Heirloom seed | Blank-vessel inventory item. Produced by seed production from a mature flower (T06A) or a mid-season death grant (T06A). Spending it starts a descendant whose mutation set comes from the owner's latest death record. Tradeable and mailable per flags. |
@@ -320,6 +320,11 @@ RULE_31: FREE-FIRST OPS. Choose free hosting and free assets first, and
 ## B2. The Exact Build Order
 
 Task IDs: **T** = game system from v5.2, **C** = client task, **O** = operations task, **H** = hardening task. Weeks are inclusive.
+
+**Scope reset 2026-11-21.** The owner asked for longer gates than the week
+numbers below, and the 90-day season plus the calamity director add work not yet
+in this table. Treat every week number here as the old baseline, not a
+commitment, until Part 16 item 4 is answered.
 
 ### Phase 0 — Foundation (Gate 1 run-up)
 | # | Task | Weeks | Depends on | Notes |
@@ -668,7 +673,7 @@ non-local server rejects dev endpoints; a normal player cannot reach the panel.
 
 | Task | Produces (Outputs) | Consumes (Inputs) | Consumed By (Downstream) |
 |------|-------------------|-------------------|--------------------------|
-| **T20** | Same planet across seasons, rule-based deep-time transformation (drift/erosion/volcanism/sea level/biome), scars fossilize, replayable time-lapse, **season-end calamity kills all via T06A**, lineage via queued heirloom only, season rewards for standard+ boosters | T06A (death pipeline), T07 (weather), T16 (ledger), T13A (rewards) | **T18** (season relics), **T39** (climate memory), **T48** (minimap aggregation), **C05** (season screen) |
+| **T20** | Same planet across seasons, rule-based deep-time transformation (drift/erosion/volcanism/sea level/biome), scars fossilize, replayable time-lapse, **many placed and survivable calamities through a 90-day season**, final cataclysm, survivors carry over, lineage via produced propagules only, season rewards for standard+ boosters | T06A (death pipeline), T07 (weather), T16 (ledger), T13A (rewards) | **T18** (season relics), **T39** (climate memory), **T48** (minimap aggregation), **C05** (season screen) |
 | **C05** | Login/sign-up, spawn/archetype select, inventory, ledger viewer, death/heirloom screen, season countdown/time-lapse, settings, reconnect, **empty shells** for marketplace/mail/guild | C01, C04, T08A, T16, T06A, T20, T08C, T12 | **C09** (touch layout), **C07** (app wrappers) |
 
 ### Launch Readiness (Phase 4-6 / Gate 3)
@@ -1299,24 +1304,28 @@ Each spec is a block. Feed one to the AI at a time. Every AI session returns imp
 
 **AI prompt.** "Build parasitism. Attacker must have higher biomass ratio or target consent. Attachment public. Parasite drains per tick. Host can shake off at cost. Drain-to-death grants prestige only if non-consensual. Multiple parasites allowed. All values in config."
 
-### T20 · Deep Time / Season — `config/deep_time.json`
+### T20 · Deep Time / Season — `config/deep_time.json` + `config/calamities.json`
 **Depends on:** T06A, T07, T16, T13A.
 
 **Must support.**
 - Same planet persists across seasons; never regenerated.
 - Between seasons, rule-based deep-time transformation: continental drift, erosion, volcanism, sea level, biome distribution, climate.
 - Player-created scars fossilize and may reappear as landmarks, mineral deposits, faint mutation traces.
-- Season length tunable default 36 real days. Inter-season event scheduled, replayable god-view time-lapse with countdown. Players can pre-build/queue next seed during event.
-- **Season-end calamity:** every plant dies. T20 runs T06A death pipeline for every plant. Lineage survives only through queued heirloom seed. No plant survives directly. **[V5.3] `calamity_grant_seed=false` default (Part 5, T06A).** A calamity is a **burial, not a wipe** (RULE_8): the death pipeline converts structural biomass into the organic-matter soil field, player-made terrain edits and voids persist, and the next season runs on the same transformed planet. No code path regenerates the world or returns it to a blank state.
+- Season length tunable default **90 real days**. Calamities are scheduled through the season, not only at its boundary. Players can pre-build/queue next seed during the season and the finale.
+- **Calamities are placed events.** Each has a shape (point, circle, ring, capsule, path, polygon or global), centre/path, magnitude, duration, warning and aftermath. Natural events come from a seeded per-world deck with forecasts; dev events can be aimed from the dev panel. See [`docs/calamities.md`](./docs/calamities.md).
+- **Calamities are survivable.** Exposure falls off across the zone and feeds the T06 damage pipeline. A plant may lose parts, be uprooted, be buried or die; survival depends on traits, morphology, terrain/shelter and a small seeded luck factor. The final cataclysm is the largest event, not an automatic wipe. Plants that survive it persist into the next season.
+- **Lineage is reproductive.** A plant that dies passes on lineage only through a propagule it actually produced: seed, bulb, tuber, rhizome, spore or another configured equivalent. **[V5.3] `calamity_grant_seed=false` default (Part 5, T06A).** A plant with no propagule ends its lineage; the player starts next season on Path 1, which is never an account punishment.
+- **Time accelerates after a calamity.** A short recovery window runs at a higher simulation scale; the inter-season transformation runs as a replayable deep-time time-lapse. The server tick rate does not change.
+- A calamity is a **burial, not a wipe** (RULE_8): the death pipeline converts structural biomass into the organic-matter soil field, player-made terrain edits and voids persist, and the next season runs on the same transformed planet. No code path regenerates the world or returns it to a blank state.
 - Season reward for standard+ boosters defined here: configured reward grants standard+ booster(s) or crafting currency per season participation. No money-to-standard loophole.
 - No relic drop in MVP; relic T18 post-MVP.
 - No pre-build decision left open; pre-build supported.
 
-**Acceptance.** Same planet across seasons. Transformation works. Scars can fossilize/reappear. Replayable time-lapse. Event scheduled/replayable. Players can pre-build/queue next seed. Season length tunable. Calamity kills every plant via T06A pipeline. Lineage via queued heirloom only. Season reward for standard+ boosters works. No relic drop MVP.
+**Acceptance.** Same planet across seasons. Transformation works. Scars can fossilize/reappear. Replayable time-lapse. Event scheduled/replayable. Players can pre-build/queue next seed. Season length tunable at 90 days. At least one natural and one dev-triggered zoned calamity. Exposure falls off across a zone and a plant can survive it. The final cataclysm is survivable and survivors persist. Dead plants run the T06A pipeline; only a produced propagule grants lineage. Season reward for standard+ boosters works. No relic drop MVP.
 
-**Config.** Season length default 36 days tunable. Years/sec time-lapse. Fossilization chance. Transformation parameters. Event schedule. Calamity death pipeline. Season reward table.
+**Config.** Season length default 90 days tunable. Calamity definitions, zone defaults, natural deck, warning lead times, exposure/falloff, survival caps and recovery time scales in `calamities.json`. Years/sec time-lapse, fossilization chance and transformation parameters in `deep_time.json`. Season reward table.
 
-**AI prompt.** "Build T20 partial deep time/season. Same planet across seasons. Rule-based transformation. Scars fossilize. Replayable time-lapse. Season length tunable default 36 days. Season-end calamity kills every plant by running T06A death pipeline for every plant; `calamity_grant_seed` default false. Lineage survives only through queued heirloom seed. Season reward for standard+ boosters. No relic drop MVP. All config in `deep_time.json`."
+**AI prompt.** "Build T20 deep time/season. Same planet across seasons. Rule-based transformation. Scars fossilize. Replayable time-lapse. Season length tunable default 90 days. Many placed calamities through the season: natural seeded deck plus dev-triggered, each with a shape, zone, magnitude, warning and aftermath. Exposure falls off and feeds T06; a plant can survive, lose parts, be uprooted or die; the final cataclysm is survivable and survivors persist. Death runs T06A; lineage only through a propagule the plant actually produced (seed, bulb, tuber, rhizome, spore); `calamity_grant_seed` default false. Recovery time scale after an event, deep time between seasons. Season reward for standard+ boosters. No relic drop MVP. All config in `calamities.json` and `deep_time.json`."
 
 ### C05 · Menus and Screens — `config/ui.json`
 *(See Part 4, B4 for full spec. Depends on C01, C04, T08A, T16, T06A, T20, T08C, T12.)*
@@ -1631,7 +1640,7 @@ before treating an entry as open._
 - No campaign in v1. Post-multiplayer.
 - Globe minimap in scope. Server-side aggregation, not renderer.
 - Profiles in scope. Cosmetics display + visibility incentive + trade discovery.
-- Season length tunable default 36 real days. First number to test.
+- Season length tunable default 90 real days. First number to test.
 - Two death types: mid-season death vs season-end death.
 - Heirloom is descendant, not continuation. Old plant dead. Descendant carries inherited mutations, ancestor name, compressed history. Gated by inventory genes or Spore retrieval.
 - No full revival without genes. Pay Spores to retrieve genes or start new character.
@@ -1654,7 +1663,7 @@ before treating an entry as open._
 - Mail for system messages, player mail, Gift Bundle delivery.
 - Spore store UI MVP; real-money integration later.
 - No permanent unlock from session end. No battle-royale session end.
-- Season-end calamity kills every plant; lineage via queued heirloom seed.
+- Many placed calamities run through a 90-day season; the final cataclysm is the largest and is survivable. Survivors carry into the next season. Lineage comes only from a propagule the plant actually produced.
 - Prestige only from non-consensual drains; weather/herbivore kills credit no one.
 
 **V5.3 / V5.3.1 locked decisions.**
@@ -1685,7 +1694,7 @@ before treating an entry as open._
 **V5.4 extension decisions (approved 2026-11-09; see Part 16).**
 
 - Reactive non-sapient fauna are allowed in multiplayer. Intelligent NPCs remain campaign-only. Fauna may have needs and reflexes; they may not converse, pursue story goals, exercise judgment, form factions, or plan.
-- There are no world resets. A season-end calamity buries the old world under sediment; it does not wipe or regenerate it.
+- There are no world resets. A season-end calamity buries the plants it kills under sediment; it does not wipe or regenerate the planet, and plants that survive it carry into the next season.
 - The damage pipeline is target-agnostic and covers plant and fauna damage, with a single record shape.
 - Material simulation runs on a decoupled cellular-automaton cadence inside the existing tick budget. It does not raise the 20 Hz gameplay tick.
 - Volumetric terrain is stored as sparse binary chunks, never as per-voxel database rows.
@@ -1835,7 +1844,7 @@ The best moments will not be designed. They will be discovered. Build the possib
 
 **Depends on:** T06A, T16, T20, T15.
 
-**Must support.** At season end, players can preserve a genetic snapshot. Next season, start as descendant of heirloom's plant with faint visual traits and small bonus. Descendant is new character; old plant died in season-end calamity. Lineage tracked across seasons with visible family trees. Descendant carries ancestor name and compressed edit history. Death records written from MVP onward: `{plant_id, parent_seed_id, genes[], season, owner_id}`. Bloodline tracing is v2: missing genes retrievable by spending Spores to trace bloodline; tracing also lets players drop unwanted genes. Cost scales with gene count; recommend supertax past threshold. Gene removals write ledger entries. Heirloom seeds tradeable/mailable per flags; pre-build on. No rarity field. V5.3: seed production from mature flowers (T06A) is the primary supply; calamity grant defaults false.
+**Must support.** At season end, players can preserve a genetic snapshot. Next season, start as descendant of heirloom's plant with faint visual traits and small bonus. Descendant is a new character; the old plant either died in the final cataclysm or survived into the next season, in which case the descendant is an additional lineage branch rather than a replacement. Lineage tracked across seasons with visible family trees. Descendant carries ancestor name and compressed edit history. Death records written from MVP onward: `{plant_id, parent_seed_id, genes[], season, owner_id}`. Bloodline tracing is v2: missing genes retrievable by spending Spores to trace bloodline; tracing also lets players drop unwanted genes. Cost scales with gene count; recommend supertax past threshold. Gene removals write ledger entries. Heirloom seeds tradeable/mailable per flags; pre-build on. No rarity field. V5.3: seed production from mature flowers (T06A) is the primary supply; calamity grant defaults false.
 
 **Must also cover (v5.3.1 clarification).** Planting a held heirloom seed is owned here (or by a separate post-MVP seed-planting task). A held heirloom seed may be placed in soil to mark where the descendant will spawn; a planted seed is a world entity the damage pipeline can affect and is not controlled while the player is alive (RULE_1). This is **not** T53.
 
@@ -2768,17 +2777,29 @@ Free tiers change often. These were checked in November 2026 and must be re-chec
 
 # Part 16 — Open Decisions Needing Approval
 
-Items 1–8 are still open unless the item says otherwise. Items 9–14 were approved
-on 2026-11-09 and are kept here as the record of that approval.
+Items 1–3 and 6–8 were answered by the owner on 2026-11-21 and are kept here
+as the record. Item 4 is still open: the owner asked for **longer** gates but has
+not chosen the new week numbers. Item 5 is partly answered by the pre-alpha
+scope (donations only, no paid Spores); the country/storefront, age gate and
+terms still need a decision before public registration. Items 15–19 are new
+mechanics opened by the 90-day calamity direction.
 
-1. **Calamity seed rule.** Default: no automatic seed at season end; you must have produced and queued one. Alternative: grant one so nobody loses lineage. Which?
-2. **Graft balance.** Genes bought with Spores can be grafted onto living plants. Keep (default, with limits), or restrict grafting to genes the player has personally carried (`graft_requires_prior_carry=true`)?
-3. **Offspring seed trading.** Account-bound until planted (default), or tradeable with a capped gene count?
-4. **Gate dates.** Accept 24 / 52 / 80, or use the Compressed Plan (13/26/52 with larger cuts)?
-5. **Age gate and legal.** Minimum age, terms, privacy policy, and payment provider depend on country and storefront. Decide before public alpha.
-6. **`spore_sac` function.** v5.2 renamed it but never says what it does. Suggested default: it emits spores used for cross-pollination range in T53 (Beta). Keep, change, or cut?
-7. **Worker threads.** Approve only if profiling shows the single thread cannot hold the tick budget.
-8. **Accessibility extras.** Part 19 lists cheap options (non-color cues, reduced motion). They are optional. Opt in or out.
+1. **Calamity seed rule — resolved.** Keep the default: no automatic seed at season end. Lineage exists only through a propagule the plant actually produced and queued or dropped (seed, bulb, tuber, rhizome, spore, equivalent). A plant with no propagule ends its lineage.
+2. **Graft balance — resolved.** Keep grafting, with limits. Genes bought with Spores may be grafted; the cap is the configured per-plant/gene limit, not a prior-carry restriction.
+3. **Offspring seed trading — resolved.** Offspring seeds are account-bound until planted, as the safe default.
+4. **Gate dates — open.** The owner asked for longer than 24 / 52 / 80 weeks. Proposed baseline: 32 / 68 / 104 weeks. Do not treat the old week numbers in Part 13 as commitments until this is answered.
+5. **Age gate and legal — partly resolved.** Pre-alpha is guest-play, browser-first, donations only, no paid Spores, single-player demo on itch.io. Minimum age, terms, privacy policy and payment provider still depend on country and storefront; decide before public registration or any paid product.
+6. **`spore_sac` function — resolved.** It emits spores used for cross-pollination range in T53 (Beta).
+7. **Worker threads — resolved.** Defer until profiling shows the single thread cannot hold the tick budget.
+8. **Accessibility extras — resolved.** Opt in to the cheap parts: non-colour cues, reduced motion, text alternatives for sound cues.
+
+**New open items from the 2026-11-21 calamity direction.**
+
+15. **Final cataclysm survival.** Should a plant that survives the final cataclysm carry into the next season? Recommendation: yes; otherwise "some people survive all the calamities" has no meaning.
+16. **Time acceleration.** Does the clock speed up after every calamity, only after the finale, or both? Recommendation: a short recovery window after every event, plus a large inter-season deep-time pass; never change the server tick rate.
+17. **Luck.** How large is the seeded variance around the deterministic exposure result? Recommendation: small, dev-visible, and never able to reverse an obviously lethal or obviously safe outcome.
+18. **Single-player demo packaging.** HTML5 build with a local simulation in a worker, or a downloadable build that bundles the existing server? This is an architecture choice; see [`docs/calamities.md`](./docs/calamities.md) §11.
+19. **Survivor state.** Does a survivor keep damage, mutations and position into the next season? Recommendation: yes, with normal recovery; the next season is a continuation, not a reset.
 
 **V5.4 extension approvals — resolved 2026-11-09.**
 
@@ -3424,13 +3445,15 @@ Deliberate config decisions, not omissions.
 - Consumed vs copied genes remains a config decision in T06A/T22.
 - Stacking curve for boosters remains tuning.
 - Spectator caps, minimap aggregation frequency, territory contest rules remain config decisions.
-- Offspring seed trading rule (**Part 16 item 3**).
-- Graft restriction (**Part 16 item 2**).
-- Calamity seed grant (**Part 16 item 1**).
-- Gate dates (**Part 16 item 4**).
-- `spore_sac` function (**Part 16 item 6**).
-- Worker threads (**Part 16 item 7**).
-- Accessibility extras (**Part 16 item 8**).
+- Offspring seed trading rule (**Part 16 item 3**, resolved: account-bound until planted).
+- Graft restriction (**Part 16 item 2**, resolved: keep grafting with caps).
+- Calamity seed grant (**Part 16 item 1**, resolved: no automatic seed; propagules only).
+- Gate dates (**Part 16 item 4**, open: owner wants longer; numbers pending).
+- `spore_sac` function (**Part 16 item 6**, resolved: cross-pollination range in T53).
+- Worker threads (**Part 16 item 7**, resolved: defer until profiling).
+- Accessibility extras (**Part 16 item 8**, resolved: opt in to the cheap parts).
+- Final-cataclysm survival, time acceleration and luck (**Part 16 items 15–17**, open).
+- Single-player demo packaging (**Part 16 item 18**, open).
 - Secrets file is intentionally excluded from AI sessions.
 
 ---

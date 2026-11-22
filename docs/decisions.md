@@ -869,6 +869,11 @@ single death queue is the hook. `season_length_days` stays owned by `world.json`
 (and `world_state` persists the countdown); `deep_time.json` owns only
 transformations.
 
+**Amended 2026-11-21 (ADR-078).** A calamity no longer kills every plant by
+definition. The burial rule applies to the plants a calamity actually kills;
+plants that survive it persist into the next season, and their biomass is not
+converted until they die.
+
 ---
 
 ## ADR-045 — Water ships in two slices
@@ -1380,7 +1385,8 @@ underground is in solid dirt and `clampEyeToGround` lifts it back up.
 
 ## ADR-065 — Inland water stops being geometry
 
-**Status:** proposed 2026-11-17 (W6), not built.
+**Status:** accepted 2026-11-21, not built. Scheduled after inventory and purse
+persistence (ADR-080).
 
 **Context.** Four translucent surfaces draw water (rain sheet, water table, river
 ribbon, ocean), and each new defect has been repaired by adding a rule that keeps
@@ -1849,8 +1855,9 @@ listener: a listener that never fires on layout is a value that never gets set.
 
 ## ADR-076 — Proposed: the planet is sized by its horizon, not by its orbit
 
-**Status: proposed — awaiting the owner's decision. This is not an accepted record, and
-`planet_radius_m` is unchanged.**
+**Status: accepted 2026-11-21 as a direction, not authorized for build. The
+owner accepted the analysis and the P1 ring-clipmap gate; `planet_radius_m`
+stays at 100 km until that work becomes a milestone.**
 
 **Context.** The world is a 100 km sphere with 620 m of authored ground, so the horizon
 at eye height (583 m) and the ground's rim agree and there is no visible edge. An
@@ -1883,8 +1890,9 @@ translation; the three dead tile keys were deleted from `config/terrain.json` an
 
 ## ADR-077 — Proposed: the orbit view is a camera path, not a second world
 
-**Status: proposed — awaiting the owner's decision. Orbit is still the dev action
-described below.**
+**Status: accepted 2026-11-21 as a direction, not authorized for build. Orbit
+remains the dev action described below until the clipmap and depth range are
+scheduled.**
 
 **Context.** Orbit is a dev action today: it saves and swaps near/far, moves the camera
 to `3R` and rebuilds `OrbitControls`. Making it a feature means a continuous descent
@@ -1902,3 +1910,108 @@ larger than the simulated one, because it is a rendering object.
 clipmap and the depth range that make a continuous chain possible. The blend factor
 becomes the one place altitude-dependent rendering is decided, so a third model
 (volumetric cloud) joins by the same rule instead of by a second mode switch.
+
+## ADR-078 — Seasons are 90 days, and calamities are many, placed and survivable
+
+**Status:** accepted 2026-11-21. Replaces the single global season-end kill.
+Details and the event catalogue are in [`calamities.md`](./calamities.md).
+
+**Context.** The shipped season boundary runs one global event and kills every
+plant still standing. The owner wants a season to contain many calamities, some
+natural and some triggered from the dev panel; each calamity must be aimable or
+have a zone of influence; a plant must be able to survive by luck or by having
+the right evolved body; and a season must last 90 real days rather than 36. The
+owner also confirmed the existing rule that a plant only passes on lineage
+through a propagule it actually produced, with no automatic calamity seed.
+
+**Decision.** One season defaults to 90 real days (`config/world.json`). Natural
+calamities come from a seeded per-world deck and are forecast. Dev calamities are
+placed from a dev-panel catalogue with a shape, centre/path, radius or width,
+magnitude, duration and aftermath. Exposure is computed per plant and part,
+falls off across the zone, and feeds the existing T06 damage pipeline. A plant
+can lose parts, be uprooted, be buried or die; survival depends on traits,
+morphology, terrain/shelter and a small seeded luck factor. The final cataclysm
+closes the season but is not an automatic wipe: survivors persist into the next
+season. Death still runs T06A and still buries biomass as organic matter
+(ADR-044). Lineage exists only through a produced propagule (seed, bulb, tuber,
+rhizome, spore or configured equivalent); `calamity_grant_seed` stays false.
+After a calamity, a recovery window runs the simulation clock faster; after the
+finale, the inter-season deep-time transformation runs as a time-lapse. The
+server tick rate does not change.
+
+**Consequences.** T20 grows from a boundary event into a season-long director
+with a new config file, zone math, protocol messages, dev-panel aiming and a
+catalogue of events. The old acceptance sentence "calamity kills every plant"
+is replaced. `world_state.last_calamity_at` now means the last event of any size,
+not only the season boundary. The single death queue stays the hook. The work is
+not in the current roadmap arithmetic; the gate dates must be extended (Part 16
+item 4). The mechanics still open are listed in `calamities.md` §11 and DESIGN
+Part 16 items 15–19.
+
+---
+
+## ADR-079 — Pre-alpha is a donation-supported single-player itch.io demo
+
+**Status:** accepted 2026-11-21. Packaging is still open (DESIGN Part 16 item
+18).
+
+**Context.** The owner chose to keep the pre-alpha browser-first and guest-play,
+with no registration and no paid Spores, but to add donations as the payment
+form, make a single-player demo, and publish it on itch.io. Mobile is explicitly
+out of pre-alpha, though the touch/control work is not thrown away. A persistent
+host waits for donation funding.
+
+**Decision.** Pre-alpha distribution is a single-player demo on itch.io. It is
+free to play; donations are the only money path. Donations grant no Spores, no
+items, no advantage and no account status. There is no real-money Spore switch,
+no paid item and no registration requirement in the demo. The demo is
+desktop-browser first; touch layout remains groundwork for a later release, not
+a pre-alpha promise. Staging remains a named Cloudflare Tunnel with a persistent
+free host when funding allows. The legal gate (country, storefront, age, terms,
+privacy) still applies before public registration or any paid product.
+
+**Consequences.** The itch.io page needs a download or HTML5 build, a donation
+link, and an honest "what works now" list. The single-player mode is a real
+architecture choice: an HTML5 local simulation in a worker, or a downloadable
+build that bundles the existing server. Choosing the former preserves reach but
+duplicates simulation authority; choosing the latter reuses server code but is a
+desktop package. Do not wire itch.io donations into the Spore economy. The
+real-money switch stays out of alpha, so T40/T41/T42 are not launch blockers for
+the demo; they remain blockers for a paid public alpha.
+
+---
+
+## ADR-080 — The 2026-11-21 scope choices
+
+**Status:** accepted 2026-11-21, except where an item says otherwise.
+
+**Context.** The owner answered the open-decision list in one pass. Some answers
+change the plan; some confirm a default; one asks for a longer schedule without
+choosing numbers.
+
+| # | Choice | Ruling |
+|---|---|---|
+| 1 | Inventory and purse persistence | Do it now. T08A is the next implementation: server-owned inventory and Spore balance, row-locked, one transaction per buy/use/drop. |
+| 2 | Next milestone | C04 closeout, then one real-device pass, then ADR-044 burial, then W6 water slices 1–2. |
+| 3 | Commit and push | Commit now. The two local commits exist; push is blocked on GitHub authentication, not on the repository. |
+| 4 | Calamity seed | No automatic seed; only a propagule the plant actually produced. Recorded in ADR-078. |
+| 5 | Pre-alpha legal and money | Donations only, single-player itch.io demo, no paid Spores, no registration. Recorded in ADR-079. |
+| 6 | W6 water | Accept ADR-065; schedule after persistence. Delete the water-table mesh, draw inland water in the ground shader, keep puddles as wetness, keep the ocean dome. No fifth surface. |
+| 7 | Planet scale | Accept ADR-076/077 as direction; authorize only P1 ring clipmap when it becomes a milestone. Keep 100 km now. |
+| 8 | Renderer look | Cheap pass first: leaf geometry cache, tone mapping, bloom. Defer instancing and cascaded shadows until measured. |
+| 9 | Mobile | Not in pre-alpha. Keep the touch/control work and document desktop-first. |
+| 10 | Staging | Named Cloudflare Tunnel and a persistent free host when donations arrive. Quick tunnel is dev-only. |
+| 11 | Accessibility | Opt in to the cheap parts: non-colour cues, reduced motion, text alternatives for sound. |
+| 12 | Gate dates | Longer than 24 / 52 / 80 weeks. Exact numbers open; proposed 32 / 68 / 104 (Design Part 16 item 4). |
+| 13 | Scale and protocol | Pre-alpha target 50–100 concurrent; design hooks for 10k. Breaking protocol changes are allowed until the first public alpha; the wire is v4 today. |
+| 14 | Post-MVP defaults | Keep grafting with caps; offspring seeds account-bound until planted; `spore_sac` is a cross-pollination range emitter at T53; defer worker threads until profiling. |
+| 15 | Licence | Keep UNLICENSED/private until public alpha. |
+
+**Consequences.** The code/config commit is `df54098`; the docs/screenshots
+commit is `a9ff286`; a third commit records this scope reset. They are verified
+by `pnpm verify:ci` but not on `origin/main`; the push must be retried after
+GitHub authentication. The next
+implementation is T08A persistence, not the calamity director; the calamity
+direction is recorded and designed but waits for the persistence hole to close.
+The old 24 / 52 / 80 schedule is a baseline, not a promise. No paid Spores, no
+real-money switch and no mobile build in pre-alpha.

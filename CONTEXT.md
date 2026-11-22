@@ -28,6 +28,17 @@ is written per painting layer, the ground has its own 1/16-day clock, and the
 loop sleeps when the camera settles. Detail:
 [`docs/what-works-now.md`](./docs/what-works-now.md).
 
+**Scope reset (2026-11-21).** One season now defaults to 90 days
+(`config/world.json`), and the single global season-end kill is replaced in the
+design by many placed, forecast, aimable and survivable calamities, with
+survivors carrying into the next season and lineage only through a propagule the
+plant actually produced. See ADR-078, [`docs/calamities.md`](./docs/calamities.md)
+and DESIGN Part 16. The pre-alpha release is a donation-supported single-player
+itch.io demo with no paid Spores, no registration and no mobile build
+(ADR-079). Neither the calamity director nor the demo is built; T08A persistence
+is still the next implementation. The old 24 / 52 / 80-week gates are a baseline,
+not a promise: the owner asked for longer dates and the numbers are open.
+
 **P0 (2026-11-15).** Measurement and budget foundations, records in
 `docs/tasks/AL-01.md` and `AL-03.md`. Client gains
 `src/dev/benchmark.ts` (six configurable poses, p50/p95/p99/max, CPU and real
@@ -606,10 +617,11 @@ Still flat: physics and persistence treat the pole as a plane, and plant nodes
 stay in the pole-local coordinate frame. Spherical physics is planned stage 2
 (see the decisions in this session's record).
 
-**Scale proposal (2026-11-21).** ADR-076 and ADR-077 are proposals awaiting the owner's
-decision; `planet_radius_m` is unchanged at 100 km. What has to agree with the authored
-ground is the horizon (`sqrt(2Rh)`, 583 m here), not the radius, and float32 spacing grows
-as `R × 2⁻²³`; the arithmetic and the staged plan to 200–400 km are in
+**Scale direction (accepted 2026-11-21).** ADR-076 and ADR-077 are accepted as
+direction, not authorized for build; `planet_radius_m` is unchanged at 100 km and only
+the P1 ring clipmap may start when it becomes a milestone. What has to agree with the
+authored ground is the horizon (`sqrt(2Rh)`, 583 m here), not the radius, and float32
+spacing grows as `R × 2⁻²³`; the arithmetic and the staged plan to 200–400 km are in
 [`docs/planet-scale.md`](./docs/planet-scale.md). P0 groundwork landed: patch and
 soil-slab vertices are patch-local metres placed at `+radius` (the colliders take the same
 placement), and the three unread tile keys (`tile_size_m`, `tile_vertices`,

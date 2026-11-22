@@ -1109,6 +1109,14 @@ that does not make it persistent. DESIGN T08A forbids in-memory inventories, so
 treat it as scaffolding, not as the economy, until T08A is completed. Details and
 the full deviation list: [`docs/tasks/T08A.md`](./tasks/T08A.md).
 
+**Calamities are still one global event (2026-11-21).** The season now defaults
+to 90 days in `config/world.json`, but the shipped boundary still runs the old
+single global death. The zoned, repeated, survivable calamity director is a
+recorded direction with a design ([`calamities.md`](./calamities.md), ADR-078),
+not a feature. There is no `calamities.json`, no zone math, no dev-panel aiming
+and no natural schedule yet. The old "kills every plant" behaviour is the known
+divergence described below.
+
 **V5.4 extension program (approved 2026-11-09, not built):** reactive fauna, material
 simulation, volumetric terrain, parametric terrain features, streamed world
 objects, ecological succession, and cloud-native orchestration. See
@@ -1151,12 +1159,14 @@ The Abyssal material was reviewed against this file and `DESIGN.md`. Nine
 decisions are recorded as ADR-041 to ADR-049 in
 [`decisions.md`](./decisions.md). What they change about the state described above:
 
-- **Known divergence: the season-end calamity.** The shipped tick kills every
-  plant and the next season starts from bare soil. RULE_8 (clarified 2026-11-09)
-  and ADR-044 make a calamity a *burial*: dead biomass must become an
-  organic-matter soil field, and terrain edits and voids persist. Planet state
-  does persist today (T25 chunks, edits, voids); the bodies do not. The fix is
-  owed in the existing death queue, not in the rule.
+- **Known divergence: the season-end calamity.** The shipped tick still kills
+  every plant and the next season starts from bare soil. RULE_8 (clarified
+  2026-11-09) and ADR-044 make a calamity a *burial*: dead biomass must become an
+  organic-matter soil field, and terrain edits and voids persist. ADR-078 now
+  also changes the event itself: many placed, survivable calamities, with
+  survivors carrying into the next season. Neither the burial nor the director
+  is built. Planet state does persist today (T25 chunks, edits, voids); the
+  bodies do not. The fix is owed in the existing death queue, not in the rule.
 - **The billboard path becomes L3-only.** Plant L2 (12–80 px) is specified as an
   ellipsoid SDF (C02, ADR-042); the shipped camera-facing billboards now cover
   L3 (2–12 px) only and carry colour, not lighting.

@@ -109,7 +109,7 @@ down with a `GROW MODE` badge above it.
 - Gameplay code reads action state via `isActive(actionId)`, never raw keys.
 - `InputBus` with `isActive`, `wasPressed`, `getAxis` for 2D movement axes.
 - **Emote wheel UI** (`E` key): circular emote selector with center close button, click-outside to close, Escape to close. Sends `/emote <id>` via chat message type.
-- **Inventory/Overview panel** (`I` key): centered panel with plant stats and inventory slot grid (visual stub; slot logic not yet wired).
+- **Inventory/Overview panel** (`I` key): centred panel with plant stats and the server's inventory slot grid. The grid and the always-on hotbar are fed by `INVENTORY_SYNC` / `INVENTORY_SLOT_UPDATE`; number keys `1`–`9` and `0` select and use outside the inventory, and select only while it is open. Drag-and-drop reordering is not built yet.
 
 ## Not built yet
 
