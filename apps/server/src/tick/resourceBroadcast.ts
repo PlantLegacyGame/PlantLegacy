@@ -19,17 +19,6 @@ export interface ResourceBroadcastPorts {
 export interface ResourceBroadcastState {
   /** When the last whole-grid update went out, on the same clock as `now`. */
   lastWholeGridAt: number;
-  /**
-   * The packed whole grid that was actually sent, so an identical re-tint is not
-   * sent again.
-   *
-   * The grid is quantised to three bytes a tile, so a re-tint that changes nothing
-   * a player can see encodes to the same buffer. It used to be resent anyway: one
-   * 192 KB base64 payload a second, which the client decodes, parses and uploads as
-   * a texture - a dropped frame every second on the receiving side. Comparing the
-   * packed bytes is the whole test; a tint that really changed still goes out.
-   */
-  lastWholeGridBase64: string | null;
 }
 
 export interface ResourceBroadcastInput {
@@ -64,22 +53,18 @@ export function broadcastResourceDeltas(
   const tiles = ports.dirtyTiles();
   const grid = ports.grid();
   if (wholeGrid) {
-    const packed = ports.encodeWholeGrid(tiles);
-    // Same bytes as last time: nothing on screen changed, so nothing is sent. The
-    // clock still moves on, which keeps the encode on the throttle instead of
-    // running it on every tick.
-    if (packed === state.lastWholeGridBase64) {
-      return { lastWholeGridAt: now, lastWholeGridBase64: state.lastWholeGridBase64 };
-    }
+    // No unchanged-bytes check: it was measured over 35 s at a 1 s cadence and 29 s
+    // at 2.5 s, and the packed grid differed every single time - the field moves at
+    // byte granularity - so it never suppressed a payload and only cost a compare.
     ports.broadcast({
       tick: input.tick,
       width: grid.width,
       height: grid.height,
       tileSize: grid.tileSize,
       delta: true,
-      gridBase64: packed,
+      gridBase64: ports.encodeWholeGrid(tiles),
     });
-    return { lastWholeGridAt: now, lastWholeGridBase64: packed };
+    return { lastWholeGridAt: now };
   }
   ports.broadcast({
     tick: input.tick,

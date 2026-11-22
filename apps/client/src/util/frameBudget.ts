@@ -53,6 +53,14 @@ export interface FrameStats extends FrameBudgetStats {
   cpuP50Ms: number;
   cpuP95Ms: number;
   cpuWorstMs: number;
+  /**
+   * Last GPU time the driver reported, milliseconds, or null when it cannot.
+   *
+   * This is the number that separates "our code is slow" from "the GPU is at its
+   * limit": with the CPU at 2 ms and the GPU at 16 ms in a 33 ms frame, the GPU is
+   * the whole story and no amount of loop work will fix it.
+   */
+  gpuMs: number | null;
 }
 
 const EMPTY: FrameBudgetStats = {
@@ -146,7 +154,7 @@ export class FrameBudget {
 const round = (value: number): number => Math.round(value * 10) / 10;
 
 /** The one readout: pacing from the animation loop, cost from every frame drawn. */
-export function frameStatsOf(budget: FrameBudget): FrameStats {
+export function frameStatsOf(budget: FrameBudget, gpuMs: number | null = null): FrameStats {
   const p = budget.stats();
   const c = budget.costStats();
   return {
@@ -155,5 +163,6 @@ export function frameStatsOf(budget: FrameBudget): FrameStats {
     cpuP50Ms: c.p50Ms,
     cpuP95Ms: c.p95Ms,
     cpuWorstMs: c.worstMs,
+    gpuMs: Number.isFinite(gpuMs) && (gpuMs as number) > 0 ? round(gpuMs as number) : null,
   };
 }

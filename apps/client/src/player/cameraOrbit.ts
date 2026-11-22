@@ -55,6 +55,7 @@ export interface LookUpPitchInput {
   upDragRad: number;
   /** Whether the orbit is against its ceiling. */
   atCeiling: boolean;
+
   /** Ceiling for the extra pitch itself, radians. */
   maxRad: number;
   /** How much of the drag the pitch takes, 0..1. */
@@ -102,7 +103,13 @@ export function stepLookUpPitch(input: LookUpPitchInput): LookUpPitchStep {
   } else {
     const deltaTime = Number.isFinite(input.deltaTimeS) ? Math.max(0, input.deltaTimeS) : 0;
     const decay = Number.isFinite(input.decayPerSecond) ? Math.max(0, input.decayPerSecond) : 0;
-    target = clamp(target - decay * deltaTime);
+    // A downward drag is the request to look back down, and it gives the pitch
+    // back at the rate it was spent. Being free is *not* a request: the ceiling is
+    // solved per azimuth, so yawing on a slope moved it and unwound the pitch
+    // under a player who only turned - and with the pitch gone the camera aimed at
+    // its target again, which is the view flipping down onto the plant.
+    const down = Number.isFinite(input.upDragRad) ? Math.min(0, input.upDragRad) : 0;
+    if (down < 0) target = clamp(target - decay * deltaTime);
   }
 
   const ease = Number.isFinite(input.dampingFactor)

@@ -34,6 +34,18 @@ describe('the frame budget', () => {
     assert.equal(stats.cpuP50Ms, 2, 'our own work in that frame');
     assert.equal(stats.cpuFrames, 10);
     assert.equal(stats.cpuWorstMs, 2);
+    assert.equal(stats.gpuMs, null, 'no driver timing was supplied');
+  });
+
+  it('reports the GPU cost next to our own', () => {
+    const budget = new FrameBudget(10);
+    budget.record(33.3);
+    budget.recordCost(2);
+    const stats = frameStatsOf(budget, 29.4);
+    assert.equal(stats.cpuP50Ms, 2);
+    assert.equal(stats.gpuMs, 29.4);
+    assert.equal(frameStatsOf(budget, Number.NaN).gpuMs, null, 'a bad reading is no reading');
+    assert.equal(frameStatsOf(budget, 0).gpuMs, null);
   });
 
   it('keeps cost when no interval was recorded, which is a hidden tab', () => {

@@ -2706,10 +2706,16 @@ function settlePlayerOnGround(deltaTime: number): void {
   // OrbitControls every frame at the terrain edge: it moved the eye without
   // moving the orbit target, which changed the orbit again on the next frame.
   // The polar limit alone is stable and leaves the camera offset intact.
-  controls.maxPolarAngle = Math.max(
-    controls.minPolarAngle + 0.001,
-    Math.min(configuredLimit, groundLimit),
-  );
+  const ceilingLimit = Math.min(configuredLimit, groundLimit);
+  // While the view is tilted up off the ground, a yaw must not pull the ceiling
+  // down under the eye. The limit is solved per azimuth, so turning left or right
+  // on a slope lowered it several degrees, which dragged the eye back down and the
+  // view with it - the camera ended up looking down at the plant again. Holding the
+  // angle already reached keeps the position and the line of sight; the ground
+  // clamp still catches an eye that ends up in a hill.
+  const heldCeiling =
+    lookUpPitchRad > 1e-4 ? Math.max(ceilingLimit, controls.getPolarAngle()) : ceilingLimit;
+  controls.maxPolarAngle = Math.max(controls.minPolarAngle + 0.001, heldCeiling);
 }
 
 /**
@@ -8477,7 +8483,7 @@ if (isDevMode) {
       return lookUpPitchTargetRad;
     },
     journal: () => loadJournal(sessionJournalStorage).entries,
-    frameStats: () => frameStatsOf(frameBudget),
+    frameStats: () => frameStatsOf(frameBudget, lastGpuMs),
     renderFrame: (deltaTime) => renderFrame(deltaTime),
     renderer,
     scene,
@@ -10973,6 +10979,8 @@ window.addEventListener('beforeunload', () => {
 let measuredFps = 60;
 /** The last four seconds of frame pacing, so "it stutters" can be measured. */
 const frameBudget = new FrameBudget(240);
+/** Last GPU time the driver reported, milliseconds; 0 until a query completes. */
+let lastGpuMs = 0;
 /**
  * The cost side of that one budget. Recorded from both loops, because a hidden
  * tab only draws on a timer - and drawing is what costs, whether or not anything
@@ -11467,6 +11475,9 @@ function renderFrame(deltaTime: number): void {
   // CPU frame time drives the same loop.
   const frameCostMs = Math.max(0.1, deltaTime * 1000);
   const gpuCostMs = gpuTimer ? gpuTimer.readMs() : null;
+  // Reported by `__pl.frameStats()`: the frame's GPU time next to our own CPU time
+  // is what says which side owns the missing frames.
+  if (gpuCostMs !== null) lastGpuMs = gpuCostMs;
   // Only frames the player is actually shown may grade quality. The hidden-tab
   // loop steps `renderFrame(0.1)` itself and Chromium throttles that timer to a
   // couple of hertz, so each hidden frame reported ~100-500 ms of cost, the band

@@ -68,12 +68,31 @@ describe('looking up off the ground', () => {
     assert.ok(close(down.targetRad, 0.4), "a downward drag at the ceiling is the orbit's");
   });
 
-  it('unwinds smoothly once the orbit is free again', () => {
+  it('keeps the pitch through a yaw that moved the ceiling', () => {
+    // The ceiling is solved per azimuth, so turning on a slope drops it under the
+    // eye and unlatches "at ceiling", with no drag of the player's. That used to
+    // unwind the whole pitch and re-aim the camera at the plant: looking up, then
+    // turning, ended up looking down at the player.
+    for (const free of [false, true]) {
+      const yawed = stepLookUpPitch({
+        ...base,
+        targetRad: 1.2,
+        appliedRad: 1.2,
+        atCeiling: !free,
+        deltaTimeS: 0.016,
+      });
+      assert.ok(close(yawed.targetRad, 1.2), `target ${yawed.targetRad}`);
+      assert.ok(close(yawed.appliedRad, 1.2), `applied ${yawed.appliedRad}`);
+    }
+  });
+
+  it('gives the pitch back on a downward drag', () => {
     const free = stepLookUpPitch({
       ...base,
       targetRad: 0.5,
       appliedRad: 0.5,
       atCeiling: false,
+      upDragRad: -0.05,
       deltaTimeS: 0.1,
     });
     assert.ok(close(free.targetRad, 0.1), `target ${free.targetRad}`);
@@ -87,10 +106,17 @@ describe('looking up off the ground', () => {
       targetRad: 0.5,
       appliedRad: 0.5,
       atCeiling: false,
+      upDragRad: -0.05,
       deltaTimeS: 10,
     });
     assert.equal(long.targetRad, 0);
-    const high = stepLookUpPitch({ ...base, targetRad: 99, appliedRad: 99, atCeiling: false });
+    const high = stepLookUpPitch({
+      ...base,
+      targetRad: 99,
+      appliedRad: 99,
+      atCeiling: false,
+      upDragRad: -0.05,
+    });
     // Off the ceiling the overshoot decays from the cap rather than sitting on it.
     assert.ok(high.targetRad <= base.maxRad, `target ${high.targetRad}`);
     assert.ok(high.appliedRad <= base.maxRad, `applied ${high.appliedRad}`);

@@ -269,13 +269,11 @@ class World {
   // daylight re-tint every tile at once, and the skipped state is naturally
   // resent by the next whole-grid event because it dirties every tile again.
   private lastCompactGridBroadcastAt = 0;
-  // The packed grid that went out last, so an unchanged re-tint is not resent.
-  private lastCompactGridBase64: string | null = null;
   /**
    * Whole-grid payloads are 192 KB each, and the client parses, decodes and
-   * uploads every one of them: at 1 Hz that was a dropped frame a second. A tint
-   * a player cannot see at 400 ms cannot be seen at 2.5 s either, so the re-tint
-   * runs slower and the dedupe in `broadcastResourceDeltas` drops the rest.
+   * uploads every one of them: at 1 Hz that measured 14-36 dropped frames per
+   * 4 s, at 2.5 s it measured 3-8 on the same scene. A tint a player cannot see
+   * at 400 ms cannot be seen at 2.5 s either.
    */
   private static readonly COMPACT_GRID_MIN_INTERVAL_MS = 2500;
   /** Wire cadence accumulators (INV-TM-09). */
@@ -2504,13 +2502,9 @@ class World {
         wholeGridThreshold: COMPACT_GRID_TILE_THRESHOLD,
         minIntervalMs: World.COMPACT_GRID_MIN_INTERVAL_MS,
       },
-      {
-        lastWholeGridAt: this.lastCompactGridBroadcastAt,
-        lastWholeGridBase64: this.lastCompactGridBase64,
-      },
+      { lastWholeGridAt: this.lastCompactGridBroadcastAt },
     );
     this.lastCompactGridBroadcastAt = gridBroadcast.lastWholeGridAt;
-    this.lastCompactGridBase64 = gridBroadcast.lastWholeGridBase64;
 
     const rootReadout = broadcastRootReadouts(this.rootReadoutPorts(), {
       tick,
