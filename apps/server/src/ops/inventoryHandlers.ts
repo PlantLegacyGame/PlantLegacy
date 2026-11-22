@@ -40,6 +40,8 @@ export interface InventoryPorts extends InventorySyncPorts {
   depositFertilizer(worldX: number, worldZ: number): void;
   depositDung(worldX: number, worldZ: number): void;
   log: InventoryLog;
+  /** Write the restart copy after a successful pouch/purse change. */
+  persist?: (player: InventoryPlayer) => void;
 }
 
 export function sendInventorySync(
@@ -155,6 +157,7 @@ export function useInventorySlot(
     if (player.spores !== before) sendInventorySync(ports, player);
   }
 
+  ports.persist?.(player);
   ports.log.info('Item used', {
     playerId: player.playerId,
     itemId: slot.itemId,
@@ -165,11 +168,12 @@ export function useInventorySlot(
 /** Swap two slots and tell the client about both, so the panel cannot half-update. */
 export function swapInventorySlots(
   ports: InventoryPorts,
-  player: Pick<InventoryPlayer, 'ws' | 'inventory'>,
+  player: InventoryPlayer,
   fromIndex: number,
   toIndex: number,
 ): void {
   if (!swapSlots(player.inventory, fromIndex, toIndex)) return;
   sendInventorySlotUpdate(ports, player, fromIndex);
   sendInventorySlotUpdate(ports, player, toIndex);
+  ports.persist?.(player);
 }

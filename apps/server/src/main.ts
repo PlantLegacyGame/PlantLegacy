@@ -83,6 +83,12 @@ import {
 } from './ops/net.ts';
 import { isAllowedOrigin } from './ops/originPolicy.ts';
 import { type PlantEvent, PlantPersistence } from './ops/persistence/plantPersistence.ts';
+import {
+  type PersistedPlayerState,
+  PlayerStateStore,
+  toInventory,
+  toPersistedState,
+} from './ops/persistence/playerStatePersistence.ts';
 import { TerrainPersistence } from './ops/persistence/terrainPersistence.ts';
 import { computePlantCapacity } from './ops/plantCapacity.ts';
 import { PlantEventLog } from './ops/plantEventLog.ts';
@@ -109,7 +115,13 @@ import {
   seasonSnapshot,
   seasonUpdatePayload,
 } from './ops/seasonClock.ts';
-import { awardSpores, loadShopConfig, purchaseShopItem, type ShopConfig } from './ops/shop.ts';
+import {
+  awardSpores,
+  loadShopConfig,
+  purchaseShopItem,
+  type ShopConfig,
+  type ShopPorts,
+} from './ops/shop.ts';
 import { loadSporeConfig, type SporeConfig } from './ops/spores.ts';
 import { TerrainService } from './ops/terrain.ts';
 import { createTickClock, type TickClock, tickClockStart, tickClockStop } from './ops/tickClock.ts';
@@ -333,6 +345,11 @@ class World {
   private itemsConfig: ReturnType<typeof loadItemsConfig>;
   private sporeConfig: SporeConfig;
   private shopConfig: ShopConfig;
+  private playerStateStore: PlayerStateStore | null;
+  /** Loaded before a HELLO creates or reclaims a player, keyed by account id. */
+  private readonly restoredPlayerStates = new Map<string, PersistedPlayerState>();
+  /** Accounts whose row could not be read; do not overwrite it this session. */
+  private readonly playerStateUnavailable = new Set<string>();
   private chatConfig: ChatConfig;
   private reportConfig: ReportConfig;
   private recentReports = new Map<string, number[]>();
@@ -782,18 +799,7 @@ class World {
             if (event.credit.kind === 'player' && event.credit.playerId) {
               const killer = this.players.get(event.credit.playerId);
               if (killer) {
-                awardSpores(
-                  {
-                    itemsConfig: this.itemsConfig,
-                    shopConfig: this.shopConfig,
-                    sporeConfig: this.sporeConfig,
-                    send: (ws, type, out) => this.send(ws, type, out),
-                    log: this.log,
-                  },
-                  killer,
-                  this.sporeConfig.earnKill,
-                  'kill_credit',
-                );
+                awardSpores(this.shopPorts(), killer, this.sporeConfig.earnKill, 'kill_credit');
               }
             }
             break;
@@ -872,6 +878,7 @@ class World {
       maxBalance: 0,
     },
     shopConfig: ShopConfig = { enabled: false, currencyName: '', items: [] },
+    playerStateStore: PlayerStateStore | null = null,
   ) {
     this.config = config;
     this.log = log;
@@ -890,6 +897,7 @@ class World {
     this.itemsConfig = itemsConfig;
     this.sporeConfig = sporeConfig;
     this.shopConfig = shopConfig;
+    this.playerStateStore = playerStateStore;
     this.chatConfig = chatConfig;
     this.reportConfig = reportConfig;
     // One clock per world: the season is world state, not per-plant state, so a
@@ -1093,6 +1101,115 @@ class World {
     });
   }
 
+  /**
+   * Load an account's pouch and purse before its player object is built.
+   *
+   * A failure is not fatal: the player can still grow. It does set a flag that
+   * suppresses writes for this session, because saving the starting kit over a
+   * readable row during a transient database outage would be worse than
+   * losing this session's changes.
+   */
+  async restorePlayerState(accountId: string): Promise<void> {
+    if (!this.playerStateStore) return;
+    try {
+      const state = await this.playerStateStore.load(accountId);
+      if (state) this.restoredPlayerStates.set(accountId, state);
+      this.playerStateUnavailable.delete(accountId);
+    } catch (error) {
+      this.playerStateUnavailable.add(accountId);
+      this.log.error('player state load failed; this session will not overwrite it', {
+        accountId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /** Build the live player object, using the restored pouch when there is one. */
+  private createConnectedPlayer(
+    ws: WebSocket,
+    playerId: string,
+    plantId: string,
+    accountId: string | undefined,
+  ): ConnectedPlayer {
+    const restored = accountId ? this.restoredPlayerStates.get(accountId) : undefined;
+    if (accountId) this.restoredPlayerStates.delete(accountId);
+
+    const inventory = createInventory(this.itemsConfig.inventorySlots);
+    let spores = this.sporeConfig.startingBalance;
+    if (restored) {
+      const loaded = toInventory(restored, {
+        itemDefinitions: this.itemsConfig.itemDefinitions,
+        maxSlots: this.itemsConfig.inventorySlots,
+        onRepair: (message, meta) => this.log.warn(message, { accountId, ...meta }),
+      });
+      inventory.slots = loaded.slots;
+      spores = restored.spores;
+    } else {
+      for (const item of this.itemsConfig.startingInventory) {
+        addItem(inventory, item.itemId, item.count, this.itemsConfig.itemDefinitions);
+      }
+    }
+
+    const player: ConnectedPlayer = {
+      ws,
+      playerId,
+      plantId,
+      accountId,
+      displayName: 'Player',
+      lastInputTick: 0,
+      pendingInputs: new Map(),
+      inventory,
+      spores,
+      blocked: new Set<string>(),
+      chatTimestamps: [],
+    };
+    if (!restored) this.persistPlayerState(player);
+    return player;
+  }
+
+  /**
+   * Write the restart copy of a player's pouch and purse.
+   *
+   * Fire-and-forget at the call site, because a shop click must not wait on a
+   * database round trip. The write is one upsert and the live object remains
+   * authoritative until the next load.
+   */
+  persistPlayerState(player: Pick<ConnectedPlayer, 'accountId' | 'inventory' | 'spores'>): void {
+    if (!this.playerStateStore || !player.accountId) return;
+    if (this.playerStateUnavailable.has(player.accountId)) return;
+    const accountId = player.accountId;
+    void this.playerStateStore
+      .save(accountId, toPersistedState(player.inventory, player.spores))
+      .catch((error: unknown) => {
+        this.log.error('player state save failed', {
+          accountId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+  }
+
+  /** Flush every live account pouch and purse on a graceful shutdown. */
+  async saveAllPlayerStates(): Promise<number> {
+    if (!this.playerStateStore) return 0;
+    let saved = 0;
+    for (const player of this.players.values()) {
+      if (!player.accountId || this.playerStateUnavailable.has(player.accountId)) continue;
+      try {
+        await this.playerStateStore.save(
+          player.accountId,
+          toPersistedState(player.inventory, player.spores),
+        );
+        saved += 1;
+      } catch (error) {
+        this.log.error('shutdown player state save failed', {
+          accountId: player.accountId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    return saved;
+  }
+
   addPlayer(
     ws: WebSocket,
     playerId: string,
@@ -1116,23 +1233,7 @@ class World {
 
     this.attachConnection(ws, playerId, plantId, accountId, 'HELLO timeout, closing connection');
 
-    const player: ConnectedPlayer = {
-      ws,
-      playerId,
-      plantId,
-      accountId,
-      displayName: 'Player',
-      lastInputTick: 0,
-      pendingInputs: new Map(),
-      inventory: createInventory(this.itemsConfig.inventorySlots),
-      spores: this.sporeConfig.startingBalance,
-      blocked: new Set<string>(),
-      chatTimestamps: [],
-    };
-    // Give starting inventory
-    for (const item of this.itemsConfig.startingInventory) {
-      addItem(player.inventory, item.itemId, item.count, this.itemsConfig.itemDefinitions);
-    }
+    const player = this.createConnectedPlayer(ws, playerId, plantId, accountId);
     this.players.set(playerId, player);
 
     const welcome = this.buildWelcome(playerId, plant);
@@ -1185,7 +1286,9 @@ class World {
   }
 
   removePlayer(playerId: string): void {
-    const disconnectedPlantId = this.players.get(playerId)?.plantId ?? null;
+    const leavingPlayer = this.players.get(playerId);
+    const disconnectedPlantId = leavingPlayer?.plantId ?? null;
+    if (leavingPlayer) this.persistPlayerState(leavingPlayer);
 
     if (disconnectedPlantId) {
       const plant = this.plantWorld.getPlant(disconnectedPlantId);
@@ -1280,6 +1383,16 @@ class World {
           // Socket already gone between lookup and send.
         }
       }
+      if (oldPlayer) {
+        // Carry the live pouch, not the row loaded before the reclaim: the old
+        // session may have changed it after that read. The save is still sent
+        // so the row catches up even if the new player object fails to build.
+        this.restoredPlayerStates.set(
+          accountId,
+          toPersistedState(oldPlayer.inventory, oldPlayer.spores),
+        );
+        this.persistPlayerState(oldPlayer);
+      }
       connectionRegistryTransferPlant(this.connectionRegistry, oldPlayerId, newPlayerId);
       this.interestManager.unregisterClient(oldPlayerId);
       this.players.delete(oldPlayerId);
@@ -1305,19 +1418,7 @@ class World {
 
     this.registerClientAtPlant(newPlayerId, plant);
 
-    const player: ConnectedPlayer = {
-      ws,
-      playerId: newPlayerId,
-      plantId: plant.id,
-      accountId,
-      displayName: 'Player',
-      lastInputTick: 0,
-      pendingInputs: new Map(),
-      inventory: createInventory(this.itemsConfig.inventorySlots),
-      spores: this.sporeConfig.startingBalance,
-      blocked: new Set<string>(),
-      chatTimestamps: [],
-    };
+    const player = this.createConnectedPlayer(ws, newPlayerId, plant.id, accountId);
     this.players.set(newPlayerId, player);
 
     const welcome = this.buildWelcome(newPlayerId, plant);
@@ -1455,19 +1556,7 @@ class World {
 
     this.registerClientAtPlant(newPlayerId, plant);
 
-    const player: ConnectedPlayer = {
-      ws,
-      playerId: newPlayerId,
-      plantId: plant.id,
-      accountId: undefined,
-      displayName: 'Player',
-      lastInputTick: 0,
-      pendingInputs: new Map(),
-      inventory: createInventory(this.itemsConfig.inventorySlots),
-      spores: this.sporeConfig.startingBalance,
-      blocked: new Set<string>(),
-      chatTimestamps: [],
-    };
+    const player = this.createConnectedPlayer(ws, newPlayerId, plant.id, undefined);
     this.players.set(newPlayerId, player);
 
     const welcome = this.buildWelcome(newPlayerId, plant);
@@ -1554,6 +1643,25 @@ class World {
       depositFertilizer: (worldX, worldZ) => this.resourceWorld.onFertilizerApplied(worldX, worldZ),
       depositDung: (worldX, worldZ) => this.resourceWorld.onDungApplied(worldX, worldZ),
       log: this.log,
+      persist: (player) => {
+        const live = this.players.get(player.playerId);
+        if (live) this.persistPlayerState(live);
+      },
+    };
+  }
+
+  /** The shop handlers' view, including the write-back after a payout. */
+  private shopPorts(): ShopPorts {
+    return {
+      itemsConfig: this.itemsConfig,
+      shopConfig: this.shopConfig,
+      sporeConfig: this.sporeConfig,
+      send: (ws, type, payload) => this.send(ws, type, payload),
+      log: this.log,
+      persist: (player) => {
+        const live = this.players.get(player.playerId);
+        if (live) this.persistPlayerState(live);
+      },
     };
   }
 
@@ -1647,13 +1755,7 @@ class World {
               // `earn_mutation` was declared and never paid before this, so the
               // HUD only ever showed dung and kill earnings.
               awardSpores(
-                {
-                  itemsConfig: this.itemsConfig,
-                  shopConfig: this.shopConfig,
-                  sporeConfig: this.sporeConfig,
-                  send: (ws, type, out) => this.send(ws, type, out),
-                  log: this.log,
-                },
+                this.shopPorts(),
                 player,
                 this.sporeConfig.earnMutation,
                 'mutation_level',
@@ -2100,17 +2202,7 @@ class World {
           const request = payload as { itemId: string };
           const buyer = this.players.get(playerId);
           if (!buyer) break;
-          purchaseShopItem(
-            {
-              itemsConfig: this.itemsConfig,
-              shopConfig: this.shopConfig,
-              sporeConfig: this.sporeConfig,
-              send: (ws, type, out) => this.send(ws, type, out),
-              log: this.log,
-            },
-            buyer,
-            String(request.itemId ?? ''),
-          );
+          purchaseShopItem(this.shopPorts(), buyer, String(request.itemId ?? ''));
           break;
         }
         case MESSAGE_TYPE.DROP_COLLECT: {
@@ -2121,18 +2213,7 @@ class World {
           // is removed, an unknown or already-spent id pays nothing.
           const pickup = pickupDrop(this.damagePipeline, this.sporeConfig, collector, request?.id);
           if (!pickup.ok || !pickup.kind) break;
-          awardSpores(
-            {
-              itemsConfig: this.itemsConfig,
-              shopConfig: this.shopConfig,
-              sporeConfig: this.sporeConfig,
-              send: (ws, type, out) => this.send(ws, type, out),
-              log: this.log,
-            },
-            collector,
-            pickup.amount,
-            `drop_${pickup.kind}`,
-          );
+          awardSpores(this.shopPorts(), collector, pickup.amount, `drop_${pickup.kind}`);
           break;
         }
         case MESSAGE_TYPE.INVENTORY_SLOT_USE: {
@@ -2995,8 +3076,12 @@ class World {
         plant.storedMinerals = capacity.minerals;
         return { water: capacity.water, minerals: capacity.minerals };
       },
-      grantItem: (itemId, count) =>
-        player ? addItem(player.inventory, itemId, count, this.itemsConfig.itemDefinitions) : 0,
+      grantItem: (itemId, count) => {
+        if (!player) return 0;
+        const added = addItem(player.inventory, itemId, count, this.itemsConfig.itemDefinitions);
+        if (added > 0) this.persistPlayerState(player);
+        return added;
+      },
       syncInventory: () => {
         if (player) sendInventorySync(this.inventoryPorts(), player);
       },
@@ -3573,6 +3658,17 @@ async function main(): Promise<void> {
     log,
   });
 
+  const sporeConfig = loadSporeConfig(configs);
+  const shopConfig = loadShopConfig(configs);
+  const playerStateStore = database.pool
+    ? new PlayerStateStore(database.pool, {
+        itemDefinitions: itemsConfig.itemDefinitions,
+        maxSlots: itemsConfig.inventorySlots,
+        maxSpores: sporeConfig.maxBalance,
+        onRepair: (message, meta) => log.warn(message, meta),
+      })
+    : null;
+
   const world = new World(
     netProtoConfig,
     log,
@@ -3596,8 +3692,9 @@ async function main(): Promise<void> {
     runtime.nodeEnv,
     runtime.devAllowedEnvironments,
     runtime.devAdminAccounts,
-    loadSporeConfig(configs),
-    loadShopConfig(configs),
+    sporeConfig,
+    shopConfig,
+    playerStateStore,
   );
   if (terrainService) {
     plantWorld.setGrowthResistanceProvider((x, y, z) => terrainService.growthResistanceAt(x, y, z));
@@ -4016,6 +4113,10 @@ async function main(): Promise<void> {
       (ws as WebSocket & { accountId?: string; accountRole?: string }).accountRole =
         accountRole ?? undefined;
 
+      // Load the restart copy before a player object exists. A brand-new
+      // account has no row; an existing one gets its pouch and purse back.
+      if (accountId) await world.restorePlayerState(accountId);
+
       // Check if this account has a plant pending reclaim (reconnect window)
       let welcome: WelcomePayload;
       if (accountId) {
@@ -4137,6 +4238,11 @@ async function main(): Promise<void> {
     if (saveInterval) {
       clearInterval(saveInterval);
     }
+
+    // Save all player pouches and purses on shutdown, before the process ends.
+    await world.saveAllPlayerStates().then((count) => {
+      if (count > 0) log.info('saved player states on shutdown', { count });
+    });
 
     // Save all plants on shutdown
     if (plantPersistence) {

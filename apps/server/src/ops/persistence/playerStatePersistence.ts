@@ -1,0 +1,173 @@
+import type { ItemDefinition } from '@plant-legacy/shared/schemas';
+import type { Pool } from 'pg';
+import { createInventory, type Inventory, setSlot } from '../inventory.ts';
+
+/** One serialised pouch slot. `null` means the slot is empty. */
+export interface PersistedSlot {
+  itemId: string;
+  count: number;
+}
+
+/** The pouch and purse as they cross the Postgres boundary. */
+export interface PersistedPlayerState {
+  slots: (PersistedSlot | null)[];
+  spores: number;
+}
+
+export interface PlayerStateStoreOptions {
+  itemDefinitions: Map<string, ItemDefinition>;
+  maxSlots: number;
+  maxSpores: number;
+  /** Called for a row that was readable but had to be repaired. */
+  onRepair?: (message: string, meta?: Record<string, unknown>) => void;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+/**
+ * Turn a stored JSON value into a safe pouch.
+ *
+ * The database is the second copy of a number the server already validated, so
+ * this is deliberately conservative: an unknown item is dropped, a bad count is
+ * dropped, and a stack above the item's own limit is clamped. A malformed row
+ * must not make the server refuse to boot, but it also must not become a free
+ * item. `null` is a valid empty slot.
+ */
+export function sanitizeSlots(
+  value: unknown,
+  options: Pick<PlayerStateStoreOptions, 'itemDefinitions' | 'maxSlots' | 'onRepair'>,
+): (PersistedSlot | null)[] {
+  if (!Array.isArray(value)) {
+    options.onRepair?.('player state slots is not an array; starting with an empty pouch');
+    return new Array(options.maxSlots).fill(null);
+  }
+
+  const slots: (PersistedSlot | null)[] = new Array(options.maxSlots).fill(null);
+  for (let index = 0; index < Math.min(value.length, options.maxSlots); index++) {
+    const raw = value[index];
+    if (raw === null || raw === undefined) continue;
+    if (!isRecord(raw)) {
+      options.onRepair?.('dropped a non-object inventory slot', { index });
+      continue;
+    }
+    const itemId = raw.itemId;
+    const count = raw.count;
+    if (typeof itemId !== 'string' || itemId.length === 0) {
+      options.onRepair?.('dropped an inventory slot with no item id', { index });
+      continue;
+    }
+    const definition = options.itemDefinitions.get(itemId);
+    if (!definition) {
+      options.onRepair?.('dropped an inventory item that no longer exists', { index, itemId });
+      continue;
+    }
+    if (!Number.isFinite(count) || !Number.isInteger(count) || (count as number) <= 0) {
+      options.onRepair?.('dropped an inventory slot with an invalid count', { index, itemId });
+      continue;
+    }
+    const stackLimit = definition.stack_limit;
+    if (!Number.isInteger(stackLimit) || stackLimit < 1) {
+      options.onRepair?.('dropped an item with an unusable stack limit', { index, itemId });
+      continue;
+    }
+    slots[index] = { itemId, count: Math.min(count as number, stackLimit) };
+  }
+  if (value.length > options.maxSlots) {
+    options.onRepair?.('truncated an oversized inventory', {
+      stored: value.length,
+      maxSlots: options.maxSlots,
+    });
+  }
+  return slots;
+}
+
+/** The write shape. Never stores an Inventory object, only its data. */
+export function toPersistedState(inventory: Inventory, spores: number): PersistedPlayerState {
+  return {
+    slots: inventory.slots.map((slot) =>
+      slot ? { itemId: slot.itemId, count: slot.count } : null,
+    ),
+    spores,
+  };
+}
+
+/** Load a persisted pouch into a fresh inventory, dropping anything unusable. */
+export function toInventory(
+  state: PersistedPlayerState,
+  options: Pick<PlayerStateStoreOptions, 'itemDefinitions' | 'maxSlots' | 'onRepair'>,
+): Inventory {
+  const inventory = createInventory(options.maxSlots);
+  const slots = sanitizeSlots(state.slots, options);
+  for (let index = 0; index < slots.length; index++) {
+    const slot = slots[index];
+    if (slot) setSlot(inventory, index, slot, options.itemDefinitions);
+  }
+  return inventory;
+}
+
+function clampSpores(
+  value: unknown,
+  maxSpores: number,
+  onRepair?: PlayerStateStoreOptions['onRepair'],
+): number {
+  // `pg` returns BIGINT as a string; a numeric string is still a number here.
+  const numeric = typeof value === 'string' && value.trim().length > 0 ? Number(value) : value;
+  if (typeof numeric !== 'number' || !Number.isFinite(numeric)) {
+    onRepair?.('player state spores is not a number; starting at zero');
+    return 0;
+  }
+  const rounded = Math.round(numeric);
+  const clamped = Math.max(0, Math.min(maxSpores, rounded));
+  if (clamped !== rounded) {
+    onRepair?.('clamped player state spores', { stored: value, clamped });
+  }
+  return clamped;
+}
+
+/**
+ * The only reader and writer of `player_state`.
+ *
+ * `save` is one upsert, which takes the row lock on the conflicting key and is
+ * atomic. The in-memory player remains the live copy between saves; the row is
+ * the restart copy. A full read-modify-write transaction will be needed when
+ * two sessions can mutate one account at the same time, which the single-active-
+ * player rule currently prevents.
+ */
+export class PlayerStateStore {
+  readonly #pool: Pool;
+  readonly #options: PlayerStateStoreOptions;
+
+  constructor(pool: Pool, options: PlayerStateStoreOptions) {
+    this.#pool = pool;
+    this.#options = options;
+  }
+
+  async load(ownerId: string): Promise<PersistedPlayerState | null> {
+    const result = await this.#pool.query<{
+      slots: unknown;
+      spores: unknown;
+    }>('SELECT slots, spores FROM player_state WHERE owner_id = $1', [ownerId]);
+    const row = result.rows[0];
+    if (!row) return null;
+    return {
+      slots: sanitizeSlots(row.slots, this.#options),
+      spores: clampSpores(row.spores, this.#options.maxSpores, this.#options.onRepair),
+    };
+  }
+
+  async save(ownerId: string, state: PersistedPlayerState): Promise<void> {
+    const slots = sanitizeSlots(state.slots, this.#options);
+    const spores = clampSpores(state.spores, this.#options.maxSpores, this.#options.onRepair);
+    await this.#pool.query(
+      `INSERT INTO player_state (owner_id, slots, spores, updated_at)
+       VALUES ($1, $2::jsonb, $3, NOW())
+       ON CONFLICT (owner_id) DO UPDATE
+         SET slots = EXCLUDED.slots,
+             spores = EXCLUDED.spores,
+             updated_at = NOW()`,
+      [ownerId, JSON.stringify(slots), spores],
+    );
+  }
+}

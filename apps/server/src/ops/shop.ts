@@ -63,6 +63,8 @@ export interface ShopPorts {
   sporeConfig: SporeConfig;
   send(ws: WebSocket, type: number, payload: unknown): void;
   log: { info(message: string, meta?: Record<string, unknown>): void };
+  /** Write the restart copy after a purchase or a payout. */
+  persist?: (player: ShopPlayer) => void;
 }
 
 /**
@@ -98,6 +100,7 @@ export function purchaseShopItem(ports: ShopPorts, player: ShopPlayer, itemId: s
 
   player.spores = nextBalance;
   sendInventorySync({ itemsConfig: ports.itemsConfig, send: ports.send }, player);
+  ports.persist?.(player);
   ports.log.info('Shop purchase', {
     playerId: player.playerId,
     itemId: entry.id,
@@ -119,6 +122,7 @@ export function awardSpores(
   player.spores = earnSpores(player.spores, amount, ports.sporeConfig.maxBalance);
   if (player.spores === before) return;
   sendInventorySync({ itemsConfig: ports.itemsConfig, send: ports.send }, player);
+  ports.persist?.(player);
   ports.log.info('Spores earned', {
     playerId: player.playerId,
     amount: player.spores - before,
