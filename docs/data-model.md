@@ -138,10 +138,10 @@ never the whole ground.
 ### Not in the database yet
 
 - **The rest of the inventory contract.** `player_state` persists the pouch and
-  purse in a row-locked transaction, and `items.json` owns the flags (ADR-082).
-  A shop purchase is a single read-modify-write transaction; item use, slot
-  swap and spore awards are not yet, and the purchase audit does not cover them;
-  see [`tasks/T08A.md`](./tasks/T08A.md).
+  purse, and every pouch and purse mutation (purchase, item use, slot swap, spore
+  award, dev grant) is a single read-modify-write transaction; `items.json` owns
+  the flags (ADR-082). The duplication audit and the trade/mail/list systems are
+  open; see [`tasks/T08A.md`](./tasks/T08A.md).
 - **Reports.** Held in a bounded in-memory queue until T40 adds a table.
 - **Fauna, materials, water bodies, world objects.** Arrive with T54–T58.
 

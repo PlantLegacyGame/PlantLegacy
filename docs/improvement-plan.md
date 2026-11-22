@@ -16,7 +16,8 @@ state), RULE_20 (no rarity), RULE_23 (account-bound flags), one task at a time,
    (Wave 2). Say the word to pull C04 HUD forward.
 2. **Postgres.** Resolved 2026-11-22: a local compose stack and test database
    were available. The T08A restart copy was verified by buy → restart →
-   reconnect; the locked read-modify-write mutation path is still open.
+   reconnect, and every pouch and purse mutation is a row-locked
+   read-modify-write; the duplication audit is still open.
 3. **Wire compatibility.** Resolved 2026-11-21: breaking changes are allowed
    until the first public alpha. The wire is v4 today. Wave 1-B turned out
    additive (new config key, fewer messages, no payload change), so it needed no
@@ -279,12 +280,13 @@ make `DEV_RESPONSE` dispatch meaningful or remove it.
 
 - **5-A T08A Postgres inventory** — the `player_state` restart copy landed on
   2026-11-22 (ADR-081): one row per account holds the pouch and purse, loaded
-  before HELLO and written after purchases, spore awards, item use, slot swaps,
-  dev grants, disconnect and shutdown. Buy → restart → reconnect and a
-  two-concurrent-purchase audit were verified against a temporary Postgres
-  database. Still open: item use, slot swap, spore awards and dev grants are not
-  yet read-modify-write; each follows the live object. Config ownership is
-  resolved (ADR-082); see `docs/tasks/T08A.md`.
+  before HELLO, and written inside the transaction of every pouch mutation
+  (purchase, item use, slot swap, spore award, dev grant), with saves on
+  disconnect, session replacement and shutdown. Buy → restart → reconnect, a
+  two-concurrent-purchase audit, and the item-use, award, clamped-write and
+  dev-grant checks in `playerStateAudit.ts` were verified against a local
+  Postgres. Still open: the duplication audit and the trade/mail/list systems.
+  Config ownership is resolved (ADR-082); see `docs/tasks/T08A.md`.
 - **5-B Season-end burial (ADR-044)** — dead biomass becomes an organic-matter
   field and edits/voids persist.
 - **5-C Measurement baseline (AL-01)** — six poses, GPU timing, zero-alloc audit;

@@ -38,9 +38,9 @@ Honest list. No feature promises (T42, RULE_13). Updated at every gate.
   the day before gives the same world a hover tip that names the exact part, a
   deeper-node pick rule and optional leaf cursors. The detailed records are the
   "Drops, picking and the way out of the earth" and "Shop, spores and the pouch"
-  sections below. The `player_state` restart copy landed on 2026-11-22; the
-  remaining T08A gaps are the locked read-modify-write path for item use, slot
-  swap and awards; `items.json` owns the flags (ADR-082).
+  sections below. The `player_state` restart copy landed on 2026-11-22 and every
+  pouch and purse mutation is now a row-locked read-modify-write; the remaining
+  T08A gap is the duplication audit; `items.json` owns the flags (ADR-082).
 - One-command local start (`pnpm dev`) and a strict verify chain (`pnpm verify`).
 - **T03P networking gate:** two tabs, one server, server-authoritative
   plant state over WebSocket + JSON at 20 Hz. WASD/arrows pan the camera.
@@ -1131,8 +1131,8 @@ their `notes` in `config/growth.json`.
 
 ## Not built yet
 
-The rest of the economy: the remaining T08A mutation paths (locked item use,
-slot swap and awards), marketplace/mail/trade (T14/T29/T45) and admin/compliance tooling. The shop, the
+The rest of the economy: the T08A duplication audit, marketplace/mail/trade
+(T14/T29/T45) and admin/compliance tooling. The shop, the
 spore purse, world drops and drop pickup are built — see "Shop, spores and the
 pouch" and "Drops, picking and the way out of the earth" below. C04 still owes
 its rebinding screen and notification log.
@@ -1153,14 +1153,14 @@ a volume, so Root Sight has no strata to cut through (A1).
 
 **Inventory caveat.** The pouch and purse are **persisted for signed-in
 accounts** (2026-11-22): `player_state` holds one row per account, `main.ts`
-loads it before a HELLO and writes it after purchases, spore awards, item use,
-slot swaps, dev grants and disconnect. A buy → restart → reconnect check passed
-against a temporary Postgres database. It is still **not the whole T08A
-contract**: a shop purchase reads, changes and writes the row inside one lock,
-and two concurrent 80-spore purchases against 120 spores leave one success, one
-refusal and 40 spores after restart; item use, slot swap and spore awards still
-mutate the live inventory and save afterwards. Guests have no restart copy. Treat it as a restart copy, not
-as the finished economy; details
+loads it before a HELLO, every pouch and purse mutation (purchase, item use,
+slot swap, spore award, dev grant) reads and writes the row inside one lock, and
+disconnect and shutdown save it. A buy → restart → reconnect check passed
+against a temporary Postgres database, and two concurrent 80-spore purchases
+against 120 spores left one success, one refusal and 40 spores after restart. It
+is still **not the whole T08A contract**: the duplication audit has not run and
+the trade/mail/list systems do not exist. Guests have no restart copy. Treat it
+as a restart copy, not as the finished economy; details
 in [`docs/tasks/T08A.md`](./tasks/T08A.md).
 
 **Calamities are still one global event (2026-11-21).** The season now defaults
@@ -1190,10 +1190,10 @@ Per the audited priority order (ADR-023), amended by ADR-048 and **ADR-050**: T0
 Communication, T04 Mutation and T06 damage, uproot and tumbling are implemented;
 T06 still needs its in-browser checklist. **C04 is partial**: health, damage,
 reroot, Inspect/Inventory, Settings and death stats are in; rebinding and the
-notification log are not. **T08A** is partial: the `player_state` restart copy now persists an account's
-pouch and purse across a server restart and the shop purchase is row-locked, but
-the other mutation paths and duplication audit are still open. Those are
-next, then the ADR-044 burial fix. AL-01 (benchmark, six fixed poses, GPU
+notification log are not. **T08A** is partial: the `player_state` restart copy
+persists an account's pouch and purse across a server restart and every pouch
+mutation is row-locked, but the duplication audit is still open. That is next,
+then the ADR-044 burial fix. AL-01 (benchmark, six fixed poses, GPU
 timing, zero-alloc audit) and AL-03 (GPU-band quality controller, replacing the
 CPU-fps-based `QualityController`) follow, per ADR-050. Shared depth between the
 WebGPU
@@ -1585,9 +1585,9 @@ grant goes through `addItem` into the same pouch the hotbar and inventory panel
 read. A refusal is a `REJECT` with a reason (`insufficient_spores`,
 `inventory_full`, `unknown_item`, `shop_closed`), not a silent no-op.
 - **The purse is persisted for signed-in accounts.** `player_state` holds the
-  pouch and purse, a shop purchase reads and writes them under a row lock, and
-  a restart keeps both. Item use, slot swap and awards are not yet on that
-  locked path; see [`tasks/T08A.md`](./tasks/T08A.md).
+  pouch and purse, purchases, item use, slot swaps, awards and dev grants read
+  and write them under a row lock, and a restart keeps both; the duplication
+  audit is still open. See [`tasks/T08A.md`](./tasks/T08A.md).
 - **Every advertised earn source now pays.** Dung on use, a mutation level, a
   kill credit, and collecting a drop (dung or fragment, exactly once: the drop
   is removed, so a replayed id finds nothing).
