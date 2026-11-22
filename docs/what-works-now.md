@@ -69,6 +69,55 @@ Honest list. No feature promises (T42, RULE_13). Updated at every gate.
   frame), with the Root Sight cutaway's floor as the one exception. Measured in
   game: a right-drag pan moved the target 20.877 -> 21.950 and it held at 21.964
   a second and a half later; the seed's framing puts it at 0.51 of the pane.
+- **The camera stops on a slope instead of collapsing into the plant
+  (2026-11-22):** a hard upward drag on a downslope used to shorten the spring
+  arm under the orbit floor and then use the shorter arm to justify a lower
+  horizon, one drag after another. Measured in the game with one gesture on a
+  0.89 slope: the arm went from 3.10 m to 0.25 m with the eye 59.2° below the
+  target. Two causes. The ceiling was a closed form per probe, and past
+  horizontal that has two answers (the ray's horizontal is `r sin(polar)` and
+  shrinks again after 90°), so on a slope it hopped between them and returned
+  162.7° while the ray was already under the hill, and permissive angles are what
+  shortened the arm into the plant. `player/cameraOrbit.ts` now walks up from the
+  top of the orbit and stops at the first angle the ground blocks - one horizon
+  per direction - so the arm is never asked to shorten. The same gesture on the
+  0.89 slope holds 3.2 m with the eye at 35.1°, and 1.5 m with 37.0°, across
+  three drags each. Eight azimuths around the plant at 3 m and at the 1.0 m floor:
+  all 16 gestures settle on one pose, the arm never moves, the eye comes within
+  5-6 cm of the soil on the low side (13-28° below the target), the seed stays in
+  frame in every pose, and the ceiling matches a brute-force horizon to 0.3°.
+- **A low camera can look up, and Space never recentres from above
+  (2026-11-22):** two camera reports, both measured in the running game. Space
+  kept the azimuth but `frameCameraOnPlant` answered a young plant with the
+  automatic framing's `camera_young_elevation` (0.55), so a seedling was
+  recentred 33° above itself over a screen of unbroken soil; the recenter
+  elevation (0.27, ~15°) now applies to every recentre the player asks for - on
+  a fresh seed 65.9° above at azimuth 63.4° became 15.7° with the azimuth
+  unchanged and the target 0.00 m off the crown. Looking up near the ground had
+  no room at all: the orbit target is the plant, 0.15 m over the soil, and the
+  camera always looks *at* the target, so an eye below it was under the ground -
+  the seed's framing sat 13.5° down with the orbit ceiling already reached, and
+  dragging up only turned the view further into the soil. `player/cameraAim.ts`
+  leans the view up without moving the eye or the target, by the smallest of the
+  eye's gap below the head, the target-to-head room and `horizontal × tan(12°)`,
+  and leaves an orbit that already looks up alone. The seed's view is level now
+  (it was 19.3° down) and a camera taken down to the soil looks 12° up with the
+  plant still in frame; the plant sits lower in the picture for it (0.51 -> 0.70
+  of the pane height). Dragged again with real input at two zooms after the slope
+  fix: at 3.2 m the seed sits at 0.72 of the pane with the horizon just above the
+  middle, and at the 1.0 m floor at 0.80 with the seed filling the lower half - the cap stayed
+  at 12°. Root Sight is exempt: the eye is under the soil on purpose there and
+  the cavity is read from the aim the player set.
+- **The Root Sight shell's clip uses its own mouth plane (2026-11-22):** the
+  bowl is anchored on the lowest ground under its rim, but its clip uniforms
+  still asked for the ground at the cavity's *centre* as the mouth plane. On a
+  slope those are up to a metre apart, so the uphill lip and the wall under it
+  counted as above the mouth outside the mouth and were discarded. The clip now
+  reads the fitted mouth plane the geometry is drawn on (`fit.lowestGround`). At
+  a slope cavity the clip radius is 0.229 m against a 0.225 m aperture with the
+  shell at 0.22 m, so no part of the wall stands beside the hole; the bright
+  lining still seen through the opening is the single-surface world showing its
+  inside, which is D02's.
 - **The palette is written per layer (2026-11-21):** the day cycle's custom
   properties used to go on `.pl-menu`, and a custom property reaches every
   descendant: a step invalidated ~1.8k elements and the browser repainted the
@@ -106,13 +155,13 @@ Honest list. No feature promises (T42, RULE_13). Updated at every gate.
 - **Camera (2026-11-19):** the orbit no longer stops at the player's own
   elevation. The polar limit used to be the horizon of the ground plane under the
   *player*, and on flat ground that is exactly horizontal — the eye could come
-  level with the seed and not a centimetre lower. It is now read from the ground
+  level with the seed and not a centimetre lower.   It is now read from the ground
   the eye is orbiting *over*, at four points along the orbit ray (30%, 55%, 80%
-  and 100% of it): each probe asks for the steepest angle that keeps that point
-  above the soil, and the limit is the strictest answer, so a hill under the
-  middle of the ray counts as well as one under its end. A probe depends only on
-  the angle and its own terrain, never on where the eye currently is, so the four
-  passes settle instead of feeding back. It stops two and a half contact margins
+  and 100% of it), so a hill under the middle of the ray counts as well as one
+  under its end. The angle is solved by the scan in `solveGroundCeiling` now (see
+  the slope entry above): the closed form this entry describes asked each probe
+  for its own steepest angle and relied on the passes settling, but past
+  horizontal that has two answers and on a slope it hopped between them - U05. It stops two and a half contact margins
   short of the dirt, which keeps the spring arm (`clampEyeToGround`) a no-op: it
   used to park exactly on the margin, so terrain noise set the arm going, and
   because the arm shortens the orbit radius the camera crept in towards the plant

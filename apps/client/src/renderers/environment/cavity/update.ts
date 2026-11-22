@@ -62,6 +62,16 @@ export function updateCavityBowl(
     | CavityClipUniforms
     | undefined;
 
+  // The plane the shell's mouth is actually on. The bowl is anchored on the
+  // lowest ground under the rim (`fit.lowestGround`, below), so on a slope the
+  // mouth is not the ground at the cavity's centre: it can be a metre lower. The
+  // clip used the centre's ground for both tests that read a plane - the buried
+  // eye's sightline, and "nothing above the mouth outside the mouth" - so the
+  // uphill lip and the wall under it counted as above the mouth and were thrown
+  // away, leaving the cut open to the sky along the uphill rim. One plane, the
+  // one the geometry is drawn on.
+  let mouthPlaneY = surfaceY;
+
   // The bowl is always drawn; what changes with the eye is whether its wall may
   // be seen *through the opening*. A buried eye outside the pit would otherwise
   // look at the far wall across the hole. Clipping only those fragments keeps
@@ -100,9 +110,10 @@ export function updateCavityBowl(
       0.05,
       placement.horizontalScale * CAVITY_CUT_OVERREACH,
     );
-    // Still the mouth's plane: the sightline test asks where the ray leaves the
-    // opening, which is the plane the lip is fitted to.
-    clip.uBowlSurfaceY.value = surfaceY;
+    // The shell's own mouth plane, so the sightline test asks where the ray
+    // leaves the opening the wall is built around rather than a plane the wall
+    // does not sit on.
+    clip.uBowlSurfaceY.value = mouthPlaneY;
     clip.uBowlClipMode.value = CAVITY_CLIP_MODE_VALUE[policy.mode];
   };
 
@@ -147,6 +158,7 @@ export function updateCavityBowl(
   placement.verticalScale = fit.verticalScale;
   bowl.scale.y = fit.verticalScale;
   bowl.position.y = fit.lowestGround + placement.rimOffsetY;
+  mouthPlaneY = fit.lowestGround;
   applyClip();
 
   const rimKey = `${centre.x.toFixed(2)}|${centre.z.toFixed(2)}|${placement.horizontalScale.toFixed(2)}|${fit.verticalScale.toFixed(3)}|${fit.highestGround.toFixed(2)}|${fit.lowestGround.toFixed(2)}`;

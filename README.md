@@ -159,6 +159,7 @@ together.
 | What to fix in the built system, in order | [`docs/improvement-plan.md`](./docs/improvement-plan.md) |
 | The 2026-11-16 verified defect pass, fix by fix | [`docs/bugfix-plan.md`](./docs/bugfix-plan.md) |
 | What is broken right now, with evidence and status | [`docs/bug-inventory.md`](./docs/bug-inventory.md) |
+| Every feature the game contains, one row per feature | [`docs/feature-inventory.md`](./docs/feature-inventory.md) |
 | How to ship it | [`docs/deploy.md`](./docs/deploy.md) |
 | Per-task evidence and checklists | [`docs/tasks/`](./docs/tasks/), [`docs/checklists/`](./docs/checklists/) |
 

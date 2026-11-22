@@ -1175,6 +1175,15 @@
         1.5
       ],
       "notes": "Vertical part of the framing direction for a young plant, before normalisation (mature plants use the shallow side view). 0.55 is roughly 30 degrees above the target."
+    },
+    "camera_recenter_elevation": {
+      "type": "number",
+      "value": 0.27,
+      "range": [
+        0,
+        0.95
+      ],
+      "notes": "Vertical part of the direction Space (and a double-click on empty ground) returns the camera to, before normalisation, while keeping the player's azimuth. 0.27 is roughly 15 degrees above the target. It resets a pitch the player panned to; it never spins the view."
     }
   }
 }

@@ -65,6 +65,8 @@ export interface RenderConfig {
   cameraYoungMaxDistance: number;
   /** Vertical part of the framing direction for a young plant. */
   cameraYoungElevation: number;
+  /** Vertical part of the direction a player-requested recenter returns to. */
+  cameraRecenterElevation: number;
   cameraPanSpeed: number;
   cameraZoomSpeed: number;
   idleDropTimeoutMs: number;
@@ -492,6 +494,8 @@ interface RenderConfigResponse {
   cameraYoungMaxDistance?: number;
   camera_young_elevation?: number;
   cameraYoungElevation?: number;
+  camera_recenter_elevation?: number;
+  cameraRecenterElevation?: number;
   camera_pan_speed?: number;
   cameraPanSpeed?: number;
   camera_zoom_speed?: number;
@@ -957,6 +961,10 @@ function normalizeRenderConfig(data: RenderConfigResponse, fallback: RenderConfi
       fallback.cameraYoungMaxDistance,
     cameraYoungElevation:
       data.camera_young_elevation ?? data.cameraYoungElevation ?? fallback.cameraYoungElevation,
+    cameraRecenterElevation:
+      data.camera_recenter_elevation ??
+      data.cameraRecenterElevation ??
+      fallback.cameraRecenterElevation,
     cameraMaxPolarAngle:
       data.camera_max_polar_angle ?? data.cameraMaxPolarAngle ?? fallback.cameraMaxPolarAngle,
     cameraCollisionEnabled:
@@ -1461,6 +1469,7 @@ export async function loadRenderConfig(serverOrigin: string): Promise<RenderConf
     cameraStartDistance: 6.0,
     cameraYoungMaxDistance: 4,
     cameraYoungElevation: 0.55,
+    cameraRecenterElevation: 0.27,
     cameraPanSpeed: 8.0,
     cameraZoomSpeed: 2.0,
     idleDropTimeoutMs: 30000,

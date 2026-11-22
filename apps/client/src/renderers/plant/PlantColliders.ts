@@ -71,6 +71,8 @@ export class PlantColliderManager {
   private rebuildIntervalMs = 100;
   private lastSyncMs = 0;
   private counts: PlantColliderCounts = { plants: 0, colliders: 0, skipped: 0 };
+  /** Entry key of the player's own plant, so the camera can ignore its body. */
+  private ownEntryKey: string | null = null;
 
   configure(config: PhysicsConfig): void {
     this.maxPlants = Math.max(1, Math.round(config.maxColliderPlants));
@@ -87,6 +89,19 @@ export class PlantColliderManager {
 
   getCounts(): PlantColliderCounts {
     return { ...this.counts };
+  }
+
+  /**
+   * The player's own plant body, so the camera can ignore its own canopy.
+   *
+   * A ray from the orbit target to the eye crosses the player's own leaves the
+   * moment the view looks up through them. Treating that hit as an obstruction
+   * pulled the eye in and made looking up read as the camera colliding with the
+   * plant. Terrain and rival plants still block the camera.
+   */
+  ownRigidBody(): RAPIER.RigidBody | null {
+    if (!this.ownEntryKey) return null;
+    return this.entries.get(this.ownEntryKey)?.body ?? null;
   }
 
   /**
@@ -125,6 +140,7 @@ export class PlantColliderManager {
     const kept = new Set<string>();
     const own = sources.find((source) => source.id === (ownPlantId ?? '__own__'));
     if (own) kept.add(own.id);
+    this.ownEntryKey = own ? own.id : null;
     const rivals = sources
       .filter((source) => source.id !== own?.id)
       .sort(

@@ -75,7 +75,10 @@ import { fetchWorldTime } from './net/worldTime.js';
 import { playerWorldY, spawnPlayer, stepPlayerVertical } from './physics/playerPhysics.js';
 import { plantPhysicsSync, rapierWorld } from './physics/RapierPhysicsManager.js';
 import { cavityEscapeLiftY, clampToCavity } from './player/burrowClamp.ts';
+import { aimLiftY } from './player/cameraAim.js';
+import { solveGroundCeiling } from './player/cameraOrbit.js';
 import { ownBodyNodes, resolveOwnAnchor } from './player/ownPlantAnchor.js';
+import { recenterOffset } from './player/recenterView.js';
 import { decideAutoOpenRootSight } from './player/rootSightAutoOpen.js';
 import { isBelowSoil } from './player/underground.js';
 import { createGpuTimer, type GpuTimer } from './render/GpuTimer.js';
@@ -2041,16 +2044,25 @@ function frameCameraOnPlant(
   // there, and the frame was soil. A sprout is framed from
   // `camera_young_elevation` (~30°) so it reads against the ground, not in it.
   const young = distance <= (renderConfig?.cameraYoungMaxDistance ?? 4);
-  // Keep the angle the player is already looking from. A fixed azimuth here is
-  // what made Space spin the view: the camera kept its distance but travelled
-  // around the plant to a scripted side, which reads as the world turning. The
-  // recenter is a pan and a zoom along the current line of sight, so the horizon
-  // stays where it was and only the subject moves to the middle.
+  // Keep the azimuth the player is already looking along - a fixed one is what
+  // made Space spin the view - but reset the elevation to the framing's own.
+  // Keeping the pitch meant a right-drag pan upwards left the camera looking
+  // down on the plant, and a recenter only moved the target: the plant stayed
+  // framed from above, which is exactly the reported "Space goes above" bug.
+  // The young elevation is the *automatic* framing's, and only the automatic
+  // framing may use it: Space on a seedling is a recenter the player asked for,
+  // and answering it with the young fit's 33 degrees put them straight back above
+  // the plant, looking at a screen of soil - the reported "Space goes above".
+  // The recenter elevation is the side view the command is named after.
   tempDirection.copy(camera.position).sub(controls.target);
-  if (tempDirection.lengthSq() < 1e-6) {
-    tempDirection.set(0.3, young ? (renderConfig?.cameraYoungElevation ?? 0.55) : 0.27, 0.92);
-  }
-  tempDirection.normalize();
+  const recentered = recenterOffset({
+    offset: tempDirection,
+    rise:
+      young && fitYoungPitch
+        ? (renderConfig?.cameraYoungElevation ?? 0.55)
+        : (renderConfig?.cameraRecenterElevation ?? 0.27),
+  });
+  tempDirection.set(recentered.x, recentered.y, recentered.z);
   // Never recenter from under the soil on a plant that stands on it: the eye may
   // be burrowed after a root inspection, and framing the whole plant from below
   // shows the underside of the ground.
@@ -2548,18 +2560,14 @@ function settlePlayerOnGround(deltaTime: number): void {
   // elevation: on flat ground the maximum polar angle was exactly horizontal, so
   // the camera could never come down to the soil and look up from it.
   //
-  // Sampling the eye's own ground is only unstable when the sample moves with the
-  // eye's height. This one cannot: the point is the target plus the horizontal
-  // direction times the orbit radius, both fixed while orbiting. One horizon per
-  // direction, nothing to feed back, no limit cycle.
   const reach = Math.max(camera.position.distanceTo(controls.target), 1e-4);
   const touch = renderConfig?.cameraGroundTouchM ?? 0.02;
   // The eye stands where its orbit puts it, not at the full radius: at a steep
   // angle its horizontal is radius * sin(polar). Sampling the ground at the full
   // radius instead placed the eye on the height of ground that was further out,
   // which on a slope falling away from the player put it under the surface it
-  // was actually standing at. Two passes settle it, because the angle only moves
-  // the sample a little once it is close.
+  // was actually standing at. The sample follows the tested angle, so it is the
+  // ground the eye would stand over, not the ground at the orbit radius.
   const groundAt = (horizontal: number): number =>
     planetTerrainY(
       planetRadius,
@@ -2569,13 +2577,10 @@ function settlePlayerOnGround(deltaTime: number): void {
     );
   // The whole orbit ray has to clear the ground, not only its far end: an eye
   // resting on the surface at the far end can still have a hill under the middle
-  // of its ray. Each probe asks "what is the steepest angle that keeps this point
-  // on the ray above the soil?", and the limit is the strictest answer. A probe
-  // depends on the angle and the point's own terrain, never on where the eye
-  // currently is, so iterating it settles on one horizon per direction instead of
-  // chasing itself. cos(polar) is the height over the target in orbit radii, so
-  // uphill of the player the limit is above horizontal and downhill it is below,
-  // which is what lets the eye come down to the soil on the low side of a slope.
+  // of its ray, so all four points are tested at whatever angle is being tried.
+  // Uphill of the player the limit comes out above horizontal and downhill below
+  // it, which is what lets the eye come down to the soil on the low side of a
+  // slope.
   // While the ground is open the orbit is not capped at the surface: the player
   // has to be able to drop the eye into the pit, and the cavity-depth rules above
   // are what keep it out of solid earth. Capping it here meant a stray floor pass
@@ -2585,29 +2590,41 @@ function settlePlayerOnGround(deltaTime: number): void {
       ? Math.PI - 0.05
       : (renderConfig?.cameraMaxPolarAngle ?? Math.PI - 0.05);
   const probes = [0.3, 0.55, 0.8, 1];
-  // Start from the configured limit, not from "horizontal". Seeding the solve at
-  // PI/2 capped every result at horizontal, and a polar angle of exactly horizontal
-  // means the eye can never drop below the target's height - which is precisely the
-  // "I can't look up" bug: with the eye on the terrain there was no angle left that
-  // pointed at the sky. The probes below are the real constraint (the eye must clear
-  // the ground at its own position), and they are allowed to answer with an angle
+  // The limit is not seeded at "horizontal". A polar angle of exactly horizontal
+  // means the eye can never drop below the target's height - which is precisely
+  // the "I can't look up" bug: with the eye on the terrain there was no angle
+  // left that pointed at the sky. The probes are the real constraint (the eye
+  // must clear the ground at its own position), and they are allowed to answer
   // past horizontal, which is what looking up from the soil needs.
-  let groundLimit = configuredLimit;
-  for (let pass = 0; pass < 4; pass += 1) {
-    let next = configuredLimit;
+  //
+  // The probes are tested in a bisection on the angle (see `solveGroundCeiling`),
+  // not in the old closed-form pass. The closed form asked, per probe, "what
+  // angle puts the eye above the ground there?" - and past horizontal that
+  // question has two answers, because the ray's horizontal is `r sin(polar)` and
+  // shrinks again after 90 degrees. Measured on a 0.89 slope it returned 131
+  // degrees while the ray was already a centimetre under the hill within the
+  // orbit floor, which is what left the spring arm to shorten the camera into
+  // the plant (U05). Asking whether the whole ray clears has one answer per
+  // direction, so the arm has nothing to correct.
+  const clearsAt = (polar: number): boolean => {
+    const rise = reach * Math.cos(polar);
+    const horizontal = reach * Math.sin(polar);
     for (const fraction of probes) {
-      const horizontal = fraction * reach * Math.sin(groundLimit);
-      const ground = groundAt(horizontal);
+      const ground = groundAt(horizontal * fraction);
       // The limit stops the orbit a little short of the dirt (two and a half
       // contact margins) so the spring arm below never has to act. Parking exactly
       // on the margin meant a centimetre of terrain noise put the arm to work, and
       // because the arm shortens the orbit radius it did so permanently: the
       // camera crept in towards the plant a little on every drag.
-      const cosPolar = (ground + touch * 2.5 - controls.target.y) / (fraction * reach);
-      next = Math.min(next, Math.acos(Math.max(-1, Math.min(1, cosPolar))));
+      if (controls.target.y + rise * fraction < ground + touch * 2.5) return false;
     }
-    groundLimit = next;
-  }
+    return true;
+  };
+  const groundLimit = solveGroundCeiling({
+    floorRad: controls.minPolarAngle + 0.001,
+    limitRad: configuredLimit,
+    clears: clearsAt,
+  });
   // Keep the limit above the pole floor. The old post-hoc position clamp fought
   // OrbitControls every frame at the terrain edge: it moved the eye without
   // moving the orbit target, which changed the orbit again on the next frame.
@@ -2695,6 +2712,45 @@ function clampEyeToCavity(deltaTime: number): void {
   if (!clamped) return;
   camera.position.x = clamped.x;
   camera.position.z = clamped.z;
+}
+
+/** Scratch for the leaned aim point; allocated once, not per frame. */
+const cameraAimPoint = new THREE.Vector3();
+const cameraAimOffset = new THREE.Vector3();
+
+/**
+ * Lean the view up while the eye is down near the ground.
+ *
+ * The camera always looks at the orbit target, and the target is the point the
+ * player framed - the seed, for a young plant, about 15 cm over the soil. An eye
+ * has to be below the target to look up at all, and below 15 cm it is in the
+ * dirt, so near the ground there was no upward pitch to be had: on a fresh seed
+ * the view sat 19.3 degrees down with an orbit ceiling of 70.7, and dragging up
+ * only turned the camera further into the soil. Lifting the target is not an
+ * option - a head-height target puts a seed at the bottom edge of the frame -
+ * so the eye and the target stay exactly where the player and the clamps put
+ * them and only the camera's rotation leans back, by `aimLiftY`.
+ *
+ * Root Sight is exempt: the eye is deliberately under the soil there, the cavity
+ * is read from the aim the player set, and leaning it would tilt the pit out of
+ * the view the dive depends on. Planet view keeps world up and aims at the body.
+ */
+function applyCameraAim(): void {
+  if (planetViewActive) return;
+  if (rootSightHoldsACavity()) return;
+  if (lastPivotY === null) return;
+  cameraAimOffset.copy(camera.position).sub(controls.target);
+  const lift = aimLiftY({
+    eyeY: camera.position.y,
+    targetY: controls.target.y,
+    headY: lastPivotY,
+    horizontalM: Math.hypot(cameraAimOffset.x, cameraAimOffset.z),
+    offsetYM: cameraAimOffset.y,
+  });
+  if (lift <= 0) return;
+  cameraAimPoint.copy(controls.target);
+  cameraAimPoint.y += lift;
+  camera.lookAt(cameraAimPoint);
 }
 
 function clampEyeToGround(): void {
@@ -8169,6 +8225,8 @@ if (isDevMode) {
       __pl: {
         camera: THREE.PerspectiveCamera;
         controls: OrbitControls;
+        /** The scene, for inspecting a named mesh (the cavity bowl, the soil). */
+        scene: THREE.Scene;
         setCamera: (px: number, py: number, pz: number, tx: number, ty: number, tz: number) => void;
         rootSight: (on: boolean) => void;
         /** Why Root Sight is open or shut: counts plus a one-line summary. */
@@ -8189,11 +8247,21 @@ if (isDevMode) {
         /** What the weather has left on the ground in the world, 0..1 each. */
         groundCover: () => { water: number; snow: number } | null;
         nodes: () => Array<{ id: string; type: string; x: number; y: number; z: number }>;
+        /** The ground height the camera clamps use, at a plan position. */
+        groundY: (x: number, z: number) => number;
+        /**
+         * The camera's live pose and orbit limits, with the ground under the eye
+         * and under the target. Pitch is only meaningful next to those two
+         * numbers: "the eye cannot go below the target" is geometry when the
+         * ground under the eye is already above the target.
+         */
+        cameraProbe: () => Record<string, number>;
       };
     }
   ).__pl = {
     camera,
     controls,
+    scene,
     setCamera: (px, py, pz, tx, ty, tz) => {
       cameraFocusTween = null;
       camera.position.set(px, py, pz);
@@ -8231,6 +8299,30 @@ if (isDevMode) {
         y: node.position.y,
         z: node.position.z,
       })),
+    groundY: (x, z) => planetTerrainY(renderConfig?.planetRadiusM ?? 0, x, z, getTerrainParams()),
+    cameraProbe: () => {
+      const radius = renderConfig?.planetRadiusM ?? 0;
+      const field = getTerrainParams();
+      const offset = camera.position.clone().sub(controls.target);
+      const distance = offset.length();
+      const rise = distance > 1e-6 ? offset.y / distance : 0;
+      return {
+        eyeX: camera.position.x,
+        eyeY: camera.position.y,
+        eyeZ: camera.position.z,
+        targetX: controls.target.x,
+        targetY: controls.target.y,
+        targetZ: controls.target.z,
+        targetGroundY: planetTerrainY(radius, controls.target.x, controls.target.z, field),
+        eyeGroundY: planetTerrainY(radius, camera.position.x, camera.position.z, field),
+        pivotY: lastPivotY ?? Number.NaN,
+        distance,
+        elevationDeg: (Math.asin(Math.max(-1, Math.min(1, rise))) * 180) / Math.PI,
+        maxPolarDeg: (controls.maxPolarAngle * 180) / Math.PI,
+        minPolarDeg: (controls.minPolarAngle * 180) / Math.PI,
+        minDistance: controls.minDistance,
+      };
+    },
   };
 }
 
@@ -10671,8 +10763,15 @@ function resolveCameraCollision(): void {
   if (distance <= 1e-4) return;
   tempCameraOffset.divideScalar(distance);
 
+  // The player's own canopy never obstructs the camera. Looking up sends the
+  // target-to-eye ray through the plant's own leaves, and treating that as a
+  // collider pulled the eye in and read as the camera colliding with the plant.
+  // Terrain and rival plants still block.
+  const ownBody = plantColliders?.ownRigidBody() ?? null;
   const ray = new RAPIER.Ray(target, tempCameraOffset);
-  const hit = rapierWorld.getWorld().castRay(ray, distance, true);
+  const hit = rapierWorld
+    .getWorld()
+    .castRay(ray, distance, true, undefined, undefined, undefined, ownBody ?? undefined);
   if (!hit) return;
 
   const hitRecord = hit as unknown as {
@@ -10917,10 +11016,13 @@ function renderFrame(deltaTime: number): void {
     }
   }
   // Last, so the ground has the final say: a pose that clears the plant but is
-  // inside a hill still has to move in, and the spring arm may legitimately end
-  // up closer than the orbit floor.
+  // inside a hill still has to move in.
   clampEyeToGround();
   clampEyeToCavity(deltaTime);
+  // Lean the view up when the eye is down on the soil (see `applyCameraAim`),
+  // after every clamp has placed the eye and before the dev pose, which owns its
+  // own look direction.
+  if (!cavityProbe.held()) applyCameraAim();
   // ... and a held dev pose after that, because the point of holding one is to
   // look from places the rig exists to prevent, such as inside the earth.
   cavityProbe.applyHold();
