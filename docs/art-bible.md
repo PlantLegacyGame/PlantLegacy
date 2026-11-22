@@ -48,6 +48,15 @@ the one to build against: a surface asks for a role, never for a step.
 `pnpm verify` fails when either is stale, and `node tools/palette/build.mjs`
 rejects a step outside sRGB rather than documenting a clipped hex.
 
+The interface follows the same rule. `config/ui.json`'s `theme` tokens hold role
+names, not hexes; the server serves this file at `/config/palette`, and
+`apps/client/src/ui/theme.ts` resolves the tokens to hex before the UI shell
+publishes them as `--<token>` custom properties over the stylesheet's own values.
+A missing palette leaves the sheet's hexes standing instead of painting a role
+name into a colour slot, so the HUD and the world cannot drift apart one
+hand-edited colour at a time. The one conversion (`packages/shared/src/color`) is
+also what draws the swatches, so the sheet and the game agree by construction.
+
 ![Palette ramps: one row per material, one cell per step](./assets/palette.svg)
 
 <!-- palette:start -->
@@ -94,6 +103,12 @@ The name a surface should ask for, so no material quotes a step directly.
 | `ui_ground` | `soil.900` | `#2c1e16` | the HUD's dark ground |
 | `accent_life` | `foliage.500` | `#609047` | health, growth, the plant's own accent |
 | `accent_hazard` | `ember.500` | `#c45e3d` | harm, drought and warnings |
+| `ui_panel` | `bark.900` | `#291f1b` | the dark chrome a panel sits on |
+| `ink_dim` | `ink.300` | `#bdb6af` | secondary text and hairlines |
+| `ink_pale` | `ink.100` | `#e7e4e1` | a pale neutral surface, cooler than paper |
+| `accent_sprout` | `foliage.300` | `#a7c194` | new growth in the interface and the plant's tender parts |
+| `accent_sky` | `sky.500` | `#6a839a` | the informational accent, read as distance |
+| `accent_soil` | `soil.500` | `#a27553` | earth in an icon or a chart |
 <!-- palette:end -->
 
 ## Organism Anatomy & Visual Fusion (C02 / T02)

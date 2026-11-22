@@ -34,17 +34,17 @@
     "theme": {
       "type": "object",
       "value": {
-        "loam_900": "#14180f",
-        "bark_700": "#2a281f",
-        "bone_100": "#efe9d8",
-        "bone_300": "#cfc8b2",
-        "leaf_500": "#7fa648",
-        "sprout_300": "#b7d47c",
-        "ember_500": "#d4553a",
-        "sky_400": "#87ceeb",
-        "soil_600": "#8b4513"
+        "loam_900": "ui_ground",
+        "bark_700": "ui_panel",
+        "bone_100": "paper",
+        "bone_300": "ink_pale",
+        "leaf_500": "accent_life",
+        "sprout_300": "accent_sprout",
+        "ember_500": "accent_hazard",
+        "sky_400": "accent_sky",
+        "soil_600": "accent_soil"
       },
-      "notes": "Design tokens. Plain colors only - no rarity tiers (RULE_20)."
+      "notes": "Token -> palette role, never a hex. The client resolves these against config/palette.json at boot and publishes them as --pl-theme-* custom properties; styles.css reads those with the old hex as a fallback. A colour value lives in the palette and nowhere else (A01)."
     },
     "toast_duration_ms": {
       "type": "integer",

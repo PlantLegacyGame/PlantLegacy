@@ -8,14 +8,6 @@
     "reason": "Read by iterating the `mutation_<id>` entries of the file: the loader strips the prefix and never names a mutation."
   },
   {
-    "key": "palette.ramps",
-    "reason": "Colour source of truth authored for A01: read by tools/palette (generator, check and tests) and by the material pass when it lands, not by a client identifier yet."
-  },
-  {
-    "key": "palette.roles",
-    "reason": "Semantic surface-to-step map for A01: read by tools/palette, consumed by the material pass when it lands, not by a client identifier yet."
-  },
-  {
     "key": "controls.bindings_touch",
     "reason": "Specification for the deferred mobile/touch layout; kept so the binding set is designed once rather than re-invented."
   }

@@ -1614,6 +1614,40 @@ export async function loadControlsConfig(serverOrigin: string): Promise<Controls
   });
 }
 
+/**
+ * The palette the client resolves UI tokens against (A01).
+ *
+ * Served as authored - OKLCH ramps and role references - so the browser and the
+ * art-bible swatches run the same conversion from `@plant-legacy/shared/color`
+ * rather than receiving pre-baked hexes that could drift from the sheet.
+ */
+export interface PaletteStep {
+  step: number;
+  l: number;
+  c: number;
+  h: number;
+}
+
+export interface PaletteRamp {
+  name: string;
+  steps: PaletteStep[];
+}
+
+export interface PaletteRole {
+  name: string;
+  ramp: string;
+  step: number;
+}
+
+export interface PaletteConfig {
+  ramps: PaletteRamp[];
+  roles: PaletteRole[];
+}
+
+export async function loadPaletteConfig(serverOrigin: string): Promise<PaletteConfig> {
+  return fetchFlat<PaletteConfig>(serverOrigin, '/config/palette', { ramps: [], roles: [] });
+}
+
 export async function loadUIConfig(serverOrigin: string): Promise<UIConfig> {
   return fetchFlat<UIConfig>(serverOrigin, '/config/ui', {
     textScale: 1.0,

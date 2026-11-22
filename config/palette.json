@@ -123,7 +123,13 @@
         { "name": "paper", "ramp": "soil", "step": 100, "use": "panel fill where the interface must sit on the world" },
         { "name": "ui_ground", "ramp": "soil", "step": 900, "use": "the HUD's dark ground" },
         { "name": "accent_life", "ramp": "foliage", "step": 500, "use": "health, growth, the plant's own accent" },
-        { "name": "accent_hazard", "ramp": "ember", "step": 500, "use": "harm, drought and warnings" }
+        { "name": "accent_hazard", "ramp": "ember", "step": 500, "use": "harm, drought and warnings" },
+        { "name": "ui_panel", "ramp": "bark", "step": 900, "use": "the dark chrome a panel sits on" },
+        { "name": "ink_dim", "ramp": "ink", "step": 300, "use": "secondary text and hairlines" },
+        { "name": "ink_pale", "ramp": "ink", "step": 100, "use": "a pale neutral surface, cooler than paper" },
+        { "name": "accent_sprout", "ramp": "foliage", "step": 300, "use": "new growth in the interface and the plant's tender parts" },
+        { "name": "accent_sky", "ramp": "sky", "step": 500, "use": "the informational accent, read as distance" },
+        { "name": "accent_soil", "ramp": "soil", "step": 500, "use": "earth in an icon or a chart" }
       ]
     }
   }

@@ -43,6 +43,7 @@ import {
   loadDevSettings,
   loadGrowthSegmentConfig,
   loadNetworkConfig,
+  loadPaletteConfig,
   loadPhysicsConfig,
   loadRenderConfig,
   loadReportsConfig,
@@ -235,6 +236,7 @@ import { createSettingsPanel, type SettingsPanelAPI } from './ui/SettingsPanel.j
 import { createShopPanel, type ShopPanel } from './ui/ShopPanel.js';
 import { createSporeChip, type SporeChipAPI } from './ui/SporeChip.js';
 import { formatSeasonRemaining } from './ui/seasonLabel.js';
+import { resolveTheme } from './ui/theme.ts';
 import { isPlantSoundEnabled, setPlantSoundEnabled } from './ui/title/plantSound.js';
 import { touchHintLines } from './ui/touchCopy.js';
 import { createUIShell, type UIShell } from './ui/UIShell.js';
@@ -3872,6 +3874,7 @@ async function initC01(): Promise<void> {
     loadedTerrainConfig,
     loadedPhysicsConfig,
     loadedShopConfig,
+    paletteConfig,
   ] = await Promise.all([
     loadRenderConfig(httpOrigin),
     loadControlsConfig(httpOrigin),
@@ -3887,6 +3890,7 @@ async function initC01(): Promise<void> {
     loadTerrainConfig(httpOrigin),
     loadPhysicsConfig(httpOrigin),
     loadShopConfig(httpOrigin),
+    loadPaletteConfig(httpOrigin),
   ]);
 
   renderConfig = loadedRenderConfig;
@@ -3919,6 +3923,12 @@ async function initC01(): Promise<void> {
       '[PlantLegacy] controls config carried no bindings: every keyboard action is dead.',
     );
   }
+
+  // A01: one colour source. `config/ui.json` names palette roles, so resolve
+  // them before the shell is built: it publishes each token as a `--<token>`
+  // custom property, and that path now carries the palette's hex rather than a
+  // role name that no surface can paint.
+  uiConfig.theme = resolveTheme(uiConfig.theme, paletteConfig);
 
   // Build UI shell
   uiShell = createUIShell(uiConfig);

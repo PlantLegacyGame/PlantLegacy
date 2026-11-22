@@ -14,6 +14,15 @@ before(async () => {
     JSON.stringify({ values: { day_length_s: { value: 600 }, season_length_days: { value: 4 } } }),
   );
   await writeFile(
+    join(dir, 'palette.json'),
+    JSON.stringify({
+      values: {
+        ramps: { value: [{ name: 'soil', steps: [{ step: 500, l: 0.6, c: 0.07, h: 58 }] }] },
+        roles: { value: [{ name: 'accent_soil', ramp: 'soil', step: 500 }] },
+      },
+    }),
+  );
+  await writeFile(
     join(dir, 'ui.json'),
     JSON.stringify({
       values: {
@@ -36,6 +45,14 @@ describe('handleConfigRequest', () => {
     const result = await handleConfigRequest(req('/config/daynight'), dir);
     assert.equal(result?.status, 200);
     assert.deepEqual(result?.body, { day_length_s: 600, season_length_days: 4 });
+  });
+
+  it('serves the palette the UI tokens resolve against', async () => {
+    const result = await handleConfigRequest(req('/config/palette'), dir);
+    assert.equal(result?.status, 200);
+    const body = result?.body as { ramps: { name: string }[]; roles: { name: string }[] };
+    assert.equal(body.ramps[0]?.name, 'soil');
+    assert.equal(body.roles[0]?.name, 'accent_soil');
   });
 
   it('serves a shaped system with its config values merged over the defaults', async () => {

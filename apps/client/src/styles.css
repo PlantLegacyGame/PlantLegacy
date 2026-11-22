@@ -32,6 +32,11 @@
    No website chrome — just game HUD that feels like part of the soil. */
 
 :root {
+  /* A01: these hexes are the sheet's own fallback. `config/ui.json` names
+     palette roles instead of colours; `ui/theme.ts` resolves them against
+     `config/palette.json` and the UI shell publishes them as --<token> custom
+     properties over these at boot. Steps without a token still carry their own
+     hex: the ramp rewrite that retires them is the rest of A01. */
   /* Earthy soil / bark — grounding, dark, rich */
   --loam-900: #0a0c08;
   --loam-800: #12140e;

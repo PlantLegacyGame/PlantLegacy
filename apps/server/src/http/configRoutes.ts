@@ -557,6 +557,11 @@ export async function handleConfigRequest(
     // `/config/shop` since the panel was written and no route ever answered it,
     // so the shop rendered "Nothing for sale yet" no matter what the file said.
     url.pathname === '/config/shop' ||
+    // A01: the palette is the one place a colour value lives. `config/ui.json`
+    // names roles, and the client resolves them against this file at boot, so
+    // routing it here is what makes the UI's colours data instead of a second
+    // hand-maintained list of hexes.
+    url.pathname === '/config/palette' ||
     // AL-01/ADR-027: the client reads the dev-only size class and the six
     // benchmark poses from the same file the dev panel edits.
     url.pathname === '/config/dev'
