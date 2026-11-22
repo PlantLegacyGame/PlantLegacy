@@ -87,7 +87,7 @@ Defects live in `bug-inventory.md`, values in `config/`, task scope in `DESIGN.m
 | ID | Feature | Task | Code home | Status | Open issues | Next action | Pri |
 |---|---|---|---|---|---|---|---|
 | F39 | Spore purse: earn, spend, cap | T13 | `ops/spores.ts`, `config/spores.json` | ✔ | — | — | P3 |
-| F40 | Shop catalogue and server-checked purchase | C05 | `ops/shop.ts`, `ui/ShopPanel.ts` | ✔ | Dev grant not read-modify-write | — | P2 |
+| F40 | Shop catalogue and server-checked purchase | C05 | `ops/shop.ts`, `ui/ShopPanel.ts` | ✔ | — | — | P2 |
 | F41 | Pouch, ten slots, hotbar and number keys | T08A | `ui/Hotbar.ts`, `player_state` | ◐ | Item use and slot swap not RMW | T08A | P0 |
 | F42 | Item definitions, names and Use | T08A | `config/items.json`, `ops/items.ts` | ◐ | I1/I2 browser pass | Verify in browser | P1 |
 | F43 | `player_state` restart copy of pouch and purse | T08A | `ops/persistence/`, `accounts` | ✔ | Awards still follow the live object | T08A | P2 |

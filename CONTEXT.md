@@ -17,8 +17,8 @@ locked read-modify-writes that adopt the committed row rather than the plan
 (`ops/playerStateMutations.ts`, `ops/shopPurchase.ts`); an adoption hook that
 throws is logged as a repair instead of failing a committed write. The purchase,
 item-use and award audits pass
-against Postgres; what remains is the dev-grant path and the trade/mail/list
-systems; see `docs/tasks/T08A.md`.
+against Postgres, and dev item grants use the same locked write; what remains is
+the trade/mail/list systems and the duplication audit; see `docs/tasks/T08A.md`.
 
 **2026-11-20/21 batch.** The economy got its first playable slice and the title
 got its performance pass. Spores are the server-owned currency (`ops/spores.ts`),
@@ -543,8 +543,8 @@ enforcement changes.
 
 ## 8. Not built yet
 
-The rest of the economy — the dev-grant path and `item_flags.json` ownership in
-T08A, marketplace/mail/trade (T14/T29/T45) and admin/compliance tooling. The T06 damage pipeline is
+The rest of the economy — `item_flags.json` ownership and the duplication audit
+in T08A, marketplace/mail/trade (T14/T29/T45) and admin/compliance tooling. The T06 damage pipeline is
 implemented and drop pickup is now live; reroot controls and the damage HUD
 belong to T51/C04. Chat, emotes and reports are implemented; the pouch and purse
 are exercised by the shop and now have an account-scoped restart copy in
@@ -659,8 +659,9 @@ placement), and the three unread tile keys (`tile_size_m`, `tile_vertices`,
   account's pouch and purse now load from `player_state` after a restart; guests
   still reset to the configured starting state. Pouch and purse mutations are
   locked read-modify-writes that adopt the committed row, and the Postgres
-  audit for purchases, item use and awards passes; the open parts of T08A are
-  the dev-grant path and the trade/mail/list systems, not a shop bug.
+  audit for purchases, item use and awards passes, and dev item grants go through
+  the same locked write; the open parts of T08A are the trade/mail/list systems
+  and the duplication audit, not a shop bug.
 - **A drop pays once.** `ops/dropPickup.ts` owns the rule (a live drop pays its
   kind's rate and the store removes it; unknown, expired, replayed and
   plantless requests pay nothing), the damage pipeline owns removal, and

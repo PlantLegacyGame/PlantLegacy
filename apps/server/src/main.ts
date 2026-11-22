@@ -66,6 +66,7 @@ import {
   swapInventorySlots,
   useInventorySlot,
 } from './ops/inventoryHandlers.ts';
+import { grantItemUnderLock, previewItemGrant } from './ops/itemGrant.ts';
 import { loadItemsConfig } from './ops/items.ts';
 import { createLogger } from './ops/log.ts';
 import { loadMutationsConfig } from './ops/mutations/config.ts';
@@ -3285,12 +3286,39 @@ class World {
       },
       grantItem: (itemId, count) => {
         if (!player) return 0;
-        const added = addItem(player.inventory, itemId, count, this.itemsConfig.itemDefinitions);
-        if (added > 0) this.persistPlayerState(player);
-        return added;
-      },
-      syncInventory: () => {
-        if (player) sendInventorySync(this.inventoryPorts(), player);
+        // The reply is dev-only and answers in this command, so it is planned
+        // here; the write is the same locked path as a purchase, and the sync
+        // that follows the commit carries the pouch the row actually holds.
+        const planned = previewItemGrant(this.itemsConfig, player.inventory.slots, itemId, count);
+        void grantItemUnderLock(
+          {
+            store: this.playerStateStore,
+            accountId: player.accountId ?? null,
+            unavailable: player.accountId
+              ? this.playerStateUnavailable.has(player.accountId)
+              : false,
+            initial: toPersistedState(player.inventory, player.spores),
+            itemsConfig: this.itemsConfig,
+            itemId,
+            count,
+            onRepair: (message, meta) => this.log.warn(message, meta),
+          },
+          (state) => {
+            if (this.players.get(player.playerId) === player) this.adoptPlayerState(player, state);
+          },
+        )
+          .then(() => {
+            if (this.players.get(player.playerId) === player) {
+              sendInventorySync(this.inventoryPorts(), player);
+            }
+          })
+          .catch((error: unknown) => {
+            this.log.error('dev item grant failed', {
+              itemId,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          });
+        return planned;
       },
       endSeason: () => ({ season: this.forceSeasonEnd(this.getTick()).season }),
       prepareRootGrowth: () => {

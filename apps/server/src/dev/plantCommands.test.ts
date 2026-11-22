@@ -43,7 +43,6 @@ function createPorts(overrides: Partial<PlantCommandPorts> = {}) {
       calls.push(`item:${itemId}:${count}`);
       return 1;
     },
-    syncInventory: () => calls.push('syncInventory'),
     endSeason: () => {
       calls.push('season');
       return { season: 'summer' };
@@ -198,10 +197,10 @@ describe('handlePlantCommand', () => {
     assert.deepEqual(responses[0]?.payload.rejected, ['plant_gone']);
   });
 
-  it('grants items with a whole count and syncs the inventory', () => {
+  it('grants items with a whole count and answers in the same command', () => {
     const { ports, calls, responses } = createPorts();
     handlePlantCommand(ports, { type: 'dev_grant_item', itemId: 'seed', count: 2.7 }, both);
-    assert.deepEqual(calls, ['item:seed:2', 'syncInventory']);
+    assert.deepEqual(calls, ['item:seed:2']);
     assert.deepEqual(responses[0]?.payload, { ok: true, itemId: 'seed', added: 1 });
   });
 

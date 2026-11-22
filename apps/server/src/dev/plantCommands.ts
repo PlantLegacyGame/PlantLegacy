@@ -26,8 +26,12 @@ export interface PlantCommandPorts {
   fillEnergy(): void;
   fillTissue(): number;
   fillStoredResources(): { water: number; minerals: number };
+  /**
+   * Grants items through the locked stored mutation. Returns the count a grant
+   * would add, so the dev command can answer in the same command; the world
+   * syncs the pouch after the commit.
+   */
   grantItem(itemId: string, count: number): number;
-  syncInventory(): void;
   endSeason(): { season: string | number };
   /** Tops the plant up enough to grow; false when it no longer exists. */
   prepareRootGrowth(): boolean;
@@ -188,7 +192,6 @@ export function handlePlantCommand(
           ? Math.floor(action.count)
           : 1;
       const added = ports.grantItem(itemId, count);
-      ports.syncInventory();
       ports.respond(action.type, { ok: added > 0, itemId, added });
       return true;
     }
