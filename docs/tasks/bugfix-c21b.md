@@ -32,7 +32,7 @@ freeze the sky (a zero system scale would sample one point forever).
 
 | Test | What it pins |
 |---|---|
-| `precipitationAnchor.test.ts` (7) | World copies stay inside the volume; a walking eye moves nothing unless a drop wraps; a wrap is exactly one box; a drop stays still across 19 m of walking |
+| `precipitationAnchor.test.ts` (6) | World copies stay inside the volume; a walking eye moves nothing unless a drop wraps; a wrap is exactly one box; a drop stays still across 19 m of walking |
 | `climateField.test.ts` (9) | Ranges and determinism; windward clouds more than lee; day/night and altitude temperature (400 m costs exactly 2.6 °C); rain/snow by temperature; precipitation hysteresis; storm cooldown; **30 simulated days**: 4–40% wet, ≤ 8 storms, no state shorter than 45 s on average, every storm runs telegraph → active → aftermath, same seed same sequence |
 | `ledger.test.ts` (shared, 7) / `ledger.test.ts` (server, 4) | Order and cap; signed amount text; one line per kind; no id in player text; `NaN` prints as 0; the wire payload is rounded and carries the committed balance |
 | `shop.test.ts`, `inventoryHandlers.test.ts` (updated) | A purchase sends `LEDGER_ENTRY` with the price and the new balance; a use sends its own line even when no spores moved |
@@ -50,26 +50,46 @@ Measured in the running page after restarting the server on the new code
   the origin with world anchors, terrain tangents present, sampled ground heights
   19.6–20.6 m across four crowns on the slope. Visible while raining above
   ground; **hidden** with the eye below the surface; visible again on return.
-- **Snow:** the compiled fragment shader carries the six-arm crystal branch
-  (`cos(3.0 * ang)`); the rain pass rendered with it compiled, so there is no
-  shader error. Snow was not forced in the browser (the dev select offers clear,
-  rain and the storm phases only); the crystal itself is not screenshotted.
+- **Snow, forced and seen (2026-11-23, second pass):** the dev panel's weather
+  select gained a Snow entry (the machine and renderer both had the state; the
+  panel simply could not reach it), and forcing it put the world into `snow` for
+  180 s: the vitals read `snow` with a clear-time forecast, the drop mesh held
+  4000 instances with `uSnow = 1`, opacity 0.85 and the clock advancing, the
+  splash pass stayed off, and six-armed crystals were visible against the sky and
+  across the ground at noon. Saved as `docs/screenshots/wave-b-snow.png`.
 - **Ledger:** using a Starter Dung showed
   `Used Starter Dung · +5 spores · 125 left`, and the spore chip read 125; the
   empty state read "No spore changes yet." A dev grant produced
   `Dev grant · 120 left` before the label gained the item name (now
   `Dev grant: Starter Fertilizer ×3`).
-- **Climate:** not exercised visually; it is the server's driver and its evidence
-  is the 30-day simulation plus the live server running on it (the world's own
-  weather was "Rain, clear in 2:41" while the field was raining at the plant).
+- **Purchase, live:** opened the shop from the spore chip while the world was
+  connected and bought a Starter Dung. The shop's balance went 120 → 100, the
+  chip followed to 100, the pouch went ×2 → ×3, and the inventory's ledger read
+  `Bought Starter Dung · −20 spores · 100 left`. Saved as
+  `docs/screenshots/wave-b-ledger-purchase.png`.
+- **Climate:** not exercised as a watched weather cycle; it is the server's
+  driver and its evidence is the 30-day simulation plus the live server running
+  on it (the world's own weather was "Rain, clear in 2:41" while the field was
+  raining at the plant).
 
-Not checked in the browser: a purchase ledger line (the shop needs spores the
-guest purse did not have; `shop.test.ts` asserts the entry), and a snow shower.
+## 4a. Fresh-eyes cuts (2026-11-23, second pass)
+
+Nothing was added; six things came out, and one of the cuts exposed a dev-control
+gap that the snow check needed closed.
+
+| Cut | Why it was not pulling its weight |
+|---|---|
+| `wrappedBetween()` in `precipitationAnchor.ts` and its test | Only its own test called it. The anchor pass compares the drawn anchor with the wrapped one and re-samples that drop's ground itself, so a second helper answering "did it wrap" was a rule with no reader |
+| `setGround(groundY, position)`'s camera argument | Every frame passed `this.camera.position` and the function began with `void position;`. The column follows the ground under the eye, not the eye's x/z |
+| `mesh.position.y = eyeGroundY` in `follow()` | A second write of the value `setGround()` had already written that same frame, behind an `if (sampler)` that could not change the result |
+| `sanitizeClimateConfig` in `loadClimateConfig` | The config was sanitised on the way out of the loader *and* again in `WeatherSystem.connectClimate`, the only place that builds a field. One boundary now, where the field is built |
+| `WeatherSystem.getClimateSample()` | A public accessor with no caller; the state machine gets the sample through the binding it already owns |
+| *(added)* Snow entry in the dev weather select | Not a cut but the one thing this pass had to add: the server's resolver, the machine and the renderer all accept `snow`, and the panel's list stopped one state short, which is exactly why a snow shower had never been seen |
 
 ## 5. Records
 
 `docs/bug-inventory.md` gained K11–K15. `docs/protocol.md`, `docs/tunables.md`,
 `CONTEXT.md`, `docs/history.md`, `docs/what-works-now.md` and the task index were
 updated. `pnpm verify` is green: 31 tools + 228 shared + 21 weather + 508 server +
-806 client tests, lint, typecheck, config validation, config keys, docs and
+805 client tests, lint, typecheck, config validation, config keys, docs and
 palette.

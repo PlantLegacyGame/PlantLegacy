@@ -1192,7 +1192,6 @@ export class EnvironmentRenderer {
               getTerrainParams(),
             )
           : this.camera.position.y - 1.7,
-        this.camera.position,
       );
       // Rain does not fall into the cavity: the opening is air, and a streak over
       // it was the one thing that made the cut look like a decal on a solid plane.

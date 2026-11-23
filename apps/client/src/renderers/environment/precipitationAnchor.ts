@@ -27,21 +27,3 @@ export function wrapToVolume(home: number, centre: number, size: number): number
   else if (offset >= half) offset -= size;
   return centre + offset;
 }
-
-/**
- * Whether the copy under `centre` is a different copy than the one under
- * `previousCentre`: i.e. whether the drop wrapped between two frames.
- *
- * The caller uses this to know which drops need their ground re-sampled, rather
- * than re-sampling all of them every frame.
- */
-export function wrappedBetween(
-  home: number,
-  previousCentre: number,
-  centre: number,
-  size: number,
-): boolean {
-  return (
-    Math.abs(wrapToVolume(home, previousCentre, size) - wrapToVolume(home, centre, size)) > 1e-6
-  );
-}

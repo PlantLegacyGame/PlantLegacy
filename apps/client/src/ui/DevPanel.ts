@@ -291,6 +291,9 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
             [
               { value: 'clear', label: 'Clear' },
               { value: 'rain', label: 'Rain' },
+              // The machine and the renderer both have snow; a panel that could
+              // not reach it meant the crystal shader was untestable by hand.
+              { value: 'snow', label: 'Snow' },
               { value: 'thunderstorm_telegraph', label: 'Storm Telegraph' },
               { value: 'thunderstorm_active', label: 'Storm Active' },
               { value: 'thunderstorm_aftermath', label: 'Storm Aftermath' },

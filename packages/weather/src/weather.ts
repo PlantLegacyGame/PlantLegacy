@@ -78,14 +78,9 @@ export class WeatherSystem {
     });
   }
 
-  /** The field at the observed point, right now. Null when no field is connected. */
-  getClimateSample(): ClimateSample | null {
-    return this.field ? this.sampleClimate() : null;
-  }
-
   private sampleClimate(): ClimateSample {
-    // `field` is guaranteed by the caller (`getClimateSample`, the binding); the
-    // fallback keeps the type honest without a non-null assertion.
+    // The binding is only connected alongside the field (see `connectClimate`);
+    // the fallback keeps the type honest without a non-null assertion.
     const field = this.field;
     if (!field) {
       return {
@@ -221,11 +216,12 @@ export function loadWeatherConfig(configs: Map<string, ConfigFile>): WeatherConf
 /**
  * The climate field's numbers, from `config/climate.json`.
  *
- * Sanitised on the way in: a zero system scale or a NaN seed would make the
- * field sample one point forever, and the weather would stop being weather.
+ * Sanitising happens once, in `WeatherSystem.connectClimate`, which is the only
+ * thing that builds a field: a zero system scale or a NaN seed would make it
+ * sample one point forever, and the weather would stop being weather.
  */
 export function loadClimateConfig(configs: Map<string, ConfigFile>): ClimateConfig {
-  return sanitizeClimateConfig({
+  return {
     seed: readInteger(configs, 'climate', 'seed'),
     systemScaleM: readNumber(configs, 'climate', 'system_scale_m'),
     windSpeedMps: readNumber(configs, 'climate', 'wind_speed_mps'),
@@ -248,7 +244,7 @@ export function loadClimateConfig(configs: Map<string, ConfigFile>): ClimateConf
     stormCooldownS: readNumber(configs, 'climate', 'storm_cooldown_s'),
     precipitationStart: readNumber(configs, 'climate', 'precipitation_start'),
     precipitationStop: readNumber(configs, 'climate', 'precipitation_stop'),
-  });
+  };
 }
 
 export function loadDayNightConfig(configs: Map<string, ConfigFile>): DayNightConfig {

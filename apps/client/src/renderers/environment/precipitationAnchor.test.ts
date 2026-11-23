@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { wrappedBetween, wrapToVolume } from './precipitationAnchor.ts';
+import { wrapToVolume } from './precipitationAnchor.ts';
 
 const SIZE = 40;
 
@@ -45,11 +45,6 @@ describe('world-anchored precipitation', () => {
     const before = wrapToVolume(home, 19.5, SIZE); // home is 19.5 behind the centre
     const after = wrapToVolume(home, 20.5, SIZE); // now it is 19.5 ahead
     assert.equal(Math.abs(after - before), SIZE);
-  });
-
-  it('reports which drops wrapped so only their ground is re-sampled', () => {
-    assert.equal(wrappedBetween(0, 0, 1, SIZE), false);
-    assert.equal(wrappedBetween(0, 19.5, 20.5, SIZE), true);
   });
 
   it('is deterministic and symmetric', () => {

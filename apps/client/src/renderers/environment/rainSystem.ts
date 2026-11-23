@@ -50,7 +50,7 @@ export interface RainSystem {
    */
   setGroundAnchor(x: number, z: number): void;
   /** Ground height under the eye: the height the field stands on. */
-  setGround(groundY: number, position: THREE.Vector3): void;
+  setGround(groundY: number): void;
   /**
    * The opening in the ground, as a plan circle: no drop, ring or patch is drawn
    * inside it. The pit is air, not soil, so weather crossing it reads as a mesh
@@ -946,14 +946,13 @@ export function createRainSystem(
       groundAnchorX = x;
       groundAnchorZ = z;
     },
-    setGround(groundY: number, position: THREE.Vector3) {
+    setGround(groundY: number) {
       // Both meshes stay at the origin horizontally: the drops carry their own
       // world x/z, so there is nothing to follow. Only the vertical extent of the
       // column is set, from the ground under the eye.
       material.uniforms.uGroundY.value = groundY;
       mesh.position.y = groundY;
       eyeGroundY = groundY;
-      void position;
     },
     setCutaway(centerX: number, centerZ: number, radiusM: number) {
       // A plan circle is enough: the cut is a vertical column of air, so anything
@@ -1008,10 +1007,6 @@ export function createRainSystem(
       const snappedZ = Math.round(anchorZ / BAKE_MOVE_M) * BAKE_MOVE_M;
       if (Math.hypot(snappedX - lastBakeX, snappedZ - lastBakeZ) > 0.01) {
         bakeGround(snappedX, snappedZ);
-      }
-      if (sampler) {
-        // The column stands on the ground under the eye, not at its altitude.
-        mesh.position.y = eyeGroundY;
       }
     },
     setLight(color: THREE.Color, level: number) {
