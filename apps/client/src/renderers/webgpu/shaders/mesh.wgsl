@@ -135,7 +135,7 @@ fn lookForOrgan(plantIndex: u32, nodeType: f32) -> LookOrgan {
     );
 
     // C02b: GPU skinning - apply joint matrices
-    var worldPosition = windOffset(input.position, frame, swayStiffness);
+    var worldPosition = windOffset(input.position, frame, swayStiffness, renderInfo.baseY);
     // NOTE: Do NOT scale worldPosition by emergence from origin. JS pre-computes
     // emergent positions; emergence is used only for radius/fade effects below.
     

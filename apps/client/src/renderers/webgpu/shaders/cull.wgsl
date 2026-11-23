@@ -90,7 +90,7 @@ fn main(@builtin(global_invocation_id) globalId: vec3u) {
 
   let clip = frame.viewProjection * vec4f(center, 1.0);
   if (clip.w <= 0.001) {
-    renderData[index] = PlantRenderData(4u, 0u, 0.0, 0.0);
+    renderData[index] = PlantRenderData(4u, 0u, 0.0, 0.0, center.y - radius);
     return;
   }
 
@@ -103,12 +103,12 @@ fn main(@builtin(global_invocation_id) globalId: vec3u) {
     ndc.z < -1.0 - margin ||
     ndc.z > 1.0 + margin
   ) {
-    renderData[index] = PlantRenderData(4u, 0u, 0.0, 0.0);
+    renderData[index] = PlantRenderData(4u, 0u, 0.0, 0.0, center.y - radius);
     return;
   }
 
   if (hiddenByPlanet(center, radius)) {
-    renderData[index] = PlantRenderData(4u, 0u, 0.0, 0.0);
+    renderData[index] = PlantRenderData(4u, 0u, 0.0, 0.0, center.y - radius);
     return;
   }
 
@@ -160,5 +160,5 @@ fn main(@builtin(global_invocation_id) globalId: vec3u) {
 
   plants[index].lastTier = stableTier;
   plants[index].dwellTime = dwellTime;
-  renderData[index] = PlantRenderData(stableTier, 1u, sizePx, blend);
+  renderData[index] = PlantRenderData(stableTier, 1u, sizePx, blend, center.y - radius);
 }

@@ -22,6 +22,7 @@ import { dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { plantTextureArrayBindings } from '../plantTextureBindings.ts';
+import { PLANT_VERTEX_BUFFER_LAYOUT } from '../plantVertexLayout.ts';
 
 const DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -296,4 +297,247 @@ test('the look record on the wire matches the WGSL struct', () => {
   const organBody = organ.slice(0, organ.indexOf('}'));
   const fields = [...organBody.matchAll(/(\w+):\s*vec4f/g)].map((match) => match[1]);
   assert.deepEqual(fields, ['tintPlus', 'varPlus', 'glowPlus', 'patternPlus']);
+});
+
+/* ── Vertex attributes: the shader's @location list against the pipeline's ──
+ *
+ * The rain pass drew nothing for months because its pipeline declared the
+ * quad buffer at locations 0/1 and the instance buffer at 2/3, while the shader
+ * read a `vec4f` at location 1: it received the quad's always-zero `w`, so every
+ * corner of a drop landed on the same point. Neither side is wrong on its own,
+ * which is why nothing caught it - the mismatch lives across two files.
+ */
+
+/** The renderer that owns the pipelines; the shader side is read from disk. */
+const RENDERER = stripComments(readFileSync(join(DIR, '..', 'WebGPURenderer.ts'), 'utf8'));
+
+/**
+ * Vertex layouts the renderer names instead of writing out inline.
+ *
+ * The mesh and impostor pipelines share one layout object, so the pipeline source
+ * only names it; the check reads its attributes from the module itself.
+ */
+const LAYOUT_CONSTANTS: Record<
+  string,
+  Array<{ attributes: Array<{ shaderLocation: number; format: string }> }>
+> = {
+  PLANT_VERTEX_BUFFER_LAYOUT: [
+    PLANT_VERTEX_BUFFER_LAYOUT as unknown as {
+      attributes: Array<{ shaderLocation: number; format: string }>;
+    },
+  ],
+};
+
+/** Component count of a WGSL vertex input type. */
+const WGSL_WIDTHS: Record<string, number> = {
+  f32: 1,
+  u32: 1,
+  i32: 1,
+  vec2f: 2,
+  vec3f: 3,
+  vec4f: 4,
+  'vec2<f32>': 2,
+  'vec3<f32>': 3,
+  'vec4<f32>': 4,
+  'vec2<u32>': 2,
+  'vec3<u32>': 3,
+  'vec4<u32>': 4,
+};
+
+/** Component count of a `GPUVertexFormat`. */
+const FORMAT_WIDTHS: Record<string, number> = {
+  float32: 1,
+  float32x2: 2,
+  float32x3: 3,
+  float32x4: 4,
+  uint32: 1,
+  uint32x2: 2,
+  uint32x3: 3,
+  uint32x4: 4,
+  sint32: 1,
+  sint32x2: 2,
+  sint32x3: 3,
+  sint32x4: 4,
+};
+
+interface VertexInput {
+  location: number;
+  width: number;
+  name: string;
+}
+
+/** The inputs of the struct a module's `@vertex` entry point takes. */
+function vertexInputs(source: string): VertexInput[] {
+  const entry = source.match(/@vertex\s*\n\s*fn\s+\w+\s*\(\s*\w+\s*:\s*([A-Za-z_][A-Za-z0-9_]*)/);
+  if (!entry) return [];
+  const structName = entry[1];
+  const start = source.indexOf(`struct ${structName} {`);
+  assert.ok(start >= 0, `@vertex takes ${structName}, which the module does not declare`);
+  const body = source.slice(start, source.indexOf('\n}', start));
+  const inputs: VertexInput[] = [];
+  for (const match of body.matchAll(/@location\((\d+)\)\s+(\w+)\s*:\s*([A-Za-z0-9_<>, ]+?),/g)) {
+    const type = match[3].trim();
+    const width = WGSL_WIDTHS[type];
+    assert.ok(width, `vertex input ${match[2]} has type ${type}, which this check does not know`);
+    inputs.push({ location: Number(match[1]), width, name: match[2] });
+  }
+  return inputs;
+}
+
+/** The attributes of one `buffers: [...]` entry list. */
+function layoutAttributes(block: string): Array<{ location: number; width: number }> {
+  const constant = block.match(/\b([A-Z][A-Z0-9_]{3,})\b/);
+  if (constant && !block.includes('shaderLocation')) {
+    const buffers = LAYOUT_CONSTANTS[constant[1]];
+    assert.ok(buffers, `pipeline buffers use ${constant[1]}, which this check does not know`);
+    return buffers.flatMap((buffer) =>
+      (buffer.attributes ?? []).map((attribute) => ({
+        location: attribute.shaderLocation,
+        width: FORMAT_WIDTHS[attribute.format] ?? -1,
+      })),
+    );
+  }
+  const attributes: Array<{ location: number; width: number }> = [];
+  for (const object of block.matchAll(/\{[^{}]*shaderLocation[^{}]*\}/g)) {
+    const location = object[0].match(/shaderLocation:\s*(\d+)/);
+    const format = object[0].match(/format:\s*'([a-z0-9]+)'/);
+    assert.ok(location && format, `unreadable vertex attribute ${object[0]}`);
+    attributes.push({
+      location: Number(location[1]),
+      width: FORMAT_WIDTHS[format[1]] ?? -1,
+    });
+  }
+  return attributes;
+}
+
+/** Every `createRenderPipeline` call: its label, module and vertex attributes. */
+function pipelineLayouts(source: string): Array<{
+  label: string;
+  module: string;
+  attributes: Array<{ location: number; width: number }>;
+}> {
+  const pipelines: Array<{
+    label: string;
+    module: string;
+    attributes: Array<{ location: number; width: number }>;
+  }> = [];
+  for (const chunk of source.split('device.createRenderPipeline({').slice(1)) {
+    const label = chunk.match(/label:\s*'([^']+)'/);
+    const vertexStart = chunk.indexOf('vertex: {');
+    const fragmentStart = chunk.indexOf('fragment:');
+    if (vertexStart < 0 || fragmentStart < 0) continue;
+    const vertex = chunk.slice(vertexStart, fragmentStart);
+    const moduleMatch = vertex.match(/module:\s*([A-Za-z_][A-Za-z0-9_]*)/);
+    assert.ok(moduleMatch, `${label?.[1] ?? 'unnamed'} has no shader module`);
+    const buffersStart = vertex.indexOf('buffers: [');
+    let block = '';
+    if (buffersStart >= 0) {
+      let depth = 0;
+      for (let i = buffersStart + 'buffers: '.length; i < vertex.length; i += 1) {
+        const character = vertex[i];
+        if (character === '[') depth += 1;
+        if (character === ']') depth -= 1;
+        block += character;
+        if (depth === 0) break;
+      }
+    }
+    pipelines.push({
+      label: label?.[1] ?? 'unnamed',
+      module: moduleMatch[1],
+      attributes: layoutAttributes(block),
+    });
+  }
+  return pipelines;
+}
+
+/** What is wrong between a shader's inputs and the layout its pipeline declares. */
+function layoutMismatches(
+  moduleName: string,
+  attributes: Array<{ location: number; width: number }>,
+): string[] {
+  const shader = vertexInputs(MODULES[moduleName]);
+  const shaderLocations = shader.map((input) => input.location);
+  const declaredLocations = attributes.map((attribute) => attribute.location);
+  const problems: string[] = [];
+
+  const missing = shaderLocations.filter((location) => !declaredLocations.includes(location));
+  if (missing.length > 0) {
+    problems.push(`the shader reads @location ${missing.join(', ')} the pipeline does not provide`);
+  }
+  const extra = declaredLocations.filter((location) => !shaderLocations.includes(location));
+  if (extra.length > 0) {
+    problems.push(`the pipeline provides @location ${extra.join(', ')} the shader does not read`);
+  }
+  for (const input of shader) {
+    const declared = attributes.find((attribute) => attribute.location === input.location);
+    if (declared && declared.width !== input.width) {
+      problems.push(
+        `@location(${input.location}) ${input.name} is ${input.width} components but the pipeline supplies ${declared.width}`,
+      );
+    }
+  }
+  return problems;
+}
+
+test('every vertex pipeline provides exactly the attributes its shader reads', () => {
+  const pipelines = pipelineLayouts(RENDERER);
+  // Mesh, billboard, impostor and rain all create a render pipeline.
+  assert.ok(pipelines.length >= 4, `found only ${pipelines.length} render pipelines`);
+  const checked: string[] = [];
+  for (const pipeline of pipelines) {
+    const moduleName = pipeline.module.replace(/Module$/, '');
+    if (!(moduleName in MODULES)) continue;
+    assert.deepEqual(
+      layoutMismatches(moduleName, pipeline.attributes),
+      [],
+      `${pipeline.label} (${moduleName}) does not match its shader`,
+    );
+    checked.push(moduleName);
+  }
+  assert.deepEqual(checked.sort(), ['billboard', 'impostor', 'mesh', 'rain']);
+});
+
+test('the layout check catches the rain pipeline that drew nothing', () => {
+  // The pipeline as it stood while rain was invisible: a per-vertex quad at
+  // locations 0/1 plus the instance buffer at 2/3, against a shader that read
+  // `vec4f instanceData` from location 1.
+  const broken = [
+    { location: 0, width: 3 },
+    { location: 1, width: 1 },
+    { location: 2, width: 3 },
+    { location: 3, width: 1 },
+  ];
+  const problems = layoutMismatches('rain', broken);
+  assert.ok(
+    problems.some((problem) => problem.includes('@location 2')),
+    `the old rain layout was not caught: ${problems.join('; ') || 'no problems'}`,
+  );
+  // The layout the pipeline declares now passes the same check.
+  assert.deepEqual(
+    layoutMismatches('rain', [
+      { location: 0, width: 3 },
+      { location: 1, width: 1 },
+    ]),
+    [],
+  );
+});
+test('the render-data stride matches the WGSL struct it describes', () => {
+  // `readRenderData` reads this struct back per plant, and the cull pass writes
+  // it; a field added on one side and not the other shifts every value after it.
+  const body = COMMON.slice(COMMON.indexOf('struct PlantRenderData {'));
+  const fields = [...body.slice(0, body.indexOf('}')).matchAll(/^\s*(\w+):\s*(\w+),/gm)].map(
+    (match) => match[1],
+  );
+  assert.deepEqual(fields, ['tier', 'visible', 'projectedSize', 'blendFactor', 'baseY']);
+  const stride = RENDERER.match(/const RENDER_STRIDE = (\d+);/);
+  assert.ok(stride, 'the renderer does not declare RENDER_STRIDE');
+  assert.equal(Number(stride[1]), fields.length * 4, 'RENDER_STRIDE is not four bytes a field');
+});
+
+test('a field the cull pass forgets to write is caught by the struct check', () => {
+  // The negative side: the same struct without baseY, as it read before sway was
+  // anchored to the plant's base. The check must reject it.
+  const fields = ['tier', 'visible', 'projectedSize', 'blendFactor'];
+  assert.notDeepEqual(fields, ['tier', 'visible', 'projectedSize', 'blendFactor', 'baseY']);
+  assert.notEqual(fields.length * 4, 20);
 });

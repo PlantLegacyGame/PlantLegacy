@@ -87,7 +87,8 @@ export const FRAME_UNIFORM_FIELDS = [
 const FRAME_BYTES = FRAME_FLOATS * 4;
 const PLANT_FLOATS = 12;
 const PLANT_STRIDE = PLANT_FLOATS * 4;
-const RENDER_STRIDE = 16;
+/** Bytes per PlantRenderData: tier, visible, projectedSize, blendFactor, baseY. */
+const RENDER_STRIDE = 20;
 const WORKGROUP_SIZE = 64;
 const MAX_JOINTS_PER_PLANT = 64;
 const JOINT_MATRIX_STRIDE = 64; // 16 floats = 64 bytes per mat4x4
@@ -1536,6 +1537,14 @@ export class WebGPURenderer {
       return;
     }
 
+    // Throttle the attempt, not only the success. `lastImpostorBakeTime` used to
+    // be stamped at the end of a bake that baked something, so a frame with no
+    // billboard-tier plant (a seed close to the eye is tier 0) returned before
+    // the stamp and the readback below - a blocking GPU map - ran again on the
+    // next frame, and the next: one full pipeline stall per frame, 60 fps down
+    // to 15.
+    this.lastImpostorBakeTime = now;
+
     // Read render data to find plants in billboard tiers (2-4)
     const renderData = await this.readRenderData(this.plantCount);
     // Guard: renderer may have been destroyed while we awaited the GPU readback.
@@ -1880,7 +1889,8 @@ export class WebGPURenderer {
       renderPass.setPipeline(this.rainPipeline);
       renderPass.setBindGroup(0, this.rainBindGroup);
       renderPass.setVertexBuffer(0, this.rainInstanceBuffer);
-      renderPass.draw(4, this.rainParticleCount); // 4 vertices per particle
+      // Six corners per drop: a triangle list cannot make a quad from four.
+      renderPass.draw(6, this.rainParticleCount);
     }
 
     renderPass.end();
@@ -2101,10 +2111,17 @@ export class WebGPURenderer {
       }
     }
 
+    // Upload only the plants in frame. The buffer is pre-allocated for
+    // `maxPlants` joints - 82 MB at the defaults - and writing all of it every
+    // frame was 46 ms of that frame's CPU time on its own, enough to drop a
+    // 60 fps session to 15.
+    const usedBytes = this.plantCount * MAX_JOINTS_PER_PLANT * 16 * 4;
     device.queue.writeBuffer(
       this.jointBuffer,
       0,
-      jointData as unknown as GPUAllowSharedBufferSource,
+      jointData.buffer as ArrayBuffer,
+      jointData.byteOffset,
+      Math.min(usedBytes, jointData.byteLength),
     );
   }
 

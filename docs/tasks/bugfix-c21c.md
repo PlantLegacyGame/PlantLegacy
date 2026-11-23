@@ -677,7 +677,31 @@ of a drop that leaves the 60 m box round to the far side so the shower follows
 the eye. The dead quad buffer is deleted. A rainy frame now draws thin streaks
 (`webgpu-rain-fixed-4.png`).
 
-Two limits remain, both noted in E30. The three.js rain still draws alongside
-this pass, so the overlay doubles the weather instead of replacing it; and the
-WebGPU canvas carries no ground depth, so a drop behind a hill is not occluded.
-`webgpu_enabled` stays false in the shipped config.
+Hiding the WebGPU canvas in that rainy frame showed no rain at all, so this is
+the only rain pass in the overlay, not a second copy of the three.js one; the
+one limit left is that the canvas carries no ground depth, so a drop behind a
+hill is not occluded. `webgpu_enabled` stays false in the shipped config.
+
+Driving it turned up three more, all fixed and recorded as E31-E33. The frame
+cost a whole joint buffer per frame: `writeJointMatrices()` uploaded all 82 MB
+of the `maxPlants` x 64 x 16-float buffer even with one plant on screen, and
+`queue.writeBuffer` measured 46 ms of a 65 ms `render()` - 14 fps with the GPU
+idle, 60 fps once the write was limited to the plants in frame. The impostor
+baker ran a blocking readback every frame whenever no plant was at billboard
+tier, because its throttle was stamped only on a bake that baked something (E33).
+And the seed slid side to side because wind sway was measured from world Y: on a
+planet whose surface is 17 m up, every vertex of a plant hashes to the same
+near-maximal sway factor, so the whole mesh - seed included - translated as one
+block (E32). Sway is now measured from the bottom of each plant's bounding
+sphere, which the cull pass writes into `PlantRenderData` as `baseY`, and
+`RENDER_STRIDE` moved 16 -> 20 with it.
+
+The rain itself got its quad: a triangle list cannot make a quad from four
+vertices, so `draw(4, count)` had been drawing one triangle per drop since the
+pass first compiled - the "white dots or triangles" in the report. Six corners
+from a corner table make both triangles, and the colour came down from 0.66-0.91
+to 0.45-0.70 grey so a drop near the eye reads as water rather than a white
+speck. `shaderSmoke.test.ts` grew three checks to hold all of this: every
+`@location` a vertex shader reads against the layout its pipeline declares (with
+the old rain layout as the negative case), and the `PlantRenderData` fields
+against `RENDER_STRIDE`.

@@ -69,16 +69,20 @@ fn vs_main(input: VertexInput) -> VertexOutput {
 
   // Short enough to read as a drop: a quarter of the old length at the top of the
   // speed range, and still varied per drop.
-  let streakLength = rain.streakLength * (0.2 + 0.35 * speedShare) * (0.5 + 0.9 * seed);
+  let streakLength = rain.streakLength * (0.35 + 0.5 * speedShare) * (0.5 + 0.9 * seed);
   let width = rain.streakWidth * (0.7 + 1.1 * seed);
 
+  // A triangle list has no four-vertex quad: drawing four vertices per instance
+  // gave one triangle per drop, which is why rain read as white ticks. Six
+  // corners make the two triangles back to back.
+  let quadCorners = array<u32, 6>(0u, 1u, 2u, 2u, 1u, 3u);
   let localOffset = array<vec4f, 4>(
     vec4f(-0.5, -0.5, 0.0, 0.0),
     vec4f(0.5, -0.5, 0.0, 0.0),
     vec4f(-0.5, 0.5, 0.0, 0.0),
     vec4f(0.5, 0.5, 0.0, 0.0),
   );
-  let local = localOffset[input.vertexIndex];
+  let local = localOffset[quadCorners[input.vertexIndex]];
 
   // Face the camera in width, follow the world fall axis in length.
   let toEye = frame.cameraPos.xyz - pos;
@@ -112,6 +116,8 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4f {
   if (alpha < 0.004) {
     discard;
   }
-  // Water, not a lamp: neutral grey, cooler in the tail, never additive.
-  return vec4f(mix(vec3f(0.66, 0.71, 0.75), vec3f(0.84, 0.88, 0.91), 1.0 - y), alpha);
+  // Water, not a lamp: neutral grey, cooler in the tail, never additive. Kept
+  // under 0.6 so a drop caught close to the eye reads as grey water rather than
+  // a white speck against the soil.
+  return vec4f(mix(vec3f(0.45, 0.5, 0.55), vec3f(0.62, 0.66, 0.7), 1.0 - y), alpha);
 }
