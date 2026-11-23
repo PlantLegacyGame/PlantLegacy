@@ -434,3 +434,45 @@ term only and leave the ambient and the strata alone, so the shaded wall keeps i
 structure and the lit strip has something to contrast against. Do not strengthen
 `BOWL_LIP_SHADOW` - the geometry is already at 0.88 on the wall it is entitled to
 shade, and more would only deepen the same flatness.
+
+### The sheet is not what a buried eye sees - and where it is
+
+A buried Root Sight frame was reported as "the ground's back face and raw clods".
+Both halves are real, but they come from different places, and a clip of the
+terrain inside the aperture cannot reach either. Measured on a seedling pit
+(0.22 m) at noon, eye frozen 1.5 m under its own ground:
+
+- **4.6 m from the aperture centre**, `apertureSoil.visible` is `false` - the
+  body's footprint is 3.6 m and the renderer only draws it inside 3.35 m - and
+  the frame is exactly the sheet's underside: a brown expanse of soil cracks with
+  the plant's own top showing through a thimble-sized hole
+  (`underground-sheet-face.png`). This is the "back face", and it is what every
+  buried pose outside the body sees.
+- **Inside the footprint** the body is drawn, and its top is already 3 cm under
+  the sheet: the sheet is behind it, so the frame is the body's own interior -
+  the hollow between its outer skin and its shaft wall - which is the "raw clods".
+  The earlier zoom-out frame (eye 8 cm under the surface, 3.59 m out) is the
+  second case with the first one's cause: 3.59 m is outside the 3.35 m bound, so
+  no body was drawn at all.
+
+So "clip the terrain inside the aperture when the eye is below the surface" was
+implemented and measured as asked (`uRootSightSectionRadius`, the sheet stood down
+over the body's footprint, keeping a hand's breadth over the eye so the body's own
+near-cut bubble cannot look through both holes at once; four pinning tests). At
+1.2 m under, 2.4 m out on the seedling and 5.4 m out on a 4.9 m pit, the before
+and after frames are the same picture: 1.7 % and 4.5 % of pixels differ and all of
+it is the weather's light level (67.7 -> 64.6 in the HUD) - the cut fires only
+where the body was already standing in front of the sheet, so it removes a surface
+nobody could see. Reverted rather than shipped as a no-op; the frames are kept as
+`underground-before/after-022.png` and `-49.png`.
+
+Two changes would actually move the picture, in this order:
+
+1. **Keep a buried eye inside the body.** Root Sight lets the camera sit under the
+   surface anywhere, and everywhere outside the 3.6 m footprint there is nothing
+   in the world but the back of the sheet. Clamping a buried eye into the body's
+   plan (the same idea as `clampToCavity`) makes the earth body what surrounds it.
+2. **Cap the section.** The body is a hollow shell, so cutting it only shows its
+   inside; a section needs a filled face - a strata-banded slice through the body
+   on the eye's side of the pit, with the bowl's near half clipped by the same
+   plane, or the near bowl wall stands in front of the slice.
