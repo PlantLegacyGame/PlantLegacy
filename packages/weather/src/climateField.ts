@@ -70,7 +70,10 @@ export interface ClimateTime {
   elapsedS: number;
   /** 0..1 through the day; 0.25 is sunrise, 0.5 noon. */
   dayFraction: number;
-  /** 0..1 through the year. Drives the seasonal temperature swing. */
+  /**
+   * 0..1 through the year: 0 is the first day of spring, 0.25 midsummer,
+   * 0.5 midautumn, 0.75 midwinter. Drives the seasonal temperature swing.
+   */
   seasonPhase?: number;
 }
 
@@ -132,8 +135,10 @@ export function createClimateField(
   terrain?: ClimateTerrain | null,
 ): ClimateField {
   const scale = Math.max(1, config.systemScaleM);
-  const windX = Math.cos(config.windDirectionRad) * config.windSpeedMps;
-  const windZ = Math.sin(config.windDirectionRad) * config.windSpeedMps;
+  const dirX = Math.cos(config.windDirectionRad);
+  const dirZ = Math.sin(config.windDirectionRad);
+  const windX = dirX * config.windSpeedMps;
+  const windZ = dirZ * config.windSpeedMps;
   const ahead = Math.max(1, config.orographicDistanceM);
 
   return {
@@ -164,8 +169,14 @@ export function createClimateField(
       let height = 0;
       if (terrain) {
         height = terrain(x, z);
-        const upwindHeight = terrain(x + windX * ahead, z + windZ * ahead);
-        const upslope = (height - upwindHeight) / ahead;
+        // `ahead` is a distance, so the sample is one wind *direction* away.
+        // Multiplying it by the speed turned the configured 120 m into 720 m
+        // at 6 m/s, which made the lift depend on how fast the wind blew
+        // rather than on the ridge under it. And the air gains humidity by
+        // climbing the slope in front of it, so the rise is ahead minus here:
+        // subtracting the other way rewarded the lee slope after the crest.
+        const aheadHeight = terrain(x + dirX * ahead, z + dirZ * ahead);
+        const upslope = (aheadHeight - height) / ahead;
         lift = Math.max(0, upslope) * config.orographicLift;
         humidity += lift;
       }
@@ -183,7 +194,11 @@ export function createClimateField(
             );
 
       // Temperature: the season, the hour, the altitude and the local air.
-      const seasonSwing = Math.cos(season * Math.PI * 2) * config.temperatureSeasonSwingC;
+      // The season phase starts at spring, so a sine puts the year's warmth at
+      // midsummer and its cold at midwinter. A cosine put the hottest day of
+      // the year on the first day of spring and the coldest on the first day of
+      // autumn, which moved the snow line into the wrong season entirely.
+      const seasonSwing = Math.sin(season * Math.PI * 2) * config.temperatureSeasonSwingC;
       const daySwing = Math.sin((day - 0.25) * Math.PI * 2) * config.temperatureDaySwingC;
       const altitude = -height * config.altitudeLapseCPerM;
       const texture = (humidityNoise - 0.5) * 2 * config.temperatureNoiseC;

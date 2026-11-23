@@ -99,6 +99,15 @@ export class WeatherSystem {
     });
   }
 
+  /**
+   * The field's reading at the anchor right now, for logs and diagnostics.
+   * The state machine already reads through its binding; this is how an
+   * operator can see what the sky was doing when it changed.
+   */
+  getClimateSample(): ClimateSample | null {
+    return this.field ? this.sampleClimate() : null;
+  }
+
   /** Where the weather is read: a plant's root, so a ridge has its own sky. */
   setClimateAnchor(x: number, z: number): void {
     if (!Number.isFinite(x) || !Number.isFinite(z)) return;

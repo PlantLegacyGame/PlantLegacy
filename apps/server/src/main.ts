@@ -2552,8 +2552,27 @@ class World {
     this.weatherSystem.setSeasonPhase(
       ((((this.seasonClock.season - 1 + (1 - seasonRemaining / seasonLengthS)) % 4) + 4) % 4) / 4,
     );
+    const previousWeatherState = this.weatherSystem.getWeatherState();
     this.weatherSystem.update(dt);
     const weatherBroadcast = this.weatherSystem.getBroadcast();
+    // Weather used to leave no trace: after a day there was no way to say how
+    // much of it was wet, or whether the field ever crossed its threshold. One
+    // line per transition is the whole record, and it is cheap enough to keep.
+    if (weatherBroadcast.weatherState !== previousWeatherState) {
+      const sample = this.weatherSystem.getClimateSample();
+      this.log.info('weather changed', {
+        from: previousWeatherState,
+        to: weatherBroadcast.weatherState,
+        tick,
+        day: weatherBroadcast.dayNumber,
+        timeOfDay: Number(weatherBroadcast.timeOfDay.toFixed(4)),
+        season: this.seasonClock.season,
+        temperatureC: sample ? Number(sample.temperatureC.toFixed(1)) : null,
+        humidity: sample ? Number(sample.humidity.toFixed(3)) : null,
+        cloud: sample ? Number(sample.cloud.toFixed(3)) : null,
+        precipitation: sample ? Number(sample.precipitation.toFixed(3)) : null,
+      });
+    }
 
     // T06 runs after the weather has advanced so a gust and a lightning strike
     // use this tick's state, and before the resource pass so a plant that died

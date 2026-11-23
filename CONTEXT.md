@@ -709,8 +709,10 @@ advected noise, adds orographic lift from the real height field and the eye's
 ground, temperature from season, hour and altitude lapse, and rare storms from a
 coarser noise; the state machine keeps its durations and storm phases and asks
 the field, with hysteresis (0.28 start / 0.14 stop) and a 900 s storm cooldown.
-Over 30 simulated days: 20.8% wet, 2 storms, 8.2 minutes per state, rain 19% and
-snow 1.3% of the sky. Every purse mutation now emits `LEDGER_ENTRY` (48, protocol
+Over 30 simulated days with the corrected field: 23.8% wet, 2 storms, 7.1
+minutes per state, and snow 1.9% of the sky (the seasonal curve, orographic
+distance and humidity centre were corrected after a full live day found them;
+see `docs/tasks/bugfix-c21b.md` §4b). Every purse mutation now emits `LEDGER_ENTRY` (48, protocol
 v5) with the label, item, count, signed amount and committed balance, one wording
 rule in `packages/shared/src/economy/ledger.ts`, and the inventory panel lists the
 last 14. Record: [`docs/tasks/bugfix-c21b.md`](./docs/tasks/bugfix-c21b.md).

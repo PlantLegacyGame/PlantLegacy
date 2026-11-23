@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
+import { fileURLToPath } from 'node:url';
+import { loadConfigDir } from '@plant-legacy/shared/config';
 import { type ClimateConfig, createClimateField } from './climateField.ts';
-import type { DayNightConfig, WeatherConfig } from './weatherStateMachine.ts';
+import { loadClimateConfig, loadDayNightConfig, loadWeatherConfig } from './weather.ts';
 import {
   climateNextState,
   createWeatherStateMachine,
@@ -10,59 +12,14 @@ import {
   weatherStateMachineUpdate,
 } from './weatherStateMachine.ts';
 
-const CLIMATE: ClimateConfig = {
-  seed: 20261123,
-  systemScaleM: 900,
-  windSpeedMps: 6,
-  windDirectionRad: 0.7,
-  orographicDistanceM: 120,
-  orographicLift: 0.35,
-  temperatureBaseC: 14,
-  temperatureDaySwingC: 6,
-  temperatureSeasonSwingC: 9,
-  temperatureNoiseC: 2,
-  altitudeLapseCPerM: 0.0065,
-  humidityBase: 0.56,
-  humiditySwing: 0.3,
-  cloudThreshold: 0.6,
-  precipitationThreshold: 0.26,
-  snowThresholdC: 2.5,
-  stormCloudThreshold: 0.55,
-  stormChance: 0.25,
-  reevaluateS: 90,
-  stormCooldownS: 900,
-  precipitationStart: 0.28,
-  precipitationStop: 0.14,
-};
-
-const WEATHER: WeatherConfig = {
-  clearDurationMinS: 180,
-  clearDurationMaxS: 420,
-  rainDurationMinS: 120,
-  rainDurationMaxS: 300,
-  stormTelegraphDurationS: 45,
-  stormActiveDurationS: 90,
-  stormAftermathDurationS: 60,
-  rainMoistureGainPerS: 0.8,
-  stormMoistureGainPerS: 1.6,
-  clearLightMultiplier: 1.0,
-  rainLightMultiplier: 0.65,
-  stormLightMultiplier: 0.35,
-  stormWindDamageThreshold: 18,
-  stormWindDamageRate: 1.5,
-  lightningFrequencyPerMinute: 4,
-  lightningDamageRadius: 6,
-  lightningDamageAmount: 25,
-  forecastWindowS: 180,
-  biomeWeatherModifier: 1,
-};
-
-const DAY: DayNightConfig = {
-  cycleLengthS: 3600,
-  dayFraction: 0.66,
-  dawnDuskTransitionS: 60,
-  conditionMapping: { clear: 'sun', rain: 'rain', thunderstorm_telegraph: 'overcast' },
-};
+// The shipped numbers, not a copy: a config change that makes the field rain
+// every day (or never) has to fail the day-long test that describes the world.
+const configDir = fileURLToPath(new URL('../../../config', import.meta.url));
+const loaded = await loadConfigDir(configDir);
+if (!loaded.ok) throw new Error('config load failed');
+const CLIMATE: ClimateConfig = loadClimateConfig(loaded.configs);
+const WEATHER = loadWeatherConfig(loaded.configs);
+const DAY = loadDayNightConfig(loaded.configs);
 
 /** A ridge the wind has to climb, so orographic lift has something to lift over. */
 function hill(x: number, z: number): number {
@@ -134,6 +91,42 @@ describe('the climate field', () => {
       Math.abs(warm.temperatureC - cold.temperatureC - 400 * CLIMATE.altitudeLapseCPerM) < 1e-6,
       `${warm.temperatureC} vs ${cold.temperatureC}`,
     );
+  });
+
+  it('is warmest in summer and coldest in winter', () => {
+    const field = createClimateField(
+      { ...CLIMATE, temperatureDaySwingC: 0, temperatureNoiseC: 0 },
+      null,
+    );
+    const at = (seasonPhase: number): number =>
+      field.sample(0, 0, { elapsedS: 0, dayFraction: 0.5, seasonPhase }).temperatureC;
+    // Phase 0 is the first day of spring. Summer peaks a quarter of a year
+    // later and winter bottoms out three quarters after spring began.
+    assert.ok(at(0.25) > at(0) + 8, `summer ${at(0.25)} vs spring ${at(0)}`);
+    assert.ok(at(0.75) < at(0.5) - 8, `winter ${at(0.75)} vs autumn ${at(0.5)}`);
+    assert.ok(Math.abs(at(0) - at(0.5)) < 1e-9, 'the equinoxes should sit at the mean');
+  });
+
+  it('lifts air over the slope ahead, measured over the configured distance', () => {
+    const flat = createClimateField(CLIMATE, null);
+    const ridge = createClimateField(CLIMATE, hill);
+    const time = { elapsedS: 0, dayFraction: 0.5, seasonPhase: 0.1 };
+
+    // The wind climbs towards the crest, so the near face gains humidity.
+    const windwardFlat = flat.sample(-120, -100, time).humidity;
+    const windwardRidge = ridge.sample(-120, -100, time).humidity;
+    assert.ok(windwardRidge > windwardFlat + 0.03, `${windwardRidge} vs ${windwardFlat}`);
+
+    // Past the crest the ground falls away: descending air gains nothing. The
+    // old subtraction rewarded this lee slope instead of the windward one.
+    const leeFlat = flat.sample(120, 100, time).humidity;
+    const leeRidge = ridge.sample(120, 100, time).humidity;
+    assert.ok(Math.abs(leeRidge - leeFlat) < 1e-9, `${leeRidge} vs ${leeFlat}`);
+
+    // A distance is a distance: 12 m/s of wind must not stretch 120 m to 1440 m.
+    const calm = createClimateField({ ...CLIMATE, windSpeedMps: 1 }, hill);
+    const windy = createClimateField({ ...CLIMATE, windSpeedMps: 12 }, hill);
+    assert.equal(windy.sample(-120, -100, time).humidity, calm.sample(-120, -100, time).humidity);
   });
 
   it('snows below the snow line and rains above it', () => {

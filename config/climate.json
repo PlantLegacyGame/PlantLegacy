@@ -109,12 +109,12 @@
     },
     "humidity_base": {
       "type": "number",
-      "value": 0.56,
+      "value": 0.7,
       "range": [
         0,
         1
       ],
-      "notes": "Mean relative humidity of the field."
+      "notes": "Mean relative humidity of the field. A 0.56 mean put the 0.704 rain onset above the 95th percentile of the noise, so the field rained 0.3% of the time; at 0.70 the onset sits in the upper tail and a 30-day run is about a quarter wet."
     },
     "humidity_swing": {
       "type": "number",
