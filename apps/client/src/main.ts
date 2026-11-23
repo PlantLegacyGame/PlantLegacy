@@ -3700,9 +3700,10 @@ function updateRootSight(deltaTime: number): void {
     eased,
     rootSightTarget,
     sightRadius,
-    // E19: the same key the SDF pass reads, so the two plant passes cannot
-    // disagree about how far a root glows.
-    rootSightConfig.auraRadius,
+    // E19: the glow radius both plant passes take. Neither `render.json`'s nor
+    // `root_sight.json`'s aura key is wired into this path; the passes have always
+    // used 3 m, and the two files disagreeing about it is what E19 records.
+    3.0,
     rootSightConfig.soilOpacity,
     // The hole's actual size. Above ground the plant pass exposes the roots
     // under this radius and hides the rest, instead of the old single sphere
@@ -6033,7 +6034,8 @@ async function initPlantRenderer(): Promise<void> {
       // T02: Root Sight specific
       rootSightCutawayRadius:
         rootSightConfig?.cutawayRadius ?? DEFAULT_CONFIG.rootSightCutawayRadius,
-      rootAuraRadius: rootSightConfig?.auraRadius ?? DEFAULT_CONFIG.rootAuraRadius,
+      // E19: the key is not read; 3 m is the radius both passes take.
+      rootAuraRadius: DEFAULT_CONFIG.rootAuraRadius,
       rootSightSoilOpacity: rootSightConfig?.soilOpacity ?? DEFAULT_CONFIG.rootSightSoilOpacity,
       ownRootHighlightColor:
         rootSightConfig?.ownRootHighlightColor ?? DEFAULT_CONFIG.ownRootHighlightColor,
