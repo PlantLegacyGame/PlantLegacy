@@ -6,10 +6,14 @@
 // The old shader stretched every quad along the screen's up axis with one
 // hardcoded blue, which is why rain read as a wall of identical blue lines.
 
+// The instance buffer is the only vertex buffer this pass binds: each instance
+// is one drop (world position + fall velocity), and the quad corners come from
+// the vertex index. Reading a per-vertex quad buffer instead left every corner
+// of a drop identical, which is a zero-area quad and no visible rain at all.
 struct VertexInput {
-  @location(0) position: vec3f,
-  @location(1) instanceData: vec4f,
-  @builtin(instance_index) instanceIndex: u32,
+  @location(0) instancePosition: vec3f,
+  @location(1) velocity: f32,
+  @builtin(vertex_index) vertexIndex: u32,
 }
 
 struct VertexOutput {
@@ -31,9 +35,32 @@ fn dropSeed(position: vec3f) -> f32 {
 fn vs_main(input: VertexInput) -> VertexOutput {
   var output: VertexOutput;
 
-  let pos = input.instanceData.xyz;
-  let velocity = input.instanceData.w;
-  let seed = dropSeed(pos);
+  let home = input.instancePosition;
+  let velocity = input.velocity;
+  let seed = dropSeed(home);
+
+  // The drops fall: each one wraps through the box height on its own clock, so
+  // the field stays full and the shower reads as moving water rather than a
+  // field of static sprinkles.
+  let fallSpeed = rain.maxVelocity * velocity;
+  let boxHeight = max(rain.boxHeight, 0.001);
+  // `fract` rather than a remainder: WGSL has no `mod`, and `%` keeps the
+  // dividend's sign, which would drop half the field below the box.
+  let cycle = fract((home.y - frame.time * fallSpeed) / boxHeight);
+
+  // The field follows the eye. Each drop owns a world position, so the copy that
+  // falls outside the box wraps exactly one box width round to the far side;
+  // walking then moves the viewer through standing weather, and the volume never
+  // runs out behind you.
+  let eye = frame.cameraPos.xyz;
+  let boxWidth = max(rain.boxWidth, 0.001);
+  let halfWidth = boxWidth * 0.5;
+  let wrapped = (fract((home.xz - eye.xz + halfWidth) / boxWidth) - 0.5) * boxWidth;
+  let pos = vec3f(
+    eye.x + wrapped.x,
+    eye.y - boxHeight * 0.3 + cycle * boxHeight,
+    eye.z + wrapped.y,
+  );
 
   // Each drop its own lean, so the shower is not one ruled line.
   let lean = (seed - 0.5) * 0.5;
@@ -51,7 +78,7 @@ fn vs_main(input: VertexInput) -> VertexOutput {
     vec4f(-0.5, 0.5, 0.0, 0.0),
     vec4f(0.5, 0.5, 0.0, 0.0),
   );
-  let local = localOffset[input.instanceIndex % 4u];
+  let local = localOffset[input.vertexIndex];
 
   // Face the camera in width, follow the world fall axis in length.
   let toEye = frame.cameraPos.xyz - pos;

@@ -386,7 +386,6 @@ export class WebGPURenderer {
   private billboardBindGroup: GPUBindGroup | null = null;
   private rainBindGroup: GPUBindGroup | null = null;
 
-  private rainVertexBuffer: GPUBuffer | null = null;
   private rainInstanceBuffer: GPUBuffer | null = null;
   private rainUniformBuffer: GPUBuffer | null = null;
 
@@ -873,20 +872,15 @@ export class WebGPURenderer {
       vertex: {
         module: rainModule,
         entryPoint: 'vs_main',
+        // One buffer, one instance per drop: the shader builds the quad from
+        // the vertex index, so there is no per-vertex buffer to bind here.
         buffers: [
           {
-            arrayStride: 16, // position(12) + velocity(4)
-            attributes: [
-              { shaderLocation: 0, offset: 0, format: 'float32x3' },
-              { shaderLocation: 1, offset: 12, format: 'float32' },
-            ],
-          },
-          {
-            arrayStride: 16, // instance data: position(12) + velocity(4)
+            arrayStride: 16, // instance position(12) + velocity(4)
             stepMode: 'instance',
             attributes: [
-              { shaderLocation: 2, offset: 0, format: 'float32x3' }, // instance position
-              { shaderLocation: 3, offset: 12, format: 'float32' }, // instance velocity
+              { shaderLocation: 0, offset: 0, format: 'float32x3' }, // instance position
+              { shaderLocation: 1, offset: 12, format: 'float32' }, // instance velocity
             ],
           },
         ],
@@ -1437,30 +1431,9 @@ export class WebGPURenderer {
   }
 
   private createRainVertexBuffer(device: GPUDevice): void {
-    // Rain particles: each is a quad (4 vertices) with position + velocity + seed
-    // We'll use instancing: base quad geometry + per-instance data
+    // Rain particles: one instance per drop, holding its world position and fall
+    // velocity. The shader builds the four quad corners from the vertex index.
     const particleCount = this.config.rainParticleCount;
-
-    // Base quad vertices for instancing
-    const quadVertices = new Float32Array([
-      // Bottom-left
-      -0.5, -0.5, 0.0, 0.0,
-      // Bottom-right
-      0.5, -0.5, 0.0, 0.0,
-      // Top-left
-      -0.5, 0.5, 0.0, 0.0,
-      // Top-right
-      0.5, 0.5, 0.0, 0.0,
-    ]);
-
-    this.rainVertexBuffer = device.createBuffer({
-      label: 'Rain base quad vertices',
-      size: quadVertices.byteLength,
-      usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
-      mappedAtCreation: true,
-    });
-    new Float32Array(this.rainVertexBuffer.getMappedRange()).set(quadVertices);
-    this.rainVertexBuffer.unmap();
 
     // Instance data buffer (position, velocity, seed) per particle
     // stride: pos(3) + velocity(1) = 4 floats = 16 bytes per instance
@@ -1888,7 +1861,6 @@ export class WebGPURenderer {
     // 7. Rain (transparent, renders last on top)
     if (
       this.rainPipeline &&
-      this.rainVertexBuffer &&
       this.rainInstanceBuffer &&
       this.rainBindGroup &&
       this.rainUniformBuffer &&
@@ -1907,8 +1879,7 @@ export class WebGPURenderer {
 
       renderPass.setPipeline(this.rainPipeline);
       renderPass.setBindGroup(0, this.rainBindGroup);
-      renderPass.setVertexBuffer(0, this.rainVertexBuffer);
-      renderPass.setVertexBuffer(1, this.rainInstanceBuffer);
+      renderPass.setVertexBuffer(0, this.rainInstanceBuffer);
       renderPass.draw(4, this.rainParticleCount); // 4 vertices per particle
     }
 
@@ -2349,7 +2320,6 @@ export class WebGPURenderer {
         texture.destroy();
       }
     }
-    this.rainVertexBuffer?.destroy();
     this.rainInstanceBuffer?.destroy();
     this.rainUniformBuffer?.destroy();
     this.impostorViewsUniformBuffer?.destroy();
@@ -2367,7 +2337,6 @@ export class WebGPURenderer {
     this.impostorSlots.clear();
     this.textureArrays = null;
     this.textureArraySampler = null;
-    this.rainVertexBuffer = null;
     this.rainInstanceBuffer = null;
     this.rainUniformBuffer = null;
     this.impostorViewsUniformBuffer = null;

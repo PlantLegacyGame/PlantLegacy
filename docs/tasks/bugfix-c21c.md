@@ -656,8 +656,28 @@ member check in `rain`) and then restoring the fix. They are not a WGSL parser -
 there is no GPU in the test runner - but they are exactly the two classes of
 breakage that killed this pass.
 
-Two things the live check found. The palette ground is unchanged, as expected
-(`webgpu-requested-palette-ground2.png`, taken while the pass still fell back).
-And with the rain module finally compiling, a rainy frame shows rain drawn as
-soft grey ellipses a metre or two across - a new record, **E30**, since the pass
-had never drawn before. `webgpu_enabled` stays false in the shipped config.
+Two things the first live check found. The palette ground is unchanged, as
+expected (`webgpu-requested-palette-ground2.png`, taken while the pass still
+fell back). And a rainy frame grew soft grey ellipses a metre or two across,
+which were recorded as **E30** and blamed on the rain pass - wrongly. Hiding the
+WebGPU canvas left the ellipses in place, and setting the rain pass to zero
+instances left them too: they are the three.js weather's wet patches, exactly
+the puddles `rainSystem.ts` describes.
+
+The real E30 was worse and simpler. The rain pipeline bound a per-vertex quad
+buffer at `@location(0)`/`@location(1)` and the instance buffer at locations 2
+and 3, while `rain.wgsl` read `position` and a `vec4f instanceData` from
+locations 0 and 1. So `instanceData` was the quad's `w` (always 0), and every
+corner of a drop took the same `localOffset` entry - a zero-area quad, no drops
+at all, since the first time the module compiled. The fix keeps one vertex
+buffer (the instances, at locations 0 and 1), takes the quad corners from
+`@builtin(vertex_index)`, gives each drop its own fall clock through
+`rain_box_height` (using `fract`, because WGSL has no `mod`) and wraps the copy
+of a drop that leaves the 60 m box round to the far side so the shower follows
+the eye. The dead quad buffer is deleted. A rainy frame now draws thin streaks
+(`webgpu-rain-fixed-4.png`).
+
+Two limits remain, both noted in E30. The three.js rain still draws alongside
+this pass, so the overlay doubles the weather instead of replacing it; and the
+WebGPU canvas carries no ground depth, so a drop behind a hill is not occluded.
+`webgpu_enabled` stays false in the shipped config.
