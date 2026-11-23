@@ -132,3 +132,43 @@ window.__plantLegacy.devCavity.setRadius(null); // back to the plant's own sizin
   a 7 m cutaway sphere carries a 4.9 m mouth (0.7 of it), and forcing both to
   one number is how the bowl and the hole came to disagree before.
 - `null` clears it. Measured live: back to the seed's own 0.22 m in one frame.
+
+## 6. What the override exposed — odd sizes, 2026-11-23
+
+Two configurations, each looked at from above, from the rim and from inside:
+`{ cavityM: 0.7, apertureM: 4.9 }` (a cavity smaller than its mouth) and
+`{ cavityM: 3.57, apertureM: 2.5 }` (a mid-size pit at the config's 0.7 ratio).
+
+**The cavity radius does not size anything on screen.** The bowl's scale is the
+same at `cavityM` 0.7 and 7 for one mouth: 4.9 → `[4.90, 9.13]`, 2.5 →
+`[2.50, 4.66]`. The mouth and its depth rule drive the cut, the bowl, the earth
+body and the camera's in-the-opening test; `uRootSightRadius` reaches the soil
+shader in exactly one place, the fused-envelope blend
+`sminK = clamp(radius · 0.12, 0.06, 0.32)` — 0.084 m at 0.7 m against 0.32 m at
+7 m. So a mouth four times its cavity is drawn as a normal mouth-sized pit, the
+walls near the roots blend harder, and the HUD's `cutawayRadius 0.70` describes
+nothing that is on screen. Nothing clamps the mouth to the cavity.
+
+**The drawn bowl is 20–32 % deeper than the depth rule.** `verticalScale` is
+`depth / CAVITY_PROFILE_DEPTH` (1.02), but the geometry's top is the *conformed
+rim* — each lip vertex raised to its own ground, up to +0.21 native here and
++0.33 on the slope — while its floor sits at −1.02. Measured rim→floor:
+**5.73 m** at a 2.5 m mouth (`cavityDepthM` says 4.75) and **12.3 m** at 4.9
+(9.31). The aperture body is built to `cavityDepthM + 0.6`, so the bowl's floor
+is ~0.4 m below the body's at 2.5 m and ~2.4 m below it at 4.9 m. No hole
+appeared in any of the shots — the slab that was built once is 13.9 m deep —
+but the pit and the earth it is cut into no longer share a floor at size.
+
+**From straight above, a pit reads as a plate.** At both sizes the mouth is
+filled by a grey, radially-streaked disc with a lobed edge, and the wall is a
+thin ochre ring; from inside the same geometry reads correctly as a shaft. A
+top-down frame — or a player looking straight down — cannot tell the 5.7 m shaft
+from a dish.
+
+**The probe cannot separate the shell meshes.** `root-sight-bowl` and
+`root-sight-skirt` share one material (`===` in the page), `setVisible` is
+overwritten each frame for the shells and the terrain volume, and
+`tint()` colours both shells the same green. Hiding the skirt's material took
+the whole floor read with it, so which mesh draws the mouth-filling disc is
+still unattributed: `root-sight-skirt` is 192 vertices — a 96-segment ring — and
+is the one shell piece sized at 1.04 of the mouth circle.
