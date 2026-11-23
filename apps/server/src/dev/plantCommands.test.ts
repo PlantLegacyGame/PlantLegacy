@@ -187,6 +187,19 @@ describe('handlePlantCommand', () => {
     assert.deepEqual(responses[0]?.payload.rejected, []);
   });
 
+  it('chains each new root to the root it just grew, not back to the radicle', () => {
+    const { ports, calls } = createPorts();
+    handlePlantCommand(ports, { type: 'dev_grow_roots', count: 3 }, both);
+    const growCalls = calls.filter((c) => c.startsWith('grow:'));
+    // The first step asks the plant; every later step starts where the last
+    // node ended, so the chain descends instead of fanning out of one point.
+    assert.deepEqual(growCalls, [
+      'grow:root-1:lateral_root:0',
+      'grow:n0:lateral_root:2.399',
+      'grow:n2.399:lateral_root:4.798',
+    ]);
+  });
+
   it('clamps the root count and stops at the first refusal', () => {
     const { ports, calls, responses } = createPorts({
       rootParent: () => null,

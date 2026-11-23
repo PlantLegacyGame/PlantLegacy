@@ -140,12 +140,19 @@ export function handlePlantCommand(
       const steps = Math.max(1, Math.min(24, Number(action.count) || 6));
       const grown: string[] = [];
       const rejected: string[] = [];
+      // Chain from the node this command just grew, not from the plant's deepest
+      // root every time. A radicle and its laterals all sit at the same depth, so
+      // re-asking `rootParent()` handed back the radicle for every step and all
+      // the laterals came out of one point - a fan, not a chain of roots.
+      let chainFrom: string | null = null;
       for (let step = 0; step < steps; step += 1) {
         if (!ports.prepareRootGrowth()) {
           rejected.push('plant_gone');
           break;
         }
-        const parent = ports.rootParent();
+        const parent: { id: string; hasRoots: boolean } | null = chainFrom
+          ? { id: chainFrom, hasRoots: true }
+          : ports.rootParent();
         if (!parent) {
           rejected.push('no_parent');
           break;
@@ -162,6 +169,7 @@ export function handlePlantCommand(
           break;
         }
         if (result.growth.newNodeId) grown.push(result.growth.newNodeId);
+        chainFrom = result.growth.newNodeId ?? parent.id;
         ports.broadcastGrowth(result.growth);
       }
       ports.respond(action.type, { ok: true, grown, rejected });
