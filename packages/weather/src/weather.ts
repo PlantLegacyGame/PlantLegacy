@@ -9,6 +9,14 @@
 
 import type { ConfigFile } from '@plant-legacy/shared/config';
 import { readInteger, readNumber, readObject } from '@plant-legacy/shared/config';
+import {
+  type ClimateConfig,
+  type ClimateField,
+  type ClimateSample,
+  type ClimateTerrain,
+  createClimateField,
+  sanitizeClimateConfig,
+} from './climateField.ts';
 import type {
   DayNightConfig,
   WeatherConfig,
@@ -23,6 +31,7 @@ import {
   weatherStateMachineGetMoistureGainPerS,
   weatherStateMachineGetTimeOfDay,
   weatherStateMachineGetWeatherState,
+  weatherStateMachineSetClimate,
   weatherStateMachineSetTimeOfDay,
   weatherStateMachineSetTimePaused,
   weatherStateMachineSetTimeScale,
@@ -36,11 +45,82 @@ export class WeatherSystem {
   /** Ease time for the light multiplier, from daynight.json dawn_dusk_transition_s. */
   private readonly lightTransitionS: number;
   private smoothedLightMultiplier: number;
+  /** The field that decides the weather; null keeps the authored chain. */
+  private field: ClimateField | null = null;
+  private climateTerrain: ClimateTerrain | null = null;
+  /** Where the weather is being observed: the world's own plant, usually. */
+  private anchorX = 0;
+  private anchorZ = 0;
+  private seasonPhase = 0;
 
-  constructor(weatherConfig: WeatherConfig, dayNightConfig: DayNightConfig) {
+  constructor(
+    weatherConfig: WeatherConfig,
+    dayNightConfig: DayNightConfig,
+    climateConfig?: ClimateConfig | null,
+  ) {
     this.machine = createWeatherStateMachine(weatherConfig, dayNightConfig);
     this.lightTransitionS = Math.max(1, dayNightConfig.dawnDuskTransitionS);
     this.smoothedLightMultiplier = weatherStateMachineGetLightMultiplier(this.machine);
+    if (climateConfig) this.connectClimate(climateConfig);
+  }
+
+  /** Connect a climate field, rebuilding it if the terrain sampler changes. */
+  private connectClimate(config: ClimateConfig): void {
+    const sanitized = sanitizeClimateConfig(config);
+    this.field = createClimateField(sanitized, this.climateTerrain);
+    weatherStateMachineSetClimate(this.machine, {
+      sample: () => this.sampleClimate(),
+      reevaluateS: sanitized.reevaluateS,
+      precipitationStart: sanitized.precipitationStart,
+      precipitationStop: sanitized.precipitationStop,
+      stormCooldownS: sanitized.stormCooldownS,
+      cooldownS: 0,
+    });
+  }
+
+  /** The field at the observed point, right now. Null when no field is connected. */
+  getClimateSample(): ClimateSample | null {
+    return this.field ? this.sampleClimate() : null;
+  }
+
+  private sampleClimate(): ClimateSample {
+    // `field` is guaranteed by the caller (`getClimateSample`, the binding); the
+    // fallback keeps the type honest without a non-null assertion.
+    const field = this.field;
+    if (!field) {
+      return {
+        temperatureC: 0,
+        humidity: 0,
+        cloud: 0,
+        precipitation: 0,
+        kind: 'rain',
+        storm: false,
+      };
+    }
+    return field.sample(this.anchorX, this.anchorZ, {
+      elapsedS: this.machine.totalElapsedS,
+      dayFraction: this.machine.timeOfDay,
+      seasonPhase: this.seasonPhase,
+    });
+  }
+
+  /** Where the weather is read: a plant's root, so a ridge has its own sky. */
+  setClimateAnchor(x: number, z: number): void {
+    if (!Number.isFinite(x) || !Number.isFinite(z)) return;
+    this.anchorX = x;
+    this.anchorZ = z;
+  }
+
+  /** The terrain the wind lifts over. Reconnects the field around new terrain. */
+  setTerrainSampler(terrain: ClimateTerrain | null): void {
+    this.climateTerrain = terrain;
+    if (this.field) this.connectClimate(this.field.config);
+  }
+
+  /** 0..1 through the year, for the seasonal temperature swing. */
+  setSeasonPhase(phase: number): void {
+    if (!Number.isFinite(phase)) return;
+    this.seasonPhase = ((phase % 1) + 1) % 1;
   }
 
   update(dtSeconds: number): void {
@@ -104,6 +184,8 @@ export class WeatherSystem {
   }
 }
 
+export type { ClimateConfig, ClimateSample } from './climateField.ts';
+export { createClimateField, sanitizeClimateConfig } from './climateField.ts';
 export type {
   DayNightConfig,
   WeatherBroadcast,
@@ -134,6 +216,39 @@ export function loadWeatherConfig(configs: Map<string, ConfigFile>): WeatherConf
     forecastWindowS: readInteger(configs, 'weather', 'forecast_window_s'),
     biomeWeatherModifier: readNumber(configs, 'weather', 'biome_weather_modifier'),
   };
+}
+
+/**
+ * The climate field's numbers, from `config/climate.json`.
+ *
+ * Sanitised on the way in: a zero system scale or a NaN seed would make the
+ * field sample one point forever, and the weather would stop being weather.
+ */
+export function loadClimateConfig(configs: Map<string, ConfigFile>): ClimateConfig {
+  return sanitizeClimateConfig({
+    seed: readInteger(configs, 'climate', 'seed'),
+    systemScaleM: readNumber(configs, 'climate', 'system_scale_m'),
+    windSpeedMps: readNumber(configs, 'climate', 'wind_speed_mps'),
+    windDirectionRad: readNumber(configs, 'climate', 'wind_direction_rad'),
+    orographicDistanceM: readNumber(configs, 'climate', 'orographic_distance_m'),
+    orographicLift: readNumber(configs, 'climate', 'orographic_lift'),
+    temperatureBaseC: readNumber(configs, 'climate', 'temperature_base_c'),
+    temperatureDaySwingC: readNumber(configs, 'climate', 'temperature_day_swing_c'),
+    temperatureSeasonSwingC: readNumber(configs, 'climate', 'temperature_season_swing_c'),
+    temperatureNoiseC: readNumber(configs, 'climate', 'temperature_noise_c'),
+    altitudeLapseCPerM: readNumber(configs, 'climate', 'altitude_lapse_c_per_m'),
+    humidityBase: readNumber(configs, 'climate', 'humidity_base'),
+    humiditySwing: readNumber(configs, 'climate', 'humidity_swing'),
+    cloudThreshold: readNumber(configs, 'climate', 'cloud_threshold'),
+    precipitationThreshold: readNumber(configs, 'climate', 'precipitation_threshold'),
+    snowThresholdC: readNumber(configs, 'climate', 'snow_threshold_c'),
+    stormCloudThreshold: readNumber(configs, 'climate', 'storm_cloud_threshold'),
+    stormChance: readNumber(configs, 'climate', 'storm_chance'),
+    reevaluateS: readNumber(configs, 'climate', 'reevaluate_s'),
+    stormCooldownS: readNumber(configs, 'climate', 'storm_cooldown_s'),
+    precipitationStart: readNumber(configs, 'climate', 'precipitation_start'),
+    precipitationStop: readNumber(configs, 'climate', 'precipitation_stop'),
+  });
 }
 
 export function loadDayNightConfig(configs: Map<string, ConfigFile>): DayNightConfig {

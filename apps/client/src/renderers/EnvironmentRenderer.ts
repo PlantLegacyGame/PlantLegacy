@@ -1168,6 +1168,10 @@ export class EnvironmentRenderer {
       // through the soil face was the one thing that made Root Sight read as an
       // outdoor scene with a brown filter on it.
       this.rain.setVisible(!this.eyeUnderSoil);
+      // A crown that landed on the surface is water on the wrong side of the
+      // ground for an eye under it: the pass says so rather than drawing rings
+      // in the roof of the pit.
+      this.rain.setEyeUnderGround(this.eyeUnderSoil);
       this.rain.setMode(weatherTargets.isSnowing ? 'snow' : 'rain');
       // Every drop stops on the terrain under its own column, sampled from the
       // same height field the ground is drawn from.

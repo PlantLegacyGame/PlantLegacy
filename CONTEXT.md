@@ -660,7 +660,8 @@ placement), and the three unread tile keys (`tile_size_m`, `tile_vertices`,
 - **Spores are the only currency.** `ops/spores.ts` owns the purse maths
   (`starting_balance`, `earn_*`, `max_balance` in `config/spores.json`),
   `ops/shop.ts` owns the catalogue and the one purchase path, and the balance
-  rides on `INVENTORY_SYNC.sporeBalance` (protocol v4). The client never invents
+  rides on `INVENTORY_SYNC.sporeBalance` and on every `LEDGER_ENTRY`
+  (`packages/shared/src/economy/ledger.ts`, protocol v5). The client never invents
   a balance or a price: `SHOP_PURCHASE { itemId }` is all it sends. A signed-in
   account's pouch and purse now load from `player_state` after a restart; guests
   still reset to the configured starting state. Pouch and purse mutations are
@@ -691,6 +692,28 @@ drawn at the display's density, the client resolution fallback matches the file'
 0.75, Inspect names an owner or says "Unnamed plant" instead of printing an id, and
 the vitals clock names Dawn/Day/Dusk/Night with a sun or moon. Record:
 [`docs/tasks/bugfix-c21.md`](./docs/tasks/bugfix-c21.md).
+
+**2026-11-23 — the twenty-one defects, Wave B.** The other five causes of the
+same list are fixed: 5 and 6 (precipitation), 8 and 20 (weather), 18 (purse).
+Precipitation is anchored in the world, not to the camera: each drop owns a
+position in a torus of `rain_box_width` and draws the copy nearest the eye
+(`renderers/environment/precipitationAnchor.ts`), so walking moves nothing, a
+drop that leaves the volume re-enters the far side exactly one box away, and the
+mesh no longer follows the player horizontally. Snow is a six-armed crystal cut
+in the fragment shader. A landing throws an open-cone crown on the ground's own
+tangents and normal (double-sided, twelve tongues of spray), culled when the eye
+is behind it and hidden whole while the eye is under the soil. The weather is no
+longer a global Markov chain: `config/climate.json` feeds
+`packages/weather/src/climateField.ts`, which derives humidity and cloud from
+advected noise, adds orographic lift from the real height field and the eye's
+ground, temperature from season, hour and altitude lapse, and rare storms from a
+coarser noise; the state machine keeps its durations and storm phases and asks
+the field, with hysteresis (0.28 start / 0.14 stop) and a 900 s storm cooldown.
+Over 30 simulated days: 20.8% wet, 2 storms, 8.2 minutes per state, rain 19% and
+snow 1.3% of the sky. Every purse mutation now emits `LEDGER_ENTRY` (48, protocol
+v5) with the label, item, count, signed amount and committed balance, one wording
+rule in `packages/shared/src/economy/ledger.ts`, and the inventory panel lists the
+last 14. Record: [`docs/tasks/bugfix-c21b.md`](./docs/tasks/bugfix-c21b.md).
 
 ## 11. Keeping this file current
 

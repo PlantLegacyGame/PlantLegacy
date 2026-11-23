@@ -4,10 +4,10 @@
  * Three instanced passes, each one draw call:
  *
  * - **Drops** are thin quads stretched along the fall axis with a round head and
- *   a thinning wake. In snow mode the same instances draw round flakes, with a
- *   quarter of the fall speed and sideways drift.
- * - **Impact rings** open where water lands and throw no spray: one short-lived
- *   quad per ring, born and dead on its own clock.
+ *   a thinning wake. In snow mode the same instances draw six-armed crystals,
+ *   with a quarter of the fall speed and sideways drift.
+ * - **Splash crowns** rise where water lands: a ring of spikes that lifts off
+ *   the ground, hugs its slope and throws spray, born and dead on its own clock.
  * - **Wet patches** are what the weather leaves behind: shallow puddles that fill
  *   while it rains and dry out afterwards, or white drifts that settle and melt
  *   slowly while it snows.
@@ -15,12 +15,19 @@
  * Every drop and every patch reads the real terrain under it (`aGroundY`, baked
  * from the same height function the ground is drawn from), so weather stops on
  * the hillside rather than on a plane at the eye's altitude.
+ *
+ * Drops and splashes are anchored in the **world**, not to the eye: each one
+ * owns a home in a torus of the configured box width (`precipitationAnchor.ts`),
+ * so walking moves the viewer through standing weather instead of dragging the
+ * shower along. Only the copy of a drop that wraps to the far side changes its
+ * world position, and that is a jump of exactly one box width.
  */
 import { mulberry32 } from '@plant-legacy/shared/math';
 import { stepSurfaceCover } from '@plant-legacy/shared/weather';
 import * as THREE from 'three';
 import type { RenderConfig } from '../../config/clientConfig.js';
 import { worldColour } from '../worldPalette.ts';
+import { wrapToVolume } from './precipitationAnchor.ts';
 
 export type PrecipitationMode = 'rain' | 'snow';
 
@@ -51,12 +58,19 @@ export interface RainSystem {
    */
   setCutaway(centerX: number, centerZ: number, radiusM: number): void;
   /**
-   * Draw the impact rings or skip the pass entirely.
+   * Draw the splash crowns or skip the pass entirely.
    *
    * Hiding the mesh still costs the draw call, so an A/B that only sets
    * `visible = false` measures nothing: this removes the pass from the frame.
    */
   setSplashEnabled(enabled: boolean): void;
+  /**
+   * An eye under the soil must not see the crowns that a moment ago landed on
+   * it: from below they are floating rings of water on the wrong side of the
+   * ground. The shader also culls each crown seen from below its own slope; this
+   * is the whole-pass switch for the Root Sight pit.
+   */
+  setEyeUnderGround(under: boolean): void;
   /** Bake the terrain under each drop and patch. Null falls back to a plane. */
   setTerrainSampler(sample: ((x: number, z: number) => number) | null): void;
   /** Water or snow. Snow falls slower, wider, white, and settles. */
@@ -83,7 +97,11 @@ const RAIN_VERTEX_SHADER = /* glsl */ `
   uniform float uSizeScale;
   uniform float uSnow;
   uniform vec3 uHole;
-  attribute vec3 aOffset;
+  // World x/z of this drop's copy, and its own place in the fall cycle. The
+  // anchors are rewritten on the CPU only when a drop wraps, so the field stands
+  // in the world while the eye walks through it.
+  attribute vec2 aAnchor;
+  attribute float aFall;
   attribute float aSpeed;
   attribute float aLength;
   attribute float aPhase;
@@ -94,8 +112,8 @@ const RAIN_VERTEX_SHADER = /* glsl */ `
   varying float vFade;
 
   void main() {
-    vec3 p = aOffset;
-    float fallen = mod(uTime * aSpeed * uFallScale + aOffset.y, uBoxHeight);
+    vec3 p = vec3(aAnchor.x, 0.0, aAnchor.y);
+    float fallen = mod(uTime * aSpeed * uFallScale + aFall, uBoxHeight);
     p.y = uBoxHeight - fallen;
     // Wind is a gust, not a constant lean. Each drop has its own lean and its own
     // sway, so the field moves like weather instead of sliding down as one rigid
@@ -131,10 +149,10 @@ const RAIN_VERTEX_SHADER = /* glsl */ `
     }
 
     // Weather ends where the ground is, and the ground is the real terrain under
-    // this drop - a hillside, not a plane at the eye's altitude. Ground heights
-    // are world heights, so bring them into the mesh's local space first.
+    // this drop - a hillside, not a plane at the eye's altitude. The anchor is a
+    // world position, so the baked height is compared directly.
     float groundWorld = aGroundY > -1e5 ? aGroundY : uGroundY;
-    float aboveGround = world.y - (groundWorld - modelMatrix[3].y);
+    float aboveGround = world.y - groundWorld;
     bool inHole = uHole.z > 0.01 && distance(world.xz, uHole.xy) < uHole.z * 0.86;
     // Snow is drawn fat, so the same count that reads as a shower reads as a
     // swarm: the flakes that show are the ones with a low phase.
@@ -171,10 +189,27 @@ const RAIN_FRAGMENT_SHADER = /* glsl */ `
     float x = (vUv.x - 0.5) * 2.0;
     float y = vUv.y;
     if (uSnow > 0.5) {
-      // A flake is a round, soft dot with a bright core: no wake, no stretch.
-      float d = length(vec2(x, (y - 0.5) * 2.0));
-      float flake = 1.0 - smoothstep(0.45, 1.0, d);
-      float alpha = uOpacity * flake * vFade * uLight;
+      // A flake is a six-armed crystal, not a dot. The old round speck was the
+      // one thing that made snow read as dust: real flakes are hexagonal plates
+      // with six spokes and side branches, and that silhouette is what the eye
+      // recognises even at a dozen pixels. Drawn in the quad's own space, so it
+      // stays a crystal at every distance.
+      vec2 q = vec2(x, (y - 0.5) * 2.0);
+      float r = length(q);
+      if (r > 1.0) discard;
+      float ang = atan(q.y, q.x);
+      // Six spokes: |cos(3w)| is 1 on six axes and 0 between them.
+      float spokes = pow(max(0.0, abs(cos(3.0 * ang))), 16.0);
+      // The spokes thin towards the rim, so the crystal has points, not a hexagon.
+      float spokeBody = spokes * (1.0 - smoothstep(0.55, 0.98, r));
+      // Side branches at half radius: two short chevrons per spoke.
+      float branchAxis = pow(max(0.0, abs(cos(3.0 * (ang - 0.42)))), 44.0);
+      float branchBand = exp(-pow((r - 0.58) / 0.13, 2.0));
+      float branches = branchAxis * branchBand * 0.75;
+      // A small bright core where the arms meet.
+      float core = 1.0 - smoothstep(0.0, 0.26, r);
+      float crystal = max(max(spokeBody, branches), core * 0.9);
+      float alpha = uOpacity * crystal * vFade * uLight;
       if (alpha < 0.004) discard;
       gl_FragColor = vec4(uColor, alpha);
       return;
@@ -193,37 +228,55 @@ const RAIN_FRAGMENT_SHADER = /* glsl */ `
 `;
 
 /**
- * Impact rings. A shower with no splash is water passing through the world: the
- * ground never answers it. One instanced quad per ring, laid flat, born and dead
- * on its own clock so the ground speckles instead of pulsing in step.
+ * Splash crowns. A shower with no splash is water passing through the world: the
+ * ground never answers it.
+ *
+ * The old pass drew one flat horizontal quad per landing, a single-sided ring at
+ * a fixed 4 cm above sea-level ground. On a slope half of it floated, from below
+ * it vanished, and it threw nothing: the ground looked like it was showing a
+ * decal rather than absorbing a drop. A crown is now a short open cone standing
+ * on the ground's own normal, with twelve tongues of water rising off it. The
+ * geometry is double-sided, and each instance is culled when the eye is under
+ * its own piece of ground, so it cannot be seen from inside the hill.
  */
 const SPLASH_VERTEX_SHADER = /* glsl */ `
   uniform float uTime;
   uniform float uSpread;
+  uniform float uCrownHeight;
   uniform vec3 uHole;
-  attribute vec2 aGround;
+  attribute vec2 aAnchor;
+  attribute float aGroundY;
+  attribute vec3 aTanU;
+  attribute vec3 aTanV;
   attribute float aPhase;
   attribute float aRate;
-  attribute float aGroundY;
   varying vec2 vUv;
   varying float vAge;
 
   void main() {
     float age = fract(uTime * aRate + aPhase);
-    // A drop hits a point and the water leaves it: the ring widens as it fades.
-    float radius = mix(0.035, uSpread, age);
-    vec3 local = vec3(aGround.x + position.x * radius, aGroundY + 0.04, aGround.y + position.y * radius);
-    // A ring inside the opening is a ring on air: the ground is cut away there.
-    vec4 world = modelMatrix * vec4(local, 1.0);
-    if (uHole.z > 0.01 && distance(world.xz, uHole.xy) < uHole.z * 0.9) {
+    // The normal of the ground this crown stands on, from the two tangents baked
+    // with it: the crown leans with the slope instead of sinking into it.
+    vec3 groundNormal = normalize(cross(aTanV, aTanU));
+    vec3 base = vec3(aAnchor.x, aGroundY + 0.012, aAnchor.y);
+    float radius = mix(0.03, uSpread, sqrt(age));
+    // A hit throws water up and then lets it fall apart as the crown widens.
+    float crown = uCrownHeight * sin(min(age, 1.0) * 3.14159) * 0.85;
+    vec3 local = vec3(position.x * radius, (position.y + 0.5) * crown, position.z * radius);
+    vec3 world = base + aTanU * local.x + aTanV * local.z + groundNormal * local.y;
+    bool inHole = uHole.z > 0.01 && distance(world.xz, uHole.xy) < uHole.z * 0.9;
+    // An eye under this piece of ground would be looking at the inside of the
+    // crown. The whole pass is also switched off while the eye is under the soil.
+    float eyeAbove = dot(cameraPosition - base, groundNormal);
+    if (inHole || eyeAbove < 0.02) {
       vUv = uv;
-      vAge = 1.0;
+      vAge = age;
       gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
       return;
     }
     vUv = uv;
     vAge = age;
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(local, 1.0);
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(world, 1.0);
   }
 `;
 
@@ -235,12 +288,15 @@ const SPLASH_FRAGMENT_SHADER = /* glsl */ `
   varying float vAge;
 
   void main() {
-    vec2 p = (vUv - 0.5) * 2.0;
-    float d = length(p);
-    // A ring that widens and thins, never a filled disc: a disc reads as a puddle
-    // appearing and vanishing rather than water spreading.
-    float ring = smoothstep(0.42 + 0.26 * vAge, 0.92, d) * (1.0 - smoothstep(0.92, 1.0, d));
-    float alpha = uOpacity * ring * (1.0 - vAge) * uLight;
+    // Twelve tongues of water around the crown, each reaching higher than the gap
+    // beside it: that silhouette is the spray. A smooth band reads as a ring
+    // standing on edge, which is not what a drop does to the ground.
+    float tongue = pow(max(0.0, sin(vUv.x * 6.2831 * 12.0)), 3.0);
+    float top = mix(0.32, 1.0, tongue);
+    float reach = 1.0 - smoothstep(top - 0.14, top, vUv.y);
+    // The crown fades as it falls apart.
+    float fade = (1.0 - vAge) * (1.0 - vAge * 0.55);
+    float alpha = uOpacity * reach * fade * uLight;
     if (alpha < 0.004) discard;
     gl_FragColor = vec4(uColor, alpha);
   }
@@ -349,7 +405,14 @@ export function createRainSystem(
   showRain = true,
 ): RainSystem {
   const count = config.rainParticleCount;
-  const offsets = new Float32Array(count * 3);
+  // Where each drop belongs in the world, relative to the volume's own origin.
+  // The wrapping copy (`anchors`) is the world x/z actually drawn, and it only
+  // changes when a drop wraps to the far side.
+  const homes = new Float32Array(count * 2);
+  // NaN until the first anchor pass, so every drop's ground is baked once even
+  // when its home happens to sit exactly on the origin.
+  const anchors = new Float32Array(count * 2).fill(Number.NaN);
+  const fallPhases = new Float32Array(count);
   const speeds = new Float32Array(count);
   const lengths = new Float32Array(count);
   const phases = new Float32Array(count);
@@ -366,9 +429,9 @@ export function createRainSystem(
     // all. The stronger pull keeps the rain where it is read as rain.
     const radius = rand() ** 0.5 * 0.5 * w;
     const angle = rand() * Math.PI * 2;
-    offsets[i * 3 + 0] = Math.cos(angle) * radius;
-    offsets[i * 3 + 1] = rand() * h;
-    offsets[i * 3 + 2] = Math.sin(angle) * radius;
+    homes[i * 2 + 0] = Math.cos(angle) * radius;
+    homes[i * 2 + 1] = Math.sin(angle) * radius;
+    fallPhases[i] = rand() * h;
     speeds[i] = config.rainParticleSpeed * (0.85 + rand() * 0.3);
     lengths[i] = config.rainStreakLength * (0.35 + rand() * 0.55);
     // A different lean and a different girth per drop: a shower where every drop
@@ -384,7 +447,10 @@ export function createRainSystem(
   geometry.setAttribute('position', quad.getAttribute('position'));
   geometry.setAttribute('uv', quad.getAttribute('uv'));
   geometry.instanceCount = count;
-  geometry.setAttribute('aOffset', new THREE.InstancedBufferAttribute(offsets, 3));
+  const anchorAttribute = new THREE.InstancedBufferAttribute(anchors, 2);
+  anchorAttribute.setUsage(THREE.DynamicDrawUsage);
+  geometry.setAttribute('aAnchor', anchorAttribute);
+  geometry.setAttribute('aFall', new THREE.InstancedBufferAttribute(fallPhases, 1));
   geometry.setAttribute('aSpeed', new THREE.InstancedBufferAttribute(speeds, 1));
   geometry.setAttribute('aLength', new THREE.InstancedBufferAttribute(lengths, 1));
   geometry.setAttribute('aPhase', new THREE.InstancedBufferAttribute(phases, 1));
@@ -428,41 +494,58 @@ export function createRainSystem(
   mesh.visible = false;
   if (showRain) scene.add(mesh);
 
-  // Splashes share the drop count's budget at a twelfth of it: rings are cheap but
-  // they are not the weather, the drops are.
+  // Splashes share the drop count's budget at a twelfth of it: crowns are cheap
+  // but they are not the weather, the drops are.
   const splashCount = Math.max(64, Math.round(count * 0.12));
-  const groundXZ = new Float32Array(splashCount * 2);
+  const splashHomes = new Float32Array(splashCount * 2);
+  const splashAnchors = new Float32Array(splashCount * 2).fill(Number.NaN);
   const splashGround = new Float32Array(splashCount);
+  const splashTanU = new Float32Array(splashCount * 3);
+  const splashTanV = new Float32Array(splashCount * 3);
   const splashPhases = new Float32Array(splashCount);
   const splashRates = new Float32Array(splashCount);
   const splashRand = mulberry32(SPLASH_SEED);
   for (let i = 0; i < splashCount; i += 1) {
-    // Rings only where they can be seen: within a dozen metres of the eye.
+    // Crowns only where they can be seen: within a dozen metres of the viewer.
     const radius = splashRand() ** 0.6 * 12;
     const angle = splashRand() * Math.PI * 2;
-    groundXZ[i * 2 + 0] = Math.cos(angle) * radius;
-    groundXZ[i * 2 + 1] = Math.sin(angle) * radius;
+    splashHomes[i * 2 + 0] = Math.cos(angle) * radius;
+    splashHomes[i * 2 + 1] = Math.sin(angle) * radius;
     splashPhases[i] = splashRand();
     splashRates[i] = 0.9 + splashRand() * 0.9;
+    // Flat until the terrain is sampled, like the patches.
+    splashTanU[i * 3 + 0] = 1;
+    splashTanV[i * 3 + 2] = 1;
   }
 
-  const splashQuad = new THREE.PlaneGeometry(1, 1);
+  // An open cone, no caps: the crown's wall. Twelve sides is enough for the
+  // twelve tongues the fragment shader cuts out of it.
+  const splashCone = new THREE.CylinderGeometry(0.42, 1, 1, 12, 1, true);
   const splashGeometry = new THREE.InstancedBufferGeometry();
-  splashGeometry.index = splashQuad.index;
-  splashGeometry.setAttribute('position', splashQuad.getAttribute('position'));
-  splashGeometry.setAttribute('uv', splashQuad.getAttribute('uv'));
+  splashGeometry.index = splashCone.index;
+  splashGeometry.setAttribute('position', splashCone.getAttribute('position'));
+  splashGeometry.setAttribute('uv', splashCone.getAttribute('uv'));
   splashGeometry.instanceCount = splashCount;
-  splashGeometry.setAttribute('aGround', new THREE.InstancedBufferAttribute(groundXZ, 2));
+  const splashAnchorAttribute = new THREE.InstancedBufferAttribute(splashAnchors, 2);
+  splashAnchorAttribute.setUsage(THREE.DynamicDrawUsage);
+  splashGeometry.setAttribute('aAnchor', splashAnchorAttribute);
   splashGeometry.setAttribute('aPhase', new THREE.InstancedBufferAttribute(splashPhases, 1));
   splashGeometry.setAttribute('aRate', new THREE.InstancedBufferAttribute(splashRates, 1));
   const splashGroundAttribute = new THREE.InstancedBufferAttribute(splashGround, 1);
   splashGroundAttribute.setUsage(THREE.DynamicDrawUsage);
   splashGeometry.setAttribute('aGroundY', splashGroundAttribute);
+  const splashTanUAttribute = new THREE.InstancedBufferAttribute(splashTanU, 3);
+  splashTanUAttribute.setUsage(THREE.DynamicDrawUsage);
+  splashGeometry.setAttribute('aTanU', splashTanUAttribute);
+  const splashTanVAttribute = new THREE.InstancedBufferAttribute(splashTanV, 3);
+  splashTanVAttribute.setUsage(THREE.DynamicDrawUsage);
+  splashGeometry.setAttribute('aTanV', splashTanVAttribute);
 
   const splashMaterial = new THREE.ShaderMaterial({
     uniforms: {
       uTime: { value: 0 },
-      uSpread: { value: 0.17 },
+      uSpread: { value: 0.19 },
+      uCrownHeight: { value: 0.075 },
       uColor: { value: worldColour('sky_horizon') },
       uOpacity: { value: 0.5 },
       uLight: { value: 1 },
@@ -472,6 +555,9 @@ export function createRainSystem(
     fragmentShader: SPLASH_FRAGMENT_SHADER,
     transparent: true,
     depthWrite: false,
+    // A crown is a thin wall of water: it has an outside and an inside, and both
+    // are water. Single-sided, half the ring disappeared as the eye moved.
+    side: THREE.DoubleSide,
     blending: THREE.NormalBlending,
   });
 
@@ -511,8 +597,8 @@ export function createRainSystem(
     return Math.min(LANDING_BINS - 1, Math.max(0, Math.floor(t)));
   };
   for (let i = 0; i < count; i += 1) {
-    const bx = landingBin(offsets[i * 3 + 0] ?? 0);
-    const bz = landingBin(offsets[i * 3 + 2] ?? 0);
+    const bx = landingBin(homes[i * 2 + 0] ?? 0);
+    const bz = landingBin(homes[i * 2 + 1] ?? 0);
     landing[bz * LANDING_BINS + bx] = (landing[bz * LANDING_BINS + bx] ?? 0) + 1;
   }
   let landingPeak = 0;
@@ -644,15 +730,107 @@ export function createRainSystem(
   // which falls back to the eye so a test scene still gets puddles.
   let groundAnchorX = Number.NaN;
   let groundAnchorZ = Number.NaN;
+  // True while the eye is under the drawn soil: a crown on the surface above it
+  // is water on the wrong side of the ground, and the pass is switched off.
+  let eyeUnderGround = false;
+  // The eye the field was last anchored to, so a fresh terrain sampler can
+  // re-bake around it without waiting for the next frame.
+  let lastFieldEyeX = 0;
+  let lastFieldEyeZ = 0;
 
-  /** Re-sample the terrain under every drop, ring and patch around the eye. */
-  const bakeGround = (eyeX: number, eyeZ: number): void => {
-    // `eyeX/eyeZ` is the cover's anchor (the player's feet), not necessarily the
-    // camera: see `setGroundAnchor`.
-    lastBakeX = eyeX;
-    lastBakeZ = eyeZ;
+  /** One place that decides whether the splash pass is drawn. */
+  const updateSplashVisibility = (): void => {
+    splashMesh.visible =
+      visible && splashesRequested && splashesAllowed && mode === 'rain' && !eyeUnderGround;
+  };
+
+  /**
+   * Ground and slope under one splash crown.
+   *
+   * A crown stands on the ground's own normal, so it needs the same two tangents
+   * the wet patches use. Sampled at the splash's world position, not at an offset
+   * from the eye: the landing belongs to the place it landed on.
+   */
+  const bakeSplash = (i: number, x: number, z: number): void => {
     if (!sampler) {
-      // No terrain field (a flat test world): everything sits on the plane under
+      splashGround[i] = eyeGroundY;
+      splashTanU[i * 3 + 0] = 1;
+      splashTanU[i * 3 + 1] = 0;
+      splashTanV[i * 3 + 1] = 0;
+      splashTanV[i * 3 + 2] = 1;
+      return;
+    }
+    splashGround[i] = sampler(x, z);
+    const step = 0.35;
+    const dx = (sampler(x + step, z) - sampler(x - step, z)) / (2 * step);
+    const dz = (sampler(x, z + step) - sampler(x, z - step)) / (2 * step);
+    const lenU = Math.hypot(1, dx) || 1;
+    const lenV = Math.hypot(1, dz) || 1;
+    splashTanU[i * 3 + 0] = 1 / lenU;
+    splashTanU[i * 3 + 1] = dx / lenU;
+    splashTanU[i * 3 + 2] = 0;
+    splashTanV[i * 3 + 0] = 0;
+    splashTanV[i * 3 + 1] = dz / lenV;
+    splashTanV[i * 3 + 2] = 1 / lenV;
+  };
+
+  /**
+   * Put the falling field where it belongs for this eye.
+   *
+   * Every frame, and cheap: a drop whose anchored copy did not wrap keeps the
+   * exact world position it had, which is what makes the shower stand still
+   * while the player walks through it. Only a drop that crossed the edge is
+   * rewritten, and only its own ground is re-sampled.
+   */
+  const anchorField = (eyeX: number, eyeZ: number): void => {
+    let dropsMoved = false;
+    for (let i = 0; i < count; i += 1) {
+      const x = wrapToVolume(homes[i * 2 + 0] ?? 0, eyeX, w);
+      const z = wrapToVolume(homes[i * 2 + 1] ?? 0, eyeZ, w);
+      const dx = Math.abs(x - (anchors[i * 2 + 0] ?? Number.NaN));
+      const dz = Math.abs(z - (anchors[i * 2 + 1] ?? Number.NaN));
+      if (dx < 1e-6 && dz < 1e-6) continue;
+      anchors[i * 2 + 0] = x;
+      anchors[i * 2 + 1] = z;
+      // The ground under the place this drop now stands, not under its home.
+      if (sampler) dropGround[i] = sampler(x, z);
+      dropsMoved = true;
+    }
+    if (dropsMoved) {
+      anchorAttribute.needsUpdate = true;
+      if (sampler) dropGroundAttribute.needsUpdate = true;
+    }
+
+    let splashesMoved = false;
+    for (let i = 0; i < splashCount; i += 1) {
+      const x = wrapToVolume(splashHomes[i * 2 + 0] ?? 0, eyeX, w);
+      const z = wrapToVolume(splashHomes[i * 2 + 1] ?? 0, eyeZ, w);
+      const dx = Math.abs(x - (splashAnchors[i * 2 + 0] ?? Number.NaN));
+      const dz = Math.abs(z - (splashAnchors[i * 2 + 1] ?? Number.NaN));
+      if (dx < 1e-6 && dz < 1e-6) continue;
+      splashAnchors[i * 2 + 0] = x;
+      splashAnchors[i * 2 + 1] = z;
+      bakeSplash(i, x, z);
+      splashesMoved = true;
+    }
+    if (splashesMoved) {
+      splashAnchorAttribute.needsUpdate = true;
+      splashGroundAttribute.needsUpdate = true;
+      splashTanUAttribute.needsUpdate = true;
+      splashTanVAttribute.needsUpdate = true;
+    }
+  };
+
+  /** Re-bake the wet cover around the ground anchor (the player's feet). */
+  const bakeGround = (anchorX: number, anchorZ: number): void => {
+    // `anchorX/anchorZ` is the cover's anchor (the player's feet), not necessarily
+    // the camera: see `setGroundAnchor`.
+    lastBakeX = anchorX;
+    lastBakeZ = anchorZ;
+    const eyeX = anchorX;
+    const eyeZ = anchorZ;
+    if (!sampler) {
+      // No terrain field (a flat test world): every patch sits on the plane under
       // the eye, which is what the old build did everywhere.
       for (let i = 0; i < patchCount; i += 1) {
         patchPos[i * 3 + 0] = eyeX + patchLocalX[i];
@@ -662,19 +840,6 @@ export function createRainSystem(
       patchPosAttribute.needsUpdate = true;
       return;
     }
-    for (let i = 0; i < count; i += 1) {
-      const x = eyeX + offsets[i * 3 + 0];
-      const z = eyeZ + offsets[i * 3 + 2];
-      dropGround[i] = sampler(x, z);
-    }
-    dropGroundAttribute.needsUpdate = true;
-    for (let i = 0; i < splashCount; i += 1) {
-      const x = eyeX + groundXZ[i * 2 + 0];
-      const z = eyeZ + groundXZ[i * 2 + 1];
-      // Rings sit a centimetre proud of the patch's own ground.
-      splashGround[i] = sampler(x, z);
-    }
-    splashGroundAttribute.needsUpdate = true;
     for (let i = 0; i < patchCount; i += 1) {
       const x = eyeX + patchLocalX[i];
       const z = eyeZ + patchLocalZ[i];
@@ -763,14 +928,18 @@ export function createRainSystem(
     setVisible(next: boolean) {
       visible = next;
       mesh.visible = next;
-      splashMesh.visible = next && splashesRequested && mode === 'rain';
       splashesAllowed = next;
+      updateSplashVisibility();
       // The ground cover is not hidden with the fall: it is what the shower left
       // behind, and it dries over the next half minute (see advance).
     },
     setSplashEnabled(enabled: boolean) {
       splashesRequested = enabled;
-      splashMesh.visible = enabled && splashesAllowed && mode === 'rain';
+      updateSplashVisibility();
+    },
+    setEyeUnderGround(under: boolean) {
+      eyeUnderGround = under;
+      updateSplashVisibility();
     },
     setGroundAnchor(x: number, z: number) {
       if (!Number.isFinite(x) || !Number.isFinite(z)) return;
@@ -778,10 +947,13 @@ export function createRainSystem(
       groundAnchorZ = z;
     },
     setGround(groundY: number, position: THREE.Vector3) {
-      splashMesh.position.set(position.x, 0, position.z);
+      // Both meshes stay at the origin horizontally: the drops carry their own
+      // world x/z, so there is nothing to follow. Only the vertical extent of the
+      // column is set, from the ground under the eye.
       material.uniforms.uGroundY.value = groundY;
       mesh.position.y = groundY;
       eyeGroundY = groundY;
+      void position;
     },
     setCutaway(centerX: number, centerZ: number, radiusM: number) {
       // A plan circle is enough: the cut is a vertical column of air, so anything
@@ -794,30 +966,36 @@ export function createRainSystem(
     setTerrainSampler(sample: ((x: number, z: number) => number) | null) {
       sampler = sample;
       lastBakeX = Number.POSITIVE_INFINITY;
-      bakeGround(mesh.position.x, mesh.position.z);
+      lastBakeZ = Number.POSITIVE_INFINITY;
+      // New terrain means every drop, crown and patch is standing on something
+      // it has never been measured against: reset the anchors and bake all.
+      anchors.fill(Number.NaN);
+      splashAnchors.fill(Number.NaN);
+      anchorField(lastFieldEyeX, lastFieldEyeZ);
+      bakeGround(lastFieldEyeX, lastFieldEyeZ);
     },
     setMode(next: PrecipitationMode) {
       mode = next;
       const isSnow = next === 'snow';
       material.uniforms.uSnow.value = isSnow ? 1 : 0;
       material.uniforms.uFallScale.value = isSnow ? 0.26 : 1;
-      material.uniforms.uSizeScale.value = isSnow ? 7 : 1;
-      // A flake is a fat, soft dot: at the rain's thin width it is a sub-pixel
-      // speck even against a bright sky.
+      material.uniforms.uSizeScale.value = isSnow ? 5 : 1;
+      // A crystal is a wide, soft shape: at the rain's thin width its arms are
+      // sub-pixel even against a bright sky.
       material.uniforms.uOpacity.value = isSnow ? 0.85 : 0.6;
       patchMaterial.uniforms.uSnow.value = isSnow ? 1 : 0;
-      splashMesh.visible = visible && splashesRequested && !isSnow;
+      updateSplashVisibility();
       // Snow is white whatever the hour; rain takes the light.
       (material.uniforms.uColor.value as THREE.Color).copy(worldColour('sky_horizon'));
       (splashMaterial.uniforms.uColor.value as THREE.Color).copy(worldColour('sky_horizon'));
     },
     follow(position: THREE.Vector3) {
-      // Follow the eye horizontally; the vertical span is set from the ground in
-      // setGround. Centring the box on the eye put half of it underground.
-      mesh.position.x = position.x;
-      mesh.position.z = position.z;
-      splashMesh.position.x = position.x;
-      splashMesh.position.z = position.z;
+      // The falling field is world-anchored: wrapping is all this does, and it
+      // moves only the drops that crossed the edge. The meshes themselves stay at
+      // the origin so nothing in the field slides with the eye.
+      lastFieldEyeX = position.x;
+      lastFieldEyeZ = position.z;
+      anchorField(position.x, position.z);
       // The cover is baked around the ground anchor, never around the eye. Zooming
       // or orbiting moves the camera several metres and used to rebuild every
       // puddle at a new spot; the ground under the player is what it belongs to.

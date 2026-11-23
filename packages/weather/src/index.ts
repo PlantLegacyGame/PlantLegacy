@@ -7,8 +7,23 @@
  * Dependencies: @plant-legacy/shared/math, @plant-legacy/shared/config
  */
 
-export { loadDayNightConfig, loadWeatherConfig, WeatherSystem } from './weather.ts';
 export {
+  type ClimateConfig,
+  type ClimateField,
+  type ClimateSample,
+  type ClimateTerrain,
+  createClimateField,
+  sanitizeClimateConfig,
+} from './climateField.ts';
+export {
+  loadClimateConfig,
+  loadDayNightConfig,
+  loadWeatherConfig,
+  WeatherSystem,
+} from './weather.ts';
+export {
+  type ClimateBinding,
+  climateNextState,
   createWeatherStateMachine,
   type DayNightConfig,
   type WeatherBroadcast,
@@ -24,5 +39,6 @@ export {
   weatherStateMachineGetTimeOfDay,
   weatherStateMachineGetWeatherState,
   weatherStateMachineIsDay,
+  weatherStateMachineSetClimate,
   weatherStateMachineUpdate,
 } from './weatherStateMachine.ts';

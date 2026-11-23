@@ -9,6 +9,7 @@
     "./config": "./src/config/index.ts",
     "./color": "./src/color/index.ts",
     "./damage": "./src/damage/index.ts",
+    "./economy": "./src/economy/index.ts",
     "./schemas": "./src/schemas/index.ts",
     "./events": "./src/events/index.ts",
     "./growth": "./src/growth/index.ts",

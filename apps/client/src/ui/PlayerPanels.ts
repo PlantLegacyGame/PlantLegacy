@@ -7,6 +7,7 @@
  * server-owned pouch. Nothing here edits plant state; item use is an intent.
  */
 
+import { type LedgerEntry, ledgerEntryText } from '@plant-legacy/shared/economy';
 import { ownerCaption } from '../render/rivalTagLabel.ts';
 import type { PlantPhase } from './PlantStatusHud.js';
 import {
@@ -111,6 +112,8 @@ export interface PlayerPanelsView {
   pressure?: Record<string, number>;
   inventory: Array<InventorySlotView | null>;
   maxSlots: number;
+  /** Why the purse moved, newest last. Absent until the server has sent one. */
+  ledger?: LedgerEntry[];
 }
 
 export interface PlayerPanelsOptions {
@@ -339,6 +342,15 @@ const STYLE = `
   .pl-slot__name { font-weight: 600; overflow-wrap: anywhere; padding-right: 12px; }
   .pl-slot__count { color: var(--leaf-200, #dfee8e); font-variant-numeric: tabular-nums; }
 
+  .pl-ledger-label { margin-top: 8px; color: var(--ink-dim, #9a937a); font-size: 0.62rem;
+    letter-spacing: 0.08em; text-transform: uppercase; }
+  .pl-ledger { display: grid; gap: 2px; margin-top: 3px; max-height: 8.2rem; overflow-y: auto; }
+  .pl-ledger__row { padding: 3px 5px; border-radius: 6px; font-size: 0.7rem;
+    color: var(--bone-200, #efe9d8); background: rgba(34, 42, 24, 0.35);
+    font-variant-numeric: tabular-nums; }
+  .pl-ledger__row[data-kind='award'], .pl-ledger__row[data-kind='drop'] {
+    color: var(--leaf-200, #dfee8e); }
+  .pl-ledger__empty { color: var(--ink-dim, #9a937a); font-size: 0.7rem; }
   .pl-item-detail { margin-top: 4px; padding: 8px 9px; border-radius: 9px;
     border: 1px solid rgba(126, 154, 74, 0.24); background: rgba(34, 42, 24, 0.42);
     display: grid; gap: 6px; }
@@ -482,6 +494,8 @@ export function createPlayerPanels(options: PlayerPanelsOptions = {}): PlayerPan
     <div class="pl-panel__body">
       <div id="pl-inventory-grid" class="pl-inventory-grid"></div>
       <div id="pl-item-detail" class="pl-item-detail"></div>
+      <div class="pl-ledger-label">Spore ledger</div>
+      <div id="pl-ledger" class="pl-ledger"></div>
       <div class="pl-panel__sub">Click a slot \u00B7 Use \u00B7 Esc closes panels</div>
     </div>`;
 
@@ -879,6 +893,26 @@ export function createPlayerPanels(options: PlayerPanelsOptions = {}): PlayerPan
         });
       }
       grid.appendChild(button);
+    }
+
+    // The ledger lists the newest change first: the line the player just caused is
+    // the one they are looking for, and it should not be at the bottom of a list.
+    const ledgerBox = must<HTMLElement>(inventory, '#pl-ledger');
+    ledgerBox.innerHTML = '';
+    const entries = [...(view.ledger ?? [])].reverse();
+    if (entries.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'pl-ledger__empty';
+      empty.textContent = 'No spore changes yet.';
+      ledgerBox.appendChild(empty);
+    } else {
+      for (const entry of entries) {
+        const row = document.createElement('div');
+        row.className = 'pl-ledger__row';
+        row.dataset.kind = entry.kind;
+        row.textContent = ledgerEntryText(entry);
+        ledgerBox.appendChild(row);
+      }
     }
 
     const detail = must<HTMLElement>(inventory, '#pl-item-detail');

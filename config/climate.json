@@ -1,0 +1,210 @@
+{
+  "_meta": {
+    "system": "climate",
+    "version": "0.1.0",
+    "schema": "extended-1",
+    "owner_task": "T07",
+    "status": "active",
+    "notes": "The planetary climate field that drives weather: advected humidity and cloud, orographic lift over terrain, temperature by season, hour and altitude, and rare thunderstorm cells. See packages/weather/src/climateField.ts."
+  },
+  "values": {
+    "seed": {
+      "type": "integer",
+      "value": 20261123,
+      "range": [
+        1,
+        2147483647
+      ],
+      "notes": "Field seed. The same seed reproduces the same climate on every server."
+    },
+    "system_scale_m": {
+      "type": "number",
+      "value": 900,
+      "range": [
+        100,
+        5000
+      ],
+      "notes": "Size of one weather system in metres. Smaller means more local variety."
+    },
+    "wind_speed_mps": {
+      "type": "number",
+      "value": 6,
+      "range": [
+        0,
+        40
+      ],
+      "notes": "Prevailing wind speed. Advects the field and drives orographic lift."
+    },
+    "wind_direction_rad": {
+      "type": "number",
+      "value": 0.7,
+      "range": [
+        0,
+        6.2832
+      ],
+      "notes": "Prevailing wind direction in radians, 0 = +x."
+    },
+    "orographic_distance_m": {
+      "type": "number",
+      "value": 120,
+      "range": [
+        10,
+        1000
+      ],
+      "notes": "Distance over which the upslope is measured for orographic lift."
+    },
+    "orographic_lift": {
+      "type": "number",
+      "value": 0.35,
+      "range": [
+        0,
+        5
+      ],
+      "notes": "Humidity gained per metre per second of upslope. Windward slopes cloud over first."
+    },
+    "temperature_base_c": {
+      "type": "number",
+      "value": 14,
+      "range": [
+        -20,
+        40
+      ],
+      "notes": "Mean temperature at sea level, mid-season."
+    },
+    "temperature_day_swing_c": {
+      "type": "number",
+      "value": 6,
+      "range": [
+        0,
+        30
+      ],
+      "notes": "Half the day-to-night temperature range."
+    },
+    "temperature_season_swing_c": {
+      "type": "number",
+      "value": 9,
+      "range": [
+        0,
+        40
+      ],
+      "notes": "Half the summer-to-winter temperature range."
+    },
+    "temperature_noise_c": {
+      "type": "number",
+      "value": 2,
+      "range": [
+        0,
+        10
+      ],
+      "notes": "Local temperature variation that follows the humidity noise."
+    },
+    "altitude_lapse_c_per_m": {
+      "type": "number",
+      "value": 0.0065,
+      "range": [
+        0,
+        0.02
+      ],
+      "notes": "Temperature lost per metre of altitude. The standard atmosphere is 0.0065."
+    },
+    "humidity_base": {
+      "type": "number",
+      "value": 0.56,
+      "range": [
+        0,
+        1
+      ],
+      "notes": "Mean relative humidity of the field."
+    },
+    "humidity_swing": {
+      "type": "number",
+      "value": 0.3,
+      "range": [
+        0,
+        1
+      ],
+      "notes": "Half the humidity range the noise may add."
+    },
+    "cloud_threshold": {
+      "type": "number",
+      "value": 0.6,
+      "range": [
+        0,
+        0.99
+      ],
+      "notes": "Humidity at which cloud begins; full cloud at 1."
+    },
+    "precipitation_threshold": {
+      "type": "number",
+      "value": 0.26,
+      "range": [
+        0,
+        0.99
+      ],
+      "notes": "Cloud cover at which rain or snow begins."
+    },
+    "snow_threshold_c": {
+      "type": "number",
+      "value": 2.5,
+      "range": [
+        -20,
+        20
+      ],
+      "notes": "Below this temperature precipitation falls as snow."
+    },
+    "storm_cloud_threshold": {
+      "type": "number",
+      "value": 0.55,
+      "range": [
+        0,
+        1
+      ],
+      "notes": "Cloud cover above which a cell may storm."
+    },
+    "storm_chance": {
+      "type": "number",
+      "value": 0.25,
+      "range": [
+        0,
+        1
+      ],
+      "notes": "Share of eligible cells that storm. Small numbers make storms rare events."
+    },
+    "reevaluate_s": {
+      "type": "number",
+      "value": 90,
+      "range": [
+        5,
+        600
+      ],
+      "notes": "How often the state machine asks the field again while a field-chosen state holds."
+    },
+    "storm_cooldown_s": {
+      "type": "number",
+      "value": 900,
+      "range": [
+        0,
+        7200
+      ],
+      "notes": "Seconds of calm after a storm, so one passing cell cannot loop its thunder."
+    },
+    "precipitation_start": {
+      "type": "number",
+      "value": 0.28,
+      "range": [
+        0,
+        1
+      ],
+      "notes": "Precipitation needed to begin raining from clear weather (hysteresis)."
+    },
+    "precipitation_stop": {
+      "type": "number",
+      "value": 0.14,
+      "range": [
+        0,
+        1
+      ],
+      "notes": "Precipitation below which rain stops (hysteresis)."
+    }
+  }
+}

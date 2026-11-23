@@ -2,6 +2,7 @@ import type { GrowthConfig, Plant } from '@plant-legacy/shared/growth';
 import type { WebSocket } from 'ws';
 import { type Inventory, setSlot, swapSlots } from './inventory.ts';
 import type { ItemsConfig } from './items.ts';
+import { sendLedgerEntry } from './ledger.ts';
 import { MESSAGE_TYPE, type RejectPayload } from './net.ts';
 import {
   type PersistedPlayerState,
@@ -260,6 +261,16 @@ export async function useInventorySlot(
   // Dung pays spores, and the chip and the shop read one balance: send it when
   // it moved, whichever path committed the change.
   if (player.spores !== sporesBefore) sendInventorySync(ports, player);
+  // What the use cost, and what it paid. Dung is the only item that pays, so
+  // most lines carry no amount at all rather than a fake zero-cost purchase.
+  sendLedgerEntry(ports, player, {
+    kind: 'use',
+    label: itemDef.name,
+    itemId,
+    count: 1,
+    amount: player.spores - sporesBefore,
+    balance: player.spores,
+  });
   // The locked port already carried the purse with the pouch; the fallback did
   // not, so it still needs the restart write.
   if (!ports.mutateState) ports.persist?.(player);

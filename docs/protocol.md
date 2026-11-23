@@ -22,12 +22,13 @@ Message format:
 
 ## Protocol Version
 
-`PROTOCOL_VERSION = 4` — bumped on any breaking wire change. v2 adds
+`PROTOCOL_VERSION = 5` — bumped on any breaking wire change. v2 adds
 `MUTATION_STATE` (35) and `MUTATION_SHED` (36); v3 adds `MUTATION_LEVEL` (45) and
 carries each mutation's level, level cost and any open card deal in
 `MUTATION_STATE`; v4 adds `SHOP_PURCHASE` (46), `DROP_COLLECT` (47) and the
-server-owned `sporeBalance` in `INVENTORY_SYNC`.
-Client sends `HELLO { clientVersion: 4, accessToken?: string, plantId?: string, displayName?: string }` on connect.
+server-owned `sporeBalance` in `INVENTORY_SYNC`; v5 adds `LEDGER_ENTRY` (48), one
+line per purse change.
+Client sends `HELLO { clientVersion: 5, accessToken?: string, plantId?: string, displayName?: string }` on connect.
 Server rejects with `ERROR { code: "VERSION_MISMATCH", ... }` if mismatch.
 
 ## Message Types
@@ -88,6 +89,7 @@ Server rejects with `ERROR { code: "VERSION_MISMATCH", ... }` if mismatch.
 | 42 | `FAUNA_EVENT` | `FaunaEventPayload` | A scripted herbivore swarm started browsing or moved on. Swarms are events, not pathfinding agents (T06) |
 | 43 | `KILL_CREDIT` | `KillCreditPayload` | Who is credited for a plant's death: the player or plant with the most damage inside `kill_credit_window_s` (T06) |
 | 44 | `WEATHER_STRIKE` | `{ tick: number, x: number, z: number, radiusM: number }` | One lightning bolt: where it landed and the radius it damages. The server owns the timing, so the sky flash and the damage are the same strike |
+| 48 | `LEDGER_ENTRY` | `{ kind: 'purchase' \| 'use' \| 'award' \| 'drop', label: string, itemId: string \| null, count: number, amount: number, balance: number }` | Why the purse moved: the reason, what moved, the spores spent or earned, and the balance the database committed. Sent once per change alongside `INVENTORY_SYNC`, so the inventory panel can explain a balance instead of showing a number that jumped. `label` is player-facing text from the server's own item table, never an id |
 | 99 | `DEV_RESPONSE` | `{ ... }` | Dev-panel response (dev builds only) |
 
 Type `10` is `WELCOME`: `REPORT` was moved to `29` after it collided with the

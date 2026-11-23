@@ -11,6 +11,7 @@
 
 import RAPIER from '@dimforge/rapier3d-compat';
 import { type Binding, createInputBus, type InputBus } from '@plant-legacy/input';
+import { appendLedger, type LedgerEntry } from '@plant-legacy/shared/economy';
 import {
   clampGrowthDirectionByGene,
   getSeedBodyHeightRatio,
@@ -3642,6 +3643,11 @@ let hotbar: HotbarAPI | null = null;
 let sporeChip: SporeChipAPI | null = null;
 /** The purse, as the last INVENTORY_SYNC reported it. Never written locally. */
 let sporeBalance = 0;
+/**
+ * Why the purse moved, newest last. The server sends one entry per change, so
+ * the panel can explain a balance instead of showing a number that jumped.
+ */
+let sporeLedger: LedgerEntry[] = [];
 /** Last Root Sight state the bar was told about; a frame only writes on change. */
 let rootSightActionShown = false;
 let contextHint: ContextHintAPI | null = null;
@@ -7094,6 +7100,7 @@ function refreshPlayerPanels(): void {
     mutationLevelOffer: mutationState?.levelOffer ?? null,
     inventory: inventorySlots,
     maxSlots: inventoryMaxSlots,
+    ledger: sporeLedger,
   });
 }
 
@@ -9112,6 +9119,22 @@ async function handleWelcome(payload: unknown): Promise<void> {
   }
 }
 
+function handleLedgerEntry(payload: unknown): void {
+  const entry = payload as Partial<LedgerEntry>;
+  const kind = entry.kind;
+  if (kind !== 'purchase' && kind !== 'use' && kind !== 'award' && kind !== 'drop') return;
+  if (typeof entry.label !== 'string' || entry.label.length === 0) return;
+  sporeLedger = appendLedger(sporeLedger, {
+    kind,
+    label: entry.label,
+    itemId: typeof entry.itemId === 'string' ? entry.itemId : null,
+    count: typeof entry.count === 'number' ? entry.count : 0,
+    amount: typeof entry.amount === 'number' ? entry.amount : 0,
+    balance: typeof entry.balance === 'number' ? entry.balance : 0,
+  });
+  refreshPlayerPanels();
+}
+
 function handleInventorySync(payload: unknown): void {
   const sync = payload as {
     slots?: Array<{ itemId?: string | null; count?: number | null } | null>;
@@ -10681,6 +10704,7 @@ const messageHandlers = createDispatchTable([
   [MESSAGE_TYPE.WELCOME, handleWelcome],
   [MESSAGE_TYPE.INVENTORY_SYNC, handleInventorySync],
   [MESSAGE_TYPE.INVENTORY_SLOT_UPDATE, handleInventorySlotUpdate],
+  [MESSAGE_TYPE.LEDGER_ENTRY, handleLedgerEntry],
   [MESSAGE_TYPE.STATE, handleState],
   [MESSAGE_TYPE.KEYFRAME, handleState],
   [MESSAGE_TYPE.RESOURCE_UPDATE, handleResourceUpdate],

@@ -145,6 +145,19 @@ describe('useInventorySlot', () => {
     assert.deepEqual(player.inventory.slots[0], { itemId: 'fertilizer_basic', count: 1 });
     assert.deepEqual(sent, [
       { type: 28, payload: { slotIndex: 0, itemId: 'fertilizer_basic', count: 1 } },
+      // A use that moves no spores still earns a line: the ledger records what
+      // the pouch did, and the committed balance rides along.
+      {
+        type: 48,
+        payload: {
+          kind: 'use',
+          label: 'Basic Fertilizer',
+          itemId: 'fertilizer_basic',
+          count: 1,
+          amount: 0,
+          balance: 0,
+        },
+      },
     ]);
   });
 

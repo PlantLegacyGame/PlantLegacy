@@ -10,6 +10,7 @@
  */
 
 import { hash32, mulberry32 } from '@plant-legacy/shared/math';
+import type { ClimateSample } from './climateField.ts';
 
 export type WeatherStateName =
   | 'clear'
@@ -128,6 +129,50 @@ export const WEATHER_STATE_MACHINE: ReadonlyMap<WeatherStateName, WeatherStateCo
   ],
 ]);
 
+/**
+ * The climate field, as the state machine sees it.
+ *
+ * The machine still owns durations, the storm's three phases and the light
+ * multipliers; the field decides which weather is happening. `cooldownS` is the
+ * one piece of mutable state here - the quiet after a storm - and lives on the
+ * binding so the field itself stays a pure function.
+ */
+export interface ClimateBinding {
+  sample(): ClimateSample;
+  /** How long a field-chosen state lasts before the field is asked again. */
+  reevaluateS: number;
+  /** Rain begins above this and stops below this: the sky cannot flutter. */
+  precipitationStart: number;
+  precipitationStop: number;
+  /** Seconds of calm after a storm has passed. */
+  stormCooldownS: number;
+  /** Remaining calm, counted down by the update. */
+  cooldownS: number;
+}
+
+/**
+ * Which state the field asks for, given the state the world is in.
+ *
+ * A thunderstorm is a sequence, not a moment: once the telegraph has begun the
+ * machine's own phase order runs it to its end, whatever the field says on the
+ * way through. Every other state follows the field, with hysteresis so a cloud
+ * sitting on the threshold does not flicker between rain and clear.
+ */
+export function climateNextState(
+  sample: ClimateSample,
+  current: WeatherStateName,
+  fallback: WeatherStateName,
+  binding: Pick<ClimateBinding, 'precipitationStart' | 'precipitationStop' | 'cooldownS'>,
+): WeatherStateName {
+  const inStormPhase = current.startsWith('thunderstorm');
+  if (inStormPhase) return fallback;
+  if (sample.storm && binding.cooldownS <= 0) return 'thunderstorm_telegraph';
+  const starting = current !== 'rain' && current !== 'snow';
+  const threshold = starting ? binding.precipitationStart : binding.precipitationStop;
+  if (sample.precipitation >= threshold) return sample.kind;
+  return 'clear';
+}
+
 export interface WeatherStateMachine {
   currentState: WeatherStateName;
   stateTimerS: number;
@@ -144,6 +189,8 @@ export interface WeatherStateMachine {
   timePaused: boolean;
   /** Dev control: multiplier on the clock's advance rate. */
   timeScale: number;
+  /** The field that decides the weather, when one is connected. */
+  climate: ClimateBinding | null;
 }
 
 export function createWeatherStateMachine(
@@ -172,6 +219,7 @@ export function createWeatherStateMachine(
     rng: mulberry32(worldSeed),
     timePaused: false,
     timeScale: 1,
+    climate: null,
   };
 }
 
@@ -243,6 +291,11 @@ export function weatherStateMachineUpdate(
 ): WeatherStateName | null {
   machine.totalElapsedS += dtSeconds;
   machine.stateTimerS += dtSeconds;
+  // The calm after a storm is clocked here, so a cell that is still drifting
+  // over the world cannot start the same thunderstorm again straight away.
+  if (machine.climate && machine.climate.cooldownS > 0) {
+    machine.climate.cooldownS = Math.max(0, machine.climate.cooldownS - dtSeconds);
+  }
 
   // The clock is server state, so a dev freeze or speed change has to live here
   // rather than in a renderer that the next broadcast overwrites. Weather keeps
@@ -290,14 +343,45 @@ export function weatherStateMachineAdvance(machine: WeatherStateMachine): Weathe
   const currentConfig = WEATHER_STATE_MACHINE.get(machine.currentState);
   if (!currentConfig) return machine.currentState;
 
-  const nextState = machine.nextState;
+  const binding = machine.climate;
+  const sampled = binding ? binding.sample() : null;
+  const nextState =
+    binding && sampled
+      ? climateNextState(sampled, machine.currentState, machine.nextState, binding)
+      : machine.nextState;
 
+  // The field can keep saying the same thing for hours. That is not a transition:
+  // the state and its timer simply carry on, and the field is asked again after
+  // its own short interval, so the sky never pretends to have changed.
+  if (nextState === machine.currentState) {
+    machine.stateTimerS = 0;
+    machine.currentDurationS = binding
+      ? Math.min(binding.reevaluateS, getRandomDuration(machine.rng, nextState, machine.config))
+      : machine.currentDurationS;
+    return machine.currentState;
+  }
+
+  const leavingStorm = machine.currentState === 'thunderstorm_aftermath';
   machine.currentState = nextState;
   machine.stateTimerS = 0;
   machine.currentDurationS = getRandomDuration(machine.rng, nextState, machine.config);
+  // Field-chosen weather is re-read sooner than the authored durations allow: a
+  // shower is minutes long, and the field should be able to end it early.
+  if (binding && !nextState.startsWith('thunderstorm')) {
+    machine.currentDurationS = Math.min(machine.currentDurationS, binding.reevaluateS);
+  }
+  if (leavingStorm && binding) binding.cooldownS = binding.stormCooldownS;
   machine.nextState = pickNextState(nextState, machine.rng);
 
   return nextState;
+}
+
+/** Connect a climate field, or disconnect it and return to the authored chain. */
+export function weatherStateMachineSetClimate(
+  machine: WeatherStateMachine,
+  binding: ClimateBinding | null,
+): void {
+  machine.climate = binding;
 }
 
 export function weatherStateMachineGetLightMultiplier(machine: WeatherStateMachine): number {
@@ -329,7 +413,9 @@ export function weatherStateMachineGetMoistureGainPerS(machine: WeatherStateMach
 }
 
 export function weatherStateMachineGetNextState(machine: WeatherStateMachine): WeatherStateName {
-  return machine.nextState;
+  const binding = machine.climate;
+  if (!binding) return machine.nextState;
+  return climateNextState(binding.sample(), machine.currentState, machine.nextState, binding);
 }
 
 export function weatherStateMachineGetBroadcast(machine: WeatherStateMachine): {

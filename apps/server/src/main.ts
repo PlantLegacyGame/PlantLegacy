@@ -6,7 +6,12 @@ import { readNumber } from '@plant-legacy/shared/config';
 import { validateDisplayName } from '@plant-legacy/shared/displayName';
 import type { Plant } from '@plant-legacy/shared/growth';
 import { validateMessage } from '@plant-legacy/shared/protocol/messageSchemas';
-import { loadDayNightConfig, loadWeatherConfig, WeatherSystem } from '@plant-legacy/weather';
+import {
+  loadClimateConfig,
+  loadDayNightConfig,
+  loadWeatherConfig,
+  WeatherSystem,
+} from '@plant-legacy/weather';
 import { WebSocket, WebSocketServer } from 'ws';
 import { loadRuntimeConfig } from './core/config.ts';
 import { SERVICE_VERSION } from './core/version.ts';
@@ -68,6 +73,7 @@ import {
 } from './ops/inventoryHandlers.ts';
 import { grantItemUnderLock } from './ops/itemGrant.ts';
 import { loadItemsConfig } from './ops/items.ts';
+import { awardLabel, sendLedgerEntry } from './ops/ledger.ts';
 import { createLogger } from './ops/log.ts';
 import { loadMutationsConfig } from './ops/mutations/config.ts';
 import {
@@ -116,6 +122,7 @@ import {
   type SeasonClock,
   type SeasonSnapshot,
   seasonClockAdvance,
+  seasonRemainingSeconds,
   seasonSnapshot,
   seasonUpdatePayload,
 } from './ops/seasonClock.ts';
@@ -911,6 +918,10 @@ class World {
     this.interestManager = interestManager;
     this.plantPersistence = plantPersistence;
     this.terrain = terrain;
+    // The wind climbs real terrain: the climate's orographic lift reads the same
+    // height field the ground is built from, so a ridge wrings rain out on its
+    // windward side instead of raining the same amount on both.
+    this.weatherSystem.setTerrainSampler((x, z) => this.terrain?.heightAt(x, z) ?? 0);
     this.maxFrameTimeMs = maxFrameTimeMs;
     this.persistenceEnabled = persistenceEnabled;
     this.plantEventLog = new PlantEventLog(eventLogCompactionThreshold);
@@ -1760,7 +1771,12 @@ class World {
    * to the row read inside `SELECT ... FOR UPDATE`, and the live purse follows
    * the committed value. Guests and a failed store keep the live path.
    */
-  private awardSporesLocked(player: ConnectedPlayer, amount: number, reason: string): void {
+  private awardSporesLocked(
+    player: ConnectedPlayer,
+    amount: number,
+    reason: string,
+    kind: 'award' | 'drop' = 'award',
+  ): void {
     if (!(amount > 0)) return;
     const accountId = player.accountId ?? null;
     let earned = 0;
@@ -1783,6 +1799,16 @@ class World {
         if (balance === null) return;
         if (this.players.get(player.playerId) !== player) return;
         sendInventorySync(this.inventoryPorts(), player);
+        // The purse moved and the player did not spend it: the ledger says what
+        // paid (a kill, a drop) and the balance the row committed.
+        sendLedgerEntry(this.inventoryPorts(), player, {
+          kind,
+          label: awardLabel(reason),
+          itemId: null,
+          count: 0,
+          amount: earned,
+          balance,
+        });
         this.log.info('Spores earned', {
           playerId: player.playerId,
           amount: earned,
@@ -2398,7 +2424,7 @@ class World {
           // is removed, an unknown or already-spent id pays nothing.
           const pickup = pickupDrop(this.damagePipeline, this.sporeConfig, collector, request?.id);
           if (!pickup.ok || !pickup.kind) break;
-          this.awardSporesLocked(collector, pickup.amount, `drop_${pickup.kind}`);
+          this.awardSporesLocked(collector, pickup.amount, `drop_${pickup.kind}`, 'drop');
           break;
         }
         case MESSAGE_TYPE.INVENTORY_SLOT_USE: {
@@ -2502,14 +2528,30 @@ class World {
     this.processPlantDeaths();
 
     const plantsForResource = new Map<string, import('./ops/resourceWorld.ts').PlantForResource>();
+    let weatherAnchor: { x: number; z: number } | null = null;
     for (const player of this.players.values()) {
       if (player.plantId) {
         const plant = this.plantWorld.getPlant(player.plantId);
         if (plant) {
           plantsForResource.set(plant.id, this.plantResourceView(plant));
+          // The climate is read where a plant actually is: its ridge has its
+          // own cloud, windward slope and rain shadow. The first connected plant
+          // is the world's weather station.
+          if (!weatherAnchor && plant.rootNodeId != null) {
+            const root = plant.nodes.get(plant.rootNodeId);
+            if (root) weatherAnchor = { x: root.x, z: root.z };
+          }
         }
       }
     }
+    if (weatherAnchor) this.weatherSystem.setClimateAnchor(weatherAnchor.x, weatherAnchor.z);
+    // Seasons run the year: the field's temperature swing follows the clock, so
+    // winter brings snow to ground that rains in summer.
+    const seasonLengthS = Math.max(1, this.seasonClock.lengthTicks / this.config.tickRateHz);
+    const seasonRemaining = seasonRemainingSeconds(this.seasonClock, tick, this.config.tickRateHz);
+    this.weatherSystem.setSeasonPhase(
+      ((((this.seasonClock.season - 1 + (1 - seasonRemaining / seasonLengthS)) % 4) + 4) % 4) / 4,
+    );
     this.weatherSystem.update(dt);
     const weatherBroadcast = this.weatherSystem.getBroadcast();
 
@@ -3309,6 +3351,20 @@ class World {
           .then((added) => {
             if (this.players.get(player.playerId) === player) {
               sendInventorySync(this.inventoryPorts(), player);
+              // A dev grant is an award of items, not of spores: the line names
+              // the item and the count and leaves the balance where it was.
+              if (added > 0) {
+                sendLedgerEntry(this.inventoryPorts(), player, {
+                  kind: 'award',
+                  // The item's own name, so the line says what was granted rather
+                  // than only that a dev granted something.
+                  label: `${awardLabel('dev_grant')}: ${this.itemsConfig.itemDefinitions.get(itemId)?.name ?? 'item'}`,
+                  itemId,
+                  count: added,
+                  amount: 0,
+                  balance: player.spores,
+                });
+              }
             }
             return added;
           })
@@ -3855,7 +3911,13 @@ async function main(): Promise<void> {
   // Weather system (T07)
   const weatherConfig = loadWeatherConfig(configs);
   const dayNightConfig = loadDayNightConfig(configs);
-  const weatherSystem = new WeatherSystem(weatherConfig, dayNightConfig);
+  // The field replaces the global Markov chain: the chain still runs the storm's
+  // phases and durations, but which weather happens is sampled from the world.
+  const weatherSystem = new WeatherSystem(
+    weatherConfig,
+    dayNightConfig,
+    loadClimateConfig(configs),
+  );
 
   // T04 mutation rules. Acquisition lives in PlantWorld; the world supplies the
   // environment each growth happened in (tiles, weather, day/night).

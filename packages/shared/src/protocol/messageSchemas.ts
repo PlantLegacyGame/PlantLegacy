@@ -590,6 +590,15 @@ export const MESSAGE_SCHEMAS: Record<number, Record<string, FieldRule>> = {
     // SHOP_PURCHASE (client -> server)
     itemId: { type: 'string', required: true },
   },
+  48: {
+    // LEDGER_ENTRY (server -> client): one purse change, and why.
+    kind: { type: 'string', required: true, enum: ['purchase', 'use', 'award', 'drop'] },
+    label: { type: 'string', required: true },
+    itemId: { type: 'string', required: false, nullable: true },
+    count: { type: 'integer', required: true },
+    amount: { type: 'number', required: true },
+    balance: { type: 'number', required: true },
+  },
   47: {
     // DROP_COLLECT (client -> server)
     id: { type: 'string', required: true },

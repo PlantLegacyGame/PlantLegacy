@@ -66,11 +66,23 @@ describe('shop purchase', () => {
     assert.equal(purchaseShopItem(ports, player, 'starter_fertilizer'), true);
     assert.equal(player.spores, 70);
     assert.equal(player.inventory.slots[0]?.itemId, 'starter_fertilizer');
-    const sync = sent.at(-1);
+    const sync = sent.find((message) => message.type === MESSAGE_TYPE.INVENTORY_SYNC);
     assert.ok(sync);
-    assert.equal(sync.type, MESSAGE_TYPE.INVENTORY_SYNC);
     assert.equal((sync.payload as { sporeBalance: number }).sporeBalance, 70);
     assert.equal((sync.payload as { slots: unknown[] }).slots.length, 4);
+    // The balance moved because of a purchase, and the ledger says so with the
+    // price and the committed balance - the panel does not have to guess.
+    const ledger = sent.at(-1);
+    assert.ok(ledger);
+    assert.equal(ledger.type, MESSAGE_TYPE.LEDGER_ENTRY);
+    assert.deepEqual(ledger.payload, {
+      kind: 'purchase',
+      label: 'Starter Fertilizer',
+      itemId: 'starter_fertilizer',
+      count: 1,
+      amount: -30,
+      balance: 70,
+    });
   });
 
   it('refuses when the balance is short, and grants nothing', () => {

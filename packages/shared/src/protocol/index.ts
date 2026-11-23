@@ -11,9 +11,9 @@ import type { PlantNode } from '../growth/index.ts';
 /** Bumped on any breaking wire change. Mismatch shows an "update required" screen. */
 /**
  * v2 adds MUTATION_STATE/MUTATION_SHED (T04); v3 adds MUTATION_LEVEL; v4 adds
- * SHOP_PURCHASE and DROP_COLLECT.
+ * SHOP_PURCHASE and DROP_COLLECT; v5 adds LEDGER_ENTRY.
  */
-export const PROTOCOL_VERSION = 4;
+export const PROTOCOL_VERSION = 5;
 
 /** `[version:u8][type:u8][payload]` — payload encoding is T03P's decision. */
 export const FRAME_HEADER_BYTES = 2;
@@ -84,6 +84,8 @@ export const MESSAGE_TYPE = {
   FAUNA_EVENT: 42,
   KILL_CREDIT: 43,
   WEATHER_STRIKE: 44,
+  /** Why the purse moved: a purchase, use, award or drop, with the balance. */
+  LEDGER_ENTRY: 48,
   TERRAIN_REGION: 33,
   TERRAIN_EDITS: 34,
 
@@ -156,6 +158,7 @@ export const SERVER_TO_CLIENT_TYPES: readonly MessageNumber[] = [
   MESSAGE_TYPE.FAUNA_EVENT,
   MESSAGE_TYPE.KILL_CREDIT,
   MESSAGE_TYPE.WEATHER_STRIKE,
+  MESSAGE_TYPE.LEDGER_ENTRY,
   MESSAGE_TYPE.TERRAIN_REGION,
   MESSAGE_TYPE.TERRAIN_EDITS,
   MESSAGE_TYPE.DEV_RESPONSE,

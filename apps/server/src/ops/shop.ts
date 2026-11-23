@@ -14,6 +14,7 @@ import type { WebSocket } from 'ws';
 import { addItem, type Inventory } from './inventory.ts';
 import { sendInventorySync } from './inventoryHandlers.ts';
 import type { ItemsConfig } from './items.ts';
+import { sendLedgerEntry } from './ledger.ts';
 import { MESSAGE_TYPE } from './net.ts';
 import { type SporeConfig, spendSpores } from './spores.ts';
 
@@ -125,6 +126,16 @@ export function purchaseShopItem(ports: ShopPorts, player: ShopPlayer, itemId: s
   player.spores = plan.spores;
   const entry = ports.shopConfig.items.find((item) => item.id === itemId);
   sendInventorySync({ itemsConfig: ports.itemsConfig, send: ports.send }, player);
+  // Why the purse moved, and what it holds now. A purchase is the one ledger
+  // event the player chose, so it says what was bought and what it cost.
+  sendLedgerEntry(ports, player, {
+    kind: 'purchase',
+    label: entry?.name ?? 'Item',
+    itemId,
+    count: 1,
+    amount: -(entry?.price ?? 0),
+    balance: player.spores,
+  });
   ports.persist?.(player);
   ports.log.info('Shop purchase', {
     playerId: player.playerId,
