@@ -42,6 +42,7 @@ import {
   APERTURE_SOIL_BELOW_FLOOR_M,
   apertureSoilParamsFor,
   createApertureSoilMesh,
+  setApertureSoilEye,
   setApertureSoilLight,
 } from './environment/apertureSoilMesh.ts';
 import {
@@ -393,7 +394,11 @@ export class EnvironmentRenderer {
       const dugTopsoil = new THREE.Color(palette.topsoilColor);
       const dugSubsoil = new THREE.Color(palette.subsoilColor);
       const dugDeep = new THREE.Color(palette.deepColor);
-      this.cavityBowl = createCavityBowl(dugTopsoil, dugSubsoil, 96, 24, dugDeep, {
+      // 160 columns round the lip, not 96: the lip is one polygon chord per
+      // column, and every chord across the shader's cut is a place the cut shows
+      // through if the chord falls outside it. At a wide mouth 160 keeps the
+      // chord error under a millimetre and a half.
+      this.cavityBowl = createCavityBowl(dugTopsoil, dugSubsoil, 160, 24, dugDeep, {
         night: palette.nightFill,
         day: palette.dayFill,
       });
@@ -1354,7 +1359,12 @@ export class EnvironmentRenderer {
     }
     // A rebuild can fail (an empty region); the key still advances so it is not
     // attempted again for the same numbers on every frame.
-    if (this.apertureSoil) this.apertureSoil.visible = inside;
+    if (this.apertureSoil) {
+      this.apertureSoil.visible = inside;
+      // The near-side cut follows the eye: it is what lets a camera inside the
+      // earth see the pit instead of a brown wall an arm's length away.
+      setApertureSoilEye(this.apertureSoil, this.camera.position, inside);
+    }
   }
 
   /**

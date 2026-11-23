@@ -16,7 +16,15 @@ import { type AtmosphereParams, DEFAULT_ATMOSPHERE, GLSL_ATMOSPHERE } from './at
 import { cavityDepthM } from './cavity/profile.ts';
 import { applySoilFragmentShader, applySoilVertexShader } from './ground/shaderOverrides.ts';
 import { createSoilSlab } from './planetSoilSlab.ts';
-import { createPlanetBody, createTerrainPatches } from './planetSurface.js';
+import {
+  createPlanetBody,
+  createTerrainPatches,
+  createTerrainSkirt,
+  PLANET_BODY_SEGMENTS,
+  planetFacetSag,
+  TERRAIN_SKIN_M,
+  terrainOuterExtentM,
+} from './planetSurface.js';
 import type { RootSightUniforms } from './rootSightUniforms.js';
 
 export interface Ground {
@@ -388,6 +396,24 @@ export function createGround(
         // the aperture pays only for that test.
         setSurfaceCut(patches.outer, true);
         terrainMeshes.push(patches.inner, patches.outer);
+        // The coarse ring is built on the exact sphere and the body is a
+        // polyhedron whose facets sit inside it, so the ground's outer edge is
+        // metres above the body it is supposed to be the surface of: an eye at
+        // that edge saw the ring floating over a gap. The skirt hangs off the
+        // ring's own edge, using the ring's own height function, and reaches
+        // past the body's facet sag. Not in `terrainMeshes`: it is a wall at the
+        // far edge of the world, not ground to walk on.
+        const skirt = createTerrainSkirt(
+          planetRadius,
+          getTerrainParams(),
+          material,
+          terrainOuterExtentM(getTerrainParams()),
+          TERRAIN_SKIN_M,
+          planetFacetSag(planetRadius, PLANET_BODY_SEGMENTS) + 2,
+          Math.max(24, Math.round(config.terrainMeshSubdivisions * 0.6)),
+        );
+        mesh.add(skirt);
+        setSurfaceCut(skirt, true);
         // The soil has thickness. The patch is a sheet: without walls and an
         // underside, opening the ground revealed the back of that sheet and the
         // empty space behind it. The slab lines the patch with the depth the

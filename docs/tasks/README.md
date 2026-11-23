@@ -14,11 +14,31 @@ design document.
    `[ ]` with a note until they are actually observed.
 3. Every record contains: implementation summary, config files touched, a
    tunables table (type/range/default/effect), the manual test checklist result,
-   and `CONTEXT.md` / `ATTRIBUTION.md` updates.
-4. No hardcoded values (RULE_3). No `rarity` field (RULE_20). Account-bound flag
+   and `CONTEXT.md` / `ATTRIBUTION.md` updates. The tunables table lists the keys
+   **that task introduced or changed**; a file that grew later is not a gap in the
+   record. The complete key list is the config file itself, indexed by
+   [`../tunables.md`](../tunables.md)'s counts — do not copy the whole file into
+   the record (ADR-049). The `CONTEXT.md` half of this rule is satisfied by
+   `CONTEXT.md` itself: sixteen records written before 2026-11-16 never name the
+   file in their own body, and every one of their tasks has an entry there, which
+   is the evidence that matters. What must not happen is a shipped task with a
+   surface in neither document.
+4. A tunables table is **current, not a snapshot of the day the task shipped**.
+   Its Default and Range cells are compared with `config/` by `pnpm docs:check`
+   wherever the table names the config key, so a later rebalance updates the
+   record in the same change. A value that was true only at acceptance belongs in
+   prose with a date, not in the Default column.
+5. A number in brackets after a test file name (`items.test.ts` (3)) is **how
+   many tests that task added there**, not how many the file holds today. The file
+   keeps growing, so the two are allowed to differ; `pnpm test` is the count that
+   matters. A claim about the *whole* file says "the file's N tests". The same goes
+   for a gate snapshot ("`pnpm verify` green: shared 221, server 504"): it is the run
+   that accepted the task, it is never updated afterwards, and no document outside
+   the record should quote it as today's number.
+6. No hardcoded values (RULE_3). No `rarity` field (RULE_20). Account-bound flag
    invariant enforced (RULE_23).
-5. Update `docs/what-works-now.md` at every gate.
-6. A partial task stays `[ ]` and its record states exactly which acceptance
+7. Update `docs/what-works-now.md` at every gate.
+8. A partial task stays `[ ]` and its record states exactly which acceptance
    criteria are met. Do not mark a slice as the whole task.
 
 ## Current priority (2026-11-22)
@@ -74,6 +94,7 @@ Specs for every task in this list are in [`DESIGN.md` Part 11](../../DESIGN.md).
 | T06 | Uproot, damage, tumbling | `[~]` Implemented server-side: four-source damage pipeline, saturation/gust/collapse/structural uproot, reroot crawl and starvation, deterministic tumbling, kill credit, world drops, protocol 37–43, PLNT v3, client redraw and dev buttons. **Open:** in-browser checklist not run; T02 substrate multiplier is still 1.0. Drop collection is live (`DROP_COLLECT`, `ops/dropPickup.ts`); persistence of the pouch/purse is T08A | [T06.md](./T06.md) |
 | T08A | Inventory | `[~]` **Partial; restart copy and every pouch mutation row-locked.** `player_state` persists pouch and purse per account, loaded before HELLO and written inside each locked mutation, with saves on disconnect/shutdown; verified by buy → server restart → reconnect, a two-concurrent-purchase audit, and the item-use, award, clamped-write and dev-grant checks in `playerStateAudit.ts`. The duplication audit passed (no bypass; one dead award helper removed). Still open: the trade/mail/list systems. `items.json` owns the flags (ADR-082) | [T08A.md](./T08A.md) |
 | — | Bugfix: camera, environment, growth | `[x]` Unindexed run of fixes; record kept as evidence | [bugfix-camera-environment-growth.md](./bugfix-camera-environment-growth.md) |
+| C21-C | The twenty-one defects, Wave C | `[x]` Items 4, 7, 13: the bowl's rim built at 160 columns so its chord against the per-fragment cut is under 1.5 mm; the planet body at 384 facets with a 1 240 m perimeter skirt hung off the coarse ground ring's own edge, so the last patch cannot float over the faceted body; and a camera-centred near-side cut that drops a 0.45 m bubble of soil around a buried eye in both the soil shader and the aperture body, so the pit and roots are visible from any eye position. Measured in the dev browser (skirt 7.27 m, bowl 3 200 vertices, a brow-wall pose now showing the shaft and sky); new tests in three suites. Wave D (14, 17) and Wave E (21) are planned, not started | [bugfix-c21c.md](./bugfix-c21c.md) |
 | C21-B | The twenty-one defects, Wave B | `[x]` Items 5, 6, 8, 18, 20: world-anchored precipitation with six-arm snow, terrain-hugging splash crowns with spray (hidden from below), a planetary climate field with orographic lift and rare storms replacing the global Markov chain, and protocol v5 `LEDGER_ENTRY` for every purse change. 30-day climate simulation with snow-in-winter asserted, a full live spring day (which found and fixed the seasonal curve, orographic distance and humidity centre), a driven winter night with live snow in the server log, and measured browser pass. Wave C is started as the first T56 volume slice; Waves D–E are planned, not started | [bugfix-c21b.md](./bugfix-c21b.md) |
 | — | Bugfix: death, respawn and what is left behind | `[x]` Protocol `RESPAWN` (49) starts a new seed on the same socket; the death card's primary action grows again in place, the husk that replaces the bone lies still on the soil, drop shadows lie in the ground plane, the framing target can no longer sit under the terrain, and the card reports the death record's own biomass and node count instead of the live panel's zeroes. A second pass seats every contact shadow on the *drawn* terrain mesh instead of the height field (they differed by tens of centimetres on a bank), takes a plant's patch from parts at or above the soil, and leaves one hand-long body plus smaller offcuts rather than four stacked corpses. Driven in the dev browser: card, husk, drop and plant patches on a bank, the respawn framing, gallery patches 0.22-0.35 m against a seed's 0.20, and the body's plate 1.0 cm above the drawn ground; the narrow-pane card, a rival's view and the final husk size after it was enlarged were not checked | [bugfix-death-respawn.md](./bugfix-death-respawn.md) |
 | C21-A | The twenty-one defects, Wave A | `[x]` Items 1, 2, 3, 9, 10, 11, 12, 15, 16, 19: title orb ordering and backstep hold, persistent drag, config home zoom, no public regenerate key, target-derived pan heading, free camera rig (`camera_mode`), named rival owners, distance-scaled tags, day-part clock. 25 tests and a measured browser pass. Waves B–E (weather, volume terrain, items/palette, the planet) are planned, not started | [bugfix-c21.md](./bugfix-c21.md) |

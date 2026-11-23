@@ -132,11 +132,100 @@ export function patchLocalSurfaceY(
  * one surface: there is no cap to end, no seam where two grounds meet, and no
  * edge that stops the player.
  */
-export function createPlanetBody(radius: number, material: THREE.Material): THREE.Mesh {
-  const geometry = new THREE.SphereGeometry(radius, 256, 128);
+/**
+ * Facets around the planet body's equator.
+ *
+ * 256 left the body's facets 7.5 m inside the true sphere at a 100 km radius,
+ * and the far patch - built on the exact sphere - ended over that step. 384
+ * nearly halves the sag, and the skirt is sized from `planetFacetSag` at this
+ * same number, so the two cannot drift apart.
+ */
+export const PLANET_BODY_SEGMENTS = 384;
+
+export function createPlanetBody(
+  radius: number,
+  material: THREE.Material,
+  widthSegments = PLANET_BODY_SEGMENTS,
+  heightSegments = PLANET_BODY_SEGMENTS / 2,
+): THREE.Mesh {
+  const geometry = new THREE.SphereGeometry(radius, widthSegments, heightSegments);
   const mesh = new THREE.Mesh(geometry, material);
   mesh.name = 'planet-surface';
   mesh.position.y = -radius;
+  mesh.receiveShadow = true;
+  mesh.castShadow = false;
+  return mesh;
+}
+
+/**
+ * How far inside the true sphere the body's widest facets sit, in metres.
+ *
+ * A sphere mesh is a polyhedron: every flat face is a chord, and the chord sags
+ * towards the centre by `radius · (1 − cos(π / segments))`. At the shipped
+ * radius that is metres, not millimetres, and the ground patches are built on
+ * the *exact* sphere - so at the patch's outer edge the body's first facet can
+ * stand below it, a step down into nothing. The skirt is sized from this number
+ * rather than from a guess.
+ */
+export function planetFacetSag(radius: number, segments: number): number {
+  const n = Math.max(3, Math.round(segments));
+  if (!Number.isFinite(radius) || radius <= 0) return 0;
+  return radius * (1 - Math.cos(Math.PI / n));
+}
+
+/**
+ * A wall hanging from a square ground patch's edge, down far enough to meet the
+ * planet body underneath it.
+ *
+ * The ground patches are built on the exact sphere; the body is a polyhedron and
+ * its facets sit *inside* that sphere, by `planetFacetSag`. At the far patch's
+ * outer edge the two surfaces therefore part company - the coarse ground ends and
+ * the body is metres lower - and an eye at that edge, or the camera looking along
+ * it, saw the patch floating over a gap. The skirt closes that step with the same
+ * height function the patch uses, so its top edge is the patch's own edge and its
+ * bottom is buried in the body.
+ */
+export function createTerrainSkirt(
+  radius: number,
+  field: TerrainFieldParams,
+  material: THREE.Material,
+  extentM: number,
+  skinM: number,
+  depthM: number,
+  segments = 64,
+): THREE.Mesh {
+  const half = Math.max(1, extentM) / 2;
+  const steps = Math.max(8, Math.round(segments));
+  const depth = Math.max(0.5, depthM);
+  const topY = (x: number, z: number): number => patchLocalSurfaceY(radius, x, z, field, skinM);
+
+  // One closed loop round the square, counter-clockwise from above, the same
+  // walk the soil slab's walls take, so the quads face outwards.
+  const loop: { x: number; z: number }[] = [];
+  for (let i = 0; i < steps; i += 1) loop.push({ x: -half + (2 * half * i) / steps, z: -half });
+  for (let i = 0; i < steps; i += 1) loop.push({ x: half, z: -half + (2 * half * i) / steps });
+  for (let i = 0; i < steps; i += 1) loop.push({ x: half - (2 * half * i) / steps, z: half });
+  for (let i = 0; i < steps; i += 1) loop.push({ x: -half, z: half - (2 * half * i) / steps });
+
+  const count = loop.length;
+  const positions: number[] = [];
+  for (const point of loop) positions.push(point.x, topY(point.x, point.z), point.z);
+  for (const point of loop) positions.push(point.x, topY(point.x, point.z) - depth, point.z);
+  const indices: number[] = [];
+  for (let i = 0; i < count; i += 1) {
+    const next = (i + 1) % count;
+    indices.push(i, count + i, next, next, count + i, count + next);
+  }
+
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setIndex(indices);
+  geometry.computeVertexNormals();
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.name = 'planet-terrain-skirt';
+  // The patch's own placement: patch-local metres, cancelled by the body's
+  // `-radius`, so the skirt joins the patch it hangs from in world space.
+  mesh.position.y = radius;
   mesh.receiveShadow = true;
   mesh.castShadow = false;
   return mesh;
@@ -231,6 +320,15 @@ export function createTerrainPatch(
  * outer patch has its centre removed and the inner patch overlaps its rim by a
  * little, so there is one ground surface everywhere and no coincident sheets.
  */
+/**
+ * Full width of the coarse ring, in metres: the patch radius doubled. Exported
+ * so the skirt that hangs off that ring's edge is built to the same square as
+ * the ring itself, rather than to a second reading of the config.
+ */
+export function terrainOuterExtentM(field: TerrainFieldParams): number {
+  return Math.max(20, field.patchRadiusM) * 2;
+}
+
 export function createTerrainPatches(
   radius: number,
   field: TerrainFieldParams,
@@ -260,7 +358,7 @@ export function createTerrainPatches(
     field,
     material,
     Math.max(24, Math.round(innerSegments * 0.6)),
-    patchRadius * 2,
+    terrainOuterExtentM(field),
     TERRAIN_SKIN_M,
     Math.max(0, innerExtent - 2),
   );

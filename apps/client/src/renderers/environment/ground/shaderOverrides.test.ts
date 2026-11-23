@@ -75,3 +75,18 @@ test('the vertex stage hands the fragment stage the surface-cut flag', () => {
   assert.match(vertex, /vSurfaceCut = aSurfaceCut;/);
   assert.match(fragment, /varying float vSurfaceCut;/);
 });
+
+test('the soil drops a bubble of itself around a buried eye', () => {
+  // An eye inside the earth is surrounded by dirt: the sheet's back faces, the
+  // slab's walls and underside. Without a cut around the eye the pit is a brown
+  // wall a stride away. The bubble is the camera's own air, and it must be
+  // conditional on the eye being under the ground.
+  assert.match(
+    fragment,
+    /if \(eyeIsUnder && distance\(vSoilWorldPos, uRootSightCamera\) < 0\.450\) \{\s*discard;/,
+    'the soil no longer cuts a bubble around a buried eye',
+  );
+  // And it must be a bubble, not the old half-space: a plane through the eye
+  // deleted whole hillsides from the surface view.
+  assert.doesNotMatch(fragment, /distance\(vSoilWorldPos, uRootSightCamera\) < [0-9.]+ \|\|/);
+});

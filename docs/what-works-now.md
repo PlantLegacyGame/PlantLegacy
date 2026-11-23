@@ -179,8 +179,10 @@ Honest list. No feature promises (T42, RULE_13). Updated at every gate.
   0.15, `sun_intensity_night` 0.15 and `exposure_night` 0.92 the young-plant
   framing - three metres out and 30° down, per `camera_young_elevation` - was a
   frame of unlit soil with a plant-shaped hole in it (light 0.5 at 19:15). The
-  night floor is now 0.28 ambient, 0.30 moonlight and exposure 1.0: dark, but the
-  ground keeps its texture and the plant reads as a silhouette. The second is a
+  night floor became 0.28 ambient, 0.30 moonlight and exposure 1.0: dark, but the
+  ground keeps its texture and the plant reads as a silhouette. The moon was
+  raised to 0.6 afterwards, because 0.30 against 0.28 ambient made the two
+  indistinguishable (`bug-inventory.md`, "Night moonlight, 0.6"). The second is a
   page that is *hidden*: `requestAnimationFrame` stops entirely for it, and the
   low-rate timer loop that draws instead was only ever started by a
   `visibilitychange` event - a page that loaded hidden (a preview pane, an
@@ -1618,7 +1620,7 @@ the band away is no longer findable.
 
 - **There is a currency, and it is the server's.** Spores are earned (dung 5,
 mutation 15, kill credit 30) and spent in the shop; the balance travels in
-`INVENTORY_SYNC.sporeBalance` (protocol v4). The starting balance is 120, so the
+`INVENTORY_SYNC.sporeBalance` (protocol v4; the wire is v5). The starting balance is 120, so the
 cheapest item is affordable on the first visit.
 - **A purchase is a server decision.** `SHOP_PURCHASE { itemId }` names an item;
 the price comes from `config/shop.json`, the balance from the purse, and the
@@ -2156,3 +2158,21 @@ outcome the players have not built themselves.
   live inside the mid and near layers and ride those depths. The three states are
   photographed in `docs/screenshots/title-scenery-day.png`, `-dusk.png` and
   `-rain.png`.
+
+## The ground at its edges (2026-11-23)
+
+- **The rim is 160 columns.** The shader cuts the opening per pixel and the bowl's
+  lip is a polygon; at 96 columns a wide mouth's chord was 6.5 cm, now under
+  1.5 mm. Every lip vertex still rises to its own ground and borrows the top
+  course's normals; the lip is deliberately not sunk, because a lip below its
+  ground opens a slot of sky at the mouth.
+- **The world's last ground patch meets the body.** The patches are built on the
+  exact sphere and the body is a polyhedron, so the coarse ring's outer edge used
+  to stop metres above the body. The body is now 384 x 192 facets and a perimeter
+  skirt hangs from the ring's own edge, from the ring's own height function, down
+  past the facet sag (live: 1 240 m wide, 7.27 m deep).
+- **A buried eye can see the pit.** A 0.45 m bubble of soil is dropped around an
+  eye that is under the drawn ground, in the shared soil shader and in the
+  aperture body. The pose that used to be a brown wall now shows the shaft's far
+  wall, the sky through the opening and the roots; the surface view is unchanged
+  because the cut is conditional on the eye being underground.

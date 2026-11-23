@@ -15,6 +15,8 @@ import {
   APERTURE_SOIL_TOP_INSET_M,
   apertureSoilParamsFor,
   createApertureSoilMesh,
+  nearCutHides,
+  setApertureSoilEye,
   setApertureSoilLight,
 } from './apertureSoilMesh.ts';
 import { CAVITY_CUT_OVERREACH, cavityDepthM } from './cavity/index.ts';
@@ -280,5 +282,46 @@ describe('the aperture body fits the bowl it is cut for', () => {
         `aperture ${apertureM}: bounds are shallower than the body`,
       );
     }
+  });
+});
+
+describe('the near-side cut', () => {
+  it('drops the body in a bubble around the eye, and nowhere else', () => {
+    const mesh = createApertureSoilMesh(
+      apertureSoilParamsFor({
+        centreX: CENTRE_X,
+        centreZ: CENTRE_Z,
+        mouthRadiusM: 0.82 * CAVITY_CUT_OVERREACH,
+        depthM: APERTURE_SOIL_MIN_DEPTH_M,
+      }),
+      bank,
+      {
+        topsoil: new THREE.Color('#51402a'),
+        subsoil: new THREE.Color('#80633e'),
+        deep: new THREE.Color('#625a4d'),
+      },
+    );
+    assert.ok(mesh, 'the body did not build');
+    const source = String((mesh.material as THREE.MeshStandardMaterial).onBeforeCompile);
+    assert.match(source, /uApertureNearCutOn/, 'the body has no near-cut switch');
+    assert.match(
+      source,
+      /distance\(vApertureWorld, uApertureEye\) < uApertureNearCut/,
+      'the cut is not a bubble',
+    );
+    assert.match(source, /discard/, 'the cut does not discard');
+
+    assert.equal(nearCutHides({ x: 0, y: 0, z: 0 }, { x: 0.2, y: 0, z: 0 }), true);
+    assert.equal(nearCutHides({ x: 0, y: 0, z: 0 }, { x: 0.6, y: 0, z: 0 }), false);
+
+    setApertureSoilEye(mesh, { x: 1, y: 2, z: 3 }, true);
+    const nearCut = mesh.userData.nearCut as {
+      eye: { value: THREE.Vector3 };
+      enabled: { value: number };
+    };
+    assert.deepEqual(nearCut.eye.value.toArray(), [1, 2, 3]);
+    assert.equal(nearCut.enabled.value, 1);
+    setApertureSoilEye(mesh, { x: 1, y: 2, z: 3 }, false);
+    assert.equal(nearCut.enabled.value, 0);
   });
 });

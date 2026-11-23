@@ -10,6 +10,16 @@
  */
 import { CAVITY_CUT_OVERREACH } from '../cavity/profile.ts';
 
+/**
+ * Radius of the air bubble the soil drops around a buried eye, in metres.
+ *
+ * Sized to the camera's own near distance: big enough that the eye is not
+ * sitting inside a shaded surface, small enough that a wall a stride away is
+ * still a wall. The aperture body uses the same number (`apertureSoilMesh.ts`
+ * imports it), so the sheet and the earth under it open the same hole.
+ */
+export const SOIL_NEAR_CUT_M = 0.45;
+
 export interface SoilShaderSources {
   /** Replaces `#include <fog_pars_fragment>`. */
   prelude: string;
@@ -162,6 +172,15 @@ vec3 soilBumpNormal(vec3 normal, vec2 uv, float strength) {
   // Is the eye buried? Decides whether this is a surface view or a view from
   // inside the earth, which need completely different shading.
   bool eyeIsUnder = uEyeUnderGround > 0.5;
+  // Camera-centred near-side cut (T56/C21-C). An eye under the surface is
+  // inside solid earth, and the soil between it and the pit is a brown wall
+  // across the whole frame - the slab's walls and underside, or the far side of
+  // a hill. Dropping a hand-sized bubble of it around the eye lets the pit and
+  // the roots be seen from wherever the camera ends up. Only under the ground:
+  // on the surface the same bubble would eat the soil under the player's feet.
+  if (eyeIsUnder && distance(vSoilWorldPos, uRootSightCamera) < ${SOIL_NEAR_CUT_M.toFixed(3)}) {
+    discard;
+  }
   // Both faces. The ground is a double-sided skin, so cutting only the front
   // face left the earth a closed ceiling from underneath: Root Sight's cavity
   // could be seen from outside and from above, and from inside the ground there

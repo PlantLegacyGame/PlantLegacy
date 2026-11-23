@@ -6,7 +6,7 @@ or a **committed** capture sitting directly in
 (`docs/verify/pass-YYYY-MM-DD/`), a root-level `*.png` or anything in `screens/`
 or `screenshots/` is gitignored, and must not be cited. This is the single home
 for *what is broken now*; the order to fix it in is
-[`bugfix-plan.md`](./bugfix-plan.md) (verified 2026-11-16, defect by defect) and
+[`bugfix-plan.md`](./bugfix-plan.md) (opened 2026-11-16, now the record of how each of those was resolved) and
 [`improvement-plan.md`](./improvement-plan.md) (value ranking), the task index is
 [`tasks/README.md`](./tasks/README.md),
 and what a fix must not break is `DESIGN.md`.
@@ -15,8 +15,8 @@ and what a fix must not break is `DESIGN.md`.
 (the row says which), `[~]` reproduced, not fixed, `[ ]` confirmed by reading the
 code, `[?]` suspected, needs the browser bot.
 
-Last full pass 2026-11-16, after a full pass over the tree and the gate; see
-[`bugfix-plan.md`](./bugfix-plan.md) §0 for the commands and their results. The
+Last full sweep 2026-11-16, then waves through 2026-11-23; see
+[`bugfix-plan.md`](./bugfix-plan.md) §0 for the gate as it reads today. The
 same day the gate was greened (L1, F10, F11 fixed), A2/A8 were fixed with
 tests, and A14 was found and fixed in an in-game pass on a slope. Title, Root
 Sight, camera, scenery and weather rows were added through 2026-11-21.
@@ -223,6 +223,17 @@ Evidence and measurements: [`tasks/bugfix-c21b.md`](./tasks/bugfix-c21b.md).
 | K29 | `[x]` | **The terrain field had two owners and neither matched the shipped file.** The server built `TerrainFieldParams` from a flat read of `terrain.json` with its own fallbacks (6 m of relief, a 7 m river, 0 m river centre); `tools/climate-day/measure.mjs` had a second copy with different ones (7 m river, 1.2 m soil). A renamed key would have quietly built two different planets. | `loadTerrainFieldParams` in `packages/shared/src/world/terrainFieldConfig.ts` is the only mapping, called by the server's `TerrainService` and the tool; a missing key throws. `terrainFieldConfig.test.ts` pins it to the shipped values (26 m relief, 12 m river, 1.6 m soil) and to that throw. | `packages/shared/src/world/terrainFieldConfig.ts`, `apps/server/src/main.ts`, `tools/climate-day/measure.mjs` |
 | K30 | `[x]` | **The vitals clock clipped the hour.** The chip was one nowrap line, `☾ Night · Season 8 · Day 1 · 23:48`, in a card 176–232 px wide, so the part that ran past the edge was the time itself. | The hour leads the chip (`☾ Night · 23:48`); season, day and the season countdown ride the sub-line, which already wraps. | `apps/client/src/ui/resourceVitals.ts`, `resourceVitals.test.ts` |
 
+## Reported 2026-11-23 — the twenty-one defects, Wave C
+
+Items 4, 7 and 13 of the same list: the ground at its edges. Evidence and
+measurements: [`tasks/bugfix-c21c.md`](./tasks/bugfix-c21c.md).
+
+| ID | Status | Bug | How it was fixed | Where / next action |
+|---|---|---|---|---|
+| K40 | `[x]` | **The cavity rim was a 96-column polygon against a per-fragment cut**, so at a wide mouth the lip could disagree with the cut by the chord error and show as a seam of sky or a sliver of lip | The bowl is built at 160 columns (3 200 vertices against 1 920), putting a wide mouth's chord under 1.5 mm. The vertex conform and the lip's borrowed normals were already there; the sink stays 0, because a lip sunk below its ground opens a slot of sky (`cavityBowl.test.ts` pins it) | `EnvironmentRenderer.ts`, `cavity/bowlMesh.ts`; shot from above at 0.63 m: one continuous ellipse, no seam |
+| K41 | `[x]` | **The far ground patch ended over a step.** The patches are built on the exact sphere and the planet body is a polyhedron, so at the coarse ring's outer edge the ground stopped metres above the body - a cliff into nothing at the edge of the world | The body is built at 384 x 192 facets (the shipped 256 sagged 7.5 m at a 100 km radius) and a perimeter skirt hangs off the coarse ring's own edge, built from the ring's own height function, to `planetFacetSag + 2` m down | `planetSurface.ts` (`createTerrainSkirt`, `planetFacetSag`, `PLANET_BODY_SEGMENTS`), `ground.ts`; live: skirt 1 240 m wide, 7.27 m deep |
+| K42 | `[x]` | **A buried eye saw a brown wall wherever it looked.** The sheet, the slab and the aperture body are all opaque earth, so an eye inside the earth could have the pit an arm's length away and still see nothing | A camera-centred near-side cut: a 0.45 m bubble of soil is dropped around a buried eye, in the soil shader (shared by the patches, slab and ring) and in the aperture body's own material, conditional on the eye being under the ground | `ground/shaderOverrides.ts` (`SOIL_NEAR_CUT_M`), `apertureSoilMesh.ts` (`setApertureSoilEye`, `nearCutHides`); live: the pose that was a wall now shows the shaft, the sky and the roots |
+
 ## Reported 2026-11-23 — the dev root chain
 
 One report from the dev tools: `dev_grow_roots` did not build a root system,
@@ -277,7 +288,8 @@ checks: [`tasks/bugfix-death-respawn.md`](./tasks/bugfix-death-respawn.md).
 | E2 | `[x]` | Mutation rolls fire on the automatic germination radicle, so a seedling can acquire upkeep before it can pay. No longer harmful: an unpaid bill cannot kill or shed (see E6). | `plantWorld.maybeAcquireMutation` |
 | E3 | `[x]` | Nothing asserted that growth cannot produce `PLANT_DAMAGE`; only the bot's rule watched it. Fixed: `plantWorld.test.ts` grows a fed plant and asserts `drainShedDamage()` stays empty, and the drought test proves the same queue does report real loss. | `ops/plantWorld.test.ts` |
 | E4 | `[x]` | **Withdrawn — not a defect as written.** The shrink is deliberate and stated in the code: `shedTissueMass` recomputes every part's radius after it loses mass "so the renderer actually draws the decline", and it drains leaves, then canopy stems, and reaches roots only after the canopy is gone. If the real complaint is that root thinning looks wrong, that is an art call, not a bug. | `plantWorld.ts:1855-1863` |
-| E5 | `[?]` | Tissue loss from unpaid upkeep (`shedTissueMass`) is silent: no `PLANT_DAMAGE`, so parts vanish with no explanation. | `plantWorld` upkeep path |
+| E5 | `[x]` | Tissue loss from unpaid upkeep (`shedTissueMass`) is silent: no `PLANT_DAMAGE`, so parts vanish with no explanation. **Fixed 2026-11-22 (FIX-16):** `PlantWorld.drainShedDamage` batches the loss per plant per tick, `tick/shedDamage.ts` sums it and flushes on the damage pipeline's own cadence (twice a second at 20 Hz), and `processUpkeepDamage` broadcasts one `PLANT_DAMAGE` with `source: 'starvation'`, `nodeId: null` and an empty `destroyedNodeIds`. The plan proposed a per-node event with a `drought` source; the shipped form coalesces per plant instead, because a wilting plant at 20 Hz made the client's damage cue flicker. Two gaps remain and are the row below. | `plantWorld.drainShedDamage`, `tick/shedDamage.ts`, `main.ts` `processUpkeepDamage` |
+| E18 | `[ ]` | **A damage source the type forbids, and a toast that cannot name it.** Upkeep loss is broadcast as `PLANT_DAMAGE` with `source: 'starvation'` (`main.ts` `processUpkeepDamage`), but `DamageSource` in `packages/shared/src/damage/index.ts` is `'weather' | 'tool' | 'herbivore' | 'terrain'`. The broadcast call is untyped, so the compiler never sees it, and the client's `sourceLabels` map in `handlePlantDamage` has no entry, so a starving player reads "Took 0.8 biomass damage (damage)." The fix is one union member (`starvation`, or a separate `upkeep` source), the matching label ("its own upkeep"), and `docs/protocol.md` naming it — the doc is updated already because the wire carries it today. | `packages/shared/src/damage/index.ts` `DamageSource`; `apps/server/src/main.ts` `processUpkeepDamage`; `apps/client/src/main.ts` `handlePlantDamage` |
 | E6 | `[x]` | The mutation bill could finish a young plant, and the interim rule auto-shed a mutation in its place (see Fixed). | `plantWorld` upkeep path |
 
 ## Camera and body tracking
@@ -337,7 +349,7 @@ checks: [`tasks/bugfix-death-respawn.md`](./tasks/bugfix-death-respawn.md).
 | F5 | `[x]` | **Fixed.** `docs/tasks/T02.md` quoted `cutaway_radius` 50.0 and `soil_opacity` 0.3; the table now reads 7.0 and 0.45, matching `config/root_sight.json`. The rest of the older entry was already stale: `controls.md` says `R` and the `tunables.md` counts match. This row stayed `[ ]` after the fix; corrected 2026-11-16. | `docs/tasks/T02.md:51,53` |
 | F12 | `[x]` | **The protocol version is documented as 1, 2 and 3**, and `net_proto.protocol_version` is not tied to `PROTOCOL_VERSION` even though the file says they must be equal: the server compares `HELLO` against the config while the client sends the shared constant, so a config-only edit makes every client fail the handshake. Code and config both say 5 today (`net_proto.protocol_version` is tied to `PROTOCOL_VERSION` at boot); v4 added `SHOP_PURCHASE`, `DROP_COLLECT` and `INVENTORY_SYNC.sporeBalance`, and v5 added `LEDGER_ENTRY`. | `CONTEXT.md` §5.6, `docs/protocol.md`; `ops/net.ts`, `apps/server/src/main.ts` |
 | F13 | `[x]` | **`pnpm verify` is not the chain CI runs**, although the README says it is. CI also runs `docs:check` and `build`, so a contributor can be green locally and red in CI. | `package.json` `scripts.verify`, `README.md`, `.github/workflows/ci.yml` |
-| F6 | `[x]` | Maintainability, not a live defect: the planet-body draw range and `surfaceShells` visibility are recomputed from the eye height every frame, so they cannot get stuck, but the toggle is split across `EnvironmentRenderer.update` and the renderer state. Worth one helper if it is touched again. | `EnvironmentRenderer` |
+| F6 | `[x]` | Maintainability, not a live defect: the planet-body draw range and `surfaceShells` visibility are recomputed from the eye height every frame, so they cannot get stuck, but the toggle was split across `EnvironmentRenderer.update` and the renderer state. **Fixed:** `updatePlanetBodyVisibility(eyeUnder)` is the one place that sets the body's draw range, every outer shell's visibility and the arch's, called once per frame. | `renderers/EnvironmentRenderer.ts` `updatePlanetBodyVisibility` |
 | F7 | `[x]` | **Fixed.** `validateMovement` (and its `MovementValidationResult` type) is deleted, so nothing pretends to validate a camera the server does not own. `INPUT` is documented as an ack-only heartbeat in `docs/protocol.md`, `docs/controls.md` and `CONTEXT.md`. | `ops/net.ts`, `docs/protocol.md` |
 | F9 | `[x]` | Day/night ambient smoothing uses a fixed 0.3 per frame rather than a per-second rate, so the fade between day and night runs at different speeds on a 30 Hz and a 144 Hz client. | `renderers/environment/celestial.ts` `stepAmbientLighting` alpha |
 

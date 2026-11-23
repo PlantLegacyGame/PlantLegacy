@@ -6,7 +6,10 @@ import {
   createPlanetBody,
   createTerrainPatch,
   createTerrainPatches,
+  createTerrainSkirt,
+  PLANET_BODY_SEGMENTS,
   patchLocalSurfaceY,
+  planetFacetSag,
   planetGravity,
   planetSurfaceDrop,
   planetSurfaceFrame,
@@ -254,5 +257,78 @@ describe('planet surface', () => {
       lowest = Math.min(lowest, positions.getY(i));
     }
     assert.ok(Math.abs(lowest + RADIUS) < 1e-2);
+  });
+});
+
+describe('the coarse ring and the body under it', () => {
+  it('hangs a skirt off it, deep enough to meet the body', () => {
+    // The ground patches are built on the exact sphere; the body is a polyhedron
+    // whose facets sit inside it. At the far patch's outer edge that difference is
+    // a step down into nothing, and the skirt is the wall that closes it. Its top
+    // must be the patch's own edge - the same height function, not a second
+    // reading of the config - and its bottom must reach past the facets.
+    const field = { ...DEFAULT_TERRAIN_FIELD, amplitudeM: 26, patchRadiusM: 620 };
+    const extent = 40;
+    const sag = planetFacetSag(RADIUS, PLANET_BODY_SEGMENTS);
+    const skirt = createTerrainSkirt(
+      RADIUS,
+      field,
+      new THREE.MeshBasicMaterial(),
+      extent,
+      TERRAIN_SKIN_M,
+      sag + 2,
+      16,
+    );
+    assert.equal(skirt.name, 'planet-terrain-skirt');
+    const positions = skirt.geometry.getAttribute('position');
+    const loop = positions.count / 2;
+    for (let i = 0; i < loop; i += 1) {
+      const x = positions.getX(i);
+      const z = positions.getZ(i);
+      const top = positions.getY(i);
+      const bottom = positions.getY(loop + i);
+      assert.ok(
+        // Float32 positions, so the edge agrees to the buffer's own precision.
+        Math.abs(top - patchLocalSurfaceY(RADIUS, x, z, field, TERRAIN_SKIN_M)) < 1e-4,
+        `skirt top ${i} is not the patch's edge`,
+      );
+      // Deeper than the body's worst facet, so the wall is buried in the body
+      // rather than stopping in the air at the patch's edge.
+      assert.ok(
+        top - bottom > sag + TERRAIN_SKIN_M,
+        `skirt bottom ${i} stops above the body's facets`,
+      );
+    }
+
+    // It faces outward: a wall seen from inside the ring would be invisible from
+    // the only side anything ever sees it.
+    const ax = positions.getX(0);
+    const az = positions.getZ(0);
+    const outward = new THREE.Vector3(ax, 0, az).normalize();
+    const a = new THREE.Vector3(positions.getX(0), positions.getY(0), positions.getZ(0));
+    const b = new THREE.Vector3(positions.getX(1), positions.getY(1), positions.getZ(1));
+    const c = new THREE.Vector3(positions.getX(loop), positions.getY(loop), positions.getZ(loop));
+    const normal = b.clone().sub(a).cross(c.clone().sub(a)).normalize();
+    assert.ok(normal.dot(outward) > 0, 'the skirt faces inward');
+  });
+
+  it('builds the planet body finer than the sag the skirt was sized for', () => {
+    // 256 facets put the body 7.5 m inside the sphere at a 100 km radius, which is
+    // where the far patch's edge hung over nothing.
+    const big = 100_000;
+    assert.ok(planetFacetSag(big, 256) > 7, 'the old facet count no longer sags');
+    assert.ok(
+      planetFacetSag(big, PLANET_BODY_SEGMENTS) < planetFacetSag(big, 256) / 1.5,
+      'the finer body did not halve the sag',
+    );
+    // And the shipped body really is that fine: its own geometry says so.
+    const body = createPlanetBody(RADIUS, new THREE.MeshBasicMaterial());
+    const positions = body.geometry.getAttribute('position');
+    let measured = 0;
+    for (let i = 0; i < positions.count; i += 1) {
+      const r = Math.hypot(positions.getX(i), positions.getY(i), positions.getZ(i));
+      measured = Math.max(measured, RADIUS - r);
+    }
+    assert.ok(measured > 0, 'the body has no facets, so this test proves nothing');
   });
 });

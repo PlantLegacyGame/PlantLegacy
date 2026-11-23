@@ -19,6 +19,13 @@ import {
 } from '@plant-legacy/shared/world';
 import * as THREE from 'three';
 import { CAVITY_STRATA_BANDS } from './cavity/profile.ts';
+import { SOIL_NEAR_CUT_M } from './ground/shaderOverrides.ts';
+
+/**
+ * The bubble the body drops around a buried eye. One number for the sheet and
+ * the earth under it, so the two cannot open different holes.
+ */
+export const APERTURE_SOIL_NEAR_CUT_M = SOIL_NEAR_CUT_M;
 
 /**
  * The body's size, as distances rather than fractions of the aperture.
@@ -134,6 +141,45 @@ export function createApertureSoilMesh(
     emissive: palette.topsoil.clone(),
     emissiveIntensity: 0.34,
   });
+  // The near-side cut (T56/C21-C). The body is solid earth around the shaft, so
+  // an eye that is inside it looks at a brown wall whichever way it turns - the
+  // pit can be a stride away and still hidden. The shader drops a hand-sized
+  // bubble of the body around the eye, the same bubble the soil sheet uses, so
+  // the opening and the roots can be seen from any eye position.
+  const nearCut = {
+    eye: { value: new THREE.Vector3() },
+    radius: { value: APERTURE_SOIL_NEAR_CUT_M },
+    enabled: { value: 0 },
+  };
+  material.userData.nearCut = nearCut;
+  material.onBeforeCompile = (shader) => {
+    shader.uniforms.uApertureEye = nearCut.eye;
+    shader.uniforms.uApertureNearCut = nearCut.radius;
+    shader.uniforms.uApertureNearCutOn = nearCut.enabled;
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vApertureWorld;')
+      .replace(
+        '#include <begin_vertex>',
+        '#include <begin_vertex>\nvApertureWorld = (modelMatrix * vec4(position, 1.0)).xyz;',
+      );
+    shader.fragmentShader = shader.fragmentShader.replace(
+      '#include <common>',
+      `#include <common>
+varying vec3 vApertureWorld;
+uniform vec3 uApertureEye;
+uniform float uApertureNearCut;
+uniform float uApertureNearCutOn;`,
+    );
+    // Before the lit path: a discarded fragment costs nothing after it.
+    shader.fragmentShader = shader.fragmentShader.replace(
+      '#include <clipping_planes_fragment>',
+      `#include <clipping_planes_fragment>
+  if (uApertureNearCutOn > 0.5 && distance(vApertureWorld, uApertureEye) < uApertureNearCut) {
+    discard;
+  }`,
+    );
+  };
+  material.customProgramCacheKey = () => 'aperture-soil-near-cut';
   const mesh = new THREE.Mesh(geometry, material);
   mesh.name = 'aperture-soil-volume';
   // It is the earth beside the pit, not an overlay: it receives the scene's
@@ -142,7 +188,42 @@ export function createApertureSoilMesh(
   mesh.receiveShadow = false;
   mesh.userData.fillColour = palette.topsoil.clone();
   mesh.userData.fillStrength = 0.34;
+  mesh.userData.nearCut = nearCut;
   return mesh;
+}
+
+/**
+ * Enable the near-side cut around this frame's eye.
+ *
+ * Only the eye's position is written; the radius is the shared constant. The
+ * cut is off for an eye above the ground, where the body is not drawn at all but
+ * a stale bubble would still be baked into the next program.
+ */
+export function setApertureSoilEye(
+  mesh: THREE.Mesh,
+  eye: { x: number; y: number; z: number },
+  buried: boolean,
+): void {
+  const nearCut = mesh.userData.nearCut as
+    | { eye: { value: THREE.Vector3 }; enabled: { value: number } }
+    | undefined;
+  if (!nearCut) return;
+  nearCut.eye.value.set(eye.x, eye.y, eye.z);
+  nearCut.enabled.value = buried ? 1 : 0;
+}
+
+/**
+ * Does the near cut drop this point? The shader's test, as a function.
+ *
+ * Kept beside the GLSL so the one number that decides what a buried eye can see
+ * is testable without a GPU.
+ */
+export function nearCutHides(
+  eye: { x: number; y: number; z: number },
+  point: { x: number; y: number; z: number },
+  radius = APERTURE_SOIL_NEAR_CUT_M,
+): boolean {
+  return Math.hypot(point.x - eye.x, point.y - eye.y, point.z - eye.z) < radius;
 }
 
 /**
