@@ -83,8 +83,14 @@ test('the soil drops a bubble of itself around a buried eye', () => {
   // conditional on the eye being under the ground.
   assert.match(
     fragment,
-    /if \(eyeIsUnder && distance\(vSoilWorldPos, uRootSightCamera\) < 0\.450\) \{\s*discard;/,
-    'the soil no longer cuts a bubble around a buried eye',
+    /eyeIsUnder &&\s*uRootSightEyeInPit < 0\.5 &&\s*distance\(vSoilWorldPos, uRootSightCamera\) < 0\.450\s*\)\s*\{\s*discard;/,
+    'the soil no longer cuts a bubble around a buried eye outside the pit',
+  );
+  // The pit's own wall is a stride from any eye standing in the opening: a
+  // bubble there would punch a hole in ground the player is beside.
+  assert.ok(
+    fragment.includes('uRootSightEyeInPit < 0.5'),
+    'the near cut is no longer exempt in the opening column',
   );
   // And it must be a bubble, not the old half-space: a plane through the eye
   // deleted whole hillsides from the surface view.

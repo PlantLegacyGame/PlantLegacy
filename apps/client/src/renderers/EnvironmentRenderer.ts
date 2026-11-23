@@ -394,11 +394,7 @@ export class EnvironmentRenderer {
       const dugTopsoil = new THREE.Color(palette.topsoilColor);
       const dugSubsoil = new THREE.Color(palette.subsoilColor);
       const dugDeep = new THREE.Color(palette.deepColor);
-      // 160 columns round the lip, not 96: the lip is one polygon chord per
-      // column, and every chord across the shader's cut is a place the cut shows
-      // through if the chord falls outside it. At a wide mouth 160 keeps the
-      // chord error under a millimetre and a half.
-      this.cavityBowl = createCavityBowl(dugTopsoil, dugSubsoil, 160, 24, dugDeep, {
+      this.cavityBowl = createCavityBowl(dugTopsoil, dugSubsoil, 96, 24, dugDeep, {
         night: palette.nightFill,
         day: palette.dayFill,
       });
@@ -1362,7 +1358,10 @@ export class EnvironmentRenderer {
     if (this.apertureSoil) {
       this.apertureSoil.visible = inside;
       // The near-side cut follows the eye: it is what lets a camera inside the
-      // earth see the pit instead of a brown wall an arm's length away.
+      // earth see the pit instead of a brown wall an arm's length away. This
+      // body is only reached for a buried eye (the early return above), which is
+      // the renderer's own answer that excludes an eye standing in the pit, so
+      // the cut can never fire on the wall beside a player in the opening.
       setApertureSoilEye(this.apertureSoil, this.camera.position, inside);
     }
   }

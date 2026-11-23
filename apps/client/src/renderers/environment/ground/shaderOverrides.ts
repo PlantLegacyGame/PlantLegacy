@@ -176,9 +176,25 @@ vec3 soilBumpNormal(vec3 normal, vec2 uv, float strength) {
   // inside solid earth, and the soil between it and the pit is a brown wall
   // across the whole frame - the slab's walls and underside, or the far side of
   // a hill. Dropping a hand-sized bubble of it around the eye lets the pit and
-  // the roots be seen from wherever the camera ends up. Only under the ground:
-  // on the surface the same bubble would eat the soil under the player's feet.
-  if (eyeIsUnder && distance(vSoilWorldPos, uRootSightCamera) < ${SOIL_NEAR_CUT_M.toFixed(3)}) {
+  // the roots be seen from wherever the camera ends up.
+  //
+  // Two exemptions, both of them ground the player may be standing on. Above
+  // the surface the bubble would eat the soil under their feet. And an eye
+  // inside the opening's column is below the sheet but not inside the earth at
+  // all: it is standing in the pit, with that pit's wall a stride away, and a
+  // bubble there would hole the ground right beside the player.
+  //
+  // eyeIsUnder is already the renderer's buried flag, which excludes the
+  // opening's column, so today the second test changes nothing. It stays
+  // because it is the guarantee stated where the discard happens rather than
+  // eighty lines away in the renderer that fills the uniform, and because the
+  // shader test pins it: a change to what that uniform means cannot quietly
+  // reintroduce the hole.
+  if (
+    eyeIsUnder &&
+    uRootSightEyeInPit < 0.5 &&
+    distance(vSoilWorldPos, uRootSightCamera) < ${SOIL_NEAR_CUT_M.toFixed(3)}
+  ) {
     discard;
   }
   // Both faces. The ground is a double-sided skin, so cutting only the front
