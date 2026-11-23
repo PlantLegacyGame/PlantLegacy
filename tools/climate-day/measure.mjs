@@ -24,17 +24,19 @@
  *   --humidity-base=F   override the field's mean humidity, for tuning
  *   --cloud-threshold=F override the humidity at which cloud begins, for tuning
  *   --step=S            simulation step in seconds (default 1)
+ *   --from=S            start the log window S seconds after the last boot
  *   --json              print only the JSON report
  *
  * A live day can be read back from the server log as well, which is the
  * authoritative record of what the running world actually did:
- *   node tools/climate-day/measure.mjs --log=path/to/server.log
+ *   node tools/climate-day/measure.mjs --log=path/to/server.log --from=600
  */
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { loadConfigDir, readBoolean, readNumber } from '../../packages/shared/src/config/index.ts';
+import { loadConfigDir, readNumber } from '../../packages/shared/src/config/index.ts';
 import { terrainHeightAt } from '../../packages/shared/src/world/terrainField.ts';
+import { loadTerrainFieldParams } from '../../packages/shared/src/world/terrainFieldConfig.ts';
 import {
   loadClimateConfig,
   loadDayNightConfig,
@@ -66,28 +68,8 @@ const climate = loadClimateConfig(configs);
 const weather = loadWeatherConfig(configs);
 const dayNight = loadDayNightConfig(configs);
 
-const terrainParams = {
-  seed: Math.round(readNumber(configs, 'terrain', 'seed')),
-  amplitudeM: readNumber(configs, 'terrain', 'surface_amplitude_m'),
-  baseFrequency: readNumber(configs, 'terrain', 'surface_base_frequency'),
-  octaves: Math.round(readNumber(configs, 'terrain', 'surface_octaves')),
-  lacunarity: readNumber(configs, 'terrain', 'surface_lacunarity'),
-  gain: readNumber(configs, 'terrain', 'surface_gain'),
-  ridgeStrength: readNumber(configs, 'terrain', 'ridge_strength'),
-  patchRadiusM: readNumber(configs, 'terrain', 'patch_radius_m'),
-  rimFadeFraction: readNumber(configs, 'terrain', 'rim_fade_fraction'),
-  maxDepthM: readNumber(configs, 'terrain', 'max_depth_m'),
-  soilDepthM: readNumber(configs, 'render', 'soil_depth_m'),
-  riverEnabled: readBoolean(configs, 'terrain', 'river_enabled'),
-  riverCenterZM: readNumber(configs, 'terrain', 'river_center_z_m'),
-  riverWidthM: readNumber(configs, 'terrain', 'river_width_m'),
-  riverDepthM: readNumber(configs, 'terrain', 'river_depth_m'),
-  riverPathCellM: readNumber(configs, 'terrain', 'river_path_cell_m'),
-  riverBankSlope: readNumber(configs, 'terrain', 'river_bank_slope'),
-  riverBankApronM: readNumber(configs, 'terrain', 'river_bank_apron_m'),
-  riverWaterDepthM: readNumber(configs, 'terrain', 'river_water_depth_m'),
-  riverLengthM: readNumber(configs, 'terrain', 'river_length_m'),
-};
+// The same loader the server builds its ground from, so the two cannot drift.
+const terrainParams = loadTerrainFieldParams(configs);
 
 const seasonLengthDays = Math.max(1, readNumber(configs, 'world', 'season_length_days'));
 const days = Math.max(1, Math.round(Number(arg('days', '1'))));
@@ -140,8 +122,9 @@ function printReport(report) {
       ? `boot ${report.bootTs}`
       : '';
   const scope = report.complete === false ? ' (partial)' : '';
+  const from = report.fromSeconds > 0 ? ` from ${Math.round(report.fromSeconds)}s` : '';
   console.log(
-    `source: ${report.source}, ${report.mode}, ${report.days} day(s)${where ? `, ${where}` : ''}${scope}`,
+    `source: ${report.source}, ${report.mode}, ${report.days} day(s)${where ? `, ${where}` : ''}${from}${scope}`,
   );
   console.log(
     `wet ${(report.wetShare * 100).toFixed(1)}%  snow ${(report.snowShare * 100).toFixed(2)}%  storms ${report.storms}  transitions ${report.transitions}  mean state ${report.meanStateSeconds.toFixed(0)}s`,
@@ -191,6 +174,10 @@ if (logPath) {
     if (entry.msg === 'weather changed') events.push(entry);
   }
 
+  // A window can start anywhere after the boot: a world driven into winter
+  // mid-day is measured from the moment it became winter, not from tick zero.
+  const fromSeconds = Math.max(0, Number(arg('from', '0')) || 0);
+  const startTick = Math.round(fromSeconds * tickRateHz);
   const dayTicks = daySeconds * tickRateHz;
   const windowTicks = days * dayTicks;
   // The log has no heartbeat, so the wall clock since boot is the only end
@@ -198,12 +185,16 @@ if (logPath) {
   const elapsedTicks = bootTs
     ? Math.max(0, Math.floor((Date.now() - Date.parse(bootTs)) / 1000) * tickRateHz)
     : 0;
-  const endTick = Math.min(windowTicks, elapsedTicks);
+  const endTick = Math.max(startTick, Math.min(startTick + windowTicks, elapsedTicks));
 
   const stateSeconds = {};
   const transitions = [];
   const dayTotals = Array.from({ length: days }, (_, index) => ({
     day: index + 1,
+    // A window that starts mid-day, or that is still running, has less than a
+    // day in it: the share must be of the seconds actually observed, or a
+    // partial day reads as a dry day next to the window's own 18.7%.
+    observedSeconds: 0,
     wetSeconds: 0,
     snowSeconds: 0,
     storms: 0,
@@ -211,9 +202,15 @@ if (logPath) {
   }));
   const spans = [];
   let state = 'clear';
-  let cursor = 0;
+  let cursor = startTick;
   for (const event of events) {
-    if (typeof event.tick !== 'number' || event.tick > endTick) continue;
+    if (typeof event.tick !== 'number') continue;
+    // The window opens in whatever state the previous transition left behind.
+    if (event.tick <= startTick) {
+      state = event.to;
+      continue;
+    }
+    if (event.tick >= endTick) break;
     spans.push({ state, from: cursor, to: event.tick });
     transitions.push({
       t: Number((event.tick / tickRateHz).toFixed(1)),
@@ -228,7 +225,7 @@ if (logPath) {
         precipitation: event.precipitation,
       },
     });
-    const dayIndex = Math.min(days - 1, Math.floor(event.tick / dayTicks));
+    const dayIndex = Math.min(days - 1, Math.floor((event.tick - startTick) / dayTicks));
     dayTotals[dayIndex].transitions += 1;
     if (event.to === 'thunderstorm_telegraph') dayTotals[dayIndex].storms += 1;
     state = event.to;
@@ -244,10 +241,11 @@ if (logPath) {
       span.state === 'rain' || span.state === 'snow' || span.state.startsWith('thunderstorm');
     let from = span.from;
     while (from < span.to) {
-      const dayIndex = Math.min(days - 1, Math.floor(from / dayTicks));
-      const portionEnd = Math.min(span.to, (dayIndex + 1) * dayTicks);
+      const dayIndex = Math.min(days - 1, Math.floor((from - startTick) / dayTicks));
+      const portionEnd = Math.min(span.to, startTick + (dayIndex + 1) * dayTicks);
       const seconds = (portionEnd - from) / tickRateHz;
       stateSeconds[span.state] = (stateSeconds[span.state] ?? 0) + seconds;
+      dayTotals[dayIndex].observedSeconds += seconds;
       if (wet) {
         wetSeconds += seconds;
         dayTotals[dayIndex].wetSeconds += seconds;
@@ -264,12 +262,13 @@ if (logPath) {
     .map((entry) => entry.sample.temperatureC)
     .filter(Number.isFinite);
   const humidities = transitions.map((entry) => entry.sample.humidity).filter(Number.isFinite);
-  const observedSeconds = endTick / tickRateHz;
+  const observedSeconds = (endTick - startTick) / tickRateHz;
   printReport({
     mode: 'live-log',
     source: logPath,
     days,
     bootTs,
+    fromSeconds,
     observedSeconds,
     complete: observedSeconds >= totalSeconds,
     wetShare: observedSeconds > 0 ? wetSeconds / observedSeconds : 0,
@@ -288,7 +287,10 @@ if (logPath) {
       aboveRainStartShare: null,
       aboveRainStopShare: null,
     },
-    perDay: dayTotals.map((day) => ({ ...day, wetShare: day.wetSeconds / daySeconds })),
+    perDay: dayTotals.map((day) => ({
+      ...day,
+      wetShare: day.wetSeconds / Math.max(1, day.observedSeconds),
+    })),
     transitionLog: transitions,
   });
   process.exit(0);

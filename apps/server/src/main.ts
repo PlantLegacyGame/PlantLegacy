@@ -6,6 +6,7 @@ import { readNumber } from '@plant-legacy/shared/config';
 import { validateDisplayName } from '@plant-legacy/shared/displayName';
 import type { Plant } from '@plant-legacy/shared/growth';
 import { validateMessage } from '@plant-legacy/shared/protocol/messageSchemas';
+import { loadTerrainFieldParams } from '@plant-legacy/shared/world/terrainFieldConfig';
 import {
   loadClimateConfig,
   loadDayNightConfig,
@@ -33,7 +34,6 @@ import {
   type ReportConfig,
 } from './ops/chat.ts';
 import { consumeChatBudget, resolveChatIntent } from './ops/chatService.ts';
-import { readFlatConfig } from './ops/configRoutes.ts';
 import {
   type ConnectionRegistry,
   connectionRegistryClearHelloTimer,
@@ -3697,54 +3697,27 @@ async function main(): Promise<void> {
   // T25 sparse soil. The base surface is the shared field; only edits load.
   let terrainService: TerrainService | null = null;
   let terrainPersistence: TerrainPersistence | null = null;
-  const terrainFlat = await readFlatConfig(runtime.configDir, 'terrain');
-  if (terrainFlat) {
-    const value = (key: string, fallback: number): number => {
-      const raw = Number(terrainFlat[key]);
-      return Number.isFinite(raw) ? raw : fallback;
-    };
-    terrainService = new TerrainService(
-      {
-        seed: Math.round(value('seed', 1337)),
-        amplitudeM: value('surface_amplitude_m', 6),
-        baseFrequency: value('surface_base_frequency', 0.045),
-        octaves: Math.round(value('surface_octaves', 4)),
-        lacunarity: value('surface_lacunarity', 2),
-        gain: value('surface_gain', 0.5),
-        ridgeStrength: value('ridge_strength', 0.35),
-        patchRadiusM: value('patch_radius_m', 620),
-        rimFadeFraction: value('rim_fade_fraction', 0.28),
-        maxDepthM: value('max_depth_m', 12),
-        soilDepthM: readNumber(configs, 'render', 'soil_depth_m'),
-        // The river is cut into the shared field, so the server's ground and the
-        // client's drawn ground are the same surface, channel included.
-        riverEnabled: terrainFlat.river_enabled !== false,
-        riverCenterZM: value('river_center_z_m', 0),
-        riverWidthM: value('river_width_m', 7),
-        riverDepthM: value('river_depth_m', 1.2),
-        riverPathCellM: value('river_path_cell_m', 2),
-        riverBankSlope: value('river_bank_slope', 0.9),
-        riverBankApronM: value('river_bank_apron_m', 12),
-        riverWaterDepthM: value('river_water_depth_m', 0.35),
-        riverLengthM: value('river_length_m', 320),
-      },
-      {
-        cellSizeM: value('cell_size_m', 0.5),
-        chunkCells: Math.round(value('chunk_cells', 32)),
-        surfaceBreakDepthM: value('surface_break_depth_m', 0.8),
-        maxDepthM: value('max_depth_m', 12),
-        maxEditVolumeM3: value('max_edit_volume_m3', 4),
-        maxEditsPerTick: Math.round(value('max_edits_per_tick', 16)),
-        collapseCadenceHz: value('collapse_cadence_hz', 2),
-        displacementRingCells: Math.round(value('displacement_ring_cells', 3)),
-        growthResistanceMin: value('growth_resistance_min', 0.4),
-        growthResistanceMax: value('growth_resistance_max', 2.5),
-        maxActiveChunks: Math.round(value('max_active_chunks', 64)),
-        runoffFraction: value('runoff_fraction', 0.15),
-        evaporationPerS: value('evaporation_per_s', 0.002),
-        rainAbsorptionPerS: value('rain_absorption_per_s', 0.05),
-      },
-    );
+  if (configs.has('terrain')) {
+    // The field's tunables come from the loader the climate day tool also uses.
+    // The two mapped this file separately, and both fell back to numbers it had
+    // outgrown (6 m of relief, a 7 m river), so a renamed key would have built
+    // two different planets without saying so.
+    terrainService = new TerrainService(loadTerrainFieldParams(configs), {
+      cellSizeM: readNumber(configs, 'terrain', 'cell_size_m'),
+      chunkCells: Math.round(readNumber(configs, 'terrain', 'chunk_cells')),
+      surfaceBreakDepthM: readNumber(configs, 'terrain', 'surface_break_depth_m'),
+      maxDepthM: readNumber(configs, 'terrain', 'max_depth_m'),
+      maxEditVolumeM3: readNumber(configs, 'terrain', 'max_edit_volume_m3'),
+      maxEditsPerTick: Math.round(readNumber(configs, 'terrain', 'max_edits_per_tick')),
+      collapseCadenceHz: Math.round(readNumber(configs, 'terrain', 'collapse_cadence_hz')),
+      displacementRingCells: Math.round(readNumber(configs, 'terrain', 'displacement_ring_cells')),
+      growthResistanceMin: readNumber(configs, 'terrain', 'growth_resistance_min'),
+      growthResistanceMax: readNumber(configs, 'terrain', 'growth_resistance_max'),
+      maxActiveChunks: Math.round(readNumber(configs, 'terrain', 'max_active_chunks')),
+      runoffFraction: readNumber(configs, 'terrain', 'runoff_fraction'),
+      evaporationPerS: readNumber(configs, 'terrain', 'evaporation_per_s'),
+      rainAbsorptionPerS: readNumber(configs, 'terrain', 'rain_absorption_per_s'),
+    });
   }
 
   // Plant growth world (T01) with T03 tier support

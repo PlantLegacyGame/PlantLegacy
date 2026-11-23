@@ -76,20 +76,21 @@ describe('rates', () => {
 describe('clock chip', () => {
   const format = (seconds: number): string => `${Math.round(seconds / 3600)} h`;
 
-  it('puts the day part, season, day and hour on one line', () => {
-    assert.equal(
-      clockChip(
-        {
-          season: 1,
-          day: 3,
-          time: '11:44',
-          timeOfDay: (11 + 44 / 60) / 24,
-          seasonRemainingS: 3600 * 5,
-        },
-        format,
-      ).main,
-      '\u2600 Day \u00B7 Season 1 \u00B7 Day 3 \u00B7 11:44',
+  it('leads with the day part and the hour, and wraps season and day underneath', () => {
+    const chip = clockChip(
+      {
+        season: 1,
+        day: 3,
+        time: '11:44',
+        timeOfDay: (11 + 44 / 60) / 24,
+        seasonRemainingS: 3600 * 5,
+      },
+      format,
     );
+    // The hour is the one part that must never be clipped, so it is short and
+    // first; the rest lives where the card is allowed to wrap.
+    assert.equal(chip.main, '\u2600 Day \u00B7 11:44');
+    assert.equal(chip.sub, 'Season 1 \u00B7 Day 3 \u00B7 ends in 5 h');
   });
 
   it('names night and dawn from the server clock', () => {
@@ -108,22 +109,19 @@ describe('clock chip', () => {
       { season: 2, day: 7, time: '22:05', timeOfDay: 22.1 / 24, seasonRemainingS: 7200 },
       format,
     );
-    assert.equal(chip.sub, 'Season ends in 2 h');
+    assert.equal(chip.sub, 'Season 2 \u00B7 Day 7 \u00B7 ends in 2 h');
     assert.match(chip.title, /Season 2, day 7, 22:05/);
     assert.match(chip.title, /2 h/);
     assert.match(chip.title, /Night/);
   });
 
-  it('says nothing about a season it does not know', () => {
+  it('says nothing about a season end it does not know', () => {
     const chip = clockChip({ season: 1, day: 1, time: '06:00', timeOfDay: 6 / 24 }, format);
-    assert.equal(chip.sub, '');
+    assert.equal(chip.sub, 'Season 1 \u00B7 Day 1');
   });
 
   it('does not name a day part before the server has sent a clock', () => {
-    assert.equal(
-      clockChip({ season: 1, day: 1, time: '--:--' }, format).main,
-      'Season 1 \u00B7 Day 1 \u00B7 --:--',
-    );
+    assert.equal(clockChip({ season: 1, day: 1, time: '--:--' }, format).main, '--:--');
   });
 });
 

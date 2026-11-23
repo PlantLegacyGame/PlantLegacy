@@ -22,6 +22,7 @@
     "./protocol": "./src/protocol/index.ts",
     "./protocol/messageSchemas": "./src/protocol/messageSchemas.ts",
     "./world": "./src/world/index.ts",
+    "./world/terrainFieldConfig": "./src/world/terrainFieldConfig.ts",
     "./weather": "./src/weather/index.ts"
   },
   "scripts": {

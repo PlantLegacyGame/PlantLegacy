@@ -137,8 +137,12 @@ export function clockChip(input: ClockInput, formatSeason: (seconds: number) => 
       : null;
   const part = dayPart ? `${dayPart.glyph} ${dayPart.word} \u00B7 ` : '';
   return {
-    main: `${part}Season ${season} \u00B7 Day ${day} \u00B7 ${input.time}`,
-    sub: remaining ? `Season ends in ${remaining}` : '',
+    // The hour leads the chip on purpose. It used to be the last thing on one
+    // nowrap line with the season and day in front of it, so on a narrow card
+    // the fraction of a millimetre that got clipped was the clock itself. The
+    // season and day belong on the sub-line, which wraps.
+    main: `${part}${input.time}`,
+    sub: `Season ${season} \u00B7 Day ${day}${remaining ? ` \u00B7 ends in ${remaining}` : ''}`,
     title: remaining
       ? `${part}Season ${season}, day ${day}, ${input.time}. Season ends in ${remaining}.`
       : `${part}Season ${season}, day ${day}, ${input.time}.`,

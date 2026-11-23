@@ -6569,7 +6569,7 @@ function updateResourceReadout(
   );
 }
 
-/** Season, day and hour in one chip; the season countdown rides in the sub-line. */
+/** The hour leads the chip; season, day and the countdown ride the sub-line. */
 function updateVitalsClock(): void {
   if (!vitalsClockMainEl || !vitalsClockSubEl) return;
   const remainingS = seasonNumber > 0 ? (seasonEndsAtMs - performance.now()) / 1000 : null;

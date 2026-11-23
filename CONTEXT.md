@@ -714,7 +714,10 @@ minutes per state, and snow 1.92% of the sky in the winter quarter — asserted 
 the 30-day test, not just reported (the seasonal curve, orographic distance and
 humidity centre were corrected after a full live day found them; see
 `docs/tasks/bugfix-c21b.md` §4b and §4c). The sanitiser's fallbacks are the
-shipped numbers, so a missing key cannot silently build a different planet. Every purse mutation now emits `LEDGER_ENTRY` (48, protocol
+shipped numbers, so a missing key cannot silently build a different planet. The
+world has also been driven to winter on the dev stack, where the log recorded
+live snow at 0.1 °C (§4d), and the terrain field's numbers now come from one
+loader (`loadTerrainFieldParams`) shared by the server and the day tool. Every purse mutation now emits `LEDGER_ENTRY` (48, protocol
 v5) with the label, item, count, signed amount and committed balance, one wording
 rule in `packages/shared/src/economy/ledger.ts`, and the inventory panel lists the
 last 14. Record: [`docs/tasks/bugfix-c21b.md`](./docs/tasks/bugfix-c21b.md).

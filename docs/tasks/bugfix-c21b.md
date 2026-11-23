@@ -146,12 +146,58 @@ at the autumn equinox and fail the second assertion.
 | `wind_speed_mps` and `orographic_lift` notes | Both still described the broken physics: speed "drives orographic lift" and the lift was "per metre per second of upslope". After K26 the lift is set by the wind direction and the distance over the slope, and the unit is metres climbed per metre travelled |
 | `--log=/tmp/server-b.log` in the usage line | On Windows `/tmp` is `C:\tmp` to Node and something else to Git Bash: a path that only works in the shell it was written in. The example is a relative path now |
 
+## 4d. A live winter day, and one ground (2026-11-23, fifth pass)
+
+Snow had only ever been a simulated figure; §4b's 1.92% is the 30-day test. The
+dev world was driven into winter with the built dev control (`dev_end_season`),
+which ends a season and kills every plant. Seasons wrap, so 1→2→3→4 is winter
+and 5 is spring again: an early duplicate jump overshot to 5, and the world had
+to be taken to 8. Winter was reached at 03:56:35Z, 168 s after the clean boot at
+03:53:47Z, and the reconnected plant's root (2.752, −4.105) became the anchor.
+
+The first twenty minutes were dry at the anchor — humidity 0.64, cloud 0.10,
+precipitation 0 at −1 °C — because precipitation needs humidity above 0.704 and
+the state machine re-reads the field every `reevaluate_s` (90 s). The advected
+air arrived at 04:16:49 (humidity 0.788, precipitation 0.283), and the next
+re-evaluation logged the first live snow:
+
+| time (UTC) | transition | temp | humidity | cloud | precip |
+|---|---|---|---|---|---|
+| 03:58:17 | clear → rain | 7.9 °C | 0.798 | 0.495 | 0.317 |
+| 04:01:17 | rain → clear | 9.0 °C | 0.717 | 0.293 | 0.045 |
+| 04:17:48 | clear → **snow** | **0.1 °C** | 0.822 | 0.556 | 0.400 |
+| 04:19:18 | snow → clear | −1.1 °C | 0.677 | 0.193 | 0 |
+
+The snow lasted 90 s. The clock was driven to 22:48 (`dev_set_time` 0.95, the
+cold hour) and held there while the cell was wet, so this is a driven night, not
+a natural one. Measured from the second the world became winter:
+`node tools/climate-day/measure.mjs --log=.tmp-dev/dev.log --from=168 --days=1`
+reads wet 18.4%, snow 6.14% (90 s), 0 storms, 4 transitions, temperature
+−1.1..9.0 °C, field humidity mean 0.754. The window is partial (1441 s of 3600 s)
+because the observation began when winter did; `--from` exists for that case,
+and a partial day's share now divides by its own observed seconds instead of a
+whole day.
+
+The same pass gave the ground one owner: `loadTerrainFieldParams`
+(`packages/shared/src/world/terrainFieldConfig.ts`) reads every terrain-field
+tunable, and both the server's `TerrainService` and the day tool call it. The
+server's inline copy still fell back to 6 m of relief and a 7 m river, the tool's
+to 7 m and 1.2 m of soil. A renamed key now throws in one place; a test pins the
+loader to `config/terrain.json` (26 m relief, 12 m river, 1.6 m soil) and asserts
+a missing key throws.
+
+The vitals clock put the hour at the end of one nowrap line behind the season and
+day, so on the narrow card the clipped part was the number the chip exists to
+show. The hour now leads it (`☾ Night · 23:48`), and season, day and the
+countdown ride the wrapping sub-line. Client tests updated; the card was not
+viewed in a browser this pass.
+
 ## 5. Records
 
 `docs/bug-inventory.md` gained K11–K15 and, from the full-day check, K25–K27.
 `docs/protocol.md`, `docs/tunables.md`, `CONTEXT.md`, `docs/history.md`,
 `docs/what-works-now.md` and the task index were updated. The climate can be
 measured with `node tools/climate-day/measure.mjs` (a simulated day or 30-day
-year, or `--log=/tmp/server-b.log` for the live day the server actually ran). `pnpm verify` is green: 31 tools + 228 shared + 23 weather + 508 server +
+year, or `--log=/tmp/server-b.log` for the live day the server actually ran). `pnpm verify` is green: 31 tools + 230 shared + 24 weather + 508 server +
 805 client tests, lint, typecheck, config validation, config keys, docs and
 palette.
