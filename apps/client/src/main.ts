@@ -11,6 +11,7 @@
 
 import RAPIER from '@dimforge/rapier3d-compat';
 import { type Binding, createInputBus, type InputBus } from '@plant-legacy/input';
+import type { DamageSource } from '@plant-legacy/shared/damage';
 import { appendLedger, type LedgerEntry } from '@plant-legacy/shared/economy';
 import {
   clampGrowthDirectionByGene,
@@ -3699,7 +3700,9 @@ function updateRootSight(deltaTime: number): void {
     eased,
     rootSightTarget,
     sightRadius,
-    3.0,
+    // E19: the same key the SDF pass reads, so the two plant passes cannot
+    // disagree about how far a root glows.
+    rootSightConfig.auraRadius,
     rootSightConfig.soilOpacity,
     // The hole's actual size. Above ground the plant pass exposes the roots
     // under this radius and hides the rest, instead of the old single sphere
@@ -6030,7 +6033,7 @@ async function initPlantRenderer(): Promise<void> {
       // T02: Root Sight specific
       rootSightCutawayRadius:
         rootSightConfig?.cutawayRadius ?? DEFAULT_CONFIG.rootSightCutawayRadius,
-      rootAuraRadius: DEFAULT_CONFIG.rootAuraRadius,
+      rootAuraRadius: rootSightConfig?.auraRadius ?? DEFAULT_CONFIG.rootAuraRadius,
       rootSightSoilOpacity: rootSightConfig?.soilOpacity ?? DEFAULT_CONFIG.rootSightSoilOpacity,
       ownRootHighlightColor:
         rootSightConfig?.ownRootHighlightColor ?? DEFAULT_CONFIG.ownRootHighlightColor,
@@ -9863,14 +9866,19 @@ function handlePlantDamage(payload: unknown): void {
   const amount = typeof damage.amount === 'number' ? damage.amount : 0;
   if (amount > 0 && Date.now() - lastDamageToastAtMs > 2500) {
     lastDamageToastAtMs = Date.now();
-    const sourceLabels: Record<string, string> = {
+    // A partial map on purpose: the payload's `source` is whatever a server
+    // build sent, so an unknown one still has to render.
+    const sourceLabels: Partial<Record<DamageSource, string>> = {
       weather: 'weather',
       tool: 'a tool',
       herbivore: 'herbivores',
       terrain: 'terrain',
+      // E18: tissue shed because the plant could not pay its own upkeep. Without
+      // this the toast read "Took 0.8 biomass damage (damage)."
+      starvation: 'starvation',
     };
     uiShell?.toast({
-      message: `Took ${amount.toFixed(1)} biomass damage (${sourceLabels[damage.source ?? ''] ?? 'damage'}).`,
+      message: `Took ${amount.toFixed(1)} biomass damage (${sourceLabels[damage.source as DamageSource] ?? 'damage'}).`,
       kind: 'error',
       durationMs: 2500,
     });
@@ -11735,6 +11743,7 @@ function renderFrame(deltaTime: number): void {
     webgpuRenderer?.setSunDirection(environmentRenderer.getSunDirection());
     webgpuRenderer?.setSunWarmth(environmentRenderer.getSunWarmth());
     webgpuRenderer?.setRainAnchor(camera.position.x, camera.position.z);
+    webgpuRenderer?.setGroundMapView(camera.position.x, camera.position.z);
     const rainLight = environmentRenderer.getRainLight();
     webgpuRenderer?.setRainLight(rainLight.color, rainLight.level);
     // Exposure grade: a lift at golden hour, a crush at night, from render.json.

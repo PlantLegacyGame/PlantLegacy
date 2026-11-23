@@ -53,6 +53,11 @@ struct FrameUniforms {
   rootSightEyeWindow: f32,
   // Golden-hour warmth, 0..1. Lit leaves facing away from the sun glow through.
   sunWarmth: f32,
+  // The ground height map the mesh pass occludes against: its low corner in xz
+  // and the metres it spans. Extent 0 means nothing has been baked yet.
+  groundMapOrigin: vec2f,
+  groundMapExtent: f32,
+  _groundMapPad: f32,
 }
 
 // C02b: Per-vertex emergence data for GPU skinning

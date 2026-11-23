@@ -32,7 +32,14 @@ import type { WebGPUDevice } from './WebGPUDevice.js';
  * billboard pass draws distant ones.
  */
 
-const FRAME_FLOATS = 96;
+/** Texels across the ground height map the mesh pass occludes against. */
+const GROUND_MAP_SIZE = 64;
+/** Metres the map spans, centred on the viewer when it is baked. */
+const GROUND_MAP_EXTENT_M = 200;
+/** Terrain samples taken per frame while a map bakes. */
+const GROUND_MAP_CHUNK = 512;
+
+const FRAME_FLOATS = 100;
 /**
  * The f32 fields of `FrameUniforms` in `shaders/common.wgsl`, in order.
  *
@@ -83,6 +90,9 @@ export const FRAME_UNIFORM_FIELDS = [
   'rootSightApertureRadius',
   'rootSightEyeWindow',
   'sunWarmth',
+  'groundMapOrigin',
+  'groundMapExtent',
+  '_groundMapPad',
 ] as const;
 const FRAME_BYTES = FRAME_FLOATS * 4;
 const PLANT_FLOATS = 13;
@@ -461,6 +471,14 @@ export class WebGPURenderer {
   private readonly rivalRootColor = new THREE.Color(DEFAULT_WEBGPU_RENDERER_CONFIG.rivalRootColor);
   // Pre-allocated per-frame uniform buffers to avoid GC pressure in the render loop
   private readonly rainUniformData = new Float32Array(12);
+  private groundMapTexture: GPUTexture | null = null;
+  private readonly groundMapData = new Float32Array(GROUND_MAP_SIZE * GROUND_MAP_SIZE);
+  private groundMapCursor = -1;
+  /** Where the map being baked sits: its low corner. */
+  private groundMapOrigin = { x: Number.NaN, z: Number.NaN };
+  /** Where the map the texture actually holds sits. */
+  private readonly groundMapSent = { x: Number.NaN, z: Number.NaN };
+  private groundMapReady = false;
   private readonly rainColor = new THREE.Color(1, 1, 1);
   private rainLevel = 1;
   private rainInstanceData: Float32Array | null = null;
@@ -615,6 +633,16 @@ export class WebGPURenderer {
       GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     );
 
+    // The one question this canvas cannot ask three.js: is a hill standing
+    // between the eye and this plant? A 64-square map over 200 m is a texel every
+    // 3.1 m - a ridge, not a clod - and costs nothing to sample.
+    this.groundMapTexture = device.createTexture({
+      label: 'Ground height map',
+      size: { width: GROUND_MAP_SIZE, height: GROUND_MAP_SIZE },
+      format: 'r32float',
+      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
+    });
+
     // C02b: Texture arrays for plant variation
     // Create procedural texture arrays for different plant part types
     this.textureArrays = new Map<PlantTextureType, GPUTexture>();
@@ -741,6 +769,12 @@ export class WebGPURenderer {
               binding: 9,
               visibility: GPUShaderStage.FRAGMENT,
               buffer: { type: 'read-only-storage' },
+            },
+            // Ground height map for the hill-in-front test (groundMap.wgsl fn).
+            {
+              binding: 10,
+              visibility: GPUShaderStage.FRAGMENT,
+              texture: { sampleType: 'unfilterable-float', viewDimension: '2d' },
             },
           ],
         }),
@@ -969,6 +1003,10 @@ export class WebGPURenderer {
               this.plantLookBuffer ??
               device.createBuffer({ size: 320, usage: GPUBufferUsage.STORAGE }),
           },
+        },
+        {
+          binding: 10,
+          resource: this.groundMapTexture!.createView(),
         },
       ],
     });
@@ -1505,6 +1543,58 @@ export class WebGPURenderer {
   setGroundHeightAt(sample: (x: number, z: number) => number): void {
     this.groundHeightAt = sample;
     this.rebuildRainField(true);
+    // A new terrain function invalidates the map the mesh pass occludes against.
+    this.groundMapOrigin = { x: Number.NaN, z: Number.NaN };
+    this.groundMapReady = false;
+  }
+
+  /** Keep the ground map over the viewer: bake again when they leave its heart. */
+  setGroundMapView(x: number, z: number): void {
+    if (!this.groundHeightAt || this.groundMapCursor >= 0) return;
+    const known = !Number.isNaN(this.groundMapOrigin.x);
+    // Measured from the map's centre: the stored origin is its low corner, and
+    // comparing against that re-baked the map on every single frame.
+    const centreX = this.groundMapOrigin.x + GROUND_MAP_EXTENT_M * 0.5;
+    const centreZ = this.groundMapOrigin.z + GROUND_MAP_EXTENT_M * 0.5;
+    const moved = Math.hypot(x - centreX, z - centreZ);
+    if (known && moved < GROUND_MAP_EXTENT_M * 0.25) return;
+    this.groundMapOrigin = { x: x - GROUND_MAP_EXTENT_M * 0.5, z: z - GROUND_MAP_EXTENT_M * 0.5 };
+    this.groundMapCursor = 0;
+  }
+
+  /**
+   * The drawn terrain under the viewer, a chunk a frame.
+   *
+   * 4096 planet samples cost 4.5 ms in one frame and this is redone every 50 m
+   * walked, so it fills over eight frames at half a millisecond each. The map
+   * already on the GPU keeps being sampled until the new one is complete.
+   */
+  private bakeGroundMap(): void {
+    const sample = this.groundHeightAt;
+    const device = this.device.getDevice();
+    if (!device || !sample || this.groundMapCursor < 0 || !this.groundMapTexture) return;
+    const total = this.groundMapData.length;
+    const end = Math.min(total, this.groundMapCursor + GROUND_MAP_CHUNK);
+    const step = GROUND_MAP_EXTENT_M / GROUND_MAP_SIZE;
+    for (let i = this.groundMapCursor; i < end; i++) {
+      const gx = i % GROUND_MAP_SIZE;
+      const gz = Math.floor(i / GROUND_MAP_SIZE);
+      this.groundMapData[i] = sample(
+        this.groundMapOrigin.x + (gx + 0.5) * step,
+        this.groundMapOrigin.z + (gz + 0.5) * step,
+      );
+    }
+    this.groundMapCursor = end >= total ? -1 : end;
+    if (end < total) return;
+    device.queue.writeTexture(
+      { texture: this.groundMapTexture },
+      this.groundMapData,
+      { bytesPerRow: GROUND_MAP_SIZE * 4, rowsPerImage: GROUND_MAP_SIZE },
+      { width: GROUND_MAP_SIZE, height: GROUND_MAP_SIZE },
+    );
+    this.groundMapSent.x = this.groundMapOrigin.x;
+    this.groundMapSent.z = this.groundMapOrigin.z;
+    this.groundMapReady = true;
   }
 
   /** Keep the rain over the viewer: reseed only when they walk out of the box. */
@@ -1870,6 +1960,7 @@ export class WebGPURenderer {
 
     this.writeFrameUniforms(device, canvas.height);
     this.refineRainGround();
+    this.bakeGroundMap();
 
     const encoder = device.createCommandEncoder({ label: 'WebGPU plant frame' });
 
@@ -2043,7 +2134,7 @@ export class WebGPURenderer {
     }
 
     // Validate frame uniform struct size matches WGSL definition
-    const expectedFloats = 96; // FRAME_FLOATS
+    const expectedFloats = FRAME_FLOATS;
     if (this.frameData.length !== expectedFloats) {
       throw new Error(
         `Frame uniform size mismatch: expected ${expectedFloats} floats (${expectedFloats * 4} bytes), got ${this.frameData.length}`,
@@ -2137,8 +2228,15 @@ export class WebGPURenderer {
     // The frame struct's last slot is the buried-eye bubble, so the occlusion
     // test can be limited to the air the eye is standing in.
     data[94] = this.rootSightEyeWindow;
-    // The struct's last slot: warm light intensity for leaf backlight.
+    // Golden-hour warmth for leaf backlight.
     data[95] = this.sunWarmth;
+    // The ground map's footprint, so a fragment can find its texel. These are the
+    // values the texture on the GPU was baked with, not the ones being filled: a
+    // rebake in progress must not point at the old data. Extent 0 means no map.
+    data[96] = this.groundMapSent.x;
+    data[97] = this.groundMapSent.z;
+    data[98] = this.groundMapReady ? GROUND_MAP_EXTENT_M : 0;
+    data[99] = 0;
 
     device.queue.writeBuffer(this.frameUniformBuffer, 0, data);
 

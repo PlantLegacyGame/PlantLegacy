@@ -786,3 +786,22 @@ and kept where it stands inside - which is what Root Sight actually opens.
 Confirmed with the eye 1.1 m and 1.6 m below the mouth of a 2.8 m pit
 (`pit-floor-plant-1`, `pit-floor-plant-2`) and again from the rim
 (`pit-above-ground-1`).
+
+Then the one thing the overlay could never do: hide a plant behind ground.
+Compositing on its own canvas means no depth from the three.js scene, and the
+shaft view made that obvious - standing on the pit floor, a seed beyond the rim
+was painted over the rim. Asking three.js for its depth buffer is not possible
+across the two APIs, so the terrain is handed over instead: a 64-square height
+map spanning 200 m, baked from the same `planetTerrainY` the ground is drawn
+from, sampled unfiltered with `textureLoad` (a new binding 10 on the plant
+layout, no sampler), and marched in eight steps along the eye-to-fragment ray
+with half a metre of slack. It fills 512 texels a frame and re-bakes only after
+50 m of walking. Measured on a pose 20 m behind a 2.8 m ridge: the seed is
+invisible with the map on and visible as a speck on the hillside with it off
+(`depth-near-ridge-on`, `depth-near-ridge-off`), and the close seed still draws
+(`depth-close-seed`). The bake's first cut compared the viewer against the map's
+corner instead of its centre and re-baked every frame - the cursor was at 1536
+of 4096 rather than idle, which is how it was caught.
+
+The rain is not marched yet, so drops still draw over a hill; that is the
+remaining half of E30 and the next thing to do with this map.
