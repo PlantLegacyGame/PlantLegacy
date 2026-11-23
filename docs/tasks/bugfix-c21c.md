@@ -220,3 +220,37 @@ larger), which is the case the old code drifted on hardest: a 0.86 m mouth with
 - The 5 % wall floor is now `MIN_CAVITY_WALL_FRACTION` in `profile.ts`, because
   every number in that file is a named constant with a comment; it earns its
   place by keeping a cliff from inverting the shell.
+
+### Mid-opening: the taper
+
+The depth rule uses the full mouth before the 500 ms ease finishes, so the pit is
+full depth while its mouth is still growing. Measured on the 43-node plant
+(0.86 m mouth, 9.97 m root-driven depth), sampling every frame of a real open:
+
+| t | progress | mouth radius drawn | rim→floor | depth : width |
+|---|---|---|---|---|
+| 54 ms | 0.35 | 0.301 m | 9.882 m | 16.4 : 1 |
+| 120 ms | 0.61 | 0.522 m | 9.918 m | 9.5 : 1 |
+| 170 ms | 0.75 | 0.643 m | 9.937 m | 7.7 : 1 |
+| 270 ms | 0.92 | 0.792 m | 9.962 m | 6.3 : 1 |
+| — | 1.00 | 0.863 m | 9.973 m | 5.8 : 1 |
+
+A screenshot cannot be timed into a 500 ms ease, so the page's clock was pinned
+at a chosen progress for the pictures (`taper-p57.png`, `taper-p82.png`); the
+HUD's own transition was not touched. At the frozen p = 0.58 state:
+
+- the **cut and the mouth agree exactly** — drawn mouth radius 0.497 m, shader
+  cut radius 0.497 m — because both scale by progress;
+- the **rim stays on its ground**: largest error across the 96 rim vertices
+  **0.0000 m**;
+- depth is **99.4 % of the budget** already, so the opening is a *widening* of a
+  pit that is at depth, not a deepening.
+
+**Verdict: it does not read wrong.** At p = 0.57 the frame is a small, dark,
+deep hole with the roots at its floor, its lip on the terrain, no sky wedge and
+no seam; by 0.82 it is the full mouth over the same floor. The only sharp state
+is the first frame or two (p ≈ 0.1, a 0.09 m mouth over a 9.9 m shaft — a needle),
+which no 60 fps eye catches. What the taper does *not* do is grow from a shallow
+dish; making it do that means easing `cavityDepthM` for the cut, the bowl and the
+body together, or the three come apart again — the bug this section is about.
+Not done, and not asked for.
