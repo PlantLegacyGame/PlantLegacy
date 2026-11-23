@@ -427,12 +427,26 @@ export class DamagePipeline {
     const fallback = death.nodes.values().next().value as PlantNode | undefined;
     const at = root ?? fallback;
     if (at) {
-      for (let i = 0; i < this.options.damage.remainsFragmentCount; i += 1) {
-        this.spawnDrop('remains', at.x, at.y, at.z, death.id);
-      }
-      for (let i = 0; i < this.options.damage.dungPerDeath; i += 1) {
-        this.spawnDrop('dung', at.x, at.y, at.z, death.id);
-      }
+      // Everything a death leaves lies *around* the body, not inside it. Spawning
+      // all of it on one point stacked four remains into a heap of corpses and
+      // put the dung ball in the middle of them.
+      let dropped = 0;
+      const dropAround = (kind: 'remains' | 'dung'): void => {
+        // A golden-angle spiral: each piece takes its own direction, so the ring
+        // never collapses into a line however many are left.
+        const angle = 0.9 + dropped * 2.39996;
+        const radiusM = 0.14 + 0.06 * dropped;
+        dropped += 1;
+        this.spawnDrop(
+          kind,
+          at.x + Math.cos(angle) * radiusM,
+          at.y,
+          at.z + Math.sin(angle) * radiusM,
+          death.id,
+        );
+      };
+      for (let i = 0; i < this.options.damage.remainsFragmentCount; i += 1) dropAround('remains');
+      for (let i = 0; i < this.options.damage.dungPerDeath; i += 1) dropAround('dung');
     }
 
     this.records.delete(death.id);

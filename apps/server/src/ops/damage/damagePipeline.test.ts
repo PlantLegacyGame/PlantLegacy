@@ -482,6 +482,21 @@ describe('damage pipeline: drops', () => {
     const dung = drops.filter((drop) => drop.kind === 'dung');
     assert.equal(remains.length, damageConfig.remainsFragmentCount);
     assert.equal(dung.length, damageConfig.dungPerDeath);
+    // They lie around the body: no two pieces share a plan position, and none
+    // strays further than a hand from where the plant stood.
+    const at = death.nodes.get(death.rootNodeId ?? '') ?? death.nodes.values().next().value;
+    assert.ok(at);
+    for (let i = 0; i < drops.length; i += 1) {
+      for (let j = i + 1; j < drops.length; j += 1) {
+        const a = drops[i];
+        const b = drops[j];
+        assert.ok(a && b);
+        assert.ok(Math.hypot(a.x - b.x, a.z - b.z) > 0.02, 'two drops share a point');
+      }
+      const drop = drops[i];
+      assert.ok(drop);
+      assert.ok(Math.hypot(drop.x - at.x, drop.z - at.z) < 0.8, 'a drop landed away from the body');
+    }
   });
 
   it('expires drops after their configured lifetime', () => {

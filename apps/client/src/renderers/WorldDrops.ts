@@ -71,7 +71,7 @@ const HOVER_M = 0.26;
  * that the ground does not z-fight through the husk - instead of bobbing a
  * quarter of a metre up like something waiting to be collected.
  */
-const REST_HOVER_M = 0.03;
+const REST_HOVER_M = 0.008;
 /** The contact disc is a CircleGeometry in its local XY plane: its normal is +Z. */
 const CIRCLE_NORMAL = new THREE.Vector3(0, 0, 1);
 
@@ -167,7 +167,14 @@ function unitNormal(value: { x: number; y: number; z: number } | undefined): THR
  * this size the silhouette is all the player sees, so a heap, a shard and a husk
  * have to be different outlines and not just different tints.
  */
-function buildModel(kind: WorldDropKind): { model: THREE.Group; materials: THREE.Material[] } {
+/** Remains closer than this to another corpse are pieces of it, not new bodies. */
+const REMAINS_CLUSTER_M = 0.6;
+
+function buildModel(
+  kind: WorldDropKind,
+  /** A broken-off piece of a corpse rather than the body itself. */
+  piece = false,
+): { model: THREE.Group; materials: THREE.Material[] } {
   const model = new THREE.Group();
   const materials: THREE.Material[] = [];
   const add = (mesh: THREE.Mesh): void => {
@@ -216,53 +223,78 @@ function buildModel(kind: WorldDropKind): { model: THREE.Group; materials: THREE
     facet.rotation.set(0.18, 0.5, 0.22);
     add(facet);
   } else {
-    // A collapsed husk, not a bone. A plant that dies leaves the plant it was: a
-    // dry stalk that fell over, two curled leaves, and the torn plate its root
-    // came away from. The bone this used to draw read as an animal skeleton in
-    // a game where the player is the plant.
+    // A plant that died the way a plant dies: the stem that held it up has let
+    // go, and the body lies where it fell. The torn root plate stays on the
+    // soil, the stalk leaves it in three connected joints and settles flat, and
+    // both leaves are still joined to the joint they grew from - a corpse with
+    // pieces floating beside it is not a body, and this game is a plant.
     const husk = new THREE.Group();
-    const dry = modelMaterial(COLOUR.remains, 0x3f3420);
-    const dryLeaf = modelMaterial(0xc9b387, 0x4a3d22);
+    // Dry plant matter, not bone: the pale value this used to have read as an
+    // animal skeleton, which is the one thing a plant's corpse is not.
+    const dry = modelMaterial(0x8a7550, 0x2f2716);
+    const dryLeaf = modelMaterial(0x9c855a, 0x332a18);
     materials.push(dry, dryLeaf);
 
-    const plate = new THREE.Mesh(new THREE.CylinderGeometry(0.036, 0.046, 0.012, 8), dry);
-    plate.position.y = 0.006;
-    husk.add(plate);
+    if (!piece) {
+      const plate = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.048, 0.018, 9), dry);
+      plate.name = 'husk-plate';
+      plate.position.y = 0.011;
+      plate.rotation.set(0.03, 0.4, 0.02);
+      husk.add(plate);
+    }
 
-    // Three short joints arched over, so the stalk reads as fallen rather than
-    // as a stick standing in the dirt. Each joint is a group whose own origin
-    // is the tip of the one before it.
-    let attach = new THREE.Vector3(0, 0.012, 0);
-    let yaw = 0;
-    for (const [length, bend] of [
-      [0.075, 0.5],
-      [0.065, 0.85],
-      [0.05, 1.15],
-    ] as const) {
+    // Each joint starts where the last one ended, so the pieces cannot drift
+    // apart. The first joint is already near the soil - that fall is what killed
+    // it - and the rest lie along the ground. A broken piece is only the first
+    // two joints, with no root plate: it is part of a body, not a body.
+    let attach = new THREE.Vector3(0, 0.016, 0);
+    let yaw = 0.35;
+    const joints: Array<{ joint: THREE.Group; length: number }> = [];
+    const segments: ReadonlyArray<readonly [number, number, number]> = piece
+      ? [[0.09, 1.2, 0.4]]
+      : [
+          [0.11, 1.32, 0.18],
+          [0.1, 0.16, 0.42],
+          [0.08, 0.24, 0.3],
+        ];
+    for (const [length, bend, turn] of segments) {
       const joint = new THREE.Group();
+      joint.name = 'husk-joint';
       joint.position.copy(attach);
       joint.rotation.set(0, yaw, -bend);
-      const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.011, 0.014, length, 6), dry);
+      const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.009, 0.013, length, 6), dry);
       shaft.position.y = length / 2;
       joint.add(shaft);
       husk.add(joint);
+      joints.push({ joint, length });
+      // The tip, in the husk's own frame, becomes the next joint's origin.
       attach = attach.clone().add(new THREE.Vector3(0, length, 0).applyEuler(joint.rotation));
-      yaw += 0.62;
+      yaw += turn;
     }
 
-    // Two leaves that dried where they hung and curled down past the tip.
-    for (const [turn, tilt] of [
-      [0.4, 0.95],
-      [2.5, 0.75],
-    ] as const) {
+    // Dried leaves, each a child of the joint it budded from, hanging down to
+    // the soil: attached at three quarters of the shaft and drooping past it.
+    const leaves: ReadonlyArray<readonly [number, number, number, number]> = piece
+      ? [[0, 1.1, 1.5, 0.06]]
+      : [
+          [0, 0.5, 1.42, 0.09],
+          [1, 2.4, 1.2, 0.07],
+        ];
+    for (const [index, turn, droop, reach] of leaves) {
+      const budded = joints[index];
+      if (!budded) continue;
       const leaf = new THREE.Mesh(new THREE.SphereGeometry(1, 8, 6), dryLeaf);
-      leaf.scale.set(0.052, 0.009, 0.026);
-      leaf.position.copy(attach);
-      leaf.rotation.set(0, turn, -tilt);
-      husk.add(leaf);
+      leaf.name = 'husk-leaf';
+      leaf.scale.set(reach, 0.006, 0.02);
+      leaf.position.set(0, budded.length * 0.75, 0);
+      leaf.rotation.set(0, turn, -droop);
+      budded.joint.add(leaf);
     }
 
-    husk.rotation.set(0, 0.7, 0.12);
+    // A full plant's corpse is a hand long, not a twig; a broken piece is a
+    // smaller offcut. Scaling about the husk's origin keeps its plate on the soil.
+    husk.scale.setScalar(piece ? 0.55 : 1.45);
+    husk.rotation.set(0, 0.7, 0.06);
     model.add(husk);
   }
 
@@ -285,7 +317,19 @@ export class WorldDrops {
   spawn(drop: WorldDropView): void {
     if (this.markers.has(drop.id)) return;
     const kind = COLOUR[drop.kind] ? drop.kind : 'fragment';
-    const { model, materials } = buildModel(kind);
+    // A death leaves several remains; the first at a spot is the body, and the
+    // rest are pieces of it. Four full husks stacked on one point was a heap of
+    // corpses, which is not what the world spawned.
+    const piece =
+      kind === 'remains' &&
+      [...this.markers.values()].some(
+        (other) =>
+          other.kind === 'remains' &&
+          Math.hypot(other.root.position.x - drop.x, other.root.position.z - drop.z) <
+            REMAINS_CLUSTER_M,
+      );
+    const { model, materials } = buildModel(kind, piece);
+    if (piece) model.scale.setScalar(0.8);
     const root = new THREE.Group();
     root.name = `drop-${drop.id}`;
     root.add(model);
@@ -297,14 +341,18 @@ export class WorldDrops {
     // the whole "no resurfacing" rule: nothing here ever clips to the surface.
     const surfaceY = this.options.groundY(drop.x, drop.z);
     const hover = kind === 'remains' ? REST_HOVER_M : HOVER_M;
-    const restY = surfaceY + drop.y + SIZE[kind] + hover;
+    // The husk is built with its root plate on y = 0, so it rests at the anchor;
+    // the other two are built around their centres and need their half-height.
+    const restY = surfaceY + drop.y + (kind === 'remains' ? 0 : SIZE[kind]) + hover;
     root.position.set(drop.x, restY, drop.z);
     // Its heading is set before the first frame, so a husk never appears facing
     // one way and then turns on the next update.
     root.rotation.y = spinRad;
 
     let shadow: THREE.Mesh | null = null;
-    if (drop.y > -0.05) {
+    // A piece of a corpse sits inside the body's own shade; a second disc there
+    // only darkens the puddle.
+    if (drop.y > -0.05 && !piece) {
       const normal = unitNormal(this.options.groundNormal?.(drop.x, drop.z));
       shadow = new THREE.Mesh(
         this.shadowGeometry,
@@ -321,7 +369,16 @@ export class WorldDrops {
       // Turned inside that plane and stretched along one axis, so a field of
       // drops does not read as the same rubber stamp under every one.
       shadow.quaternion.multiply(new THREE.Quaternion().setFromAxisAngle(CIRCLE_NORMAL, spinRad));
-      shadow.scale.set(SIZE[kind] * 1.7 * (1 + hashUnit(drop.id) * 0.12), SIZE[kind] * 1.45, 1);
+      // A husk is wide and flat, so its shade sits closer to its own footprint
+      // than a bead's does; four overlapping discs made one black puddle.
+      const spread = kind === 'remains' ? 1.15 : 1.7;
+      const depth = kind === 'remains' ? 0.95 : 1.45;
+      const body = kind === 'remains' ? 1.9 : 1;
+      shadow.scale.set(
+        SIZE[kind] * spread * body * (1 + hashUnit(drop.id) * 0.12),
+        SIZE[kind] * depth * body,
+        1,
+      );
       // A whisker along the normal keeps it off the soil without a squat lift.
       shadow.position.set(drop.x, surfaceY, drop.z).addScaledVector(normal, 0.02);
     }

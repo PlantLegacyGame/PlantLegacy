@@ -37,6 +37,10 @@ new client request, and a client that does not send it behaves exactly as before
 | `ui/DeathScreen.test.ts` (5) | The card still leads with the cause; the curated rows and their order; cause and source wording; an unknown `killedBy` token stays readable; mutation upkeep appears only when the plant had mutations; the live vitals (Water, Minerals, Energy, Health, Growth rate) are never on the card. The old "the rows come from the shared stat owner" test asserted the behaviour this wave removed, and is replaced by one that pins the divergence from `plantStatRows` |
 | `renderers/WorldDrops.test.ts` (+3, 10 total) | A disc's plane is the ground plane and it is lifted along the normal; two drops on different slopes get different orientations; a husk rests under 25 cm, does not bob and does not spin |
 | `renderers/PlantContactShadows.test.ts` (6) | One patch per plant; the disc's +Z maps onto the hill's own normal; the patch follows a moved foot and resizes with the spread; a seed never gets a dot under 0.12 m and a thicket never a patch past 2.6 m; a plant that leaves the payload loses its patch; the patches hide and show with the body pass; a missing normal falls back to flat ground |
+| `renderers/drawnGround.test.ts` (3) | The drawn mesh's height is preferred over the field; with no mesh hit the field is the fallback; the normal comes from drawn heights 0.3 m either side, not from the field |
+| `renderers/PlantFootprints.test.ts` (4) | Roots never get a foot; two plants keep two patches; a body more than 0.35 m off the field gets none; a seed still gets the 0.16 m floor, and the patch grows with the spread |
+| `renderers/WorldDrops.test.ts` (+1, 12 total) | One body and any number of offcuts for a pile of remains: exactly one root plate, the offcut smaller than the body, and no second shadow disc; the body is over 0.3 m long |
+| `ops/damage/damagePipeline.test.ts` (+1 assertion set) | A death's remains and dung lie around the body: no two drops share a plan point, none is further than 0.8 m from it |
 | `packages/shared` protocol tests (230 with the wave) | `CLIENT_TO_SERVER_TYPES` and `SERVER_TO_CLIENT_TYPES` still cover `MESSAGE_TYPE` exactly once with `RESPAWN` (49) present |
 
 ## 4. Checks run
@@ -69,8 +73,40 @@ new client request, and a client that does not send it behaves exactly as before
   the drops close up were looked at, not only measured.
 - Not checked: the card at a narrow pane, the husk at normal play distance (it
   was inspected at about 1 m), and how a second account sees the respawned seed.
+- Second pass, same dev browser. A dropped seed and the mutation gallery's 32
+  grown bodies were measured together: the seed's patch is 0.20 m across and the
+  gallery patches 0.22-0.35 m, each against its own body's spread. A death left
+  four remains: on the drawn ground the body's plate bottom sat at 19.014 m
+  against the drawn surface at 19.004 m, its leaves were children of its joints,
+  and the pile held one root plate, 6 joints and 5 leaves across four remains -
+  one body and three offcuts. Drop shadows now lift 0.027 m off the drawn ground
+  at their own x/z (previously the field put them up to tens of centimetres out).
+- The corpse was looked at again after the split (`screenshots/husk-v2.png`): one
+  body with a dung ball above it and offcuts around, not four pale husks. The
+  body was then made half again as long and given a wider shade; that last size
+  change is pinned by the test (body over 0.3 m) but was not re-viewed, because
+  the dev page stopped accepting PLAY after the final reload.
+- The plant could not be grown on a slope through gameplay in the dev world: a
+  direct `GROWTH_INTENT` was refused four times and the seed never germinated, so
+  the multi-node check used the gallery's real grown bodies (20-34 nodes) rather
+  than a hand-grown seedling.
 
-## 5. Files
+## 5. Second pass — the shadow on the drawn ground, and one corpse
+
+Three things still looked wrong after the wave, and all three were the same kind
+of mistake: a number taken from a world slightly different from the one drawn.
+
+| Report | Cause | Fix |
+|---|---|---|
+| "The shadow is hovering - it isn't on the actual ground" | Contact shadows were seated on the analytic height field, but the ground on screen is the `planet-terrain-detail` triangle mesh, and on a bank the two disagree by tens of centimetres. The normal came from the field too, so the disc was tilted to a slope that was not under it | `DrawnGround` raycasts the drawn mesh down its own column and takes a plane normal from the drawn heights 0.3 m either side. Drops and plants both seat on it. The height field is kept for classification only - is this part a root, is the body airborne - never for placement |
+| The patch under a plant followed its lowest node, whatever that node was | A root is below the soil, so the lowest node was usually a root tip and the patch slid off the crown down the hill; a seed got a dot under a point that was not the plant | `plantFootprints` (pure, exported) counts only nodes at or above the soil, places one foot per plant, then spreads it; a body more than 0.35 m off its field gets no patch; the floor is 0.16 m and the radius is 0.55 × spread |
+| "Fix the dead body... all the nodes are still connected" | A death spawns four `remains` and a dung ball at one point, and each remains was drawn as a whole husk: four pale corpses stacked into one black shadow puddle, with the dung hovering out of the pile. The husk itself was loose pieces, 0.26 m long | The server drops them on a golden-angle spiral around the body (0.14-0.38 m out). The client draws the first remains at a spot as the body - root plate, three chained joints, two leaves each parented to a joint, a hand long, base on the soil - and any further remains within 0.6 m as a smaller offcut: one joint, one leaf, no plate, no second shadow |
+
+The husk is also no longer pale bone-coloured: the dried stalk and leaves are
+olive-brown, and the leaf droops were backed off until every tip rests on or just
+above the soil instead of 4 cm through it.
+
+## 6. Files
 
 - `packages/shared/src/protocol/index.ts`, `messageSchemas.ts` — `RESPAWN` (49),
   `PLANT_REMOVED.biomass/nodeCount`.
@@ -83,7 +119,13 @@ new client request, and a client that does not send it behaves exactly as before
   curated rows.
 - `apps/client/src/ui/plantStats.ts` — formatters exported for the death card.
 - `apps/client/src/renderers/WorldDrops.ts`, `WorldDrops.test.ts` — the husk and
-  slope-aligned contact shadows.
+  slope-aligned contact shadows; one body plus offcuts per pile of remains.
+- `apps/client/src/renderers/drawnGround.ts`, `drawnGround.test.ts` — the drawn
+  mesh's height and plane normal.
+- `apps/client/src/renderers/PlantContactShadows.ts`, `PlantFootprints.test.ts` —
+  `plantFootprints`, the above-soil footprint rule.
+- `apps/server/src/ops/damage/damagePipeline.ts`, `damagePipeline.test.ts` — the
+  death's drops lie around the body.
 - `apps/client/src/renderers/PlantContactShadows.ts`,
   `PlantContactShadows.test.ts` — one contact patch per plant, in the ground
   plane.

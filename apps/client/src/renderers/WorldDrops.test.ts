@@ -125,17 +125,61 @@ describe('world drops', () => {
     assert.ok(first.quaternion.angleTo(second.quaternion) > 0.1);
   });
 
-  it('leaves a husk lying where it fell instead of hovering and turning', () => {
+  it('draws one body and pieces for a pile of remains, not four corpses', () => {
+    const { drops, group } = make(() => 0);
+    drops.spawn({ id: 'drop_body', kind: 'remains', x: 0, y: 0, z: 0 });
+    drops.spawn({ id: 'drop_piece', kind: 'remains', x: 0.24, y: 0, z: 0.1 });
+    assert.equal(drops.size(), 2);
+    // The body has a root plate; the piece does not.
+    const bodies = group.children.filter(
+      (child) =>
+        child instanceof THREE.Group &&
+        child.name.startsWith('drop-') &&
+        !!child.getObjectByName('husk-plate'),
+    );
+    assert.equal(bodies.length, 1);
+    const piece = group.children.find(
+      (child) => child instanceof THREE.Group && child.name === 'drop-drop_piece',
+    ) as THREE.Group;
+    const pieceModel = piece.children[0] as THREE.Group;
+    assert.ok(pieceModel.scale.x < 1, 'a piece must be smaller than the body');
+    // A piece casts no disc of its own: it lies inside the body's shade.
+    assert.equal(
+      group.children.filter(
+        (child) => (child as THREE.Mesh).geometry instanceof THREE.CircleGeometry,
+      ).length,
+      1,
+    );
+  });
+
+  it('lays a husk on its soil instead of hovering, and keeps its body joined', () => {
     const { drops, group } = make(() => 0);
     drops.spawn({ id: 'drop_husk', kind: 'remains', x: 0, y: 0, z: 0 });
     const root = group.children[0] as THREE.Group;
     const rest = root.position.y;
-    assert.ok(rest > 0.1 && rest < 0.25, `husk rests ${rest.toFixed(2)} m up`);
+    assert.ok(rest > 0 && rest < 0.02, `husk rests ${rest.toFixed(3)} m up`);
     const heading = root.rotation.y;
     drops.update(500);
     drops.update(5_000);
     assert.equal(root.position.y, rest, 'a corpse must not bob');
     assert.equal(root.rotation.y, heading, 'a corpse must not spin');
+
+    // One body: the plate and three stalk joints, and each leaf a child of the
+    // joint it budded from. A leaf slung beside the stalk is a heap, not a plant.
+    const model = root.children[0] as THREE.Group;
+    const husk = model.children[0] as THREE.Group;
+    const leaves = husk.getObjectsByProperty('name', 'husk-leaf');
+    assert.equal(leaves.length, 2);
+    for (const leaf of leaves) assert.equal(leaf.parent?.name, 'husk-joint');
+    // Its lowest point is at or under the anchor - a husk built around its
+    // centre would stand the plate in the air - and no lower than a leaf tip
+    // lying in the soil.
+    const box = new THREE.Box3().setFromObject(model);
+    assert.ok(box.min.y <= rest + 0.002, `base at ${box.min.y}, anchor ${rest}`);
+    assert.ok(box.min.y > rest - 0.04, `base at ${box.min.y} is under the world`);
+    // A whole plant's corpse is a hand long; a twig does not read as a body.
+    const length = Math.max(box.max.x - box.min.x, box.max.z - box.min.z);
+    assert.ok(length > 0.3, `body is only ${length.toFixed(2)} m long`);
   });
 
   it('fades a drop before it decays and clears it when the server says so', () => {

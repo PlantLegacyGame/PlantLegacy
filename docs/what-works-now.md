@@ -820,7 +820,13 @@ Honest list. No feature promises (T42, RULE_13). Updated at every gate.
   dev action, the card read, "Grow a new seed" clicked on the same socket, and
   the new seed landed in frame (pivot 17.41 m on ground 17.34 m, eye 1.56 m
   clear); the husk, a seed's patch and three drops' shadows on a bank were looked
-  at close up. See
+  at close up. Every shadow is seated on the drawn terrain mesh rather than the
+  height field - the two differ by tens of centimetres on a bank, which is why a
+  patch could look like it hovered - and a plant's patch counts only parts at or
+  above the soil (a root tip used to drag it down the hill) and sizes itself from
+  the plant's spread. A death leaves one body, not four: its remains lie on a
+  golden-angle spiral around the spot, the first is the hand-long husk and the
+  rest are smaller offcuts. See
   [`tasks/bugfix-death-respawn.md`](./tasks/bugfix-death-respawn.md).
 - **HUD pass (ADR-067):** one vitals card (top right) holds biomass, energy,
   light, water and minerals with bars where a capacity exists, the single clock

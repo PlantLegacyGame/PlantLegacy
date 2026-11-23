@@ -30,6 +30,7 @@ import {
   nodeHealthLook,
   nodeHealthStatus,
 } from '../ui/plantHealth.ts';
+import { DrawnGround } from './drawnGround.ts';
 import { type AtmosphereParams, DEFAULT_ATMOSPHERE } from './environment/atmosphere.js';
 import {
   applyAtmosphereToStandardMaterial,
@@ -39,7 +40,7 @@ import { type OrganKey, organRoleForNodeType, resolveOrganColours } from './orga
 import {
   PlantContactShadows,
   type PlantFootprint,
-  type SurfaceNormal,
+  plantFootprints,
 } from './PlantContactShadows.ts';
 import {
   geometryKey,
@@ -645,26 +646,12 @@ export class MeshPlantRenderer {
 
   private lastSignatureKey = '';
 
-  /** Terrain under a plan position, so a seed can sit on the soil it is drawn over. */
+  /** The soil as drawn, so a seed or a footprint rests on the triangle under it. */
+  private readonly drawnGround = new DrawnGround();
+  /** Height field under a point; classifies roots from above-ground parts. */
   private groundQuery: ((x: number, z: number) => number) | null = null;
-  /** The drawn ground mesh, so a seed can rest on the triangle, not the field. */
-  private groundMesh: THREE.Object3D | null = null;
-  private readonly groundRay = new THREE.Raycaster();
-  /** Terrain normal under a plant's foot; a flat patch on a hill cuts into it. */
-  private groundNormal: ((x: number, z: number) => SurfaceNormal | null | undefined) | null = null;
   /** One contact patch per plant, laid in the ground plane like a drop's. */
   private contactShadows!: PlantContactShadows;
-
-  /** The height of the soil actually drawn under a point, or the field's fallback. */
-  private drawnGroundY(x: number, z: number, fallback: number): number {
-    const mesh = this.groundMesh;
-    if (!mesh) return fallback;
-    this.groundRay.near = 0;
-    this.groundRay.far = 8;
-    this.groundRay.set(new THREE.Vector3(x, fallback + 4, z), new THREE.Vector3(0, -1, 0));
-    const hit = this.groundRay.intersectObject(mesh, false)[0];
-    return hit && Number.isFinite(hit.point.y) ? hit.point.y : fallback;
-  }
 
   /**
    * Give the mesh pass the mesh the ground is drawn as.
@@ -676,7 +663,7 @@ export class MeshPlantRenderer {
    * beside a shore. Casting down onto the mesh seats it on the surface on screen.
    */
   setGroundMesh(mesh: THREE.Object3D | null): void {
-    this.groundMesh = mesh;
+    this.drawnGround.setMesh(mesh);
   }
 
   /**
@@ -687,17 +674,7 @@ export class MeshPlantRenderer {
    */
   setGroundQuery(query: ((x: number, z: number) => number) | null): void {
     this.groundQuery = query;
-  }
-
-  /**
-   * The terrain normal under a point. The shadow map cannot tilt a patch, so a
-   * plant on a slope needs the surface it stands on to lie down on it.
-   */
-  setGroundNormal(
-    normal: ((x: number, z: number) => SurfaceNormal | null | undefined) | null,
-  ): void {
-    this.groundNormal = normal;
-    this.contactShadows?.setGroundNormal(normal);
+    this.drawnGround.setFallback(query);
   }
 
   constructor(scene: THREE.Scene, quality: Partial<MeshQualityConfig> = {}) {
@@ -710,9 +687,12 @@ export class MeshPlantRenderer {
     this.scene = scene;
     this.scene.add(this.meshGroup);
     this.meshGroup.visible = false;
+    // The footprint is laid on the drawn slope, not the analytic field: a patch
+    // flat against the field while the triangle under it faces elsewhere is the
+    // shadow that reads as hovering.
     this.contactShadows = new PlantContactShadows({
       scene,
-      groundNormal: this.groundNormal ?? undefined,
+      groundNormal: (x, z) => this.drawnGround.sample(x, z).normal,
     });
   }
 
@@ -916,50 +896,19 @@ export class MeshPlantRenderer {
   }
 
   /**
-   * One footprint per plant: where its body meets the ground, and how far it
-   * spreads. A plant in the air (uprooted, tumbling) has no foot to shade, and a
-   * patch under a floating body was a decal hanging in the sky.
+   * One footprint per plant, from the parts that stand above its soil, seated on
+   * the drawn ground rather than the field under it.
    */
   private updateContactShadows(): void {
-    type Foot = { x: number; y: number; z: number; spread: number };
-    const feet = new Map<string, Foot>();
-    for (const node of this.nodeMap.values()) {
-      const plantId = node.plantId ?? (node.isOwnPlant ? 'own' : 'rival');
-      const p = node.position;
-      const foot = feet.get(plantId);
-      if (!foot) {
-        feet.set(plantId, { x: p.x, y: p.y, z: p.z, spread: 0 });
-        continue;
-      }
-      // The lowest node is the foot: the seed, or the crown of a plant that
-      // rooted above its soil. Distance to it is the plant's spread in plan.
-      if (p.y < foot.y) {
-        foot.x = p.x;
-        foot.y = p.y;
-        foot.z = p.z;
-      }
-      foot.spread = Math.max(foot.spread, Math.hypot(p.x - foot.x, p.z - foot.z));
-    }
-
-    const footprints: PlantFootprint[] = [];
-    for (const [plantId, foot] of feet) {
-      const fieldY = this.groundQuery?.(foot.x, foot.z);
-      const groundY = Number.isFinite(fieldY)
-        ? this.drawnGroundY(foot.x, foot.z, fieldY as number)
-        : foot.y;
-      // A body more than a hand above its soil is airborne (uproot, tumble), and
-      // a body a metre under it is a root-only mirror: neither stands on the
-      // ground, so neither gets a contact patch.
-      const height = foot.y - groundY;
-      if (height > 0.35 || height < -1) continue;
-      footprints.push({
-        plantId,
-        x: foot.x,
-        z: foot.z,
-        groundY,
-        radius: Math.max(0.16, foot.spread * 0.55),
-      });
-    }
+    const query = this.groundQuery;
+    const footprints: PlantFootprint[] = plantFootprints(
+      [...this.nodeMap.values()].map((node) => ({
+        plantId: node.plantId,
+        isOwnPlant: node.isOwnPlant,
+        position: node.position,
+      })),
+      (x, z) => query?.(x, z) ?? 0,
+    ).map((foot) => ({ ...foot, groundY: this.drawnGround.height(foot.x, foot.z) }));
     this.contactShadows.update(footprints);
   }
 
@@ -1053,9 +1002,8 @@ export class MeshPlantRenderer {
       // keeps the height it was placed at, so on soil drawn a few centimetres
       // lower it hung in the air. Seat it on the ground under it; never lift it
       // off that ground, so a stored point lower than the drawing still wins.
-      const fieldY = this.groundQuery?.(node.position.x, node.position.z);
-      const contactY = Number.isFinite(fieldY)
-        ? this.drawnGroundY(node.position.x, node.position.z, fieldY as number)
+      const contactY = Number.isFinite(node.position.y)
+        ? this.drawnGround.height(node.position.x, node.position.z)
         : node.position.y;
       mesh.position.set(
         node.position.x,
@@ -1397,7 +1345,7 @@ export class MeshPlantRenderer {
       // shared between segments and plants, so the ground under this one is
       // handed to the shader on its own draw.
       if (usesSoilRamp(node.nodeType)) {
-        const soilY = this.drawnGroundY(mesh.position.x, mesh.position.z, mesh.position.y);
+        const soilY = this.drawnGround.height(mesh.position.x, mesh.position.z);
         mesh.onBeforeRender = (_renderer, _scene, _camera, _geometry, material) => {
           setSoilLine(material, soilY);
         };

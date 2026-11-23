@@ -98,6 +98,7 @@ import { interpolationDurationMs, NodeInterpolator } from './render/PlantInterpo
 import { clientNodeHealth, resolveDrawnProgress } from './render/plantProgress.js';
 import { createQualityController, type QualityController } from './render/QualityController.js';
 import { rivalTagLabel } from './render/rivalTagLabel.js';
+import { DrawnGround } from './renderers/drawnGround.js';
 import { EnvironmentRenderer } from './renderers/EnvironmentRenderer.js';
 import {
   APERTURE_FLOOR_MARGIN_M,
@@ -153,11 +154,7 @@ import {
   plantLateralExtent,
   resolveCutawayRadius,
 } from './renderers/rootSight/rootSightCutaway.js';
-import {
-  configureTerrain,
-  getTerrainParams,
-  surfaceNormalAt,
-} from './renderers/terrain/terrainState.js';
+import { configureTerrain, getTerrainParams } from './renderers/terrain/terrainState.js';
 import { WorldDrops } from './renderers/WorldDrops.js';
 import { resolveDrawnNodePosition } from './renderers/webgpu/PlantMeshBuilder.js';
 import { isWebGPUSupported, WebGPUDevice } from './renderers/webgpu/WebGPUDevice.js';
@@ -6006,13 +6003,12 @@ async function initPlantRenderer(): Promise<void> {
     plantRenderer.setGroundQuery((x, z) =>
       planetTerrainY(renderConfig?.planetRadiusM ?? 0, x, z, getTerrainParams()),
     );
-    // A plant's contact patch is laid in the ground plane, so it has to know
-    // which way the ground faces: on a slope a flat disc cuts into the hill on
-    // one side and floats over it on the other, exactly as a drop's did.
-    plantRenderer.setGroundNormal((x, z) => surfaceNormalAt(x, z));
     // The drawn soil, not just the field: the seed rests on the triangle on
     // screen, which stands above the field wherever the mesh is coarse.
-    plantRenderer.setGroundMesh(scene.getObjectByName('planet-terrain-detail') ?? null);
+    const drawnTerrain = scene.getObjectByName('planet-terrain-detail') ?? null;
+    plantRenderer.setGroundMesh(drawnTerrain);
+    // Drops are seated on the same drawn surface, not on the field under it.
+    drawnGround.setMesh(drawnTerrain);
     plantRenderer.setViewportSize(renderer.domElement.width, renderer.domElement.height);
 
     // Initialize with existing plant nodes (root node from WELCOME, or empty)
@@ -8460,14 +8456,23 @@ const scene = new THREE.Scene();
  * still has somewhere to go. The ground sampler is lazy: the render config is
  * loaded after this point, and a drop is placed when it spawns, not at boot.
  */
-const worldDrops = new WorldDrops({
-  scene,
-  groundY: (x, z) =>
+/**
+ * The soil as it is drawn, for the things that rest on it. Seating them on the
+ * height field instead put a drop's contact shadow up to a few centimetres above
+ * the triangle the player is looking at - the shadow that hovers.
+ */
+const drawnGround = new DrawnGround();
+drawnGround.setFallback(
+  (x, z) =>
     planetTerrainY(renderConfig?.planetRadiusM ?? 0, x, z, getTerrainParams()) +
     (renderConfig?.cameraGroundTouchM ?? 0.02),
-  // A drop's shadow lies in the ground it sits on: on a slope a flat disc cuts
-  // into the hill on one side and floats over it on the other.
-  groundNormal: (x, z) => surfaceNormalAt(x, z),
+);
+const worldDrops = new WorldDrops({
+  scene,
+  groundY: (x, z) => drawnGround.height(x, z),
+  // A drop's shadow lies in the drawn ground it sits on: on a slope a flat disc
+  // cuts into the hill on one side and floats over it on the other.
+  groundNormal: (x, z) => drawnGround.sample(x, z).normal,
   pickDistanceM: () => renderConfig?.dropPickDistanceM ?? 6,
 });
 // Sky-coloured background/fog so the world is never pitched into near-black.
