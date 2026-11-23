@@ -253,11 +253,35 @@ fn applyRootSight(
 // Plants composite on their own canvas, so the WebGL ground can never
 // depth-test them. The planet surface is analytic, so it is tested directly
 // along the eye-to-fragment segment: anything the earth stands in front of is
-// buried. Root Sight carves a bubble, and fragments inside that bubble are let
-// through, which is what makes the cavity read as air.
+// buried. Root Sight cuts the soil in plan view, and anything in that column is
+// air - the open shaft itself, seen from above or from the pit floor.
+/** Inside the open column of the Root Sight pit, in plan view. */
+fn inRootSightShaft(worldPos: vec3f) -> bool {
+  if (frame.rootSightEnabled == 0u || frame.rootSightProgress <= 0.05) {
+    return false;
+  }
+  // `var`, not `let`: the aperture radius replaces this one below, and WGSL's
+  // `let` is immutable - as written the module failed to validate and the whole
+  // WebGPU pass fell back to three.js.
+  var cavityRadius = frame.rootSightRadius * frame.rootSightProgress;
+  if (frame.rootSightApertureRadius > 0.0) {
+    cavityRadius = frame.rootSightApertureRadius * frame.rootSightProgress;
+  }
+  return distance(worldPos.xz, frame.rootSightCenter.xz) <= cavityRadius;
+}
+
 fn soilOccludes(worldPos: vec3f) -> bool {
   let planetRadius = frame.planetRadius;
   if (planetRadius <= 0.0) {
+    return false;
+  }
+
+  // The shaft is air. The soil is cut in plan view, so whatever stands under the
+  // opening has no earth in front of it however deep the eye sits - that is what
+  // lets a player on the pit floor see their plant above the mouth. This has to
+  // come before the buried-eye test, because that one hides everything outside
+  // the eye's own bubble and would take the whole plant with it.
+  if (inRootSightShaft(worldPos)) {
     return false;
   }
 
@@ -302,22 +326,7 @@ fn soilOccludes(worldPos: vec3f) -> bool {
     return false;
   }
 
-  // The earth is between the eye and the fragment. The soil is cut in plan view
-  // around the cavity, so the test is a cylinder, not a sphere: every root under
-  // the opening is exposed whatever its depth, which is what the hole in the
-  // ground actually is.
-  if (frame.rootSightEnabled != 0u && frame.rootSightProgress > 0.05) {
-    // `var`, not `let`: the aperture radius replaces this one below, and WGSL's
-    // `let` is immutable - as written the module failed to validate and the
-    // whole WebGPU pass fell back to three.js.
-    var cavityRadius = frame.rootSightRadius * frame.rootSightProgress;
-    if (frame.rootSightApertureRadius > 0.0) {
-      cavityRadius = frame.rootSightApertureRadius * frame.rootSightProgress;
-    }
-    if (distance(worldPos.xz, frame.rootSightCenter.xz) <= cavityRadius) {
-      return false;
-    }
-  }
+  // The earth is between the eye and the fragment.
   return true;
 }
 

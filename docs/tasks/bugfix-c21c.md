@@ -760,3 +760,29 @@ pass in this canvas (E30), and the three.js weather still draws its own rain
 alongside (`rain_threejs_only` was the measurement that settled that). This turn
 only made the overlay's copies agree with the light and stand on the ground.
 
+
+One correction to that, from the other side of the same test. Asked whether a
+player standing down inside the pit could still see their plant above the mouth:
+the buried-eye check hid it, because it exempted only a bubble around the eye and
+the plant stood outside that bubble. The exemption is the open *shaft*, not the
+eye: `inRootSightShaft()` tests the plan-view column the soil is cut in, and it
+now runs before the buried-eye branch, so anything in that column is air whether
+the eye is above it or on the floor of it. The mesh's ground clip takes the same
+test, so the plant's buried half is clipped where it stands outside the column
+and kept where it stands inside - which is what Root Sight actually opens.
+Confirmed with the eye 1.1 m and 1.6 m below the mouth of a 2.8 m pit
+(`pit-floor-plant-1`, `pit-floor-plant-2`) and again from the rim
+(`pit-above-ground-1`).
+
+One correction to that, from the other side of the same test. Asked whether a
+player standing down inside the pit could still see their plant above the mouth:
+the buried-eye check hid it, because it exempted only a bubble around the eye and
+the plant stood outside that bubble. The exemption is the open *shaft*, not the
+eye: `inRootSightShaft()` tests the plan-view column the soil is cut in, and it
+now runs before the buried-eye branch, so anything in that column is air whether
+the eye is above it or on the floor of it. The mesh's ground clip takes the same
+test, so the plant's buried half is clipped where it stands outside the column
+and kept where it stands inside - which is what Root Sight actually opens.
+Confirmed with the eye 1.1 m and 1.6 m below the mouth of a 2.8 m pit
+(`pit-floor-plant-1`, `pit-floor-plant-2`) and again from the rim
+(`pit-above-ground-1`).

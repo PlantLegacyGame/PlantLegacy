@@ -186,9 +186,13 @@ fn lookForOrgan(plantIndex: u32, nodeType: f32) -> LookOrgan {
    }
    // The analytic sphere `soilOccludes` tests sits below the drawn terrain, so
    // the topsoil between them showed plants through it - the seed's buried half
-   // was painted over the ground. Nothing falls below the terrain it stands on.
-   // Root Sight opens the ground, so it keeps the roots below it.
-   if (frame.rootSightEnabled == 0u && input.worldPosition.y < renderData[input.plantIndex].groundY) {
+   // was painted over the ground. Nothing falls below the terrain it stands on,
+   // except what stands in the open column of the pit, which is air: that is the
+   // part of the plant a player down the shaft is looking at.
+   if (
+     input.worldPosition.y < renderData[input.plantIndex].groundY &&
+     !inRootSightShaft(input.worldPosition)
+   ) {
      discard;
    }
 
