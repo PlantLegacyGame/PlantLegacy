@@ -147,7 +147,7 @@ export function updateCavityBowl(
     const worldZ = centre.z + position.getZ(index) * placement.horizontalScale;
     ground.push(surfaceHeight(worldX, worldZ));
   }
-  const fit = fitRimToGround(ground, placement.verticalScale);
+  const fit = fitRimToGround(ground);
   // The mouth plane is the *lowest* ground under the rim, not the highest and
   // not a stretched average. Anchored here, every rim vertex reaches its own
   // ground by moving up, and the wall between the lip and the floor is never

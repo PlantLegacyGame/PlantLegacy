@@ -15,6 +15,7 @@ import {
   CAVITY_MOUTH_OVERHANG,
   CAVITY_PROFILE_DEPTH,
   CAVITY_RIM_SINK_M,
+  MIN_CAVITY_WALL_FRACTION,
   RIM_CIRCLE_RADIUS,
 } from './profile.ts';
 
@@ -61,12 +62,10 @@ export function cavityBowlPlacement(
   };
 }
 
-/** What the rim's ground heights force on the shell this frame. */
+/** How far the ground under the rim falls, from its highest lip to its lowest. */
 export interface RimFit {
   highestGround: number;
   lowestGround: number;
-  /** Vertical scale the shell is drawn at: the depth it was given, unaltered. */
-  verticalScale: number;
 }
 
 /**
@@ -86,9 +85,9 @@ export interface RimFit {
  * hides the sliver of shell that hangs below it.
  */
 export function bowlVerticalScale(depthM: number, reliefM: number): number {
-  const depth = Number.isFinite(depthM) ? Math.max(0.1, depthM) : 0.1;
+  const depth = Number.isFinite(depthM) ? depthM : 0;
   const relief = Number.isFinite(reliefM) ? Math.max(0, reliefM) : 0;
-  const wall = Math.max(CAVITY_PROFILE_DEPTH * 0.05, depth - relief);
+  const wall = Math.max(CAVITY_PROFILE_DEPTH * MIN_CAVITY_WALL_FRACTION, depth - relief);
   return wall / CAVITY_PROFILE_DEPTH;
 }
 
@@ -108,7 +107,7 @@ export function bowlVerticalScale(depthM: number, reliefM: number): number {
  * no extra wall length is needed. The uphill side is a shallow pit and the
  * downhill side a deep one, which is what digging into a bank does.
  */
-export function fitRimToGround(grounds: readonly number[], baseVerticalScale: number): RimFit {
+export function fitRimToGround(grounds: readonly number[]): RimFit {
   let highestGround = Number.NEGATIVE_INFINITY;
   let lowestGround = Number.POSITIVE_INFINITY;
   for (const height of grounds) {
@@ -117,7 +116,5 @@ export function fitRimToGround(grounds: readonly number[], baseVerticalScale: nu
   }
   if (!Number.isFinite(highestGround)) highestGround = 0;
   if (!Number.isFinite(lowestGround)) lowestGround = 0;
-  // The base scale is handed back unchanged: how much of it survives is the
-  // caller's decision, and `bowlVerticalScale` is where that happens.
-  return { highestGround, lowestGround, verticalScale: Math.max(0.01, baseVerticalScale) };
+  return { highestGround, lowestGround };
 }

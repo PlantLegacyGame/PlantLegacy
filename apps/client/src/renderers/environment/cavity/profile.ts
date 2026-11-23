@@ -56,6 +56,15 @@ export const CAVITY_RIM_RING = 0;
 /** Depth of the shell in its own units, rim to floor. */
 export const CAVITY_PROFILE_DEPTH = 1.02;
 
+/**
+ * Shortest wall the shell is ever drawn with, as a fraction of the profile.
+ *
+ * A mouth wider than it is deep across a cliff spends the whole depth budget on
+ * the rim's own travel up the slope. The wall is then kept this tall rather than
+ * inverted, and the soil's cut hides the sliver of shell left below it.
+ */
+export const MIN_CAVITY_WALL_FRACTION = 0.05;
+
 /** Horizontal radius of the unit bowl's rim circle: the profile keeps it at 1. */
 export const RIM_CIRCLE_RADIUS = 1;
 

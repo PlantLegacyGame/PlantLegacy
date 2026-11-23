@@ -344,13 +344,9 @@ function rimSamples(
 }
 
 describe('the bowl wall takes the rim travel out of the depth', () => {
-  it('draws the whole depth in the wall on flat ground', () => {
-    // 1.02 units of profile, so the wall is the budget itself.
-    assert.ok(Math.abs(bowlVerticalScale(4.75, 0) - 4.75 / CAVITY_PROFILE_DEPTH) < 1e-9);
-  });
-
   it('subtracts the rim relief, so rim-to-floor stays the budget', () => {
     for (const [depth, relief] of [
+      [4.75, 0],
       [4.75, 0.9],
       [9.31, 3.0],
       [1.2, 0.1],

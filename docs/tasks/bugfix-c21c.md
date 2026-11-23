@@ -187,3 +187,36 @@ overwritten each frame for the shells and the terrain volume, and
 the whole floor read with it, so which mesh draws the mouth-filling disc is
 still unattributed: `root-sight-skirt` is 192 vertices — a 96-segment ring — and
 is the one shell piece sized at 1.04 of the mouth circle.
+
+### The rule holds for the plant's own cavity
+
+The three sizes above came from the dev override. Re-measured with `forcedRadius()`
+`null`, growing a real plant with `dev_grow_roots` and reading the same geometry
+and the same uniforms the renderer uses (`uRootSightNodes` for the deepest
+bubble, the ground at the mouth for the datum):
+
+| stage | mouth | deepest bubble | `cavityDepthM` | rim→floor drawn |
+|---|---|---|---|---|
+| seed | 0.22 m | 0.41 m | 0.807 m | **0.805 m** |
+| +6 roots, 5 bubbles | 0.63 m | 3.02 m | 3.415 m | **3.415 m** |
+| +12 roots, 9 bubbles | 0.86 m | 5.35 m | 5.753 m | **5.753 m** |
+| +24 roots, 16 bubbles, 43 nodes | 0.86 m | 9.57 m | 9.973 m | **9.973 m** |
+
+Every row is root-driven rather than mouth-driven (`cavityDepthM` takes the
+larger), which is the case the old code drifted on hardest: a 0.86 m mouth with
+9.6 m of roots is a 9.97 m pit, and it is drawn 9.97 m deep.
+
+### What the review cut
+
+- `RimFit.verticalScale` and `fitRimToGround`'s `baseVerticalScale` parameter:
+  both existed only to echo a number back after the depth rule moved out of it.
+  Gone, with the two test assertions that only checked the echo.
+- `bowlVerticalScale`'s `Math.max(0.1, depthM)` clamp: the call site already
+  clamps, and the wall floor already keeps the result positive.
+- Two `placement.test.ts` cases that proved constants against themselves (the
+  scale times the profile depth, and `-CAVITY_PROFILE_DEPTH < -0.27`), and the
+  standalone flat-ground unit test — folded into the relief loop as a `relief 0`
+  row, since it is the same rule.
+- The 5 % wall floor is now `MIN_CAVITY_WALL_FRACTION` in `profile.ts`, because
+  every number in that file is a named constant with a comment; it earns its
+  place by keeping a cliff from inverting the shell.

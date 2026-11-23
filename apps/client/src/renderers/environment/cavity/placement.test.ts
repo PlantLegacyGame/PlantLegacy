@@ -8,7 +8,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { cavityClipPolicy, isEyeInsideCavity } from './clip.ts';
-import { cavityBowlPlacement, fitRimToGround } from './placement.ts';
+import { bowlVerticalScale, cavityBowlPlacement, fitRimToGround } from './placement.ts';
 import { CAVITY_DEPTH_TO_MOUTH, CAVITY_PROFILE_DEPTH, cavityDepthM } from './profile.ts';
 
 describe('cavity depth budget', () => {
@@ -26,38 +26,24 @@ describe('cavity depth budget', () => {
 });
 
 describe('fitting the rim to the ground', () => {
-  it('leaves a level mouth exactly as placed', () => {
-    const fit = fitRimToGround([0, 0, 0, 0], 3);
-    assert.equal(fit.verticalScale, 3);
+  it('leaves a level mouth level', () => {
+    const fit = fitRimToGround([0, 0, 0, 0]);
     assert.equal(fit.highestGround, 0);
     assert.equal(fit.lowestGround, 0);
   });
 
-  it('measures the bank but never stretches the wall for it', () => {
+  it('measures the bank, and hands the drop to the depth rule', () => {
     // The wall used to be stretched until the lowest lip could reach its ground,
     // then squashed back by a floor factor. The two cancelled into a shallow
     // dish: the profile kept its radii and lost its heights, so the vertical cut
     // and the strata it carries were flattened away. The slope moves the mouth
-    // plane instead (see updateCavityBowl), so the scale is the depth, always.
-    const fit = fitRimToGround([2, 0, 1, -0.5], 3);
+    // plane instead, and its drop comes out of the wall (`bowlVerticalScale`).
+    const fit = fitRimToGround([2, 0, 1, -0.5]);
     assert.equal(fit.highestGround, 2);
     assert.equal(fit.lowestGround, -0.5);
-    assert.equal(fit.verticalScale, 3);
-  });
-
-  it('gives the pit the depth it asked for on any slope', () => {
-    const fit = fitRimToGround([0, -2.9], 3.8 / CAVITY_PROFILE_DEPTH);
-    const floorDepth = fit.verticalScale * CAVITY_PROFILE_DEPTH;
-    assert.ok(Math.abs(floorDepth - 3.8) < 1e-6, `floor at ${floorDepth.toFixed(2)} m`);
-  });
-
-  it('leaves the floor a whole profile below the mouth on a cliff', () => {
-    // The mouth sits on the lowest ground, so a cliff only makes the lip rise.
-    // Nothing has to be compressed, and the floor can never reach the lip.
-    const fit = fitRimToGround([0, -16], 2.66 / CAVITY_PROFILE_DEPTH);
-    const floorLocal = -CAVITY_PROFILE_DEPTH;
-    assert.ok(floorLocal < -0.27, `floor local ${floorLocal.toFixed(3)} is at or above the lip`);
-    assert.ok(fit.highestGround - fit.lowestGround === 16);
+    const wall =
+      bowlVerticalScale(3.8, fit.highestGround - fit.lowestGround) * CAVITY_PROFILE_DEPTH;
+    assert.ok(Math.abs(wall - 1.3) < 1e-9, `wall ${wall.toFixed(3)} m`);
   });
 });
 
