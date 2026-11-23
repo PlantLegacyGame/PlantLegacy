@@ -279,7 +279,7 @@ describe('the pit reads as a shaft from above', () => {
     // angle sweeps a full turn within centimetres, so the noise there was 96
     // radial spokes converging on the floor - a grey plate with a spoke pattern,
     // measured straight down at 2.5 m and 4.9 m mouths.
-    assert.match(source, /float bowlAxis = smoothstep\(0\.06, 0\.30, bowlRadius/);
+    assert.match(source, /float bowlAxis = smoothstep\(0\.10, 0\.55, bowlRadius/);
     assert.match(
       source,
       /mix\(\s*vBowlWorldPosition\.xz,\s*vec2\(bowlArc, vBowlWorldPosition\.y\),\s*bowlAxis\s*\)/,

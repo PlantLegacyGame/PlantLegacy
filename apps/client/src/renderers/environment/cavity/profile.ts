@@ -44,15 +44,9 @@ export const CAVITY_PROFILE: ReadonlyArray<{ y: number; r: number }> = [
   { y: -0.28, r: 0.985 },
   { y: -0.55, r: 1.0 },
   { y: -0.78, r: 0.82 },
-  // The bottom third is a cone, not a saucer. Measured from 7 m above a 2.5 m
-  // mouth, 46 % of the visible opening was the old bottom flare: a nearly flat
-  // surface 0.76-1.0 of the way down, which is a grey plate however it is lit.
-  // A smooth inward slope puts a different depth under every radius, so the
-  // floor is a small patch, the wall fills the ring around it, and the shading
-  // and strata have an actual gradient to sit on.
-  { y: -0.72, r: 0.88 },
-  { y: -0.88, r: 0.66 },
-  { y: -0.98, r: 0.38 },
+  { y: -0.94, r: 0.55 },
+  // A floor you can see from above. The old profile ended in a point, which
+  // made the cavity a funnel read only as a banded disc.
   { y: -1.02, r: 0 },
 ];
 
@@ -226,12 +220,8 @@ export interface StrataBand {
 /** The layers of the dug wall, topsoil to deep earth. */
 export const CAVITY_STRATA_BANDS: readonly StrataBand[] = [
   { from: 0, to: 0.24 },
-  // The subsoil runs most of the wall and the cold earth starts at four fifths
-  // of the depth, not at 0.58. An eye above the mouth sees the bottom half of
-  // the wall, so with the old edge the whole opening was the one grey band - the
-  // palette's strata were there and only one of them was ever in view.
-  { from: 0.24, to: 0.8 },
-  { from: 0.8, to: 1 },
+  { from: 0.24, to: 0.58 },
+  { from: 0.58, to: 1 },
 ];
 
 /** Vertical courses per profile segment: enough rings for the wall to be relief. */

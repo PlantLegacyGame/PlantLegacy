@@ -295,29 +295,43 @@ the floor read with it" was the shared material hiding the bowl as well.
    same at 0.63 m, 2.5 m and 4.9 m and never got attributed to the size: nothing
    in the pit's shading knows how deep the pit is.
 
-**The change.** The bottom is a cone, not a saucer (`profile.ts`:
-`-0.72 r 0.88`, `-0.88 r 0.66`, `-0.98 r 0.38`, `-1.02 r 0`); the deep band
-starts at 0.80 so the subsoil is the bed an eye above the lip actually sees; the
-grain blends from the cylindrical chart to world xz near the axis; and the depth
-falloff is 0.45 below the first tenth of the wall instead of 0.14 over all of it.
-Two tests pin the shader's half of that, and the profile is data.
+**The change, second pass: only the shading.** The cone bottom and the 0.80
+deep-band move were reverted. They did move the area distribution, but only by
+reshaping the pit in every view, and seen from the rim the pit was a funnel again
+— the shape `profile.ts` had already been changed out of, because a funnel reads
+as a banded disc and has no cut wall. `profile.ts` is byte-identical to `0582da2`
+again: the saucer bottom (r 0.82 → 0.55 → 0) and the strata bands at 0.24 / 0.58
+stand. What is kept is the two fixes that do not touch the geometry: the grain
+blends from the cylindrical chart to world xz over the floor, and the wall
+darkens 0.45 with its depth instead of 0.14.
 
-**After**, same ray harness: visible area by depth fifth is now
-`0.30 / 0.13 / 0.19 / 0.12 / 0.25` — the bottom fifth halves, and every fifth is
-populated, so the opening carries a depth gradient instead of one flat tone. The
-depth rule is untouched by the reshape: rim→floor is 9.31 m at a 4.9 m mouth,
+**Measured after the revert.** The visible area by depth fifth is back to what
+the saucer gives — `0.11 / 0.10 / 0.11 / 0.22 / 0.46` through the mouth from 7 m
+up on a 2.5 m pit. Half the opening is still one near-flat surface, and that is a
+property of the profile, not of the shading. What did change on screen is the
+texture and the tone: at both mouths and in both views the 96 radial spokes
+converging on the floor are gone, and the wall carries a depth falloff instead of
+one value.
+
+The first axis blend was too narrow to fix the floor: it finished at 0.30 of the
+mouth, but the saucer reaches 0.55, so the outer floor still drew the cylinder
+chart and streaked. 0.10–0.55 covers the floor and leaves the vertical wall on
+the cylinder, where the chart is isotropic by construction.
+
+The depth rule is untouched by any of this: rim→floor 9.31 m at a 4.9 m mouth,
 4.75 m at 2.5 m, and on the plant's own 0.64 m mouth **9.204 m against a 9.204 m
-budget**. The roots still fit: the worst node is 3.5 cm outside the wall
-(3.2 cm under the old profile) and behind it, so it is hidden either way.
+budget**. The roots' worst node is 3.2 cm outside the wall, as it was before the
+reshape.
 
-Seen straight down at 2.5 m and 4.9 m the mouth is now a dark bed at the rim, the
-ochre subsoil band shrinking with depth, and a small dark floor with the roots on
-it — no spokes, no single grey disc. From 9 m out and 4.5 m up the wall, the
-strata and the floor read as they did.
+Re-shot in frozen noon daylight, straight down from 9 m (4.9 m mouth) and 7 m (2.5 m), and from the side at 11.4 m out / 5.5 m up and 6.2 m out / 3.2 m up: `topdown-49-keep2.png`, `topdown-25-keep2.png`, `oblique-49-keep4.png`, `oblique-25-keep2.png`. Both oblique frames show the saucer pit with its cut wall and strata, as earlier passes settled it. Both top-down frames are a smooth grey floor inside an ochre ring — no spokes, but still a disc.
 
-**What it still does not do.** The falloff is in profile units, so the pit is
-self-similar: a 0.63 m pit and a 4.9 m pit now read as the same funnel with the
-same small bottom, and the absolute depth is carried by the geometry (measured
-9.5 m) and by the strata break rather than by brightness. Strata positions in
-metres rather than fractions of the pit would give a pit that visibly deepens
-with size; that is a palette decision for another pass.
+**What it still does not do.** Reading as a shaft from straight above needs the
+opening to stop being half one flat surface, and that is a profile decision: a
+cone bought the read by giving up the oblique view, which is the trade this file
+has already refused once. A terrace or a stepped bottom would have to be judged
+from the rim before it is believed from above. Separately, the depth falloff is
+in profile units, so the pit stays self-similar — a 0.63 m pit and a 4.9 m one
+read as the same shape, and the absolute depth is carried by the measured
+geometry (9.5 m) rather than by brightness. Strata positions in metres rather
+than fractions of the pit would give a pit that visibly deepens with size; that
+is a palette decision for another pass.

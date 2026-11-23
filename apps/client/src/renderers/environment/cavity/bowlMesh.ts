@@ -282,7 +282,7 @@ float bowlNoise(vec2 p) {
   // axis is close to horizontal, where the plane is the right chart, so the grain
   // blends to world xz before the angle gets that fast. Both charts are metres,
   // so the clods keep their size across the join.
-  float bowlAxis = smoothstep(0.06, 0.30, bowlRadius / max(uBowlApertureRadius, 0.05));
+  float bowlAxis = smoothstep(0.10, 0.55, bowlRadius / max(uBowlApertureRadius, 0.05));
   vec2 bowlWall = mix(
     vBowlWorldPosition.xz,
     vec2(bowlArc, vBowlWorldPosition.y),
