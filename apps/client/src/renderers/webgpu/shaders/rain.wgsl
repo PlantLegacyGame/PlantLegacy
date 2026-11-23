@@ -25,6 +25,48 @@ struct VertexOutput {
 
 @group(0) @binding(0) var<uniform> frame: FrameUniforms;
 @group(0) @binding(1) var<uniform> rain: RainUniforms;
+// The coarse ground the mesh pass occludes against. Declared here rather than in
+// `common.wgsl` so the impostor and billboard modules, which share that file and
+// have fixed layouts, are not made to bind it.
+@group(0) @binding(2) var groundHeightMap: texture_2d<f32>;
+
+const GROUND_MAP_SIZE: f32 = 64.0;
+const GROUND_MARCH_STEPS: u32 = 8u;
+
+/**
+ * Is a hill standing between the eye and this drop?
+ *
+ * Same march the mesh pass runs: this canvas has no depth from the three.js
+ * ground, so a drop beyond a ridge was painted over the ridge. The drop's own
+ * column is handled by the `groundY` it carries; this is for what stands between.
+ */
+fn groundBlocks(worldPos: vec3f) -> bool {
+  if (frame.groundMapExtent <= 0.0) {
+    return false;
+  }
+  let eye = frame.cameraPos.xyz;
+  let toDrop = worldPos - eye;
+  if (dot(toDrop, toDrop) < 2.25) {
+    return false;
+  }
+  for (var i = 1u; i < GROUND_MARCH_STEPS; i = i + 1u) {
+    let t = f32(i) / f32(GROUND_MARCH_STEPS);
+    if (t > 0.85) {
+      break;
+    }
+    let p = eye + toDrop * t;
+    let uv = (p.xz - frame.groundMapOrigin) / frame.groundMapExtent;
+    if (uv.x < 0.0 || uv.y < 0.0 || uv.x >= 1.0 || uv.y >= 1.0) {
+      continue;
+    }
+    let texel = vec2i(vec2u(uv * GROUND_MAP_SIZE));
+    let height = textureLoad(groundHeightMap, texel, 0).r;
+    if (p.y < height - 0.5) {
+      return true;
+    }
+  }
+  return false;
+}
 
 /** Stable per-drop random in 0..1, from where the drop is. */
 fn dropSeed(position: vec3f) -> f32 {
@@ -58,7 +100,7 @@ fn vs_main(input: VertexInput) -> VertexOutput {
   // drawn ground, so a drop beyond the planet's bulk - past a ridge, over the
   // horizon - was painted on top of the dirt it should be behind. Collapsing the
   // quad puts it outside the clip volume, where it costs nothing.
-  if (soilOccludes(pos)) {
+  if (soilOccludes(pos) || groundBlocks(pos)) {
     output.uv = vec2f(0.0);
     output.velocity = velocity;
     output.clipPosition = vec4f(0.0, 0.0, -2.0, 1.0);

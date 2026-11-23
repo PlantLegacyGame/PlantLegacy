@@ -805,3 +805,30 @@ of 4096 rather than idle, which is how it was caught.
 
 The rain is not marched yet, so drops still draw over a hill; that is the
 remaining half of E30 and the next thing to do with this map.
+
+The rain followed. `rain.wgsl` already collapsed a drop behind the planet's bulk
+through `soilOccludes()`, so it now also collapses one behind a hill through the
+same ground map, in its vertex shader where a rejected drop costs nothing after
+the cull: a second `r32float` view at binding 2 of the rain bind group, and a
+copy of the march in `rain.wgsl` rather than a move into `common.wgsl`, because
+the impostor and billboard modules share that file and their layouts are fixed.
+Measured on a pose 26 m behind a 2.9 m ridge: with the map on, the drops over the
+ridge face are gone and only the ones in front remain; with it forced off they
+come back across the hill (`rain-ridge-on`, `rain-ridge-off`).
+
+The matured pit is not reachable from here, and the reason is structural rather
+than a missing pose. The mouth is sized from horizontal root reach
+(`plantLateralExtent`), roots are chains of 0.4 m segments (`lateral_root_node.
+segment_length`) that only reach metres when successive segments continue
+outward - which is what the player's aimed growth does - and the only dev route,
+`dev_grow_roots`, turns every next segment by 2.399 rad from the previous one and
+restarts from the radicle on each call, so its chains curl into a rosette. Measured
+across five calls: nodes 1 -> 25 -> 49 -> 73 -> 97, reach 0.52 -> 0.74 -> 0.75 ->
+0.75 m, aperture 0.64 -> 0.89 m. It cannot produce a pit a person fits in, and the
+real growth path needs a selected plant, resources and a cooldown per node - tens
+of growths over minutes - which this session's clicks on the plant and G presses
+did not produce a node from. The shaft exemption itself is a plan-radius test, so
+the aperture size does not change its behaviour; it is verified at 2.8 m, 1.4 m
+and the 0.86 m dev-grown pit. The fix for the record is a dev action that grows a
+straight aimed chain (`dev_grow_roots` with a direction instead of `step * 2.399`),
+which is a small server-side change and not this pass.
