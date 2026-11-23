@@ -111,12 +111,12 @@ owning task fills it.
 | `prestige` | T08B | stub | 0 |
 | `profiles` | T47 | stub | 0 |
 | `relics` | T18 | stub | 0 |
-| `render` | C01 | active | 136 |
+| `render` | C01 | active | 132 |
 | `reports` | T05 | active | 5 |
 | `reproduction` | T53 | stub | 0 |
 | `reputation` | T43 | stub | 0 |
 | `resources` | T00A | draft | 50 |
-| `root_sight` | T02 | active | 30 |
+| `root_sight` | T02 | active | 27 |
 | `session` | T08 | stub | 0 |
 | `shop` | C05 | active | 4 |
 | `spectating` | T30 | stub | 0 |
@@ -130,7 +130,7 @@ owning task fills it.
 | `territory` | T49 | stub | 0 |
 | `tumbling` | T06 | active | 10 |
 | `tutorial` | T33 | stub | 0 |
-| `ui` | C01 | active | 35 |
+| `ui` | C01 | active | 36 |
 | `uproot` | T06 | active | 19 |
 | `water` | T31 | active | 33 |
 | `weather` | T07 | active | 19 |
@@ -142,6 +142,31 @@ Total: **83 files**; 34 populated and 49 stubs (4 of them `draft`, 2 `deprecated
 **This line owns the count.** Other documents link here rather than quoting a
 number (ADR-049).
 Populated: `accounts`, `chat`, `climate`, `compliance`, `controls`, `damage`, `daynight`, `dev`, `emotes`, `growth`, `items`, `mutations`, `mutation_visuals`, `net_proto`, `network`, `onboarding`, `ops`, `palette`, `physics`, `plant_renderer`, `render`, `reports`, `resources`, `root_sight`, `shop`, `spores`, `terrain`, `terrain_volume`, `tumbling`, `ui`, `uproot`, `water`, `weather`, `world`.
+
+## One key name, two files
+
+Twenty-one key names are declared in more than one config file. That is not
+automatically a mistake — `seed` is per-system, and `enabled` belongs to whichever
+file names it — but the name does **not** make two values the same. Read the file
+that owns the system, never a neighbour with the same key.
+
+Three cases are worth knowing before you tune them, because the name promises
+more agreement than exists:
+
+- `terrain_radius` (`render`) and `patch_radius_m` (`terrain`) are the same 620 m
+  by intent: one is the collider/sky-dome radius, the other the ground patch.
+  Change them together.
+- `root_aura_radius` is declared twice and **read from neither** — both plant
+  passes take a literal 3.0. E19 in [`bug-inventory.md`](./bug-inventory.md).
+- `lightning_damage_amount` is 8 in `damage` (the value the pipeline bills) and 25
+  in `weather` (parsed, never read). E20 in the same file.
+
+`photosynthesis_energy_per_second`, `evaporation_per_s` and the `webgpu_tier*`
+thresholds also repeat. Growth's energy per second is not resources' energy per
+photosynthetic unit — two subsystems, two meanings. The `dev` copies of the
+`webgpu_*` and camera keys are **not** live overrides: the dev panel draws them
+from `/dev/config` and `applyDevConfig` refuses them, so `render`'s values are
+what runs (E21).
 
 ## Approved V5.4 config files (not created yet)
 
