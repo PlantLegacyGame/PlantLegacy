@@ -79,9 +79,11 @@ uniform vec3 uSoilWetColor;
 uniform vec3 uSoilMineralColor;
 uniform float uSoilMoisture;
 uniform float uSoilGrainStrength;
-uniform float uSoilCrackStrength;
-uniform float uSoilPebbleStrength;
 uniform float uSoilMineralStrength;
+  // Form rather than texture: the palette step a clod top lifts to and the one
+  // the hollow between clods falls to, so the relief is of the same earth.
+uniform vec3 uSoilClodLiftColor;
+uniform vec3 uSoilHollowColor;
 // Sun uniforms for ground lighting
 uniform vec3 uSunDir;
 uniform vec3 uSunColor;
@@ -372,29 +374,33 @@ vec3 soilBumpNormal(vec3 normal, vec2 uv, float strength) {
   float clods = soilFbm(soilDetail * 1.6);
   float patches = soilFbm(soilDetail * 0.22 + 11.7);
   float grit = soilNoise(soilDetail * 12.0);
-  // Gentler contrast than before: 0.78/0.44 plus 0.90/0.20 swung the soil by
-  // nearly half its brightness over a few centimetres, which read as speckle
-  // rather than dirt. Softer bands with a finer grain read as texture.
-  dynamicSoil *= 0.88 + 0.24 * mix(0.5, clods, detailFade);
-  dynamicSoil = mix(dynamicSoil, dynamicSoil * 1.12, smoothstep(0.45, 0.82, patches));
-  dynamicSoil *= 0.95 + 0.1 * mix(0.5, grit, detailFade);
+  // Form, not texture. A multiplier used to lighten and darken the one brown,
+  // which reads as a shaded sheet; the clods are palette steps instead - their
+  // tops lift toward soil_lit, the hollows between them sink toward soil_shade -
+  // so the ground's surface is made of the ground's own earth.
+  //
+  // Two things to keep in mind when tuning this. soilFbm sums four octaves of
+  // 0..1 noise, so its mean is ~0.47 and its swing is about +-0.13: thresholds
+  // picked as if it spanned 0..1 left the clods invisible above the mean and
+  // darkened everything below it. The deviation from the mean is the shape,
+  // signed, so tops and hollows are equal halves of one relief and the average
+  // colour does not move. And form outlives grit - a clod is half a metre
+  // across, so it still reads where the millimetre octaves have blurred - so it
+  // gets a gentler footprint fade and a second, coarser scale.
+  float clodFade = 1.0 - smoothstep(0.2, 0.7, footprint);
+  float clodsBig = soilFbm(soilDetail * 0.75 + 5.3);
+  float clodStep = clamp((mix(clodsBig, clods, 0.5) - 0.47) * 3.0, -1.0, 1.0) * clodFade;
+  dynamicSoil = mix(dynamicSoil, uSoilClodLiftColor, max(clodStep, 0.0) * 0.26);
+  dynamicSoil = mix(dynamicSoil, uSoilHollowColor, max(-clodStep, 0.0) * 0.22);
+  // Damp patches drift toward the wet step rather than being brightened: damper
+  // soil is darker and browner, which is exactly what soil_wet is. They are
+  // metres across, so they keep their own, much longer fade.
+  float patchFade = 1.0 - smoothstep(20.0, 90.0, distance(cameraPosition, vSoilWorldPos));
+  float dampPatch = clamp((patches - 0.47) * 3.5, -1.0, 1.0);
+  dynamicSoil = mix(dynamicSoil, uSoilWetColor, max(dampPatch, 0.0) * 0.16 * patchFade);
+  dynamicSoil *= 0.97 + 0.06 * mix(0.5, grit, detailFade);
 
-  // Dried fissures. Ridged noise gives narrow, connected seams instead of the
-  // soft blobs plain noise produces, so the topsoil breaks into plates and
-  // reads as dirt rather than a painted sheet.
-  float ridged = 1.0 - abs(soilNoise(soilDetail * 5.5 + 3.1) * 2.0 - 1.0);
-  float cracks = smoothstep(0.92, 1.0, ridged) * detailFade;
-  dynamicSoil *= 1.0 - cracks * uSoilCrackStrength;
-
-  // Rounded pebbles mixed into the matrix: their own colour, brighter than the
-  // soil around them, plus a second bump layer below so they catch light.
-  // Sparse and warm: a stone is a slightly greyer, lighter piece of the same
-  // earth, not a pale speck. Dense or cool stones read as litter on the ground.
-  float pebbles = smoothstep(0.86, 0.95, soilNoise(soilDetail * 9.0 + 41.7)) * detailFade;
-  vec3 pebbleColor = mix(uSoilDryColor, uSoilMineralColor, 0.45) * 1.18;
-  dynamicSoil = mix(dynamicSoil, pebbleColor, pebbles * uSoilPebbleStrength);
-
-    dynamicSoil = mix(dynamicSoil, uSoilMineralColor, mineralNoise * uSoilGrainStrength + tileMinerals * uSoilMineralStrength);
+  dynamicSoil = mix(dynamicSoil, uSoilMineralColor, mineralNoise * uSoilGrainStrength + tileMinerals * uSoilMineralStrength);
 
   // Soil the water table touches is waterlogged and darker: below the table it
   // is under the surface, just above it capillary rise keeps it damp. This is
@@ -428,12 +434,9 @@ vec3 soilBumpNormal(vec3 normal, vec2 uv, float strength) {
   // Clod-scale relief, strongest on bare soil: this is what makes the surface
   // read as loose dirt rather than a coloured plane.
   vec3 groundNormal = soilBumpNormal(macroNormal, vSoilWorldPos.xz * 3.2, 0.55 * detailFade);
-  // A finer bump layer for the pebbles, on top of the clod relief.
-  groundNormal = soilBumpNormal(
-    groundNormal,
-    vSoilWorldPos.xz * 9.0,
-    (0.2 + uSoilPebbleStrength) * detailFade
-  );
+  // A finer bump layer on top of the clod relief, so the surface has a second
+  // scale of looseness underfoot.
+  groundNormal = soilBumpNormal(groundNormal, vSoilWorldPos.xz * 9.0, 0.18 * detailFade);
   // uSunDir points FROM the ground TOWARD the sun, so use it directly.
   float NdotL = max(dot(groundNormal, normalize(uSunDir)), 0.0);
   // Sky fill and the hill-shading curve use the macro normal, not the bump

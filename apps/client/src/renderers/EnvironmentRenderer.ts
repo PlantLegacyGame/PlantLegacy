@@ -375,7 +375,7 @@ export class EnvironmentRenderer {
     // `undergroundViewColor * 1.9`, a pale tan that the soil shader faded its rim
     // into: that is the light band that read as a ring around and inside the
     // cavity's lip from above, which no crater has.
-    this.cavityWallColor.set(config.soilWetColor).multiplyScalar(0.9);
+    this.cavityWallColor.copy(worldColour('soil_wet')).multiplyScalar(0.9);
     this.soilUniforms.uRootSightWallColor.value.copy(this.cavityWallColor);
 
     // 2. Terrain and the Root Sight cutaway.
@@ -449,12 +449,11 @@ export class EnvironmentRenderer {
         // slab in the first visual pass. It takes the dry soil colour pulled a
         // third of the way to the wet one, so it sits in the same earth family
         // as the hillside, darker where it has not dried out.
-        const rockColour = new THREE.Color(config.soilDryColor)
-          .lerp(new THREE.Color(config.soilWetColor), 0.25)
-          // A trace of the mineral accent, not all of it: 6% cools the brown
-          // towards stone where the first pass's 100% was a teal slab, and 15%
-          // still read as concrete at noon.
-          .lerp(new THREE.Color(config.soilMineralTint), 0.06);
+        const rockColour = worldColour('soil_mid')
+          .lerp(worldColour('soil_wet'), 0.25)
+          // A trace of the dark earth, not all of it: 6% cools the brown towards
+          // stone, while a heavier mix reads as concrete at noon.
+          .lerp(worldColour('soil_shade'), 0.06);
         this.terrainVolume = createTerrainVolumeMesh(
           tuning.volume,
           (x, z) => planetTerrainY(config.planetRadiusM, x, z, getTerrainParams()),
@@ -510,7 +509,7 @@ export class EnvironmentRenderer {
             },
             // Wet ground is the same colour the soil shader uses for wetness, taken
             // a step darker: soil in contact with standing water is waterlogged.
-            new THREE.Color(config.soilWetColor).multiplyScalar(0.55),
+            worldColour('soil_wet').multiplyScalar(0.55),
             surveyedRiver && riverMask
               ? {
                   stations: surveyedRiver.stations,

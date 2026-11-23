@@ -2,6 +2,7 @@ import { mulberry32 } from '@plant-legacy/shared/math';
 import * as THREE from 'three';
 import { type MutationLookStack, NEUTRAL_STACK } from '../plant/mutations.ts';
 import type { PlantNodeData } from '../plant/plantNodeData.js';
+import { worldColour } from '../worldPalette.ts';
 import { ImpostorAtlasSlots } from './impostorAtlasSlots.js';
 import { jointMatrixFor } from './jointMatrix.js';
 import { buildPlantMesh, type PlantRenderPlant } from './PlantMeshBuilder.js';
@@ -226,10 +227,6 @@ export interface WebGPURendererConfig {
   planetRadius: number;
   ownRootColor: string;
   rivalRootColor: string;
-  /** Ground palette, mirroring config/render.json soil colours. */
-  soilDryColor: string;
-  soilWetColor: string;
-  soilMineralColor: string;
   pointSizeScale: number;
   // C02b: Rain rendering
   rainStreakLength: number;
@@ -276,9 +273,6 @@ export const DEFAULT_WEBGPU_RENDERER_CONFIG: WebGPURendererConfig = {
   planetRadius: 0,
   ownRootColor: '#4CAF50',
   rivalRootColor: '#FF5722',
-  soilDryColor: '#6B5539',
-  soilWetColor: '#2E2418',
-  soilMineralColor: '#5A8FA8',
   pointSizeScale: 1.0,
   // C02b: Rain rendering
   rainStreakLength: 25.0,
@@ -517,9 +511,14 @@ export class WebGPURenderer {
   }
 
   private writeSoilPalette(): void {
-    writeSrgbTriplet(this.config.soilDryColor, this.soilData, 0);
-    writeSrgbTriplet(this.config.soilWetColor, this.soilData, 4);
-    writeSrgbTriplet(this.config.soilMineralColor, this.soilData, 8);
+    // The ground's colours are the palette's soil ramp. This renderer used to
+    // carry its own copies of `config/render.json`'s soil hexes, so once the
+    // ground was painted from the palette the WebGPU path would have kept the
+    // old brown; `#rrggbb` is what `writeSrgbTriplet` parses, hence the prefix.
+    const hex = (role: string): string => `#${worldColour(role).getHexString()}`;
+    writeSrgbTriplet(hex('soil_mid'), this.soilData, 0);
+    writeSrgbTriplet(hex('soil_wet'), this.soilData, 4);
+    writeSrgbTriplet(hex('soil_shade'), this.soilData, 8);
     this.soilData[12] = this.soilMoisture;
   }
 

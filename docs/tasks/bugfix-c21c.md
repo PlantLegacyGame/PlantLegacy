@@ -573,10 +573,46 @@ layer in `shaderOverrides.ts` (`mix(dynamicSoil, uSoilMineralColor * 0.6, stones
 remains on the surface is the moisture mix, the clod and patch variation and the
 fine grit; the ground now reads as flat palette dirt (`palette-dirt-ground.png`).
 
-Left for a later pass: `soil_dry_color`, `soil_wet_color`, `soil_mineral_tint`,
-`cavity_topsoil_color`, `cavity_subsoil_color` and `cavity_deep_color` are still
-declared in their config files and read into `clientConfig.ts`, but the client no
-longer paints from them. They pass `config:keys` on the documented blind spot (a
-key read into a struct nobody consumes still counts as read), which is exactly the
-kind of dead knob that check exists to find - delete them with the palette
-wiring in place, or repoint them.
+The six colour keys were then deleted rather than left as knobs nobody paints
+from: `soil_dry_color`, `soil_wet_color` and `soil_mineral_tint` are gone from
+`config/render.json`, `cavity_topsoil_color`, `cavity_subsoil_color` and
+`cavity_deep_color` from `config/root_sight.json`, along with their interfaces,
+input types, parsing and defaults in `clientConfig.ts`. Three more consumers had
+to move with them, and each had been reading a colour the palette now owns: the
+rock arch (`EnvironmentRenderer`), the wall colour behind the lip, the wet-ground
+stain the water field is built with, and the WebGPU renderer's own soil palette,
+which had been carrying a second copy of the same hexes as its defaults.
+`soil_crack_strength` and `soil_pebble_strength` went too, because the shader
+terms they scaled were deleted in the same pass (see Sec. 9) and a strength knob
+for a term that no longer exists is the same lie.
+
+`docs/tunables.md`'s counts moved with the files (render 137 -> 132, root_sight
+30 -> 27) and the three rows left `docs/tasks/C03.md`'s config table.
+
+## 9. The ground's form, from the palette, 2026-11-23
+
+With the crack and grit layers gone the surface was flat colour plus a
+brightness ramp - honest, but it read as painted paper. The relief is now made
+of palette steps: clod tops mix toward `soil_lit`, the hollows between clods
+toward `soil_shade`, and the damp patches drift toward `soil_wet`. Nothing is a
+brighter or darker copy of the same brown, and the two clod mixes cancel over an
+area, so the ground's average colour is still `soil_mid`.
+
+Two measurements decided the shape of this term, both from the running page:
+
+- `soilFbm` sums four octaves of 0..1 noise, so its mean is ~0.47 with a swing of
+  about +-0.13. Thresholds written as if it spanned 0..1 (tops above 0.52,
+  hollows below 0.46) fired on the wrong side of the mean: the tops almost never
+  appeared and half the ground darkened at once, which read as one flat brown
+  sheet with no clods at all. The signed deviation from the mean is the shape.
+- Form outlives grit. Under `detailFade` (which fades from 8 m and by pixel
+  footprint) the clods sat at a third of their strength at eye level. They get
+  their own gentler footprint fade and a second, coarser scale (0.75 cycles/m
+  against 1.6), which is visible at 1.4 m and still soft at 7 m.
+
+At noon, clear weather (`dev_set_time` 0.5 paused, `dev_set_weather` clear, both
+through the DEV_ACTION message - as raw `{type: 'dev_set_weather'}` they are
+ignored, which is why an earlier pass thought the clock would not move):
+`palette-ground-form-day.png` from 7 m up, `palette-ground-form-close-noon3.png`
+from 1.4 m. Low-contrast clod relief and damp patches, no cracks, no speckle, no
+dark lines.

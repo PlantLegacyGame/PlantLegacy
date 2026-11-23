@@ -152,14 +152,7 @@ export interface RenderConfig {
   lightningMaxIntensity: number;
   lightningFlashDurationMs: number;
   lightningIntensityBoost: number;
-  soilDryColor: string;
-  soilWetColor: string;
-  soilMineralTint: string;
   soilGrainStrength: number;
-  /** AL-04 dirt: dried fissures darkening the topsoil, 0..1. */
-  soilCrackStrength: number;
-  /** AL-04 dirt: rounded stones in colour and relief, 0..1. */
-  soilPebbleStrength: number;
   soilMineralStrength: number;
   // Root Sight underground backdrop.
   undergroundViewColor: string;
@@ -335,12 +328,6 @@ export interface RootSightConfig {
    * soil intact around the eye and Root Sight shows nothing from down there.
    */
   eyeWindowRadius: number;
-  /** Dug wall, top stratum (`cavity_topsoil_color`). */
-  cavityTopsoilColor: string;
-  /** Dug wall, middle stratum (`cavity_subsoil_color`). */
-  cavitySubsoilColor: string;
-  /** Dug wall, deepest stratum (`cavity_deep_color`). */
-  cavityDeepColor: string;
   /** Fraction of the wall's albedo kept at midnight (`cavity_night_fill`). */
   cavityNightFill: number;
   /** The same at full daylight (`cavity_day_fill`). */
@@ -627,18 +614,8 @@ interface RenderConfigResponse {
   weatherTransitionMs?: number;
   lightning_max_intensity?: number;
   lightningMaxIntensity?: number;
-  soil_dry_color?: string;
-  soilDryColor?: string;
-  soil_wet_color?: string;
-  soilWetColor?: string;
-  soil_mineral_tint?: string;
-  soilMineralTint?: string;
   soil_grain_strength?: number;
   soilGrainStrength?: number;
-  soil_crack_strength?: number;
-  soilCrackStrength?: number;
-  soil_pebble_strength?: number;
-  soilPebbleStrength?: number;
   soil_mineral_strength?: number;
   soilMineralStrength?: number;
   underground_view_color?: string;
@@ -860,12 +837,6 @@ interface RootSightConfigResponse {
   auto_open_on_root_growth?: boolean;
   eye_window_radius_m?: number;
   eyeWindowRadius?: number;
-  cavity_topsoil_color?: string;
-  cavityTopsoilColor?: string;
-  cavity_subsoil_color?: string;
-  cavitySubsoilColor?: string;
-  cavity_deep_color?: string;
-  cavityDeepColor?: string;
   cavity_night_fill?: number;
   cavityNightFill?: number;
   cavity_day_fill?: number;
@@ -1089,22 +1060,8 @@ function normalizeRenderConfig(data: RenderConfigResponse, fallback: RenderConfi
       data.weather_transition_ms ?? data.weatherTransitionMs ?? fallback.weatherTransitionMs,
     lightningMaxIntensity:
       data.lightning_max_intensity ?? data.lightningMaxIntensity ?? fallback.lightningMaxIntensity,
-    soilDryColor: data.soil_dry_color ?? data.soilDryColor ?? fallback.soilDryColor,
-    soilWetColor: data.soil_wet_color ?? data.soilWetColor ?? fallback.soilWetColor,
-    soilMineralTint: data.soil_mineral_tint ?? data.soilMineralTint ?? fallback.soilMineralTint,
     soilGrainStrength:
       data.soil_grain_strength ?? data.soilGrainStrength ?? fallback.soilGrainStrength,
-    soilCrackStrength: Math.max(
-      0,
-      Math.min(1, data.soil_crack_strength ?? data.soilCrackStrength ?? fallback.soilCrackStrength),
-    ),
-    soilPebbleStrength: Math.max(
-      0,
-      Math.min(
-        1,
-        data.soil_pebble_strength ?? data.soilPebbleStrength ?? fallback.soilPebbleStrength,
-      ),
-    ),
     soilMineralStrength:
       data.soil_mineral_strength ?? data.soilMineralStrength ?? fallback.soilMineralStrength,
     undergroundViewColor:
@@ -1338,11 +1295,6 @@ function normalizeRootSightConfig(
     extentToRadius: data.extent_to_radius ?? data.extentToRadius ?? fallback.extentToRadius,
     autoOpenOnRootGrowth: data.auto_open_on_root_growth ?? fallback.autoOpenOnRootGrowth,
     eyeWindowRadius: data.eye_window_radius_m ?? data.eyeWindowRadius ?? fallback.eyeWindowRadius,
-    cavityTopsoilColor:
-      data.cavity_topsoil_color ?? data.cavityTopsoilColor ?? fallback.cavityTopsoilColor,
-    cavitySubsoilColor:
-      data.cavity_subsoil_color ?? data.cavitySubsoilColor ?? fallback.cavitySubsoilColor,
-    cavityDeepColor: data.cavity_deep_color ?? data.cavityDeepColor ?? fallback.cavityDeepColor,
     cavityNightFill: data.cavity_night_fill ?? data.cavityNightFill ?? fallback.cavityNightFill,
     cavityDayFill: data.cavity_day_fill ?? data.cavityDayFill ?? fallback.cavityDayFill,
   };
@@ -1572,12 +1524,7 @@ export async function loadRenderConfig(serverOrigin: string): Promise<RenderConf
     lightningMaxIntensity: 1.0,
     lightningFlashDurationMs: 120,
     lightningIntensityBoost: 4.0,
-    soilDryColor: '#6B5539',
-    soilWetColor: '#2E2418',
-    soilMineralTint: '#5A8FA8',
     soilGrainStrength: 0.02,
-    soilCrackStrength: 0.32,
-    soilPebbleStrength: 0.28,
     soilMineralStrength: 0.05,
     undergroundViewColor: '#241D16',
     growthAimRingScale: 1.6,
@@ -1745,12 +1692,9 @@ export async function loadRootSightConfig(serverOrigin: string): Promise<RootSig
     extentToRadius: 1.6,
     autoOpenOnRootGrowth: true,
     eyeWindowRadius: 1.1,
-    // The dug wall's palette and its sky fill. One set of numbers, in
-    // `cavity/profile.ts`, so the config file, this fallback and the renderer's
-    // own fallback cannot disagree.
-    cavityTopsoilColor: CAVITY_PALETTE.topsoilColor,
-    cavitySubsoilColor: CAVITY_PALETTE.subsoilColor,
-    cavityDeepColor: CAVITY_PALETTE.deepColor,
+    // The dug wall's sky fill. The three strata colours are not here: they are
+    // the palette's soil ramp (`cavityPaletteFromWorld`), so a config file
+    // holding a second set of browns could only drift from them.
     cavityNightFill: CAVITY_PALETTE.nightFill,
     cavityDayFill: CAVITY_PALETTE.dayFill,
   });

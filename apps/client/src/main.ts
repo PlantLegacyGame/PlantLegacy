@@ -5865,9 +5865,6 @@ async function initPlantRenderer(): Promise<void> {
       if (deviceReady && device.getDevice() && device.getContext()) {
         const gpuRenderer = new WebGPURenderer(device, {
           maxPlants: renderConfig.webgpuMaxPlants,
-          soilDryColor: renderConfig.soilDryColor,
-          soilWetColor: renderConfig.soilWetColor,
-          soilMineralColor: renderConfig.soilMineralTint,
           leafSize: config.leafSize,
           leafCountPerNode: config.leafCountPerNode,
           // One owner for a drawn tube's radial detail, shared with the

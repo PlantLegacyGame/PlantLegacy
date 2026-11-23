@@ -248,6 +248,11 @@ export function createGround(
   // The mineral accent darkens a soil rather than tinting it a foreign colour:
   // the old blue made wet ground read as metal fittings scattered in the dirt.
   const soilMineral = worldColour('soil_shade');
+  // The clods' two steps: the lit top of a clod and the hollow between them.
+  // Relief out of palette colours, so a lightened or darkened brown is *soil*
+  // rather than a shaded plane.
+  const soilClodLift = worldColour('soil_lit');
+  const soilHollow = worldColour('soil_shade');
   const material = new THREE.MeshStandardMaterial({
     color: soilDry.clone(),
     roughness: 0.95,
@@ -293,9 +298,9 @@ export function createGround(
     shader.uniforms.uSoilDryColor = { value: soilDry };
     shader.uniforms.uSoilWetColor = { value: soilWet };
     shader.uniforms.uSoilMineralColor = { value: soilMineral };
+    shader.uniforms.uSoilClodLiftColor = { value: soilClodLift };
+    shader.uniforms.uSoilHollowColor = { value: soilHollow };
     shader.uniforms.uSoilGrainStrength = { value: config.soilGrainStrength };
-    shader.uniforms.uSoilCrackStrength = { value: config.soilCrackStrength };
-    shader.uniforms.uSoilPebbleStrength = { value: config.soilPebbleStrength };
     shader.uniforms.uSoilMineralStrength = { value: config.soilMineralStrength };
     shader.uniforms.uSoilMoisture = { value: 0.2 };
     shader.uniforms.uSunDir = { value: new THREE.Vector3(0, 1, 0) };

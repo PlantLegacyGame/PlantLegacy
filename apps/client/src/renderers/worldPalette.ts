@@ -24,6 +24,7 @@ export const WORLD_ROLES = [
   'sunlight',
   'sky_bounce',
   'sky_horizon',
+  'soil_lit',
   'soil_mid',
   'soil_shade',
   'soil_wet',

@@ -13,7 +13,6 @@ const CONFIG = {
   sunColorNight: '#7088A8',
   sunIntensityDay: 1.4,
   undergroundViewColor: '#241d16',
-  soilDryColor: '#6b5539',
 } as unknown as RenderConfig;
 
 describe('createSkyDome', () => {

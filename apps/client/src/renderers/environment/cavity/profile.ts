@@ -233,11 +233,11 @@ export const CAVITY_WALL_BASE_DEPTH = Math.max(0.05, -CAVITY_RIM_WALL_BASE);
 /**
  * The dug wall's palette: three strata and the sky fill that keeps them legible.
  *
- * `config/root_sight.json` is the source of truth; this is the set the renderer
- * falls back to when it is built without a palette, and the set the client's own
- * config defaults start from. Both read it from here, so there is one copy of
- * the numbers instead of a config file, a fallback and a shader that can drift
- * apart.
+ * The live colours are the palette's soil ramp (`cavityPaletteFromWorld` in
+ * `EnvironmentRenderer.ts`), not these: a second set of browns next to
+ * `config/palette.json` could only drift from it. What is left here is the last
+ * resort for a renderer built without a palette (tests, and the client's own
+ * config defaults), plus the two fills, which are light rather than paint.
  */
 export interface CavityPalette {
   /** Dark, root-woven earth at the lip. */

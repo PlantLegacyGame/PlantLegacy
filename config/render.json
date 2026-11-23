@@ -581,21 +581,6 @@
       ],
       "notes": "Peak flash intensity the storm weather state emits."
     },
-    "soil_dry_color": {
-      "type": "color",
-      "value": "#6B5539",
-      "notes": "Terrain soil tint when moisture is low. Warm brown so dry dirt does not read as grey."
-    },
-    "soil_wet_color": {
-      "type": "color",
-      "value": "#2E2418",
-      "notes": "Terrain soil tint when moisture is high or after rain."
-    },
-    "soil_mineral_tint": {
-      "type": "color",
-      "value": "#5A8FA8",
-      "notes": "Subtle mineral accent tone on ground terrain."
-    },
     "soil_grain_strength": {
       "type": "number",
       "value": 0.02,
@@ -961,24 +946,6 @@
         0.5
       ],
       "notes": "Secondary wave of the aim arrow, as a fraction of its length. 0 keeps the preview straight like the real segment."
-    },
-    "soil_crack_strength": {
-      "type": "number",
-      "value": 0,
-      "range": [
-        0,
-        1
-      ],
-      "notes": "AL-04 dirt: how strongly dried fissures darken the soil. Off by default: ridged noise draws dark lines over the ground, which read as scratches across the palette's flat dirt rather than as dry soil. Turn up only when a cracked crust is wanted."
-    },
-    "soil_pebble_strength": {
-      "type": "number",
-      "value": 0,
-      "range": [
-        0,
-        1
-      ],
-      "notes": "AL-04 dirt: small rounded stones mixed into the topsoil, in colour and in the bump normal, so the ground catches light like loose dirt. Off by default: the speckle breaks up the palette's flat dirt, which is the look the soil ramp is for."
     },
     "atmosphere_extinction_r": {
       "type": "number",
