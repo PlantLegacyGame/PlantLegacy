@@ -56,6 +56,8 @@ export const MESSAGE_TYPE = {
   /** Ask the server to pick a world drop up. `{ id }`; the server grants it. */
   DROP_COLLECT: 47,
   REROOT_INTENT: 37,
+  /** Ask for a fresh seed after the old plant died. No payload. */
+  RESPAWN: 49,
   TERRAIN_REGION_REQUEST: 32,
 
   // Server -> Client
@@ -128,6 +130,7 @@ export const CLIENT_TO_SERVER_TYPES: readonly MessageNumber[] = [
   MESSAGE_TYPE.SHOP_PURCHASE,
   MESSAGE_TYPE.DROP_COLLECT,
   MESSAGE_TYPE.REROOT_INTENT,
+  MESSAGE_TYPE.RESPAWN,
   MESSAGE_TYPE.TERRAIN_REGION_REQUEST,
 ];
 

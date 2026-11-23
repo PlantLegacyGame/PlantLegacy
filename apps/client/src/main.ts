@@ -153,7 +153,11 @@ import {
   plantLateralExtent,
   resolveCutawayRadius,
 } from './renderers/rootSight/rootSightCutaway.js';
-import { configureTerrain, getTerrainParams } from './renderers/terrain/terrainState.js';
+import {
+  configureTerrain,
+  getTerrainParams,
+  surfaceNormalAt,
+} from './renderers/terrain/terrainState.js';
 import { WorldDrops } from './renderers/WorldDrops.js';
 import { resolveDrawnNodePosition } from './renderers/webgpu/PlantMeshBuilder.js';
 import { isWebGPUSupported, WebGPUDevice } from './renderers/webgpu/WebGPUDevice.js';
@@ -2152,7 +2156,20 @@ function frameCameraOnPlant(
   // the leftover framing distance would drag the camera back in.
   cancelCameraAutoMove();
   const distance = plantFrameDistance();
-  tempTarget.set(x, y, z);
+  // A framing target may never sit under the visible soil. Relief reaches tens
+  // of metres, so a surface-relative point mapped before the terrain config was
+  // known (a reload's first WELCOME) put the pivot inside the hill and the whole
+  // view under the ground. Root Sight is the one mode that frames a buried
+  // point on purpose, so it is exempt.
+  const rootSightFraming = rootSightMachine
+    ? rootSightStateMachineIsEnabled(rootSightMachine)
+    : false;
+  let targetY = y;
+  if (!rootSightFraming) {
+    const groundY = clientSurfaceY(x, z, 0);
+    if (Number.isFinite(groundY) && targetY < groundY) targetY = groundY;
+  }
+  tempTarget.set(x, targetY, z);
 
   // Shallow side view, not a high orbit. A young plant is only a seed or a
   // seedling, so looking down on it at 40°+ read as a bird's-eye view of a dot;
@@ -3672,6 +3689,8 @@ let deathScreen: DeathScreen | null = null;
 let spectateChip: SpectateChip | null = null;
 /** True while the player stays in the world with no plant after a death. */
 let spectating = false;
+/** A RESPAWN request is in flight; the next WELCOME answers it. */
+let respawnPending = false;
 /** What the title card is told when the player finally leaves: one owner. */
 let lostReason: string | null = null;
 let lostStats: { cause: string; stats: PlantStatsSummary } | null = null;
@@ -7246,8 +7265,61 @@ function handleRerootMovementKey(actionId: string, active: boolean): boolean {
   return true;
 }
 
+/** Show the title's "your plant is gone" card without tearing down the socket. */
+function showPlantLostScreen(): void {
+  entryFlowPlantLost(entryFlow, lostReason, lostStats ?? undefined);
+  entryScreen.render(entryFlow);
+}
+
+/**
+ * Ask for a new seed on the socket we already hold.
+ *
+ * The card's first action used to route through the title screen, which meant
+ * a fresh connection, a fresh world and - on a reload - a camera framed before
+ * the terrain was known. The server answers with a WELCOME for the new plant,
+ * and the welcome handler does the rest: adopt it, reframe, show the HUD again.
+ * If the socket is gone there is nothing to ask, so the title is the fallback.
+ */
+function requestNewSeed(): void {
+  if (respawnPending) return;
+  if (!ws || ws.readyState !== WebSocket.OPEN) {
+    exitDeathUi();
+    showPlantLostScreen();
+    return;
+  }
+  respawnPending = true;
+  ws.send(JSON.stringify({ type: MESSAGE_TYPE.RESPAWN, payload: {} }));
+  contextHint?.show({
+    id: 'respawn',
+    text: 'Planting a new seed...',
+    durationMs: 5000,
+  });
+  // A server that never answers must not leave the player behind a dead card.
+  window.setTimeout(() => {
+    if (!respawnPending) return;
+    respawnPending = false;
+    exitDeathUi();
+    showPlantLostScreen();
+  }, 6000);
+}
+
+/** Close the death card and the spectate chip; the plant they describe is gone. */
+function exitDeathUi(): void {
+  respawnPending = false;
+  spectating = false;
+  deathScreen?.destroy();
+  deathScreen = null;
+  spectateChip?.destroy();
+  spectateChip = null;
+}
+
 /** One reset path for a live death and a missed PLANT_REMOVED. */
-function handleOwnPlantLoss(cause?: string, source?: string): void {
+function handleOwnPlantLoss(
+  cause?: string,
+  source?: string,
+  /** The death record's own numbers, which are newer than the client mirror. */
+  report?: { biomass?: number; nodeCount?: number },
+): void {
   const lostPlantId = plantId;
   if (!lostPlantId) return;
   if (playerPanels?.isOpen) {
@@ -7258,7 +7330,7 @@ function handleOwnPlantLoss(cause?: string, source?: string): void {
   uiShell?.setToastsEnabled(false);
   const deathStats: PlantStatsSummary = {
     healthFraction: plantStructure ? structureFraction(plantStructure) : null,
-    biomass: plantBiomass,
+    biomass: report?.biomass ?? plantBiomass,
     biomassRatePerSecond: smoothedBiomassRate,
     peakBiomass,
     energy: plantEnergy,
@@ -7266,8 +7338,9 @@ function handleOwnPlantLoss(cause?: string, source?: string): void {
     waterCapacity: plantWaterCapacity,
     storedMinerals: plantMinerals,
     mineralCapacity: plantMineralCapacity,
-    nodeCount: Array.from(plantNodes.values()).filter((node) => node.isOwnPlant).length,
-    peakNodeCount,
+    nodeCount:
+      report?.nodeCount ?? Array.from(plantNodes.values()).filter((node) => node.isOwnPlant).length,
+    peakNodeCount: Math.max(peakNodeCount, report?.nodeCount ?? 0),
     mutationCount: plantMutationCount,
     mutationUpkeepPerSecond: plantMutationUpkeep,
     mutationEnergyUpkeepPerSecond: plantMutationEnergyUpkeep,
@@ -7323,10 +7396,6 @@ function handleOwnPlantLoss(cause?: string, source?: string): void {
   // never the whole story the player is given.
   lostReason = reason;
   lostStats = { cause: source ? `${deathCause} · ${source}` : deathCause, stats: deathStats };
-  const leaveToTitle = (): void => {
-    entryFlowPlantLost(entryFlow, lostReason, lostStats ?? undefined);
-    entryScreen.render(entryFlow);
-  };
 
   // A death that was not a removal gets a card in the world, and the first thing
   // it offers is to stay: the player who spent an hour on this plant is allowed to
@@ -7348,16 +7417,12 @@ function handleOwnPlantLoss(cause?: string, source?: string): void {
       {
         mount: uiShell?.getLayer('modal') ?? document.body,
         onSpectate: () => enterSpectate(),
-        onNewSeed: () => {
-          deathScreen?.destroy();
-          deathScreen = null;
-          leaveToTitle();
-        },
+        onNewSeed: () => requestNewSeed(),
       },
     );
     return;
   }
-  leaveToTitle();
+  showPlantLostScreen();
 }
 
 /**
@@ -7368,6 +7433,9 @@ function handleOwnPlantLoss(cause?: string, source?: string): void {
  * the time this runs, so what is left is the place.
  */
 function enterSpectate(): void {
+  // The card's button and its Escape key can both land here; the second one has
+  // nothing left to enter.
+  if (spectating) return;
   deathScreen?.destroy();
   deathScreen = null;
   spectating = true;
@@ -7378,24 +7446,16 @@ function enterSpectate(): void {
   setGrowModeChrome(false);
   hideGrowthSelection();
   spectateChip?.destroy();
+  // The chip's seed button asks the live server, exactly as the card's does.
+  // Routing it through the title closed a healthy socket for no reason.
   spectateChip = createSpectateChip(uiShell?.getLayer('hud') ?? document.body, () =>
-    leaveSpectate(),
+    requestNewSeed(),
   );
   contextHint?.show({
     id: 'spectate',
     text: 'Your plant is gone. The world is still running.',
     durationMs: 6000,
   });
-}
-
-/** The one exit from spectating, shared by the chip and the Escape order. */
-function leaveSpectate(): void {
-  if (!spectating) return;
-  spectating = false;
-  spectateChip?.destroy();
-  spectateChip = null;
-  entryFlowPlantLost(entryFlow, lostReason, lostStats ?? undefined);
-  entryScreen.render(entryFlow);
 }
 
 function hideGrowthSelection(): void {
@@ -8376,6 +8436,9 @@ const worldDrops = new WorldDrops({
   groundY: (x, z) =>
     planetTerrainY(renderConfig?.planetRadiusM ?? 0, x, z, getTerrainParams()) +
     (renderConfig?.cameraGroundTouchM ?? 0.02),
+  // A drop's shadow lies in the ground it sits on: on a slope a flat disc cuts
+  // into the hill on one side and floats over it on the other.
+  groundNormal: (x, z) => surfaceNormalAt(x, z),
   pickDistanceM: () => renderConfig?.dropPickDistanceM ?? 6,
 });
 // Sky-coloured background/fog so the world is never pitched into near-black.
@@ -8797,6 +8860,12 @@ async function handleWelcome(payload: unknown): Promise<void> {
     totalEnergy: message.totalEnergy,
   });
   welcome = message;
+  // A WELCOME on an open socket is how a live respawn arrives, and a reconnect
+  // after a death lands here too: the card and the chip describe a plant that
+  // no longer exists, so they go before the new one is adopted.
+  exitDeathUi();
+  lostReason = null;
+  lostStats = null;
 
   playerId = welcome.playerId;
   plantId = welcome.plantId;
@@ -8879,6 +8948,7 @@ async function handleWelcome(payload: unknown): Promise<void> {
     if (cameraUserMoved) return;
     recenterCamera();
   }, 1200);
+  plantStatusHud?.setVisible(true);
   actionBar?.setVisible(true);
   hotbar?.setVisible(true);
   sporeChip?.setVisible(true);
@@ -9081,7 +9151,9 @@ async function handleWelcome(payload: unknown): Promise<void> {
   }
   plantFirstSeenAtMs = performance.now();
   peakBiomass = welcome.totalBiomass;
-  peakNodeCount = plantNodes.size;
+  // The node set WELCOME carries is this plant's, not whatever the mirror still
+  // held from the plant that just died.
+  peakNodeCount = welcome.nodes?.length ?? 0;
 
   // Clear other players' plants to avoid stale data on reconnect
   otherPlayerPlants.clear();
@@ -10626,7 +10698,13 @@ function handlePlantCreated(payload: unknown): void {
 }
 
 function handlePlantRemoved(payload: unknown): void {
-  const removed = payload as { plantId: string; cause?: string; source?: string };
+  const removed = payload as {
+    plantId: string;
+    cause?: string;
+    source?: string;
+    biomass?: number;
+    nodeCount?: number;
+  };
   console.log('[PlantLegacy] PLANT_REMOVED received:', {
     plantId: removed.plantId,
     isOwnPlant: removed.plantId === plantId,
@@ -10634,7 +10712,10 @@ function handlePlantRemoved(payload: unknown): void {
   if (removed.plantId === plantId) {
     // Failed germination or removal with persistence off. There is no
     // implicit restore: the player reloads to start a fresh seed.
-    handleOwnPlantLoss(removed.cause, removed.source);
+    handleOwnPlantLoss(removed.cause, removed.source, {
+      biomass: removed.biomass,
+      nodeCount: removed.nodeCount,
+    });
     pruneStreamedNodeInterpolation();
     return;
   }
@@ -10870,6 +10951,10 @@ async function connect(): Promise<void> {
       if (welcome && (!cameraFramed || plantChanged)) {
         cameraFramed = true;
         framedPlantId = welcome.plantId;
+        // A new plant is a new subject. A camera the player dragged around the
+        // old hill must not veto the automatic refit for this one, which is how
+        // a respawn could keep the view it had over a plant that had died.
+        cameraUserMoved = false;
         // No nodes in the mirror yet: the fit below is a guess at the start
         // distance, so ask for one refit when the first own node lands.
         refitFramingOnFirstNodes = true;

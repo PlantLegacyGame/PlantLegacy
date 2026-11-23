@@ -797,6 +797,23 @@ Honest list. No feature promises (T42, RULE_13). Updated at every gate.
   seedling four pixels wide in front of a hillside) and a young plant is framed
   from `camera_young_elevation` so the eye is not left 0.24 m off the soil.
 - **Death reporting (2026-11-15):** a loss names what did it. `PlantDeathRecord.killedBy` carries the damage source (`tool`, `weather`, `herbivore`, `terrain`), the store that ran dry (`thirst`, `minerals`, `no_energy`), or `uprooted` for a plant that bled out after being torn free; `PLANT_REMOVED` and the reconnect report forward it as `source`, and the loss screen reads "It was damaged past saving by another player's tool" instead of stopping at "damage". An ungerminated seed is also sheltered from weather damage: the storm's rate is absolute rather than scaled by size, so a one-biomass seed died in its first storm tick (covered by `damagePipeline.test.ts`), and a failed germination no longer destroys the seed (`germination_failure_kills_seed` is false), so a bad spot costs a sprout attempt, not the plant.
+- **A death keeps you in the world (2026-11-23):** the death card's primary
+  action is "Grow a new seed", and it is a request on the socket the player
+  already has (`RESPAWN`, 49): the server creates the plant under the same owner,
+  refuses while a live plant is still owned, broadcasts it to nearby players and
+  answers with a normal `WELCOME`, so no reconnect, world rebuild or identity
+  change happens. The card itself is a 520 px sheet with the death sentence, an
+  ember rule and its own rows - cause, what did it, age, day, biomass and nodes at
+  death, peaks, and mutations only if there were any - fed by the death record's
+  own biomass and node count; it no longer prints the live panel's `Water 0 / 0`
+  or a growth rate from the last second of life. The remains a death leaves in the
+  world are a collapsed husk (root plate, arched dry stalk, curled leaves) resting
+  on the soil and still, not the bone and turntable it used to be, and a drop's
+  contact shadow lies in the ground's own plane instead of a flat disc at one
+  angle. The camera's framing target is floored at the drawn surface, which is
+  what kept a reload's first view under a hill. The card and husk have not been
+  looked at in a browser yet; see
+  [`tasks/bugfix-death-respawn.md`](./tasks/bugfix-death-respawn.md).
 - **HUD pass (ADR-067):** one vitals card (top right) holds biomass, energy,
   light, water and minerals with bars where a capacity exists, the single clock
   ("Season 1 · Day 3 · 11:44", season countdown in the sub-line) and a weather

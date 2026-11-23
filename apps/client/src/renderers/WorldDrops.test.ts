@@ -4,11 +4,15 @@ import * as THREE from 'three';
 
 import { WorldDrops } from './WorldDrops.ts';
 
-function make(groundY: (x: number, z: number) => number = () => 0) {
+function make(
+  groundY: (x: number, z: number) => number = () => 0,
+  groundNormal?: (x: number, z: number) => { x: number; y: number; z: number },
+) {
   const scene = new THREE.Scene();
   const drops = new WorldDrops({
     scene,
     groundY,
+    ...(groundNormal ? { groundNormal } : {}),
     pickDistanceM: () => 6,
   });
   const group = scene.children[0] as THREE.Group;
@@ -82,6 +86,56 @@ describe('world drops', () => {
     const far = new THREE.Raycaster(new THREE.Vector3(1, 20, 2), new THREE.Vector3(0, -1, 0));
     far.far = 40;
     assert.equal(drops.pick(far), null);
+  });
+
+  it('lies a contact shadow in the slope it sits on', () => {
+    const normal = { x: 0.6, y: 0.8, z: 0 };
+    const { drops, group } = make(
+      () => 0,
+      () => normal,
+    );
+    drops.spawn({ id: 'drop_slope', kind: 'dung', x: 0, y: 0, z: 0 });
+    const shadow = group.children[1] as THREE.Mesh;
+    const mapped = new THREE.Vector3(0, 0, 1).applyQuaternion(shadow.quaternion).normalize();
+    assert.ok(
+      mapped.distanceTo(new THREE.Vector3(normal.x, normal.y, normal.z).normalize()) < 1e-6,
+      'the disc plane must be the ground plane',
+    );
+    // Lifted along the normal, not straight up: a flat lift leaves half the
+    // disc buried on one side of a hill.
+    assert.ok(shadow.position.x > 0.005, `shadow sits at x=${shadow.position.x}`);
+  });
+
+  it('turns each shadow with its own ground instead of one fixed angle', () => {
+    const scene = new THREE.Scene();
+    const drops = new WorldDrops({
+      scene,
+      groundY: () => 0,
+      groundNormal: (x) => (x > 0 ? { x: 0.7, y: 0.7, z: 0 } : { x: 0, y: 1, z: 0 }),
+      pickDistanceM: () => 6,
+    });
+    drops.spawn({ id: 'drop_a', kind: 'dung', x: 1, y: 0, z: 0 });
+    drops.spawn({ id: 'drop_b', kind: 'dung', x: -1, y: 0, z: 0 });
+    const shadows = (scene.children[0] as THREE.Group).children.filter(
+      (child) => (child as THREE.Mesh).geometry instanceof THREE.CircleGeometry,
+    ) as THREE.Mesh[];
+    assert.equal(shadows.length, 2);
+    const [first, second] = shadows;
+    assert.ok(first && second, 'both drops drew a shadow');
+    assert.ok(first.quaternion.angleTo(second.quaternion) > 0.1);
+  });
+
+  it('leaves a husk lying where it fell instead of hovering and turning', () => {
+    const { drops, group } = make(() => 0);
+    drops.spawn({ id: 'drop_husk', kind: 'remains', x: 0, y: 0, z: 0 });
+    const root = group.children[0] as THREE.Group;
+    const rest = root.position.y;
+    assert.ok(rest > 0.1 && rest < 0.25, `husk rests ${rest.toFixed(2)} m up`);
+    const heading = root.rotation.y;
+    drops.update(500);
+    drops.update(5_000);
+    assert.equal(root.position.y, rest, 'a corpse must not bob');
+    assert.equal(root.rotation.y, heading, 'a corpse must not spin');
   });
 
   it('fades a drop before it decays and clears it when the server says so', () => {

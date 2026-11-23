@@ -640,6 +640,11 @@ class World {
           plantId: death.id,
           cause: death.cause,
           source: death.killedBy,
+          // The card's numbers come from the death record, not from the
+          // client's last mirror packet: between STATE updates a starving plant
+          // loses biomass, so the mirror can report the previous second's body.
+          biomass: death.totalBiomass,
+          nodeCount: death.nodes.size,
         });
       } catch (e) {
         this.log.error('PLANT_REMOVED broadcast failed', { plantId: death.id, error: String(e) });
@@ -1326,6 +1331,63 @@ class World {
     return { plantId, welcome };
   }
 
+  /**
+   * Give a plantless player a fresh seed on the socket they already hold.
+   *
+   * The death card's "Grow again" used to send the player back to the title,
+   * which closed the socket and rebuilt the whole world around a new join. The
+   * server already knows both halves of the real thing: `addPlayer` starts a
+   * seed, and the dev Regenerate action adopts one mid-session. This is those
+   * two steps without the reconnect, so the camera, the inventory and the
+   * player's identity all stay where they were.
+   *
+   * A player who still owns a live plant is refused. One plant per owner is the
+   * rule the join path enforces (INV-ID-01), and a second seed would leave the
+   * first one unattended and unreclaimable.
+   */
+  respawnPlayerAsSeed(
+    playerId: string,
+  ): { ok: true; plantId: string } | { ok: false; reason: string } {
+    const player = this.players.get(playerId);
+    if (!player) return { ok: false, reason: 'no_player' };
+    if (player.plantId) {
+      const existing = this.plantWorld.getPlant(player.plantId);
+      if (existing) return { ok: false, reason: 'plant_alive' };
+    }
+
+    const spawn = this.findSpawnPosition();
+    // Same owner identity and world as addPlayer, so reclaim, persistence and
+    // the one-plant-per-owner index all still see this plant.
+    const plant = this.plantWorld.createPlant(
+      player.accountId ?? playerId,
+      'world_0',
+      spawn.x,
+      spawn.z,
+    );
+    player.plantId = plant.id;
+    connectionRegistrySetPlant(this.connectionRegistry, playerId, plant.id);
+    this.registerClientAtPlant(playerId, plant);
+    this.lastRootResourceUpdate.delete(playerId);
+
+    const rootNode = plant.rootNodeId ? plant.nodes.get(plant.rootNodeId) : undefined;
+    if (rootNode) this.interestManager.addEntityToCell(plant.id, rootNode.x, rootNode.z);
+    // Everyone who can see the spot sees the seed appear, exactly as on a join.
+    this.broadcastNear(
+      MESSAGE_TYPE.PLANT_CREATED,
+      this.plantCreatedPayload(plant),
+      rootNode?.x ?? spawn.x,
+      rootNode?.z ?? spawn.z,
+      plant.ownerId,
+    );
+    this.send(player.ws, MESSAGE_TYPE.WELCOME, this.buildWelcome(playerId, plant));
+    this.log.info('player respawned as a new seed', {
+      playerId,
+      plantId: plant.id,
+      accountId: player.accountId ?? 'anonymous',
+    });
+    return { ok: true, plantId: plant.id };
+  }
+
   removePlayer(playerId: string): void {
     const leavingPlayer = this.players.get(playerId);
     const disconnectedPlantId = leavingPlayer?.plantId ?? null;
@@ -1911,6 +1973,17 @@ class World {
           };
           if (growthIntent?.intent && typeof growthIntent.intent.tick === 'number') {
             this.handleGrowthIntent(playerId, growthIntent.intent);
+          }
+          break;
+        }
+        case MESSAGE_TYPE.RESPAWN: {
+          const respawner = this.players.get(playerId);
+          const result = this.respawnPlayerAsSeed(playerId);
+          if (!result.ok && respawner) {
+            this.send(respawner.ws, MESSAGE_TYPE.REJECT, {
+              reason: result.reason,
+              originalType: MESSAGE_TYPE.RESPAWN,
+            });
           }
           break;
         }

@@ -27,7 +27,9 @@ Message format:
 carries each mutation's level, level cost and any open card deal in
 `MUTATION_STATE`; v4 adds `SHOP_PURCHASE` (46), `DROP_COLLECT` (47) and the
 server-owned `sporeBalance` in `INVENTORY_SYNC`; v5 adds `LEDGER_ENTRY` (48), one
-line per purse change.
+line per purse change, and `RESPAWN` (49), a client request for a fresh seed on
+the socket it already holds. `RESPAWN` needs no version bump of its own: an older
+client simply never sends it.
 Client sends `HELLO { clientVersion: 5, accessToken?: string, plantId?: string, displayName?: string }` on connect.
 Server rejects with `ERROR { code: "VERSION_MISMATCH", ... }` if mismatch.
 
@@ -56,6 +58,7 @@ Server rejects with `ERROR { code: "VERSION_MISMATCH", ... }` if mismatch.
 | 37 | `REROOT_INTENT` | `{ dirX: number, dirZ: number }` | Steer an uprooted plant's crawl in world XZ; zero stops it. Ignored unless the plant is uprooted (T06) |
 | 45 | `MUTATION_LEVEL` | `{ plantId: string, mutationId: string, cardId?: string }` | Client raises a held mutation. Without `cardId` the server deals that mutation's cards; with one it takes that card, spends the stored resources and applies the level. A card the server did not deal is refused (T04) |
 | 46 | `SHOP_PURCHASE` | `{ itemId: string }` | Client asks to buy one shop item with spores. The price, the balance check and the inventory grant are the server's; the client only names the item. The reply is `INVENTORY_SYNC` (with the new balance) or `REJECT` |
+| 49 | `RESPAWN` | `{}` | Ask for a fresh seed after the plant died, without reconnecting. The server refuses while the player still owns a live plant (`REJECT { reason: 'plant_alive' }`) and otherwise creates one at a free spawn, registers the socket at it, broadcasts `PLANT_CREATED` to nearby players and answers with a normal `WELCOME` |
 | 47 | `DROP_COLLECT` | `{ id: string }` | Client asks to pick up a drop it was shown. The server owns the drop, its expiry and the reward: dung and fragments pay spores, the drop is removed, and `DROP_EXPIRED` tells every client that holds it. An id the server does not know is ignored, so a stale marker cannot mint a reward |
 
 ### Server → Client
@@ -72,7 +75,7 @@ Server rejects with `ERROR { code: "VERSION_MISMATCH", ... }` if mismatch.
 | 17 | `RESOURCE_UPDATE` | `ResourceUpdatePayload` | Local resource tile update (player's tile only) |
 | 18 | `PLANT_SYNC` | `PlantSyncPayload` | Full plant state for reclaim/desync recovery |
 | 19 | `PLANT_CREATED` | `{ plantId: string, ownerId: string, rootNode: ... }` | New plant in world |
-| 20 | `PLANT_REMOVED` | `{ plantId: string, cause?: string }` | Plant removed (death, reconnect expiry or administrative removal). `cause` is optional so an older server's removal still validates; the client uses it to name the loss |
+| 20 | `PLANT_REMOVED` | `{ plantId: string, cause?: string, source?: string, biomass?: number, nodeCount?: number }` | Plant removed (death, reconnect expiry or administrative removal). `cause` and `source` are optional so an older server's removal still validates; the client uses them to name the loss. `biomass` and `nodeCount` come from the death record rather than the client's last mirror packet, so the death card reports what actually died |
 | 21 | `WEATHER_UPDATE` | `WeatherUpdatePayload` | Weather/day-night state, including the world clock's `timePaused`/`timeScale` so every client and dev panel shows the server's clock mode |
 | 22 | `GROWTH_OPTIONS_RESULT` | `GrowthOptionsResultPayload` | Legal options, costs and plain reasons for a node |
 | 23 | `CHAT_BROADCAST` | `ChatBroadcastPayload` | Chat or emote from another player |

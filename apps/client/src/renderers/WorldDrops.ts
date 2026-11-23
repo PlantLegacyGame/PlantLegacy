@@ -36,6 +36,12 @@ export interface WorldDropsOptions {
   scene: THREE.Scene;
   /** Height of the soil at a world position; the drop's own y is relative to it. */
   groundY: (x: number, z: number) => number;
+  /**
+   * Unit surface normal at a world position. A contact shadow lies in the ground
+   * it sits on; a flat disc on a slope cuts into the hill on one side and floats
+   * over it on the other, which is what every shadow in the world looked like.
+   */
+  groundNormal?: (x: number, z: number) => { x: number; y: number; z: number };
   /** How far the pointer may reach to pick a drop up, metres. A getter, because
    * the render config is loaded after the scene is built. */
   pickDistanceM: () => number;
@@ -52,12 +58,22 @@ const COLOUR: Record<WorldDropKind, number> = {
 /** Roughly the half-height of each model, so it rests on its anchor point. */
 const SIZE: Record<WorldDropKind, number> = {
   dung: 0.085,
-  remains: 0.085,
+  // A collapsed husk is wider and flatter than a bead, so it needs more room in
+  // its own shadow and less in the air.
+  remains: 0.13,
   fragment: 0.125,
 };
 
 /** Height above the anchor when the drop is at rest, metres. */
 const HOVER_M = 0.26;
+/**
+ * A corpse does not hover. Remains rest a few centimetres off the soil - enough
+ * that the ground does not z-fight through the husk - instead of bobbing a
+ * quarter of a metre up like something waiting to be collected.
+ */
+const REST_HOVER_M = 0.03;
+/** The contact disc is a CircleGeometry in its local XY plane: its normal is +Z. */
+const CIRCLE_NORMAL = new THREE.Vector3(0, 0, 1);
 
 /** How far it bobs off its rest height, metres. Never larger than HOVER_M. */
 const BOB_M = 0.04;
@@ -74,6 +90,9 @@ interface Marker {
   shadow: THREE.Mesh | null;
   restY: number;
   expiresAtMs: number | null;
+  kind: WorldDropKind;
+  /** Fixed heading for a remains marker: it must not turn like a collectable. */
+  spinRad: number;
   phase: number;
   materials: THREE.Material[];
 }
@@ -122,11 +141,30 @@ function modelMaterial(colour: number, emissive: number): THREE.MeshStandardMate
   });
 }
 
+/** A stable 0..1 from an id, so a drop's lean and shadow survive a re-spawn. */
+function hashUnit(text: string): number {
+  let hash = 2166136261;
+  for (let i = 0; i < text.length; i += 1) {
+    hash ^= text.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0) / 0xffffffff;
+}
+
+/** A usable unit ground normal, defaulting to flat ground. */
+function unitNormal(value: { x: number; y: number; z: number } | undefined): THREE.Vector3 {
+  const normal = new THREE.Vector3(value?.x ?? 0, value?.y ?? 1, value?.z ?? 0);
+  const finite =
+    Number.isFinite(normal.x) && Number.isFinite(normal.y) && Number.isFinite(normal.z);
+  if (!finite || normal.lengthSq() < 1e-9) return new THREE.Vector3(0, 1, 0);
+  return normal.normalize();
+}
+
 /**
  * The three shapes.
  *
  * Each one is a small group of primitives rather than a sphere with a colour: at
- * this size the silhouette is all the player sees, so a heap, a shard and a bone
+ * this size the silhouette is all the player sees, so a heap, a shard and a husk
  * have to be different outlines and not just different tints.
  */
 function buildModel(kind: WorldDropKind): { model: THREE.Group; materials: THREE.Material[] } {
@@ -178,26 +216,54 @@ function buildModel(kind: WorldDropKind): { model: THREE.Group; materials: THREE
     facet.rotation.set(0.18, 0.5, 0.22);
     add(facet);
   } else {
-    // A bone: a tapered shaft with two knobbed ends.
-    const bone = new THREE.Group();
-    const shaft = new THREE.Mesh(
-      new THREE.CapsuleGeometry(0.026, 0.11, 4, 8),
-      modelMaterial(COLOUR.remains, 0x4a3d2a),
-    );
-    shaft.rotation.z = Math.PI / 2;
-    bone.add(shaft);
-    for (const side of [-1, 1]) {
-      const knob = new THREE.Mesh(
-        new THREE.SphereGeometry(0.034, 8, 6),
-        modelMaterial(COLOUR.remains, 0x4a3d2a),
-      );
-      knob.position.x = side * 0.075;
-      bone.add(knob);
+    // A collapsed husk, not a bone. A plant that dies leaves the plant it was: a
+    // dry stalk that fell over, two curled leaves, and the torn plate its root
+    // came away from. The bone this used to draw read as an animal skeleton in
+    // a game where the player is the plant.
+    const husk = new THREE.Group();
+    const dry = modelMaterial(COLOUR.remains, 0x3f3420);
+    const dryLeaf = modelMaterial(0xc9b387, 0x4a3d22);
+    materials.push(dry, dryLeaf);
+
+    const plate = new THREE.Mesh(new THREE.CylinderGeometry(0.036, 0.046, 0.012, 8), dry);
+    plate.position.y = 0.006;
+    husk.add(plate);
+
+    // Three short joints arched over, so the stalk reads as fallen rather than
+    // as a stick standing in the dirt. Each joint is a group whose own origin
+    // is the tip of the one before it.
+    let attach = new THREE.Vector3(0, 0.012, 0);
+    let yaw = 0;
+    for (const [length, bend] of [
+      [0.075, 0.5],
+      [0.065, 0.85],
+      [0.05, 1.15],
+    ] as const) {
+      const joint = new THREE.Group();
+      joint.position.copy(attach);
+      joint.rotation.set(0, yaw, -bend);
+      const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.011, 0.014, length, 6), dry);
+      shaft.position.y = length / 2;
+      joint.add(shaft);
+      husk.add(joint);
+      attach = attach.clone().add(new THREE.Vector3(0, length, 0).applyEuler(joint.rotation));
+      yaw += 0.62;
     }
-    bone.rotation.z = 0.35;
-    model.add(bone);
-    for (const child of bone.children)
-      materials.push((child as THREE.Mesh).material as THREE.Material);
+
+    // Two leaves that dried where they hung and curled down past the tip.
+    for (const [turn, tilt] of [
+      [0.4, 0.95],
+      [2.5, 0.75],
+    ] as const) {
+      const leaf = new THREE.Mesh(new THREE.SphereGeometry(1, 8, 6), dryLeaf);
+      leaf.scale.set(0.052, 0.009, 0.026);
+      leaf.position.copy(attach);
+      leaf.rotation.set(0, turn, -tilt);
+      husk.add(leaf);
+    }
+
+    husk.rotation.set(0, 0.7, 0.12);
+    model.add(husk);
   }
 
   return { model, materials };
@@ -223,15 +289,23 @@ export class WorldDrops {
     const root = new THREE.Group();
     root.name = `drop-${drop.id}`;
     root.add(model);
+    // Stable per-drop heading, so a re-spawned marker keeps its lean and its
+    // shadow's turn rather than looking freshly randomised every time.
+    const spinRad = hashUnit(drop.id) * Math.PI * 2;
 
     // The soil line under the drop, then the drop's own height from it. This is
     // the whole "no resurfacing" rule: nothing here ever clips to the surface.
     const surfaceY = this.options.groundY(drop.x, drop.z);
-    const restY = surfaceY + drop.y + SIZE[kind] + HOVER_M;
+    const hover = kind === 'remains' ? REST_HOVER_M : HOVER_M;
+    const restY = surfaceY + drop.y + SIZE[kind] + hover;
     root.position.set(drop.x, restY, drop.z);
+    // Its heading is set before the first frame, so a husk never appears facing
+    // one way and then turns on the next update.
+    root.rotation.y = spinRad;
 
     let shadow: THREE.Mesh | null = null;
     if (drop.y > -0.05) {
+      const normal = unitNormal(this.options.groundNormal?.(drop.x, drop.z));
       shadow = new THREE.Mesh(
         this.shadowGeometry,
         new THREE.MeshBasicMaterial({
@@ -241,10 +315,15 @@ export class WorldDrops {
           depthWrite: false,
         }),
       );
-      // Flat on the ground, just above it, so it cannot z-fight with the soil.
-      shadow.rotation.x = -Math.PI / 2;
-      shadow.scale.setScalar(SIZE[kind] * 1.7);
-      shadow.position.set(drop.x, surfaceY + 0.02, drop.z);
+      // Lie in the ground plane. The disc's normal is +Z, so mapping it onto the
+      // surface normal tilts the shadow with the slope instead of through it.
+      shadow.quaternion.setFromUnitVectors(CIRCLE_NORMAL, normal);
+      // Turned inside that plane and stretched along one axis, so a field of
+      // drops does not read as the same rubber stamp under every one.
+      shadow.quaternion.multiply(new THREE.Quaternion().setFromAxisAngle(CIRCLE_NORMAL, spinRad));
+      shadow.scale.set(SIZE[kind] * 1.7 * (1 + hashUnit(drop.id) * 0.12), SIZE[kind] * 1.45, 1);
+      // A whisker along the normal keeps it off the soil without a squat lift.
+      shadow.position.set(drop.x, surfaceY, drop.z).addScaledVector(normal, 0.02);
     }
 
     root.userData.dropId = drop.id;
@@ -263,6 +342,8 @@ export class WorldDrops {
       model,
       shadow,
       restY,
+      kind,
+      spinRad,
       expiresAtMs: typeof drop.expiresAtMs === 'number' ? drop.expiresAtMs : null,
       phase: (this.markers.size * 1.7) % (Math.PI * 2),
       materials,
@@ -293,11 +374,20 @@ export class WorldDrops {
   update(nowMs: number): void {
     for (const marker of this.markers.values()) {
       const t = nowMs / 1000 + marker.phase;
-      marker.root.position.y = marker.restY + Math.sin(t * 1.5) * BOB_M;
-      marker.root.rotation.y = t * SPIN_RAD_PER_S;
-      // A slow tilt off both axes: a model that only spins reads as a turntable.
-      marker.model.rotation.z = Math.sin(t * 0.63) * 0.07;
-      marker.model.rotation.x = Math.cos(t * 0.51) * 0.05;
+      if (marker.kind === 'remains') {
+        // A dead plant does not hover or turn on a turntable. It lies where it
+        // fell, with only the faintest settle as the air moves over it.
+        marker.root.position.y = marker.restY;
+        marker.root.rotation.y = marker.spinRad;
+        marker.model.rotation.z = Math.sin(t * 0.31) * 0.012;
+        marker.model.rotation.x = Math.sin(t * 0.23) * 0.008;
+      } else {
+        marker.root.position.y = marker.restY + Math.sin(t * 1.5) * BOB_M;
+        marker.root.rotation.y = t * SPIN_RAD_PER_S;
+        // A slow tilt off both axes: a model that only spins reads as a turntable.
+        marker.model.rotation.z = Math.sin(t * 0.63) * 0.07;
+        marker.model.rotation.x = Math.cos(t * 0.51) * 0.05;
+      }
 
       const left = marker.expiresAtMs === null ? Infinity : marker.expiresAtMs - nowMs;
       const fade = left >= FADE_WINDOW_MS ? 1 : Math.max(0, left / FADE_WINDOW_MS);

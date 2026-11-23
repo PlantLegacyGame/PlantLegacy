@@ -28,11 +28,11 @@ export interface PlantStatsSummary {
 
 export type StatRow = [label: string, value: string];
 
-function count(value: number): string {
+export function formatCount(value: number): string {
   return Number.isFinite(value) ? Math.round(value).toLocaleString('en-US') : '0';
 }
 
-function decimal(value: number, digits = 1): string {
+export function formatDecimal(value: number, digits = 1): string {
   return Number.isFinite(value) ? value.toFixed(digits) : '0';
 }
 
@@ -42,7 +42,7 @@ function decimal(value: number, digits = 1): string {
  * "0.0 B/s", so the death screen blamed a cost it showed as nothing. Small
  * nonzero rates keep their significant digits.
  */
-function rate(value: number): string {
+export function formatRate(value: number): string {
   if (!Number.isFinite(value) || value === 0) return '0.0';
   return Math.abs(value) < 0.1 ? value.toFixed(3) : value.toFixed(1);
 }
@@ -54,26 +54,29 @@ export function plantStatRows(stats: PlantStatsSummary): StatRow[] {
       'Health',
       stats.healthFraction === null ? 'Unknown' : `${Math.round(stats.healthFraction * 100)}%`,
     ],
-    ['Biomass', decimal(stats.biomass)],
+    ['Biomass', formatDecimal(stats.biomass)],
     [
       'Growth rate',
       stats.biomassRatePerSecond === null
         ? 'Unknown'
-        : `${stats.biomassRatePerSecond >= 0 ? '+' : ''}${decimal(stats.biomassRatePerSecond)}/s`,
+        : `${stats.biomassRatePerSecond >= 0 ? '+' : ''}${formatDecimal(stats.biomassRatePerSecond)}/s`,
     ],
-    ['Peak biomass', decimal(stats.peakBiomass)],
-    ['Energy', decimal(stats.energy)],
-    ['Water', `${decimal(stats.storedWater)} / ${decimal(stats.waterCapacity, 0)}`],
-    ['Minerals', `${decimal(stats.storedMinerals)} / ${decimal(stats.mineralCapacity, 0)}`],
-    ['Growth nodes', count(stats.nodeCount)],
-    ['Peak nodes', count(stats.peakNodeCount)],
-    ['Mutations', count(stats.mutationCount)],
+    ['Peak biomass', formatDecimal(stats.peakBiomass)],
+    ['Energy', formatDecimal(stats.energy)],
+    ['Water', `${formatDecimal(stats.storedWater)} / ${formatDecimal(stats.waterCapacity, 0)}`],
+    [
+      'Minerals',
+      `${formatDecimal(stats.storedMinerals)} / ${formatDecimal(stats.mineralCapacity, 0)}`,
+    ],
+    ['Growth nodes', formatCount(stats.nodeCount)],
+    ['Peak nodes', formatCount(stats.peakNodeCount)],
+    ['Mutations', formatCount(stats.mutationCount)],
     [
       'Mutation upkeep',
-      `${rate(stats.mutationEnergyUpkeepPerSecond ?? stats.mutationUpkeepPerSecond)} E/s \u00B7 ${rate(stats.mutationBiomassUpkeepPerSecond ?? 0)} B/s`,
+      `${formatRate(stats.mutationEnergyUpkeepPerSecond ?? stats.mutationUpkeepPerSecond)} E/s \u00B7 ${formatRate(stats.mutationBiomassUpkeepPerSecond ?? 0)} B/s`,
     ],
     ['Age', formatAge(stats.ageSeconds)],
-    ['Game day', `${count(stats.dayNumber)} \u00B7 ${stats.clock}`],
+    ['Game day', `${formatCount(stats.dayNumber)} \u00B7 ${stats.clock}`],
   ];
 }
 

@@ -477,6 +477,10 @@ export const MESSAGE_SCHEMAS: Record<number, Record<string, FieldRule>> = {
     // What did it, when the cause is too coarse: 'tool', 'weather', 'uprooted',
     // 'thirst', 'minerals', 'no_energy'. Optional for the same reason.
     source: { type: 'string' },
+    // The death record's own numbers, so the card reports what actually died
+    // rather than the client's last mirror packet.
+    biomass: { type: 'number' },
+    nodeCount: { type: 'integer' },
   },
   31: {
     // SEASON_UPDATE
@@ -602,5 +606,8 @@ export const MESSAGE_SCHEMAS: Record<number, Record<string, FieldRule>> = {
   47: {
     // DROP_COLLECT (client -> server)
     id: { type: 'string', required: true },
+  },
+  49: {
+    // RESPAWN (client -> server): nothing to say. The server picks the spot.
   },
 };
