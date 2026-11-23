@@ -12,11 +12,14 @@ describe('the terrain volume params', () => {
   it('reads the shipped file, not a fallback table', () => {
     const params = loadTerrainVolumeParams(loaded.configs);
     assert.equal(params.enabled, true);
-    assert.equal(params.spanM, 10);
-    assert.equal(params.riseM, 3);
-    assert.equal(params.voxelM, 0.3);
+    assert.equal(params.centreXM, 21);
+    assert.equal(params.centreZM, -11);
+    assert.equal(params.bearingDeg, 63);
+    assert.equal(params.spanM, 9);
+    assert.equal(params.riseM, 2.8);
+    assert.equal(params.voxelM, 0.28);
     assert.equal(params.seed, 20261123);
-    assert.equal(params.strataBandM, 0.55);
+    assert.equal(params.strataBandM, 0.45);
   });
 
   it('throws on a missing key instead of inventing one', () => {

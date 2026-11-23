@@ -57,18 +57,18 @@ export interface TerrainVolumeParams {
  */
 export const DEFAULT_TERRAIN_VOLUME: TerrainVolumeParams = {
   enabled: true,
-  centreXM: 11,
-  centreZM: 8,
-  voxelM: 0.3,
+  centreXM: 21,
+  centreZM: -11,
+  voxelM: 0.28,
   marginM: 1.2,
-  legDepthM: 1.4,
+  legDepthM: 2.6,
   seed: 20261123,
-  spanM: 10,
-  riseM: 3,
-  thicknessM: 1.3,
-  widthM: 2.6,
-  bearingDeg: 38,
-  strataBandM: 0.55,
+  spanM: 9,
+  riseM: 2.8,
+  thicknessM: 1.05,
+  widthM: 2.4,
+  bearingDeg: 63,
+  strataBandM: 0.45,
 };
 
 /** Ground height at a pole-local (x, z), from the shared terrain field. */
@@ -146,18 +146,73 @@ export function archSdf(
   const ringDistance = gradient > 1e-6 ? (q - 1) / gradient : -Math.min(a, b) * (1 - Math.sqrt(q));
 
   const angle = Math.atan2(v / b, u / a);
+  // Height through the opening, 0 at the feet and 1 at the crown. Both bands
+  // taper with it: a rock arch is thickest where it carries the most and thin at
+  // the crown. A constant section read as an extruded pipe (first visual pass,
+  // 2026-11-23), and the flat top it produced looked like a road.
+  const height = Math.min(1, Math.max(0, v / b));
   const wobble =
     1 +
     0.16 * Math.sin(angle * 3 + params.seed * 0.00037) +
-    0.08 * Math.sin(angle * 7 + params.seed * 0.00011);
-  const halfThickness = Math.max(0.05, (params.thicknessM * wobble) / 2);
-  const rock = Math.abs(ringDistance) - halfThickness;
+    0.08 * Math.sin(angle * 7 + params.seed * 0.00011) +
+    // A third, faster term in height as well as angle: beds and fractures, not
+    // a smooth sweep. Small enough that the field stays well behaved at 0.28 m.
+    0.05 * Math.sin(angle * 13 + height * 2.4 + params.seed * 0.0007);
+  const taper = 1 - 0.28 * height;
+  const halfThickness = Math.max(0.05, (params.thicknessM * wobble * taper) / 2);
+  // Six centimetres of field noise, at about a metre's wavelength. Without it
+  // the surface is a swept band: mathematically right, and in the first visual
+  // pass it read as moulded clay. On the *ring distance* the noise moves the
+  // surface along its normal, so it dents and bulges the rock rather than
+  // wobbling the whole body; 6 cm against a 28 cm voxel keeps the field sane.
+  const grain =
+    rockNoise(u * 1.3, v * 1.3, w * 1.3, params.seed) * 0.06 +
+    rockNoise(u * 3.4, v * 3.4, w * 3.4, params.seed + 7919) * 0.012;
+  const rock = Math.abs(ringDistance + grain) - halfThickness;
 
-  const across = Math.abs(w) - params.widthM / 2;
+  // The sides are not flat planes: a slow wobble in depth, so the arch seen
+  // end-on is a rock bridge with a weathered side rather than an extruded
+  // plank (which is what 2.4 m of perfectly flat width looked like at noon).
+  const across = Math.abs(w) - (params.widthM / 2) * (1 - 0.22 * height);
   // The foot cut follows the drawn ground, so it stays under the soil on a slope.
   const aboveFooting = ground(x, z) - params.legDepthM - y;
 
   return Math.max(rock, across, aboveFooting);
+}
+
+/**
+ * Deterministic value noise in [-1, 1], for the rock's grain.
+ *
+ * `Math.imul` keeps the hash exact and engine-independent; a plain `x * prime`
+ * overflows a double and rounds differently on different machines, which would
+ * make the rock a different rock in the client and the tests.
+ */
+function rockNoise(x: number, y: number, z: number, seed: number): number {
+  const hash = (ix: number, iy: number, iz: number): number => {
+    let h =
+      Math.imul(ix, 374761393) +
+      Math.imul(iy, 668265263) +
+      Math.imul(iz, 1442695041) +
+      Math.imul(seed, 2246822519);
+    h = Math.imul(h ^ (h >>> 13), 1274126177);
+    h ^= h >>> 16;
+    return ((h >>> 0) / 4294967296) * 2 - 1;
+  };
+  const xi = Math.floor(x);
+  const yi = Math.floor(y);
+  const zi = Math.floor(z);
+  const fx = x - xi;
+  const fy = y - yi;
+  const fz = z - zi;
+  const ux = fx * fx * (3 - 2 * fx);
+  const uy = fy * fy * (3 - 2 * fy);
+  const uz = fz * fz * (3 - 2 * fz);
+  const mix = (a: number, b: number, t: number): number => a + (b - a) * t;
+  const x00 = mix(hash(xi, yi, zi), hash(xi + 1, yi, zi), ux);
+  const x10 = mix(hash(xi, yi + 1, zi), hash(xi + 1, yi + 1, zi), ux);
+  const x01 = mix(hash(xi, yi, zi + 1), hash(xi + 1, yi, zi + 1), ux);
+  const x11 = mix(hash(xi, yi + 1, zi + 1), hash(xi + 1, yi + 1, zi + 1), ux);
+  return mix(mix(x00, x10, uy), mix(x01, x11, uy), uz);
 }
 
 /** The region's sample bounds, with enough air on every side to close the mesh. */

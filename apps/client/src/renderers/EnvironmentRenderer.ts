@@ -402,10 +402,21 @@ export class EnvironmentRenderer {
       //     so the body has an underside and an overhang instead of one skin.
       //     Seated on the drawn surface, not the bare sphere.
       if (tuning.volume) {
+        // Rock is earth, not the mineral *accent* the soil shader sprinkles on
+        // the ground: painting the arch with `soil_mineral_tint` made it a teal
+        // slab in the first visual pass. It takes the dry soil colour pulled a
+        // third of the way to the wet one, so it sits in the same earth family
+        // as the hillside, darker where it has not dried out.
+        const rockColour = new THREE.Color(config.soilDryColor)
+          .lerp(new THREE.Color(config.soilWetColor), 0.25)
+          // A trace of the mineral accent, not all of it: 6% cools the brown
+          // towards stone where the first pass's 100% was a teal slab, and 15%
+          // still read as concrete at noon.
+          .lerp(new THREE.Color(config.soilMineralTint), 0.06);
         this.terrainVolume = createTerrainVolumeMesh(
           tuning.volume,
           (x, z) => planetTerrainY(config.planetRadiusM, x, z, getTerrainParams()),
-          new THREE.Color(config.soilMineralTint),
+          rockColour,
         );
         if (this.terrainVolume) scene.add(this.terrainVolume);
       }

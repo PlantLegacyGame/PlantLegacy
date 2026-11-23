@@ -17,10 +17,10 @@ import * as THREE from 'three';
 /**
  * Build the region's mesh, or `null` when the region is disabled or empty.
  *
- * `rock` is the palette's mineral tint, the same role the soil shader uses for
- * its mineral grains. The three shades below are that one colour at three
- * brightnesses - a bed's compacted base, its body and its lighter top - so the
- * arch still answers to the palette and cannot introduce a colour of its own.
+ * `rock` is the soil palette's dry and wet earth, mixed by the caller. The two
+ * shades below are that one colour at two brightnesses - a bed's compacted base
+ * and its lighter top - so the arch still answers to the palette and cannot
+ * introduce a colour of its own.
  */
 export function createTerrainVolumeMesh(
   params: TerrainVolumeParams | undefined,
@@ -36,8 +36,12 @@ export function createTerrainVolumeMesh(
   geometry.setAttribute('normal', new THREE.BufferAttribute(mesh.normals, 3));
   geometry.setIndex(new THREE.BufferAttribute(mesh.indices, 1));
 
-  const base = rock.clone().multiplyScalar(0.72);
-  const light = rock.clone().multiplyScalar(1.18);
+  // A stone's beds differ in value, not in brightness: the dark base and light
+  // top span 0.8..1.2 of the albedo. The first pass's 0.72..1.18 multiplied a
+  // dark blend until the rock was near-black on its shaded side; 0.88..1.12
+  // then hid the beds entirely at noon.
+  const base = rock.clone().multiplyScalar(0.8);
+  const light = rock.clone().multiplyScalar(1.2);
   const colours = new Float32Array(mesh.vertices * 3);
   const shade = new THREE.Color();
   for (let v = 0; v < mesh.vertices; v += 1) {

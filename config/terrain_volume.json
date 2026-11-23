@@ -15,21 +15,21 @@
     },
     "centre_x_m": {
       "type": "number",
-      "value": 11.0,
+      "value": 21.0,
       "range": [-600, 600],
-      "notes": "Centre of the authored region, in the same pole-local metres the terrain field uses."
+      "notes": "Centre of the authored region, in the same pole-local metres the terrain field uses. Chosen for 1.3 m of ground relief across the arch's footprint (the first site had 2.8 m and buried its uphill leg) and a base that stands clear of every crest between it and spawn."
     },
     "centre_z_m": {
       "type": "number",
-      "value": 8.0,
+      "value": -11.0,
       "range": [-600, 600],
       "notes": "Centre of the authored region, across the play area."
     },
     "voxel_size_m": {
       "type": "number",
-      "value": 0.3,
+      "value": 0.28,
       "range": [0.1, 1],
-      "notes": "Grid step the signed-distance field is sampled on. Smaller finds finer rock and costs more samples."
+      "notes": "Grid step the signed-distance field is sampled on. Smaller finds finer rock and costs more samples; 0.28 m keeps the arch's 1.05 m band four cells thick."
     },
     "margin_m": {
       "type": "number",
@@ -39,9 +39,9 @@
     },
     "leg_depth_m": {
       "type": "number",
-      "value": 1.4,
+      "value": 2.6,
       "range": [0.2, 8],
-      "notes": "How far below the drawn ground the arch's legs continue before they are cut off, so each foot disappears into the soil instead of ending on it."
+      "notes": "How far below the drawn ground the arch's legs continue before they are cut off. The first visual pass at 1.4 m left the cut face standing proud of the falling ground on a crest; 2.6 m keeps it under the soil from every side the player can reach."
     },
     "seed": {
       "type": "integer",
@@ -51,37 +51,37 @@
     },
     "span_m": {
       "type": "number",
-      "value": 10.0,
+      "value": 9.0,
       "range": [2, 40],
       "notes": "Width of the arch's opening, measured between the two feet at ground level."
     },
     "rise_m": {
       "type": "number",
-      "value": 3.0,
+      "value": 2.8,
       "range": [0.6, 20],
       "notes": "Height of the arch's crown above its footing."
     },
     "thickness_m": {
       "type": "number",
-      "value": 1.3,
+      "value": 1.05,
       "range": [0.3, 8],
-      "notes": "Thickness of the rock band. It is real thickness: the underside is a surface of its own."
+      "notes": "Thickness of the rock band at its base, tapering to 72% of this at the crown. It is real thickness: the underside is a surface of its own."
     },
     "width_m": {
       "type": "number",
-      "value": 2.6,
+      "value": 2.4,
       "range": [0.4, 20],
-      "notes": "Depth of the arch across its span - how wide the rock bridge is to walk under."
+      "notes": "Depth of the arch across its span at its base, narrowing to 78% at the crown - how wide the rock bridge is to walk under."
     },
     "bearing_deg": {
       "type": "number",
-      "value": 38.0,
+      "value": 63.0,
       "range": [-180, 180],
-      "notes": "Direction the span runs, in degrees from +x towards +z."
+      "notes": "Direction the span runs, in degrees from +x towards +z. Chosen so the opening faces the spawn plant."
     },
     "strata_band_m": {
       "type": "number",
-      "value": 0.55,
+      "value": 0.45,
       "range": [0.1, 4],
       "notes": "Vertical spacing of the rock's beds. Each vertex's bed fraction is the material the mesher carries into the renderer."
     }

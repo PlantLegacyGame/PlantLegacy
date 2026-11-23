@@ -88,7 +88,7 @@ when each task starts.
 |---|---|---|---|
 | T54 | Reactive Fauna | `[ ]` approved (not started) | [DESIGN.md Part 11](../../DESIGN.md) |
 | T55 | Material Simulation | `[ ]` approved (not started) | [DESIGN.md Part 11](../../DESIGN.md) |
-| T56 | Volumetric Terrain | `[~]` **Partial, 2026-11-23:** one authored region is real 3D volume — a signed-distance field meshed by surface nets (2 078 vertices, welded, gradient normals), with an underside, an arch, deterministic strata and a config-owned field. Chunking, per-voxel materials, collision, persistence, LOD, streaming and the Root Sight interior are not built | [T56.md](./T56.md) |
+| T56 | Volumetric Terrain | `[~]` **Partial, 2026-11-23:** one authored region is real 3D volume — a signed-distance field meshed by surface nets (2 386 vertices, welded, gradient normals), with an underside, an arch, deterministic strata and a config-owned field. Shot from four angles in the live world on 2026-11-23; placed at (21, −11) for 1.28 m of footprint relief. Chunking, per-voxel materials, collision, persistence, LOD, streaming and the Root Sight interior are not built | [T56.md](./T56.md) |
 | C10 | Volumetric Terrain and Material Rendering | `[ ]` approved (not started) | [DESIGN.md Part 11](../../DESIGN.md) |
 | T57 | Parametric Terrain Features | `[ ]` approved (not started) | [DESIGN.md Part 11](../../DESIGN.md) |
 | T58 | World Object Streaming and Behaviour | `[ ]` approved (not started) | [DESIGN.md Part 11](../../DESIGN.md) |
