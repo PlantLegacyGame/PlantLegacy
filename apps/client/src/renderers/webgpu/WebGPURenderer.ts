@@ -511,10 +511,14 @@ export class WebGPURenderer {
   }
 
   private writeSoilPalette(): void {
-    // The ground's colours are the palette's soil ramp. This renderer used to
-    // carry its own copies of `config/render.json`'s soil hexes, so once the
-    // ground was painted from the palette the WebGPU path would have kept the
-    // old brown; `#rrggbb` is what `writeSrgbTriplet` parses, hence the prefix.
+    // The soil colours are the palette's ramp, not `config/render.json`'s old
+    // hexes; `#rrggbb` is what `writeSrgbTriplet` parses, hence the prefix.
+    //
+    // Be aware of what this buffer is: nothing reads it. No bind group names
+    // `soilUniformBuffer` and no shader declares its `@binding`, and the ground
+    // inside this renderer is the three.js soil shader's, not a WebGPU pass -
+    // so the colours are written every frame into 64 bytes nobody samples. E28
+    // in `docs/bug-inventory.md` holds the bind-or-delete decision.
     const hex = (role: string): string => `#${worldColour(role).getHexString()}`;
     writeSrgbTriplet(hex('soil_mid'), this.soilData, 0);
     writeSrgbTriplet(hex('soil_wet'), this.soilData, 4);

@@ -616,3 +616,32 @@ ignored, which is why an earlier pass thought the clock would not move):
 `palette-ground-form-day.png` from 7 m up, `palette-ground-form-close-noon3.png`
 from 1.4 m. Low-contrast clod relief and damp patches, no cracks, no speckle, no
 dark lines.
+
+## 10. The WebGPU path, checked, 2026-11-23
+
+Asked whether the WebGPU path still draws the ground from the palette. It does
+not draw the ground at all, and it has not run for a while:
+
+- **No ground pass.** `WebGPURenderer` draws the plant overlay (and rain) on a
+  second canvas; the ground, the sky and the pit are the three.js passes, and the
+  soil surface is `environment/ground.ts`'s shader - the one these palette
+  commits changed. So the palette ground a session sees is the same in a WebGPU
+  session and a WebGL one, because it is the same mesh.
+- **Its soil palette reaches nothing.** `writeSoilPalette()` fills `soilData`
+  from `soil_mid`, `soil_wet` and `soil_shade` and `setSoilMoisture()` rewrites the
+  buffer every frame, but no bind group names `soilUniformBuffer` and no shader
+  declares its `@binding`. Recorded as **E28**.
+- **It cannot initialise.** `webgpu_enabled` true on this tree fails
+  `initialize()` on two WGSL modules: `soilOccludes()` in `common.wgsl` reassigns
+  a `let cavityRadius` (WGSL `let` is immutable), and `rain.wgsl` writes
+  `output.worldPosition` into a vertex output with no such member. The fallback to
+  three.js is complete and silent. Recorded as **E29**; the one-word `var` fix was
+  tried to get the path running, the rain module then failed, and the change was
+  reverted rather than left as a half-fixed dead path.
+
+Verified live with `webgpu_enabled` set true and then restored to its shipped
+`false`: the world draws the palette ground with its clod form
+(`webgpu-requested-palette-ground2.png`), and the console shows the WebGPU
+initialisation failure that let it happen. So the deletion of the six soil keys
+changed the WebGPU path in no visible way - which is the confirmation asked for,
+and also why it took a check to notice the path is dead.
