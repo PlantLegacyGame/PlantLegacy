@@ -95,9 +95,17 @@ export function rateText(perSecond: number | null | undefined): string {
   return `${perSecond > 0 ? '+' : ''}${perSecond.toFixed(1)}/s`;
 }
 
+import { dayPartAt } from './dayPart.ts';
+
 export interface ClockInput {
   /** 24h clock, HH:MM. */
   time: string;
+  /**
+   * The server's 0..1 day fraction, for the day-part word. Omitted before the
+   * first weather packet: an hour the client has not been told is not a light
+   * level it may name.
+   */
+  timeOfDay?: number;
   day: number;
   season: number;
   /** Seconds left in the season, or null when the server has not said. */
@@ -119,12 +127,21 @@ export function clockChip(input: ClockInput, formatSeason: (seconds: number) => 
     typeof input.seasonRemainingS === 'number' && Number.isFinite(input.seasonRemainingS)
       ? formatSeason(input.seasonRemainingS)
       : '';
+  // `12:00` is only a readable time if the reader knows this world's clock is a
+  // 0..1 day fraction. The word and the glyph are the same fact in plain
+  // language, and they come from the server's own fraction, not from the light
+  // on the client.
+  const dayPart =
+    typeof input.timeOfDay === 'number' && Number.isFinite(input.timeOfDay)
+      ? dayPartAt(input.timeOfDay)
+      : null;
+  const part = dayPart ? `${dayPart.glyph} ${dayPart.word} \u00B7 ` : '';
   return {
-    main: `Season ${season} \u00B7 Day ${day} \u00B7 ${input.time}`,
+    main: `${part}Season ${season} \u00B7 Day ${day} \u00B7 ${input.time}`,
     sub: remaining ? `Season ends in ${remaining}` : '',
     title: remaining
-      ? `Season ${season}, day ${day}, ${input.time}. Season ends in ${remaining}.`
-      : `Season ${season}, day ${day}, ${input.time}.`,
+      ? `${part}Season ${season}, day ${day}, ${input.time}. Season ends in ${remaining}.`
+      : `${part}Season ${season}, day ${day}, ${input.time}.`,
   };
 }
 

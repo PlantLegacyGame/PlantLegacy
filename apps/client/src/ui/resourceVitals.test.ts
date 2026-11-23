@@ -76,23 +76,54 @@ describe('rates', () => {
 describe('clock chip', () => {
   const format = (seconds: number): string => `${Math.round(seconds / 3600)} h`;
 
-  it('puts the season, day and hour on one line', () => {
+  it('puts the day part, season, day and hour on one line', () => {
     assert.equal(
-      clockChip({ season: 1, day: 3, time: '11:44', seasonRemainingS: 3600 * 5 }, format).main,
-      'Season 1 \u00B7 Day 3 \u00B7 11:44',
+      clockChip(
+        {
+          season: 1,
+          day: 3,
+          time: '11:44',
+          timeOfDay: (11 + 44 / 60) / 24,
+          seasonRemainingS: 3600 * 5,
+        },
+        format,
+      ).main,
+      '\u2600 Day \u00B7 Season 1 \u00B7 Day 3 \u00B7 11:44',
+    );
+  });
+
+  it('names night and dawn from the server clock', () => {
+    assert.match(
+      clockChip({ season: 2, day: 7, time: '22:05', timeOfDay: 22.1 / 24 }, format).main,
+      /\u263E Night/u,
+    );
+    assert.match(
+      clockChip({ season: 2, day: 7, time: '06:00', timeOfDay: 6 / 24 }, format).main,
+      /\u25D0 Dawn/u,
     );
   });
 
   it('keeps the season countdown in the sub-line and the tooltip', () => {
-    const chip = clockChip({ season: 2, day: 7, time: '22:05', seasonRemainingS: 7200 }, format);
+    const chip = clockChip(
+      { season: 2, day: 7, time: '22:05', timeOfDay: 22.1 / 24, seasonRemainingS: 7200 },
+      format,
+    );
     assert.equal(chip.sub, 'Season ends in 2 h');
     assert.match(chip.title, /Season 2, day 7, 22:05/);
     assert.match(chip.title, /2 h/);
+    assert.match(chip.title, /Night/);
   });
 
   it('says nothing about a season it does not know', () => {
-    const chip = clockChip({ season: 1, day: 1, time: '06:00' }, format);
+    const chip = clockChip({ season: 1, day: 1, time: '06:00', timeOfDay: 6 / 24 }, format);
     assert.equal(chip.sub, '');
+  });
+
+  it('does not name a day part before the server has sent a clock', () => {
+    assert.equal(
+      clockChip({ season: 1, day: 1, time: '--:--' }, format).main,
+      'Season 1 \u00B7 Day 1 \u00B7 --:--',
+    );
   });
 });
 

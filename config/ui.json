@@ -189,6 +189,15 @@
         1
       ]
     },
+    "title_home_zoom": {
+      "type": "number",
+      "value": 0.72,
+      "notes": "The title camera's resting zoom, and where Space and 0 return it. It used to be ZOOM_MIN (0.55), the point where the pane first fits inside the painted world - a camera at its mechanical limit rather than at the composition. Clamped to the camera's own 0.55..3.2 range. Title screen only.",
+      "range": [
+        0.55,
+        3.2
+      ]
+    },
     "title_parallax_depth": {
       "type": "object",
       "value": {

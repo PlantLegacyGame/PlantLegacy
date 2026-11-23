@@ -33,16 +33,27 @@ export function clampParallax(point: ParallaxPoint, dragPx: number): ParallaxPoi
 /**
  * Where the scene should be heading. A drag in progress always wins: the pointer
  * is still holding the view, and letting hover fight it makes the drag feel loose.
+ *
+ * A released drag leaves the picture where it was let go (`rest`). It used to
+ * return to the middle the moment the pointer lifted, and no pointer at all -
+ * the pointer leaving the window - also meant the origin, so letting go of a drag
+ * undid it. The rest offset is the drag's result; hover is a small spring added
+ * on top of it, so moving the pointer still animates the scene without throwing
+ * away the view the player chose. Only Space clears `rest`.
  */
 export function parallaxTarget(
   draft: ParallaxPoint | null,
   pointer: ParallaxPoint | null,
   config: ParallaxConfig,
+  rest: ParallaxPoint = PARALLAX_ORIGIN,
 ): ParallaxPoint {
   if (!config.enabled) return PARALLAX_ORIGIN;
   if (draft) return clampParallax(draft, config.dragPx);
-  if (!pointer) return PARALLAX_ORIGIN;
-  return clampParallax({ x: pointer.x * config.hover, y: pointer.y * config.hover }, config.dragPx);
+  if (!pointer) return clampParallax(rest, config.dragPx);
+  return clampParallax(
+    { x: rest.x + pointer.x * config.hover, y: rest.y + pointer.y * config.hover },
+    config.dragPx,
+  );
 }
 
 /** Exponential ease: frame-rate independent, and never overshoots. */

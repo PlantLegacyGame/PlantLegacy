@@ -5,7 +5,7 @@
     "schema": "extended-1",
     "owner_task": "C01",
     "status": "active",
-    "notes": "C01 input abstraction: named actions, producers for keyboard/mouse/touch, bindings loaded at runtime. Gameplay code never reads raw keys. Updated per user requirements: G=grow mode toggle, R=root sight, E=emote, I=inventory/overview, 1-0=inventory slots, `=dev panel."
+    "notes": "C01 input abstraction: named actions, producers for keyboard/mouse/touch, bindings loaded at runtime. Gameplay code never reads raw keys. Updated per user requirements: G=grow mode toggle, R=root sight, E=emote, I=inventory/overview, 1-0=inventory slots, `=dev panel. Regenerating the test plant is a dev-panel button, not a binding."
   },
   "values": {
     "bindings_desktop": {
@@ -264,15 +264,6 @@
           "mouse": "",
           "mode": "toggle",
           "context": ""
-        },
-        {
-          "action": "plant_regenerate",
-          "keys": [
-            "KeyP"
-          ],
-          "mouse": "",
-          "mode": "press",
-          "context": "dev"
         }
       ]
     },

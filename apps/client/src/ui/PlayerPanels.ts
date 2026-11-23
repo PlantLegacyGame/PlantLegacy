@@ -7,6 +7,7 @@
  * server-owned pouch. Nothing here edits plant state; item use is an intent.
  */
 
+import { ownerCaption } from '../render/rivalTagLabel.ts';
 import type { PlantPhase } from './PlantStatusHud.js';
 import {
   type HealthThresholds,
@@ -86,6 +87,8 @@ export interface ItemDefinitionView {
  */
 export interface InspectOtherView {
   owner?: string;
+  /** The owner's display name, when the world sent one. */
+  ownerName?: string;
   /** World id, so two rivals with no owner streamed can still be told apart. */
   plantId: string;
   parts: Array<{ type: string; count: number; biomass: number }>;
@@ -625,7 +628,7 @@ export function createPlayerPanels(options: PlayerPanelsOptions = {}): PlayerPan
         '#pl-other-summary',
         `${otherView.partCount} part${otherView.partCount === 1 ? '' : 's'} \u00B7 ` +
           `${otherView.totalBiomass.toFixed(1)} biomass \u00B7 ` +
-          `${otherView.owner ? `owner ${otherView.owner.slice(0, 12)}` : otherView.plantId.slice(0, 12)}`,
+          `${ownerCaption(otherView.ownerName)}`,
       );
       renderInventory();
       return;

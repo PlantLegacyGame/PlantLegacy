@@ -9,6 +9,18 @@
  *
  * Pure so the wording can be tested without a renderer or a socket.
  */
+/**
+ * The owner line the Inspect panel prints.
+ *
+ * A display name, or that there is none. The panel used to print
+ * `ownerId.slice(0, 12)`, a machine identifier in player-facing text: a guest's
+ * id is random noise and an account's is opaque, so the line named nobody. A
+ * plant whose owner is not connected has no name to send and says so.
+ */
+export function ownerCaption(ownerName: string | undefined): string {
+  return ownerName?.trim() || 'Unnamed plant';
+}
+
 export function rivalTagLabel(
   ownerId: string,
   ownerName: string | undefined,

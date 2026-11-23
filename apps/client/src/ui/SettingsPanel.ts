@@ -248,9 +248,17 @@ function installStyles(): void {
  * is the order a player learns them in, so the file owns the order now. Within
  * the numbered slots the numeric order is restored explicitly.
  */
-function controlEntries(bindings: Record<string, BindingView>): Array<[string, BindingView]> {
+export function controlEntries(
+  bindings: Record<string, BindingView>,
+): Array<[string, BindingView]> {
   const entries = Object.entries(bindings).filter(
-    ([, binding]) => binding.keys.length > 0 || binding.mouse !== '',
+    ([, binding]) =>
+      (binding.keys.length > 0 || binding.mouse !== '') &&
+      // A dev-context action is not a control. `plant_regenerate` was listed here
+      // as `P` (and in the old controls page as `R`), so a player could press a
+      // key that exists only to replace their plant with a test specimen. The dev
+      // panel owns that button now; the settings table has no row for it.
+      binding.context !== 'dev',
   );
   const slotIndex = (action: string): number => {
     const match = /^inventory_slot_(\d+)$/.exec(action);
@@ -270,13 +278,7 @@ const CONTROL_SECTIONS: ReadonlyArray<{ label: string; test: (action: string) =>
   {
     label: 'Growth',
     test: (action) =>
-      [
-        'select_part',
-        'grow_mode_toggle',
-        'root_sight_toggle',
-        'grow_cancel',
-        'plant_regenerate',
-      ].includes(action),
+      ['select_part', 'grow_mode_toggle', 'root_sight_toggle', 'grow_cancel'].includes(action),
   },
   {
     label: 'Interface',

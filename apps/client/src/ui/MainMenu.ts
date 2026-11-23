@@ -1880,6 +1880,7 @@ export class MainMenu {
         dragPx: options.ui.titleParallaxDragPx,
         hover: options.ui.titleParallaxHover,
       },
+      homeZoom: options.ui.titleHomeZoom,
       depth: options.ui.titleParallaxDepth,
       settleMs: options.ui.titleParallaxSettleMs,
       reducedMotion: options.ui.reducedMotion,
@@ -3394,7 +3395,13 @@ export class MainMenu {
     // How far a body may be held still rather than whipped backwards. A real jump
     // (a pinned hour, a paused world, a dev time change) is accepted; anything
     // under this is the tick landing behind the extrapolation below.
-    const ORB_BACKSTEP_SNAP = 0.02;
+    // The backstep hold is the window in which a tick that landed behind the
+    // extrapolation is absorbed. It used to be 0.02 day - twenty-nine minutes of
+    // a twenty-four hour clock - so any shortfall froze both discs for that long.
+    // A tick can only be behind by its own clamped dt (a couple of seconds of
+    // world time), which is a thousandth of a day, so this holds for at most a
+    // few frames and never reads as a stopped sky.
+    const ORB_BACKSTEP_SNAP = 0.0015;
     let lastOrbPhase = -1;
     const hourAt = (nowMs: number): number => {
       if (pinnedHour !== null) {
@@ -3681,8 +3688,8 @@ export class MainMenu {
     // runs on, and with it the app around it) and it did the smoothing with script,
     // which is the most expensive way to move two dots.
     const ORB_INTERVAL_MS = 250;
-    const paintOrbs = (): void => {
-      const phase = hourAt(performance.now());
+    const paintOrbs = (phaseOverride?: number): void => {
+      const phase = phaseOverride ?? hourAt(performance.now());
       const sunBody = sunPosition(phase);
       const moonBody = moonPosition(phase);
       // The moon answers to the light, not to the clock. Both are driven by the same
@@ -3724,12 +3731,20 @@ export class MainMenu {
       const loop = (now: number): void => {
         if (this.orbTimer === 0) return;
         const phase = hourAt(now);
-        this.scene.setCelestialSmooth(sunPosition(phase), moonPosition(phase));
-        // Zero at boot, so the first frame is the first layout step.
+        // The layout first, then the translate that carries the disc off it.
+        //
+        // The smooth pass reads the step the disc is *drawn* at from its own
+        // custom properties, so the layout has to have run for this frame before
+        // the offset is written against it. The old order wrote the offset
+        // against the previous step and then moved the step: one step of travel
+        // applied twice, then corrected on the next frame - the disc jumped and
+        // was pulled back every quarter second. `orbPlacement.ts` pins the order
+        // with a test.
         if (now - lastLayout >= ORB_INTERVAL_MS) {
           lastLayout = now;
-          paintOrbs();
+          paintOrbs(phase);
         }
+        this.scene.setCelestialSmooth(sunPosition(phase), moonPosition(phase));
         this.orbTimer = requestAnimationFrame(loop);
       };
       this.orbTimer = requestAnimationFrame(loop);
@@ -3810,9 +3825,10 @@ export class MainMenu {
         setHour(phase: number): number {
           pinnedHour = ((phase % 1) + 1) % 1;
           // The palette first: the discs fade with the dark, and the dark is the
-          // palette's.
+          // palette's. The layout runs before the smooth pass for the same reason
+          // the frame loop does (see `paintOrbs`).
           render();
-          paintOrbs();
+          paintOrbs(pinnedHour);
           return pinnedHour;
         },
         setWeather(state: string | null): string | null {

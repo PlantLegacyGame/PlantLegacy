@@ -674,6 +674,24 @@ placement), and the three unread tile keys (`tile_size_m`, `tile_vertices`,
   `DROP_COLLECT` is the only way in. `dev.mjs` reuses a healthy stack instead of
   refusing when 8080/4173 already answer, so `pnpm dev` is idempotent.
 
+**2026-11-23 — the twenty-one defects, Wave A.** Ten of the reported twenty-one are
+fixed and measured; the list's weather items (5/6/8/20) and its volume-terrain
+items (7/12/13/21) are grouped by cause and are not in this wave. The title's orbs
+now lay out before the smooth pass on one phase, so the quarter-second double
+offset is gone, and the backstep hold is 0.0015 day rather than 0.02; a released
+drag is the scene's new resting place and only Space clears it; the home zoom is
+`ui.title_home_zoom` (0.72). `plant_regenerate` is no longer a binding anywhere —
+Settings filters every `dev`-context action and the dev panel keeps the button.
+The world camera has two rigs behind `render.camera_mode`: `free` (the default) is
+a flying eye whose heading is `target - eye`, with no terrain follow, no target
+floor and no ground or cavity clamp, so a pan across a hill keeps its height and a
+player can fly through one; `ground` is the old rig. Rival tags are sized by a
+distance curve (`render/tagScale.ts`, 22 px cap, 16 px at 20 m, 7 px floor) and
+drawn at the display's density, the client resolution fallback matches the file's
+0.75, Inspect names an owner or says "Unnamed plant" instead of printing an id, and
+the vitals clock names Dawn/Day/Dusk/Night with a sun or moon. Record:
+[`docs/tasks/bugfix-c21.md`](./docs/tasks/bugfix-c21.md).
+
 ## 11. Keeping this file current
 
 Update this file in the same change as any of:

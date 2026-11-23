@@ -26,9 +26,28 @@ describe('title parallax', () => {
     assert.deepEqual(parallaxTarget(null, { x: 200, y: 100 }, config), { x: 70, y: 35 });
   });
 
-  it('rests at the origin with no pointer and no drag', () => {
+  it('rests at the origin with no pointer, no drag and no rest offset', () => {
     assert.deepEqual(parallaxTarget(null, null, config), { x: 0, y: 0 });
     assert.equal(parallaxAtRest(parallaxTarget(null, null, config)), true);
+  });
+
+  it('keeps a released drag where it was let go', () => {
+    // No pointer at all is a pointer that left the window: that used to mean the
+    // origin, which undid the drag the moment the hand left the scene.
+    assert.deepEqual(parallaxTarget(null, null, config, { x: 40, y: -20 }), { x: 40, y: -20 });
+    // The rest offset is clamped like a drag, so a stale oversized one cannot
+    // push the art past its own travel.
+    assert.deepEqual(parallaxTarget(null, null, config, { x: 500, y: -500 }), {
+      x: 90,
+      y: -90,
+    });
+  });
+
+  it('adds hover on top of the rest offset without losing it', () => {
+    const target = parallaxTarget(null, { x: 200, y: 100 }, config, { x: 30, y: 10 });
+    assert.deepEqual(target, { x: 90, y: 45 });
+    const small = parallaxTarget(null, { x: 20, y: 20 }, config, { x: 30, y: 10 });
+    assert.deepEqual(small, { x: 37, y: 17 });
   });
 
   it('does nothing at all when disabled', () => {

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { rivalTagLabel } from './rivalTagLabel.ts';
+import { ownerCaption, rivalTagLabel } from './rivalTagLabel.ts';
 
 describe('the tag over a rival plant', () => {
   it("uses the owner's display name, not an id slice", () => {
@@ -21,5 +21,18 @@ describe('the tag over a rival plant', () => {
 
   it('takes the first mutation when a plant expresses several', () => {
     assert.equal(rivalTagLabel('p_1', 'Moss', ['Glowcap', 'Thorned']), 'Glowcap · Moss');
+  });
+});
+
+describe('the owner line in Inspect', () => {
+  it('prints the display name, trimmed, and never an id', () => {
+    assert.equal(ownerCaption('Fern Test'), 'Fern Test');
+    assert.equal(ownerCaption('  Moss Keeper  '), 'Moss Keeper');
+  });
+
+  it('says there is no name rather than inventing one from an owner id', () => {
+    assert.equal(ownerCaption(undefined), 'Unnamed plant');
+    assert.equal(ownerCaption(''), 'Unnamed plant');
+    assert.equal(ownerCaption('   '), 'Unnamed plant');
   });
 });

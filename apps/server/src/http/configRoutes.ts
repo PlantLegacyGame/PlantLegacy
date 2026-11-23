@@ -258,7 +258,10 @@ export async function handleConfigRequest(
         body: {
           target_fps: 60,
           fps_warning_threshold: 0.85,
-          resolution_floor: 0.25,
+          // The same floor as `config/render.json`. A server-served fallback of
+          // 0.25 drew the world at a quarter density on a client whose config
+          // fetch failed, and the quality band could not climb back out of it.
+          resolution_floor: 0.75,
           max_pixel_ratio: 2.0,
           camera_smoothing: 0.05,
           camera_min_distance: 10.0,
@@ -515,13 +518,6 @@ export async function handleConfigRequest(
           mouse: '',
           mode: 'toggle',
           context: '',
-        },
-        plant_regenerate: {
-          action: 'plant_regenerate',
-          keys: ['KeyR'],
-          mouse: '',
-          mode: 'press',
-          context: 'dev',
         },
       };
       return {

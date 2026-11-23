@@ -53,6 +53,15 @@
       ],
       "notes": "OrbitControls dampingFactor. Damping is per frame, so 0.05 (Three's default) is a ~0.3 s glide at 60 fps and a ~0.7 s glide at 27 fps: dragging the camera read as input lag rather than weight."
     },
+    "camera_mode": {
+      "type": "enum",
+      "enum": [
+        "free",
+        "ground"
+      ],
+      "value": "free",
+      "notes": "The camera rig. free: a flying eye - W/A/S/D follow the whole view vector, the eye neither follows the terrain nor is clamped out of it, and Root Sight's cavity clamps are off (the near-side cut that keeps the pit readable from inside it lands with the volume terrain). ground: the old ground-following rig, where the rig rises with the terrain and the eye is kept out of the dirt."
+    },
     "camera_min_distance": {
       "type": "number",
       "value": 1,

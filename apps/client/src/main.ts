@@ -86,6 +86,7 @@ import { plantPhysicsSync, rapierWorld } from './physics/RapierPhysicsManager.js
 import { cavityEscapeLiftY, clampToCavity, raiseEyeWithAim } from './player/burrowClamp.ts';
 import { aimLiftY } from './player/cameraAim.js';
 import { solveGroundCeiling, stepLookUpPitch } from './player/cameraOrbit.js';
+import { panMove } from './player/cameraPan.ts';
 import { ownBodyNodes, resolveOwnAnchor } from './player/ownPlantAnchor.js';
 import { recenterOffset } from './player/recenterView.js';
 import { decideAutoOpenRootSight } from './player/rootSightAutoOpen.js';
@@ -589,12 +590,9 @@ const EMERGENCE_DELAY_MS: Record<string, number> = {
 };
 
 // Temp reusable objects to avoid per-frame GC pressure in render/update loops
-const tempRight = new THREE.Vector3();
-const tempMove = new THREE.Vector3();
 const tempTarget = new THREE.Vector3();
 const tempDirection = new THREE.Vector3();
 const tempVector = new THREE.Vector3();
-const tempForward = new THREE.Vector3();
 const tempCameraOffset = new THREE.Vector3();
 
 let connecting = false;
@@ -774,6 +772,8 @@ let peakBiomass = 0;
 let peakNodeCount = 0;
 let weatherDayNumber = 1;
 let weatherClock = '00:00';
+/** The server's day fraction, kept beside the formatted clock for the day part. */
+let weatherTimeOfDay = 0;
 // Stored water/minerals are what growth actually waits on, so the HUD shows
 // them next to their capacity — otherwise a stalled plant looks like a bug.
 let plantWater = 0;
@@ -1928,7 +1928,7 @@ function updatePlantLabelPositions(): void {
     const viewportHeightPx = Math.max(1, renderer.domElement.clientHeight);
     const halfFovTan = Math.tan((camera.fov * Math.PI) / 360);
     const metresPerPixel = (2 * halfFovTan * Math.max(0.1, distance)) / viewportHeightPx;
-    const tagHeight = label.sizeLabel?.(plantId, metresPerPixel) ?? 0;
+    const tagHeight = label.sizeLabel?.(plantId, metresPerPixel, distance) ?? 0;
     label.place(plantId, cx, topY + 0.25 + tagHeight / 2, cz);
   }
 }
@@ -2394,14 +2394,30 @@ function cameraMinDistanceForNode(node: PlantNodeData): number {
   return Math.min(surfaceMin, rootMin);
 }
 
-// WASD / arrows fly the camera in the direction the camera is facing.
+/**
+ * The camera rig: a free flying eye, or the old ground-following rig.
+ *
+ * `free` is the plan's items 11 and 12: panning is travel, not a walk. Nothing
+ * about the terrain moves the camera - no follow, no pivot, no target floor and
+ * no eye clamp - so crossing a hill changes the view by exactly the distance the
+ * keys were held. `ground` keeps the old behaviour behind a config switch.
+ */
+function cameraFliesFree(): boolean {
+  return (renderConfig?.cameraMode ?? 'free') === 'free';
+}
+
+// WASD / arrows fly the camera in the direction the picture is facing.
 // W/ArrowUp    -> forward along the view heading
 // S/ArrowDown  -> backward along the view heading
 // A/ArrowLeft  -> strafe left   (view heading X camera up)
 // D/ArrowRight -> strafe right
-// The heading is flattened onto the ground plane, so looking down at the soil
-// still travels across it instead of burrowing. Nothing on the plant moves, and
-// the orbit pivot is wherever the player has looked it (ADR-022).
+//
+// The heading is `target - eye`, not the camera's cached rotation: the pan pass
+// runs before the controls and the aim lean rebuild the camera for the frame, so
+// the rotation is last frame's and a drag could leave W pointing somewhere the
+// player never aimed. Ground mode flattens the heading; free mode keeps the whole
+// view vector. Nothing on the plant moves, and the orbit pivot is wherever the
+// player has looked it (ADR-022).
 function applyCameraPan(deltaTime: number): void {
   const baseSpeed = renderConfig?.cameraPanSpeed ?? 0;
   if (baseSpeed <= 0) return;
@@ -2413,43 +2429,35 @@ function applyCameraPan(deltaTime: number): void {
   const speed = baseSpeed * Math.max(0.15, distance / 12);
 
   let forwardAxis = 0; // W / S: along the direction the camera looks
-  let x = 0; // A / D: strafe perpendicular to it
+  let strafe = 0; // A / D: strafe perpendicular to it
   if (cameraPanState.forward) forwardAxis += 1;
   if (cameraPanState.backward) forwardAxis -= 1;
-  if (cameraPanState.left) x -= 1;
-  if (cameraPanState.right) x += 1;
-  if (x === 0 && forwardAxis === 0) return;
+  if (cameraPanState.left) strafe -= 1;
+  if (cameraPanState.right) strafe += 1;
+  if (strafe === 0 && forwardAxis === 0) return;
   cancelCameraAutoMove();
 
-  // The old W/S drove the camera up and down the world Y axis, which read as
-  // the view being bolted to the plant rather than a free camera.
-  const forward = tempForward.copy(camera.getWorldDirection(tempVector));
-  forward.y = 0;
-  if (forward.lengthSq() < 1e-6) {
-    // Looking straight down: any ground heading is arbitrary, so use the
-    // camera's own into-the-screen axis instead of stalling.
-    forward.set(0, 0, -1).applyQuaternion(camera.quaternion);
-    forward.y = 0;
-  }
-  forward.normalize();
-  const right = tempRight.crossVectors(forward, camera.up).normalize();
-
-  const move = tempMove
-    .addScaledVector(forward, forwardAxis)
-    .addScaledVector(right, x)
-    .normalize()
-    .multiplyScalar(speed * deltaTime);
+  const move = panMove({
+    eye: camera.position,
+    target: controls.target,
+    up: camera.up,
+    forwardAxis,
+    strafe,
+    free: cameraFliesFree(),
+    speed,
+    deltaTime,
+  });
+  if (!move) return;
 
   // Move both target and camera.position together so panning works even when
   // controls.enabled = false (e.g. while the growth panel is open or drawing).
   // OrbitControls.update() will keep the spherical offset intact.
-  controls.target.add(move);
-  camera.position.add(move);
-
-  // Height is not snapped to the surface here any more: the player's vertical
-  // physics owns it (settlePlayerOnGround), so panning up a hill lifts the rig
-  // with the terrain instead of teleporting it, and the camera keeps its orbit
-  // offset while it does.
+  controls.target.x += move.x;
+  controls.target.y += move.y;
+  controls.target.z += move.z;
+  camera.position.x += move.x;
+  camera.position.y += move.y;
+  camera.position.z += move.z;
 }
 
 // Simple player physics: the player is a point that falls onto the terrain and
@@ -2565,6 +2573,15 @@ let lastPivotY: number | null = null;
 function settlePlayerOnGround(deltaTime: number): void {
   const planetRadius = renderConfig?.planetRadiusM ?? 0;
   if (planetRadius <= 0) return;
+  // The free rig stands on nothing. Every branch below exists to make the camera
+  // a passenger of the ground - the pivot follow, the target floor, the orbit
+  // ceiling sampled from the terrain - and all of them are exactly the height
+  // changes a pan across a hill used to produce (plan item 11).
+  if (cameraFliesFree()) {
+    lastPivotY = null;
+    controls.maxPolarAngle = renderConfig?.cameraMaxPolarAngle ?? Math.PI - 0.05;
+    return;
+  }
   // The orbit floor is deliberately not set here. It was, at `mouth * 0.6`, and
   // the render loop overwrote it with the eased `currentCameraMinDistance()` a
   // few lines later - which asked for `mouth * 1.25`, outside the rim the dive
@@ -4889,20 +4906,10 @@ async function initC01(): Promise<void> {
         // already looking from. The pitch correction is for automatic framing only.
         recenterCamera(false);
       }
-      if (import.meta.env.DEV && actionId === 'plant_regenerate' && state.pressed) {
-        if (plantRenderer) {
-          const testNodes = plantRenderer.generateTestPlant();
-          plantRenderer.rebuild();
-          plantRenderer.updatePlantData(testNodes);
-          if (webgpuRenderer) webgpuRenderer.updatePlants(testNodes, performance.now());
-          controls.target.set(0, 0, 0);
-          camera.position.set(0, 20, 30);
-          controls.update();
-          setDetail(
-            `Generated test plant at origin (${testNodes.length} nodes). Orbit camera to inspect.`,
-          );
-        }
-      }
+      // Regenerating the test plant is a dev-panel button, not a key. It used to
+      // be a public binding on P, so a player pressing P for any reason (or a
+      // player who read the old controls page that said R) replaced their plant
+      // with a test specimen. `config/controls.json` has no such action now.
       if (actionId === 'root_sight_toggle' && rootSightMachine) {
         // Toggle from the machine itself. Trusting the input bus's latched
         // `active` flag meant a latch that had drifted from the machine (after a
@@ -6565,6 +6572,9 @@ function updateVitalsClock(): void {
       season: seasonNumber,
       day: weatherDayNumber,
       time: weatherClock || '--:--',
+      // Only when the server has a clock: a chip that has never heard from it
+      // would otherwise claim it is night at midnight on a world it cannot see.
+      timeOfDay: weatherClock ? weatherTimeOfDay : undefined,
       seasonRemainingS: remainingS,
     },
     formatSeasonRemaining,
@@ -6641,6 +6651,13 @@ function updateSeasonChip(): void {
 // Basic identity of a plant that is not yours, keyed by world plant id. Filled
 // from PLANT_CREATED, which is the message that carries the owner.
 const plantOwners = new Map<string, string>();
+/**
+ * The owner's display name, when the world sent one. The inspect panel used to
+ * show `ownerId.slice(0, 12)` - a machine identifier in player-facing text - so
+ * a plant signed "owner 9f3a1c07b8e2" named nobody. A name is the only thing a
+ * reader can use; a plant whose owner is not connected says "Unnamed plant".
+ */
+const plantOwnerNames = new Map<string, string>();
 
 /**
  * Inspect a rival plant through the Inspect panel, in low detail.
@@ -6668,6 +6685,7 @@ function inspectOtherPlant(plantId_: string, nodes: Map<string, PlantNodeData>):
   }
   playerPanels.inspectOther({
     owner: plantOwners.get(plantId_),
+    ownerName: plantOwnerNames.get(plantId_),
     plantId: plantId_,
     parts: [...parts].map(([type, entry]) => ({
       type,
@@ -9767,6 +9785,7 @@ function handleWeatherUpdate(payload: unknown, ctx: MessageContext): void {
   // handover from it to the renderer was a visible brightness step.
   environmentRenderer?.handleWeatherUpdate(weather);
   weatherDayNumber = weather.dayNumber ?? weatherDayNumber;
+  weatherTimeOfDay = weather.timeOfDay;
   weatherClock = formatClock(weather.timeOfDay);
   // Weather is displayed in one place: the vitals chip.
   vitalsWeather = {
@@ -10297,6 +10316,7 @@ function handlePlantSync(payload: unknown): void {
         plant.id,
         rivalTagLabel(plant.ownerId, plant.ownerName, plant.mutations),
       );
+      if (plant.ownerName?.trim()) plantOwnerNames.set(plant.id, plant.ownerName.trim());
     }
     if (isOwn && !plantId) {
       plantId = plant.id;
@@ -10553,6 +10573,9 @@ function handlePlantCreated(payload: unknown): void {
   }
   otherPlayerPlants.set(created.plant.id, otherPlant);
   if (created.plant.ownerId) plantOwners.set(created.plant.id, created.plant.ownerId);
+  if (created.plant.ownerName?.trim()) {
+    plantOwnerNames.set(created.plant.id, created.plant.ownerName.trim());
+  }
   // Tag it now, not at the next full sync: a rival that sprouts beside the
   // player used to stand there nameless for up to the sync interval.
   plantLabelLayer()?.setLabel(
@@ -11389,12 +11412,19 @@ function renderFrame(deltaTime: number): void {
   }
   // Last, so the ground has the final say: a pose that clears the plant but is
   // inside a hill still has to move in.
-  clampEyeToGround();
-  clampEyeToCavity(deltaTime);
+  // A free camera is not clamped out of the ground or out of a cavity: flying
+  // through a hill is the point of item 12, and the near-side cut that keeps the
+  // inside readable is Wave C's volume terrain. The aim lean is a ground-rig
+  // device too - it exists because an orbit camera cannot look up from the soil.
+  const freeCamera = cameraFliesFree();
+  if (!freeCamera) {
+    clampEyeToGround();
+    clampEyeToCavity(deltaTime);
+  }
   // Lean the view up when the eye is down on the soil (see `applyCameraAim`),
   // after every clamp has placed the eye and before the dev pose, which owns its
   // own look direction.
-  if (!cavityProbe.held()) {
+  if (!cavityProbe.held() && !freeCamera) {
     applyCameraAim();
     // A camera looks along its local -Z: a positive turn about its own X lifts
     // that direction towards +Y, which is up.

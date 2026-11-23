@@ -33,7 +33,12 @@
 | Planet orbit view | Dev panel → Camera → Orbit Planet / Local View | No key binding by request; the action is `planet_view_toggle` but it is not bound |
 | Debug overlay | dev panel → Debug → Metrics overlay | Unbound on purpose. It used to be a bare `Shift`, which fired every time a player held shift to select or capitalise, and swallowed the modifier. |
 | Hints | `H` | Shows the key list on demand and re-enables hints. Hints themselves are contextual: each one appears once, when it is relevant |
-| Regenerate plant (dev) | `R` (dev context) | Generates test plant at origin |
+
+Regenerating the test plant has no binding. It is a button in the dev panel's
+Plant section (`?dev=1`). It used to be bound to `P`, while this page said `R`,
+so a player following the page could replace their plant with a test specimen;
+the binding is gone from `config/controls.json` and from the Settings → Controls
+table, which now filters every `dev`-context action.
 
 Input is sampled and sent to the server at 20 Hz. The camera is client-side and
 server-unvalidated: `INPUT` frames are stored and only advance `lastInputTick`
@@ -138,7 +143,7 @@ These names are provisional until C04 adds the full settings UI:
 | Camera | `camera_orbit`, `camera_pan`, `camera_zoom`, `camera_recenter`, `camera_pan_forward`, `camera_pan_backward`, `camera_pan_left`, `camera_pan_right` |
 | Interaction | `select_part`, `grow_mode_toggle`, `grow_cancel` |
 | UI | `root_sight_toggle`, `emote_wheel`, `inventory_overview_toggle`, `inventory_slot_1`–`inventory_slot_10`, `dev_panel_toggle`, `debug_toggle`, `hint_card_toggle` |
-| Dev | `plant_regenerate` |
+| Dev | Dev-panel actions, including regenerate, are not bindings |
 
 When the C04 settings UI lands, replace this file with the actual action table,
 default bindings, and the touch layout.

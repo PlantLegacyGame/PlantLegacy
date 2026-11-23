@@ -8,6 +8,7 @@
  * every other named action simply stop existing. These pin both shapes.
  */
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 import { normalizeBindings } from './controlsBindings.ts';
 
@@ -18,6 +19,27 @@ const ROOT_SIGHT = {
   mode: 'toggle' as const,
   context: '',
 };
+
+describe('the shipped controls table', () => {
+  const raw = JSON.parse(
+    readFileSync(new URL('../../../../config/controls.json', import.meta.url), 'utf8'),
+  ) as { values?: Record<string, unknown> };
+  const bindings = normalizeBindings(raw.values ?? {});
+
+  it('offers no dev-context action as a player control', () => {
+    assert.ok(bindings, 'the shipped file produced no binding table');
+    const offered = Object.entries(bindings).filter(
+      ([, binding]) =>
+        binding.context === 'dev' && (binding.keys.length > 0 || binding.mouse !== ''),
+    );
+    assert.deepEqual(offered, [], `dev actions are offered as keys: ${offered.map(([a]) => a)}`);
+  });
+
+  it('has no regenerate binding: the dev panel owns that button', () => {
+    assert.ok(bindings);
+    assert.equal(bindings.plant_regenerate, undefined);
+  });
+});
 
 describe('normalizeBindings', () => {
   it('reads the file’s schema-array table into one entry per action', () => {

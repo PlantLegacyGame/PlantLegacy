@@ -2084,6 +2084,34 @@ outcome the players have not built themselves.
   glass at 0.67; and 26 s of rain gave soak 0.34, mushrooms 0.98, worm 0.57 and
   6.9 px of water in the barrel. The gates were low enough to be reached by then -
   at the first thresholds that shower left both the mushrooms and the worm hidden.
+- **The title camera is a place, not a pull-back.** It opens at
+  `ui.title_home_zoom` 0.72 (not the 0.55 mechanical limit), a released drag is the
+  new resting place (`-107.43 px` during → `-119.98 px` after release), and Space
+  is the only thing that clears it (`-0.02 px`). Measured in the page, not
+  eyeballed.
+- **The sun and moon move without a jerk.** The layout runs before the smooth
+  pass on the same frame and phase, and the backstep hold is 0.0015 day instead of
+  0.02. Measured unpinned over 3.2 s: 193 frames, 2.087 px of travel, a largest
+  frame step of 0.014 px, no backwards step and none over 1 px.
+- **One free camera.** `camera_mode: free` (the default) is a flying eye: W/S/A/D
+  head from `target - eye`, with no terrain follow, no target floor and no ground
+  or cavity clamp. Measured: a 6.671 m pan over a 0.829 slope while the ground rose
+  3.005 m changed the eye's height by 0.0000 m; looking down and holding W dropped
+  3.493 m in 0.7 s; aimed under a hill the eye held 0.593 m below the ground at its
+  own position. `camera_mode: ground` restores the old rig.
+- **Name tags are things in the world.** Their screen size follows
+  `render/tagScale.ts` (22 px cap, 16 px at 20 m, 7 px floor) and the texture is
+  drawn at `min(2, devicePixelRatio)`. Measured in the mutation gallery at exactly
+  5 / 20 / 50 m: 21.99 / 15.94 / 11.57 px, with the sprite 0.278 / 0.806 / 1.462 m
+  and the canvas 159 px at dpr 1.42. Inspect prints the owner's display name or
+  "Unnamed plant", never an id.
+- **The clock says what time it is.** The vitals chip reads
+  `◐ Dawn · Season 1 · Day 3 · 07:59` and turns over to `☀ Day` at 08:00, from the
+  server's own day fraction (boundaries 05:00/08:00/17:00/20:00).
+- **`P` is not a key that does anything.** Regenerating the test plant is a
+  dev-panel button; the shipped controls file has no dev-context binding, the
+  Settings table filters them, and a test reads the file to keep it that way.
+  Live: pressing P left the plant at one node with no toast.
 - **The verge belongs to the ground it stands on.** The prop band and the soil layer
   are registered at the ground plane's 0.9 share, so a drag slides them with the
   soil, the plant and the finds instead of leaving them behind: measured, a 120 px

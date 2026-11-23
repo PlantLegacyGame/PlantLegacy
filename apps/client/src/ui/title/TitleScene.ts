@@ -19,6 +19,13 @@ import { TOUCH_TITLE_HINT } from '../touchCopy.ts';
 import { cloudArt } from './cloudArt.ts';
 import { type CelestialBody, lerpHex, type TitlePalette } from './dayCycle.ts';
 import {
+  arcHeight,
+  arcInset,
+  quantArcHeight,
+  quantArcInset,
+  smoothOrbOffset,
+} from './orbPlacement.ts';
+import {
   clampParallax,
   PARALLAX_ORIGIN,
   type ParallaxConfig,
@@ -93,6 +100,13 @@ export interface TitleSceneOptions {
    */
   zoomHost?: HTMLElement;
   parallax: ParallaxConfig;
+  /**
+   * The camera's resting zoom: the composed title, not the pulled-back limit.
+   * The title opened at `ZOOM_MIN` because that is where the pane first fits
+   * inside the painted world - a camera at its mechanical limit, with the whole
+   * composition small in the middle. The home is its own number now.
+   */
+  homeZoom?: number;
   depth: Record<string, number>;
   settleMs: number;
   reducedMotion: boolean;
@@ -2463,6 +2477,11 @@ export function createTitleScene(options: TitleSceneOptions): TitleScene {
   (options.hintHost ?? root).appendChild(hint);
 
   let state: ParallaxPoint = { ...PARALLAX_ORIGIN };
+  /**
+   * Where a released drag left the picture. The scene is persistent: a drag is a
+   * new resting place, not a temporary pull that springs back. Space clears it.
+   */
+  let rest: ParallaxPoint = { ...PARALLAX_ORIGIN };
   let draft: ParallaxPoint | null = null;
   let pointer: ParallaxPoint | null = null;
   let dragStart: { x: number; y: number; base: ParallaxPoint } | null = null;
@@ -2519,8 +2538,16 @@ export function createTitleScene(options: TitleSceneOptions): TitleScene {
   // the top or bottom edge would show.
   const ZOOM_MIN = 0.55;
   const ZOOM_MAX = 3.2;
-  /** Where the camera rests: the zoom at which the pane is entirely inside the world. */
-  const ZOOM_HOME = ZOOM_MIN;
+  /**
+   * Where the camera rests: the composed framing, from config (`title_home_zoom`).
+   * Clamped to the camera's own range, so a bad config cannot open the title past
+   * the world's edge or inside the plant.
+   */
+  const configuredHome = options.homeZoom;
+  const ZOOM_HOME =
+    typeof configuredHome === 'number' && Number.isFinite(configuredHome)
+      ? Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, configuredHome))
+      : ZOOM_MIN;
   let zoom = ZOOM_HOME;
   let zoomTarget = ZOOM_HOME;
   // The camera, without a style recalculation per frame.
@@ -2578,13 +2605,10 @@ export function createTitleScene(options: TitleSceneOptions): TitleScene {
   zoomHost.style.setProperty('--pl-scene-zoom', zoom.toFixed(3));
   sky.style.scale = String(1 / zoom);
   zoomSettled = zoom;
-  // The arc, raw and quantised. The raw forms give where a body is now; the
-  // quantised ones give where the disc is *drawn*, and the difference is what the
-  // smooth pass carries as a translate.
-  const arcInset = (x: number): number => 5 + Math.min(1, Math.max(0, x)) * 90;
-  const arcHeight = (y: number): number => Math.min(1, Math.max(0, y));
-  const quantArcInset = (x: number): number => Math.round(arcInset(x) * 4) / 4;
-  const quantArcHeight = (y: number): number => Math.round(arcHeight(y) * 400) / 400;
+  // The arc, raw and quantised, lives in `orbPlacement.ts`: the raw forms give
+  // where a body is now, the quantised ones where the disc is *drawn*, and the
+  // difference is what the smooth pass carries as a translate. The geometry is
+  // shared with the test so the ordering can be checked without a browser.
   // The arc's own box, cached per zoom and per pane: a percentage of the arc is
   // only a pixel count against the arc's layout size, and that box is not the pane
   // (the world scales, the sky counter-scales). Reading it per frame would be a
@@ -2615,13 +2639,7 @@ export function createTitleScene(options: TitleSceneOptions): TitleScene {
       Number.parseFloat(el.style.getPropertyValue('--pl-body-inset')) || arcInset(body.x);
     const baseHeight =
       Number.parseFloat(el.style.getPropertyValue('--pl-body-height')) || arcHeight(body.y);
-    // The disc's `left` is clamped in CSS so it cannot hang off the arc; the offset
-    // is measured in that same clamped space, or a body rising out of the clamp
-    // lands a few pixels from where the arc puts it and jumps as it clears it.
-    const at = (pct: number): number =>
-      Math.min(size.w - size.clamp, Math.max(size.clamp, (pct / 100) * size.w));
-    const dx = at(arcInset(body.x)) - at(baseInset);
-    const dy = -(arcHeight(body.y) - baseHeight) * size.h;
+    const { dx, dy } = smoothOrbOffset(baseInset, baseHeight, body, size);
     el.style.transform = `translate(-50%, -50%) translate3d(${dx.toFixed(2)}px, ${dy.toFixed(2)}px, 0)`;
   };
 
@@ -2671,22 +2689,13 @@ export function createTitleScene(options: TitleSceneOptions): TitleScene {
         root.dataset.parallaxGate = 'off';
       }
     }
-    const wanted = parallaxTarget(draft, pointer, options.parallax);
+    const wanted = parallaxTarget(draft, pointer, options.parallax, rest);
     state = stepParallax(state, wanted, dt, options.settleMs);
     if (parallaxAllowed) {
-      // The near plane follows the drag while one is held and zero after it, at
-      // the same rate as the hills: released, the two pictures settle together.
-      nearState = stepParallax(
-        nearState,
-        draft !== null ? wanted : PARALLAX_ORIGIN,
-        dt,
-        options.settleMs,
-      );
-      // Below a twentieth of a pixel there is nothing to see; land exactly on zero
-      // so the transform ends at 0 rather than at 0.0001 and the loop can stop.
-      if (draft === null && Math.abs(nearState.x) < 0.05 && Math.abs(nearState.y) < 0.05) {
-        nearState = { ...PARALLAX_ORIGIN };
-      }
+      // The near plane follows the same target as the hills: released, the two
+      // pictures settle together on the drag's new resting place instead of the
+      // foreground snapping home while the background stays where it was put.
+      nearState = stepParallax(nearState, wanted, dt, options.settleMs);
     }
     apply();
     if (zoom !== zoomTarget) {
@@ -2706,8 +2715,8 @@ export function createTitleScene(options: TitleSceneOptions): TitleScene {
       zoom !== zoomTarget ||
       Math.abs(state.x - wanted.x) > 0.02 ||
       Math.abs(state.y - wanted.y) > 0.02 ||
-      nearState.x !== 0 ||
-      nearState.y !== 0;
+      Math.abs(nearState.x - wanted.x) > 0.02 ||
+      Math.abs(nearState.y - wanted.y) > 0.02;
     if (!moving) return;
     frame = requestAnimationFrame(tick);
   };
@@ -2774,6 +2783,9 @@ export function createTitleScene(options: TitleSceneOptions): TitleScene {
   const endDrag = (event: PointerEvent): void => {
     if (!dragStart) return;
     dragStart = null;
+    // A release is a new resting place, not a spring-back: the drag is the
+    // player's framing decision, so the scene stays where the hand left it.
+    if (draft) rest = { ...draft };
     draft = null;
     root.classList.remove('is-dragging');
     wake();
@@ -2822,6 +2834,9 @@ export function createTitleScene(options: TitleSceneOptions): TitleScene {
       setZoom(ZOOM_HOME);
       draft = null;
       pointer = null;
+      // The camera home is the whole framing: zoom, drag offset and hover all
+      // come back, or Space would leave the picture dragged off-centre.
+      rest = { ...PARALLAX_ORIGIN };
       wake();
       return;
     }
@@ -2859,10 +2874,11 @@ export function createTitleScene(options: TitleSceneOptions): TitleScene {
     root.addEventListener('pointercancel', endDrag);
     root.addEventListener('pointerleave', (event) => {
       if (!dragStart) {
-        // The hover target is gone, so the scene has to come home. `endDrag`
-        // returns early when nothing is held, and the frame loop stops itself
-        // at rest: without this wake the hills stayed leaning after the pointer
-        // left the window until the next pointer event started a frame again.
+        // The hover spring is gone, so the scene returns to its resting offset -
+        // which is where a released drag left it, not the origin. `endDrag`
+        // returns early when nothing is held, and the frame loop stops itself at
+        // rest: without this wake the hills stayed leaning after the pointer left
+        // the window until the next pointer event started a frame again.
         pointer = null;
         wake();
       }

@@ -69,6 +69,12 @@ export interface RenderConfig {
   cameraRecenterElevation: number;
   cameraPanSpeed: number;
   cameraZoomSpeed: number;
+  /**
+   * `free` is a flying eye: W/A/S/D follow the whole view vector and nothing
+   * follows the terrain or clamps the eye. `ground` is the old ground-following
+   * rig, kept as a switch so the change can be compared and reverted.
+   */
+  cameraMode: 'free' | 'ground';
   idleDropTimeoutMs: number;
   shadowMapSize: number;
   shadowBias: number;
@@ -267,6 +273,8 @@ export interface UIConfig {
   titleParallaxEnabled: boolean;
   titleParallaxDragPx: number;
   titleParallaxHover: number;
+  /** The title camera's resting zoom, and where Space/0 return it. */
+  titleHomeZoom: number;
   /** Per-layer multiplier: sky moves least, near moves most. */
   titleParallaxDepth: Record<string, number>;
   titleParallaxSettleMs: number;
@@ -500,6 +508,8 @@ interface RenderConfigResponse {
   cameraPanSpeed?: number;
   camera_zoom_speed?: number;
   cameraZoomSpeed?: number;
+  camera_mode?: string;
+  cameraMode?: string;
   idle_drop_timeout_ms?: number;
   idleDropTimeoutMs?: number;
   shadow_map_size?: number;
@@ -773,6 +783,8 @@ interface UIConfigResponse {
   titleParallaxDragPx?: number;
   title_parallax_hover?: number;
   titleParallaxHover?: number;
+  title_home_zoom?: number;
+  titleHomeZoom?: number;
   title_parallax_depth?: Record<string, number>;
   titleParallaxDepth?: Record<string, number>;
   title_parallax_settle_ms?: number;
@@ -977,6 +989,8 @@ function normalizeRenderConfig(data: RenderConfigResponse, fallback: RenderConfi
       data.camera_start_distance ?? data.cameraStartDistance ?? fallback.cameraStartDistance,
     cameraPanSpeed: data.camera_pan_speed ?? data.cameraPanSpeed ?? fallback.cameraPanSpeed,
     cameraZoomSpeed: data.camera_zoom_speed ?? data.cameraZoomSpeed ?? fallback.cameraZoomSpeed,
+    cameraMode:
+      (data.camera_mode ?? data.cameraMode ?? fallback.cameraMode) === 'ground' ? 'ground' : 'free',
     idleDropTimeoutMs:
       data.idle_drop_timeout_ms ?? data.idleDropTimeoutMs ?? fallback.idleDropTimeoutMs,
     shadowMapSize: data.shadow_map_size ?? data.shadowMapSize ?? fallback.shadowMapSize,
@@ -1250,6 +1264,7 @@ function normalizeUIConfig(data: UIConfigResponse, fallback: UIConfig): UIConfig
       data.title_parallax_drag_px ?? data.titleParallaxDragPx ?? fallback.titleParallaxDragPx,
     titleParallaxHover:
       data.title_parallax_hover ?? data.titleParallaxHover ?? fallback.titleParallaxHover,
+    titleHomeZoom: data.title_home_zoom ?? data.titleHomeZoom ?? fallback.titleHomeZoom,
     titleParallaxDepth:
       data.title_parallax_depth ?? data.titleParallaxDepth ?? fallback.titleParallaxDepth,
     titleParallaxSettleMs:
@@ -1426,7 +1441,10 @@ export async function loadRenderConfig(serverOrigin: string): Promise<RenderConf
   return fetchFlat<RenderConfig>(serverOrigin, '/config/render', {
     targetFps: 60,
     fpsWarningThreshold: 0.85,
-    resolutionFloor: 0.25,
+    // One floor, in the file and in the fallback. The fallback was 0.25 while the
+    // shipped config said 0.75, so a client that could not read the config drew
+    // every tag at a quarter of the display's density with no lever to recover.
+    resolutionFloor: 0.75,
     maxPixelRatio: 2.0,
     gpuBandMinMs: 10.0,
     gpuBandMaxMs: 13.6,
@@ -1472,6 +1490,7 @@ export async function loadRenderConfig(serverOrigin: string): Promise<RenderConf
     cameraRecenterElevation: 0.27,
     cameraPanSpeed: 8.0,
     cameraZoomSpeed: 2.0,
+    cameraMode: 'free',
     idleDropTimeoutMs: 30000,
     shadowMapSize: 2048,
     shadowBias: -0.0005,
@@ -1683,6 +1702,7 @@ export async function loadUIConfig(serverOrigin: string): Promise<UIConfig> {
     titleParallaxEnabled: true,
     titleParallaxDragPx: 90,
     titleParallaxHover: 0.35,
+    titleHomeZoom: 0.72,
     titleParallaxDepth: { sky: 0.15, far: 0.35, mid: 0.6, near: 1 },
     titleParallaxSettleMs: 420,
     titlePlantSwayMs: 5200,
