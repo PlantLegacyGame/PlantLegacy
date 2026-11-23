@@ -34,6 +34,7 @@ No new keys. The numbers are code constants with comments:
 |---|---|
 | `planetSurface.test.ts` (+2) | The skirt's top edge is `patchLocalSurfaceY` at every vertex (the patch's own edge, to float32); its depth clears the body's facet sag; it winds outward. The body is finer than 256 (sag more than halved) and its own geometry really carries facets |
 | `shaderOverrides.test.ts` (+1) | The soil discards a bubble around `uRootSightCamera` only while `eyeIsUnder` **and** only outside the opening's column (`uRootSightEyeInPit < 0.5`), and it is a bubble, not a half-space |
+| `cavityProbe.test.ts` (+5) | `devCavity.setRadius` keeps the cavity and the mouth apart, floors both, falls back to the cavity for a missing mouth, returns copies, and `setRadius(null)` clears it |
 | `apertureSoilMesh.test.ts` (+1) | The body's material carries the near-cut switch and a distance discard; `nearCutHides` is the shader's test as a function; `setApertureSoilEye` writes the eye and toggles the cut |
 
 ## 4. Browser pass — `localhost:4174/PlantLegacy/?dev=1`, 2026-11-23
@@ -67,21 +68,26 @@ Measured in the running page after the client reloaded on the new code:
   buried eye. The `uRootSightEyeInPit < 0.5` clause is therefore a second,
   local guarantee at the discard, not the thing the measurement depends on, and
   it says so in the shader.
-- **The near cut at a grown 4.91 m mouth.** The pit was sized to a mature plant
-  by holding 24 root nodes on a 4.10 m ring in the client's node map (a page-level
-  interval kept them there while the server's state syncs wiped the map: the
-  simulation is paused and the nodes are not real grown roots — no dev action
-  grows a plant that far in reasonable time, and the numbers below are the
-  aperture those nodes size, 4.91 m, with `roots reach 4.16`). Inside it:
-  - 1.1 m from the centre, 1.0 m under the sheet: `eyeInPit` 1,
-    `uEyeUnderGround` **0**, the body not drawn, the frame the pit's far wall and
-    the sky over its rim, continuous — `screenshots/wave-c-49-inside.png`.
+- **The near cut at a grown 4.91 m mouth.** Sized by the dev action
+  `devCavity.setRadius({ cavityM: 7, apertureM: 4.9 })`, on a page with a single
+  seed node and no fake roots: one call, one click on Root sight, and the
+  uniforms read **cavity 7.00 m, mouth 4.90 m** (`aperture 4.90`, one bubble).
+  The previous pass needed 24 root nodes written into the client's node map plus
+  a page interval to re-add them after every state sync; the radii and the
+  pictures below are the same, the harness is gone. Inside it:
+  - 1.0 m under the sheet, 0.3 m from the crown: `eyeInPit` 1,
+    `uEyeUnderGround` **0**, the body not drawn, the frame the pit's walls, floor
+    and rim with sky over it, continuous —
+    `screenshots/wave-c-49-inside-devaction.png`.
   - 0.7 m from the wall (radius 4.22 m), 0.7 m under: `eyeInPit` 1, cut off, the
-    wall and floor whole — `screenshots/wave-c-49-beside-wall.png`.
+    wall rising to its rim and the floor whole, no hole in either —
+    `screenshots/wave-c-49-beside-wall-devaction.png`.
   - Inside the soil just outside the mouth (radius 5.12 m, 1.4 m down):
     `eyeInPit` 0, `uEyeUnderGround` 1, body drawn with its cut on, and the
-    bubble opens the mouth — sky disc, rim silhouette, the seed in it —
-    `screenshots/wave-c-49-body-wall.png`.
+    bubble opens the mouth — sky disc, rim silhouette, the seed and the sun in
+    it — `screenshots/wave-c-49-body-wall-devaction.png`.
+  - `setRadius(null)` hands the cavity back: the reported aperture returns to the
+    seed's own **0.22 m**, so the override is a replacement, not a latch.
   - 0.65 m outside the mouth (radius 5.56 m, 0.7 m under): cut on, **and the
     frame is still soil**. That is the bubble's radius, not a regression: it
     clears 0.45 m around the eye and 0.2 m of earth is left between that and the
@@ -102,3 +108,27 @@ Measured in the running page after the client reloaded on the new code:
   square as the ring, and the shots above are along one edge), and whether that
   7.27 m step at the world's edge should read as a cliff at all — the skirt was
   asked to close a gap, and closing it is all that was measured.
+
+## 5. The dev action — `devCavity.setRadius`
+
+`?dev=1` only, on the existing cavity probe (`apps/client/src/dev/cavityProbe.ts`),
+so it lives with the other things a camera cannot do by hand:
+
+```js
+window.__plantLegacy.devCavity.setRadius({ cavityM: 7, apertureM: 4.9 }); // returns a copy
+window.__plantLegacy.devCavity.forcedRadius(); // { cavityM: 7, apertureM: 4.9 } | null
+window.__plantLegacy.devCavity.setRadius(null); // back to the plant's own sizing
+```
+
+- It replaces **both** radii where the plant's sizing is decided (`main.ts`),
+  before `rootCavityShape`, so the uniform, the cut volume, the ground sampling
+  for the rim mode, the bowl, the earth body and the camera's "inside the
+  opening" test all read the same two numbers. Nothing is duplicated.
+- A forced mouth is not capped by a seedling's seed pit, which is the one clamp
+  a dev number has to beat: `setRadius({ cavityM: 0.7, apertureM: 4.9 })` is a
+  4.9 m hole in a 0.7 m cavity, which is nonsense but not silently shrunk — the
+  caller sees the uniforms disagree instead.
+- The two values stay separate because the shipped config keeps them separate:
+  a 7 m cutaway sphere carries a 4.9 m mouth (0.7 of it), and forcing both to
+  one number is how the bowl and the hole came to disagree before.
+- `null` clears it. Measured live: back to the seed's own 0.22 m in one frame.

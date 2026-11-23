@@ -3296,7 +3296,14 @@ function updateRootSight(deltaTime: number): void {
   // Root Sight belongs to this plant. The cavity is centred on its seed/root
   // crown and sized from its own underground reach; a nearby rival root or an
   // old tunnel must not drag the whole cavity off the player.
-  const sightRadius = cutawayRadius;
+  //
+  // A dev override (`?dev=1`, `devCavity.setRadius`) replaces both radii with a
+  // number. Read here, where they are decided, so the uniform, the cut volume,
+  // the bowl, the earth body and the camera's own "inside the opening" test all
+  // follow: a second copy of the numbers is how the bowl and the hole came to
+  // disagree in the first place.
+  const forcedCavity = cavityProbe.forcedRadius();
+  const sightRadius = forcedCavity?.cavityM ?? cutawayRadius;
   // The mouth is a circle in plan, so it is sized from the lateral spread. The
   // 3D extent above sizes the cavity, and it counts a deep root's depth as
   // reach: a taproot 1.7 m down under a 0.7 m spread opened a hole 2 m in radius,
@@ -3390,7 +3397,7 @@ function updateRootSight(deltaTime: number): void {
     // so a mouth narrower than that cylinder would leave roots hanging outside
     // the opening (INV-RS-14).
     const configuredApertureM = apertureRadiusFor(
-      Math.min(sightRadius, lateralRadius),
+      forcedCavity?.apertureM ?? Math.min(sightRadius, lateralRadius),
       rootSightConfig,
     );
     // The mouth has to contain the bubbles it cuts; the envelope loop below
@@ -3442,7 +3449,11 @@ function updateRootSight(deltaTime: number): void {
         ]
       : own;
     const apertureCapM = seedOnly ? seedPitRadiusM : Number.POSITIVE_INFINITY;
-    const effectiveApertureM = Math.min(ownBubbleFloorM, apertureCapM);
+    // A forced mouth is not capped by a seedling's seed pit: it is a number the
+    // dev chose, and it is the hole the rest of the frame has to be built around.
+    const effectiveApertureM = forcedCavity
+      ? forcedCavity.apertureM
+      : Math.min(ownBubbleFloorM, apertureCapM);
     // Sample the whole column, not just its rim: the highest soil inside the
     // opening is what the cut has to clear. Sampling only the rim let an uphill
     // rise inside the circle sit above the cut's top, so it stayed as a ceiling

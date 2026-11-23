@@ -26,6 +26,14 @@ export interface CavityProbePose {
   targetZ: number;
 }
 
+/** A cavity and mouth radius forced for inspection, in metres. */
+export interface CavityProbeRadius {
+  /** The cutaway sphere: what `uRootSightRadius` carries and the eye window reads. */
+  cavityM: number;
+  /** The opening in plan: what the cut, the bowl's mouth and the earth body read. */
+  apertureM: number;
+}
+
 /** Debug colours: the soil body in red, the cavity shell in green. */
 const DEBUG_SOIL = '#ff0000';
 const DEBUG_SHELL = '#00ff00';
@@ -58,6 +66,20 @@ export interface CavityProbe {
   ): { on: boolean; reason?: string };
   /** How the live earth body was built, including its cavity hole radius. */
   slabInfo(): Record<string, unknown> | null;
+  /**
+   * Size the cavity and its mouth outright instead of from the plant's roots.
+   *
+   * Sizing a grown pit for a look used to mean writing fake root nodes into the
+   * node map and re-adding them after every state sync - a harness with its own
+   * bugs, and one whose numbers the cavity could disagree with. This forces the
+   * two radii the plant would otherwise earn by growing, where the plant's own
+   * sizing happens, so the cut, the bowl, the earth body and the camera's
+   * "inside the opening" test all follow from one place. `?dev=1` only; `null`
+   * hands the cavity back to the plant.
+   */
+  setRadius(radius: CavityProbeRadius | null): CavityProbeRadius | null;
+  /** The forced radii, or `null` while the plant is sizing the cavity. */
+  forcedRadius(): CavityProbeRadius | null;
 }
 
 export function createCavityProbe(input: {
@@ -68,6 +90,7 @@ export function createCavityProbe(input: {
 }): CavityProbe {
   const { scene, camera, getTarget } = input;
   let hold: CavityProbePose | null = null;
+  let forced: CavityProbeRadius | null = null;
   /** Restores, one per material touched, so a tint is always reversible. */
   const restores: Array<() => void> = [];
   let before: THREE.Mesh | null = null;
@@ -193,6 +216,26 @@ export function createCavityProbe(input: {
     slabInfo() {
       const slab = findMesh('planet-soil-slab');
       return (slab?.geometry.userData?.slabOptions as Record<string, unknown> | undefined) ?? null;
+    },
+
+    setRadius(radius) {
+      if (!radius) {
+        forced = null;
+        return null;
+      }
+      // The shader's own floors: a cavity of zero has no hole, and a mouth of
+      // zero is a pinhole a frame cannot be looked through. Clamping here keeps
+      // a console typo from producing a NaN radius in every uniform at once.
+      const cavityM = Number.isFinite(radius.cavityM) ? Math.max(0.05, radius.cavityM) : 0.05;
+      const apertureM = Number.isFinite(radius.apertureM)
+        ? Math.max(0.05, radius.apertureM)
+        : cavityM;
+      forced = { cavityM, apertureM };
+      return { ...forced };
+    },
+
+    forcedRadius() {
+      return forced ? { ...forced } : null;
     },
   };
 }
