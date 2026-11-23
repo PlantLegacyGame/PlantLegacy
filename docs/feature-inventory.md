@@ -107,7 +107,7 @@ Defects live in `bug-inventory.md`, values in `config/`, task scope in `DESIGN.m
 
 | ID | Feature | Task | Code home | Status | Open issues | Next action | Pri |
 |---|---|---|---|---|---|---|---|
-| F50 | Planet sphere, 620 m terrain, exact colliders | T25/C03b | `environment/planetSurface.ts`, `ground.ts` | ◐ | D02: one authored region has real volume; the planet is still a skin | T56 volume (started) | P0 |
+| F50 | Planet sphere, 620 m terrain, exact colliders | T25/C03b | `environment/planetSurface.ts`, `ground.ts` | ◐ | D02: two authored regions have real volume (the arch, and the ground under the Root Sight aperture); the planet is still a skin | T56 volume (started) | P0 |
 | F51 | Sparse soil edits, root tunnels, collapse | T25 | `terrain/terrainState.ts`, `TERRAIN_EDITS` | ◐ | Client height texture (3-A); D02 | — | P1 |
 | F52 | Spherical tile addressing and resource grid | T25 | `shared/world/sphericalGrid.ts` | ✔ | No dense planet grid (by design) | — | P3 |
 | F53 | Raymarched SDF organism renderer | C02 | `renderers/PlantRenderer.ts`, `plant/` | ✔ | — | — | P2 |

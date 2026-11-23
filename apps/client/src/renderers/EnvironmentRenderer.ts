@@ -39,8 +39,14 @@ const skyDuskScratch = new THREE.Color();
 const skyNightScratch = new THREE.Color();
 
 import {
+  apertureSoilParamsFor,
+  createApertureSoilMesh,
+  setApertureSoilLight,
+} from './environment/apertureSoilMesh.ts';
+import {
   CAVITY_CUT_OVERREACH,
   CAVITY_WATER_DRAIN_APERTURES,
+  cavityDepthM,
   createCavityBowl,
   createCavitySkirt,
   setCavityBowlLight,
@@ -183,6 +189,10 @@ export class EnvironmentRenderer {
   // The cavity as real geometry: a dug bowl of earth under the opening.
   private cavityBowl: THREE.Mesh | null = null;
   private terrainVolume: THREE.Mesh | null = null;
+  // The aperture's soil body (T56 slice 2): earth with a shaft, built lazily
+  // for a buried eye and keyed to the aperture it was cut for.
+  private apertureSoil: THREE.Mesh | null = null;
+  private apertureSoilKey = '';
   private cavitySkirt: THREE.Mesh | null = null;
   // The soil's cut face at the aperture boundary, so the skin's edge is not a
   // see-through line with nothing behind it.
@@ -992,6 +1002,10 @@ export class EnvironmentRenderer {
         groundUniforms.uEyeUnderGround.value = eyeBuried ? 1 : 0;
       }
       this.updatePlanetBodyVisibility(eyeBuried);
+      // T56 slice 2: the ground under the aperture, as a volume. It is drawn
+      // under the sheet (see the module), so it only matters - and is only
+      // built - when an eye is actually down there.
+      this.syncApertureSoil(eyeBuried, surfaceY);
     }
     this.elapsedSeconds += dt;
     if (this.cavityBowl) {
@@ -1275,6 +1289,74 @@ export class EnvironmentRenderer {
   }
 
   /**
+   * Keep the aperture soil body in step with the cavity, and show it only to an
+   * eye that is inside it.
+   *
+   * Built lazily: from above it is behind the opaque sheet and cannot be seen,
+   * so a player who never goes underground never pays for it. Rebuilt when the
+   * aperture changes size or moves, which is a Root Sight open or a reroot, not
+   * a per-frame event.
+   */
+  private syncApertureSoil(eyeBuried: boolean, surfaceY: number): void {
+    const progress = this.soilUniforms.uRootSightProgress.value;
+    const centre = this.soilUniforms.uRootSightApertureCenter.value;
+    const aperture = this.soilUniforms.uRootSightApertureRadius.value;
+    const open = progress > 0.98 && aperture > 0.05;
+    if (!open) {
+      if (this.apertureSoil) this.apertureSoil.visible = false;
+      return;
+    }
+    if (!eyeBuried) {
+      if (this.apertureSoil) this.apertureSoil.visible = false;
+      return;
+    }
+
+    // The bowl's mouth is the hole the player sees, and the soil must stay just
+    // behind it. `CAVITY_CUT_OVERREACH` is the same factor the shader cuts the
+    // sheet with, so the body's shaft is wider than the cut by the gap alone.
+    const depthBelowLip = cavityDepthM(aperture);
+    const params = apertureSoilParamsFor({
+      centreX: centre.x,
+      centreZ: centre.z,
+      mouthRadiusM: aperture * CAVITY_CUT_OVERREACH,
+      depthM: depthBelowLip + 1.2,
+    });
+    const radius = Math.hypot(this.camera.position.x - centre.x, this.camera.position.z - centre.z);
+    const insidePlan = radius < params.extentM - 0.25;
+    const depth = this.camera.position.y - surfaceY;
+    const insideDepth = depth < -0.05 && depth > -(params.depthM - 0.2);
+    const inside = insidePlan && insideDepth;
+
+    const key = `${centre.x.toFixed(2)}|${centre.z.toFixed(2)}|${params.voidRadiusM.toFixed(2)}|${params.depthM.toFixed(2)}`;
+    if (key !== this.apertureSoilKey) {
+      if (this.apertureSoil) {
+        this.scene.remove(this.apertureSoil);
+        this.apertureSoil.geometry.dispose();
+        (this.apertureSoil.material as THREE.Material).dispose();
+        this.apertureSoil = null;
+      }
+      this.apertureSoilKey = key;
+    }
+
+    if (inside && !this.apertureSoil) {
+      const palette = this.cavityPalette;
+      this.apertureSoil = createApertureSoilMesh(
+        params,
+        (x, z) => planetTerrainY(this.planetRadiusM, x, z, getTerrainParams()),
+        {
+          topsoil: new THREE.Color(palette.topsoilColor),
+          subsoil: new THREE.Color(palette.subsoilColor),
+          deep: new THREE.Color(palette.deepColor),
+        },
+      );
+      if (this.apertureSoil) this.scene.add(this.apertureSoil);
+    }
+    // A rebuild can fail (an empty region); the key still advances so it is not
+    // attempted again for the same numbers on every frame.
+    if (this.apertureSoil) this.apertureSoil.visible = inside;
+  }
+
+  /**
    * Follow the scene's light with the dug wall's brightness.
    *
    * The pit is unlit geometry, so without this it keeps its noon brightness at
@@ -1293,6 +1375,7 @@ export class EnvironmentRenderer {
       this.hemisphereLight.intensity * 0.5;
     const level = THREE.MathUtils.clamp(total / CAVITY_DAYLIGHT_REFERENCE, 0.2, 1);
     setCavityBowlLight(this.cavityBowl, level);
+    if (this.apertureSoil) setApertureSoilLight(this.apertureSoil, level);
   }
 
   /**

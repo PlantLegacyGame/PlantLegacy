@@ -1,4 +1,12 @@
 export {
+  type ApertureSoilMesh,
+  type ApertureSoilParams,
+  apertureSoilBounds,
+  apertureSoilSdf,
+  buildApertureSoilMesh,
+  DEFAULT_APERTURE_SOIL,
+} from './apertureSoilVolume.ts';
+export {
   buildCavityField,
   type CavityBubble,
   type CavityField,
