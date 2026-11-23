@@ -301,11 +301,9 @@ test('the look record on the wire matches the WGSL struct', () => {
 
 /* ── Vertex attributes: the shader's @location list against the pipeline's ──
  *
- * The rain pass drew nothing for months because its pipeline declared the
- * quad buffer at locations 0/1 and the instance buffer at 2/3, while the shader
- * read a `vec4f` at location 1: it received the quad's always-zero `w`, so every
- * corner of a drop landed on the same point. Neither side is wrong on its own,
- * which is why nothing caught it - the mismatch lives across two files.
+ * The rain pass drew nothing for months because its pipeline put the instance
+ * buffer at locations 2/3 while the shader read `instanceData` from location 1.
+ * Neither side is wrong alone, which is why nothing caught it.
  */
 
 /** The renderer that owns the pipelines; the shader side is read from disk. */
@@ -509,7 +507,7 @@ test('the layout check catches the rain pipeline that drew nothing', () => {
   ];
   const problems = layoutMismatches('rain', broken);
   assert.ok(
-    problems.some((problem) => problem.includes('@location 2')),
+    problems.some((problem) => problem.includes('@location 3')),
     `the old rain layout was not caught: ${problems.join('; ') || 'no problems'}`,
   );
   // The layout the pipeline declares now passes the same check.
@@ -517,6 +515,7 @@ test('the layout check catches the rain pipeline that drew nothing', () => {
     layoutMismatches('rain', [
       { location: 0, width: 3 },
       { location: 1, width: 1 },
+      { location: 2, width: 1 },
     ]),
     [],
   );
@@ -528,16 +527,8 @@ test('the render-data stride matches the WGSL struct it describes', () => {
   const fields = [...body.slice(0, body.indexOf('}')).matchAll(/^\s*(\w+):\s*(\w+),/gm)].map(
     (match) => match[1],
   );
-  assert.deepEqual(fields, ['tier', 'visible', 'projectedSize', 'blendFactor', 'baseY']);
+  assert.deepEqual(fields, ['tier', 'visible', 'projectedSize', 'blendFactor', 'groundY']);
   const stride = RENDERER.match(/const RENDER_STRIDE = (\d+);/);
   assert.ok(stride, 'the renderer does not declare RENDER_STRIDE');
   assert.equal(Number(stride[1]), fields.length * 4, 'RENDER_STRIDE is not four bytes a field');
-});
-
-test('a field the cull pass forgets to write is caught by the struct check', () => {
-  // The negative side: the same struct without baseY, as it read before sway was
-  // anchored to the plant's base. The check must reject it.
-  const fields = ['tier', 'visible', 'projectedSize', 'blendFactor'];
-  assert.notDeepEqual(fields, ['tier', 'visible', 'projectedSize', 'blendFactor', 'baseY']);
-  assert.notEqual(fields.length * 4, 20);
 });

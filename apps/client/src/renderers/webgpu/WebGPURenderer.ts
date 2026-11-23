@@ -85,10 +85,12 @@ export const FRAME_UNIFORM_FIELDS = [
   'sunWarmth',
 ] as const;
 const FRAME_BYTES = FRAME_FLOATS * 4;
-const PLANT_FLOATS = 12;
+const PLANT_FLOATS = 13;
 const PLANT_STRIDE = PLANT_FLOATS * 4;
 /** Bytes per PlantRenderData: tier, visible, projectedSize, blendFactor, baseY. */
 const RENDER_STRIDE = 20;
+/** x, y, z, fall velocity and the terrain height under the drop. */
+const RAIN_INSTANCE_FLOATS = 5;
 const WORKGROUP_SIZE = 64;
 const MAX_JOINTS_PER_PLANT = 64;
 const JOINT_MATRIX_STRIDE = 64; // 16 floats = 64 bytes per mat4x4
@@ -388,6 +390,8 @@ export class WebGPURenderer {
   private rainBindGroup: GPUBindGroup | null = null;
 
   private rainInstanceBuffer: GPUBuffer | null = null;
+  private groundHeightAt: ((x: number, z: number) => number) | null = null;
+  private rainAnchor: { x: number; z: number } | null = null;
   private rainUniformBuffer: GPUBuffer | null = null;
 
   // C02b: Texture arrays for plant variation
@@ -877,11 +881,12 @@ export class WebGPURenderer {
         // the vertex index, so there is no per-vertex buffer to bind here.
         buffers: [
           {
-            arrayStride: 16, // instance position(12) + velocity(4)
+            arrayStride: 20, // instance position(12) + velocity(4) + groundY(4)
             stepMode: 'instance',
             attributes: [
               { shaderLocation: 0, offset: 0, format: 'float32x3' }, // instance position
               { shaderLocation: 1, offset: 12, format: 'float32' }, // instance velocity
+              { shaderLocation: 2, offset: 16, format: 'float32' }, // ground height
             ],
           },
         ],
@@ -892,9 +897,12 @@ export class WebGPURenderer {
         targets: [
           {
             format: presentationFormat,
+            // Straight alpha, as this shader writes it: `one` expects the colour
+            // premultiplied, so every drop came out at full strength and the
+            // shower read as pure white instead of grey water.
             blend: {
               color: {
-                srcFactor: 'one',
+                srcFactor: 'src-alpha',
                 dstFactor: 'one-minus-src-alpha',
                 operation: 'add',
               },
@@ -1432,26 +1440,9 @@ export class WebGPURenderer {
   }
 
   private createRainVertexBuffer(device: GPUDevice): void {
-    // Rain particles: one instance per drop, holding its world position and fall
-    // velocity. The shader builds the four quad corners from the vertex index.
-    const particleCount = this.config.rainParticleCount;
-
-    // Instance data buffer (position, velocity, seed) per particle
-    // stride: pos(3) + velocity(1) = 4 floats = 16 bytes per instance
-    const instanceData = new Float32Array(particleCount * 4);
-    const boxWidth = this.config.rainBoxWidth;
-    const boxHeight = this.config.rainBoxHeight;
-    // Same fixed seed as the WebGL2 rain field, so both paths lay the drops out
-    // identically and a screenshot is reproducible.
-    const rand = mulberry32(0x5eed1234);
-    for (let i = 0; i < particleCount; i++) {
-      const base = i * 4;
-      instanceData[base] = (rand() - 0.5) * boxWidth; // x
-      instanceData[base + 1] = rand() * boxHeight; // y
-      instanceData[base + 2] = (rand() - 0.5) * boxWidth; // z
-      instanceData[base + 3] = 0.85 + rand() * 0.3; // velocity
-    }
-
+    // One instance per drop: world position, fall velocity, and the terrain
+    // height under it, so the column stands on the slope it is falling onto.
+    const instanceData = this.buildRainInstances();
     this.rainInstanceBuffer = device.createBuffer({
       label: 'Rain instance data',
       size: instanceData.byteLength,
@@ -1460,8 +1451,63 @@ export class WebGPURenderer {
     });
     new Float32Array(this.rainInstanceBuffer.getMappedRange()).set(instanceData);
     this.rainInstanceBuffer.unmap();
+    this.rainParticleCount = this.config.rainParticleCount;
+  }
 
-    this.rainParticleCount = particleCount;
+  /**
+   * Drop positions around the rain anchor, with the ground under each one.
+   *
+   * The same fixed seed as the WebGL2 rain field, so both paths lay the drops
+   * out identically and a screenshot is reproducible.
+   */
+  private buildRainInstances(): Float32Array {
+    const particleCount = this.config.rainParticleCount;
+    const boxWidth = this.config.rainBoxWidth;
+    const boxHeight = this.config.rainBoxHeight;
+    const anchorX = this.rainAnchor?.x ?? 0;
+    const anchorZ = this.rainAnchor?.z ?? 0;
+    const data = new Float32Array(particleCount * RAIN_INSTANCE_FLOATS);
+    const rand = mulberry32(0x5eed1234);
+    for (let i = 0; i < particleCount; i++) {
+      const base = i * RAIN_INSTANCE_FLOATS;
+      const x = anchorX + (rand() - 0.5) * boxWidth;
+      const z = anchorZ + (rand() - 0.5) * boxWidth;
+      data[base] = x;
+      data[base + 1] = rand() * boxHeight; // fall phase
+      data[base + 2] = z;
+      data[base + 3] = 0.85 + rand() * 0.3; // velocity
+      data[base + 4] = this.groundHeightAt?.(x, z) ?? 0;
+    }
+    return data;
+  }
+
+  /** Terrain height under (x, z), from the same function the ground is drawn from. */
+  setGroundHeightAt(sample: (x: number, z: number) => number): void {
+    this.groundHeightAt = sample;
+    this.rebuildRainField();
+  }
+
+  /** Keep the rain over the viewer: reseed only when they walk out of the box. */
+  setRainAnchor(x: number, z: number): void {
+    if (this.rainAnchor) {
+      const moved = Math.hypot(x - this.rainAnchor.x, z - this.rainAnchor.z);
+      if (moved < this.config.rainBoxWidth * 0.4) return;
+    }
+    this.rainAnchor = { x, z };
+    this.rebuildRainField();
+  }
+
+  private rebuildRainField(): void {
+    const device = this.device.getDevice();
+    if (!device || !this.rainInstanceBuffer) return;
+    const data = this.buildRainInstances();
+    device.queue.writeBuffer(
+      this.rainInstanceBuffer,
+      0,
+      data.buffer as ArrayBuffer,
+      0,
+      data.byteLength,
+    );
   }
 
   private uploadPlantData(device: GPUDevice, plantData: PlantRenderPlant[]): void {
@@ -1489,6 +1535,10 @@ export class WebGPURenderer {
       data[offset + 10] = plant.nodeCount;
       // Spare PlantData word carries the plant's mutation mask to billboards.
       dataU32[offset + 11] = plant.mutationMask & 0x7;
+      // Terrain height under the plant: sway runs from it and the soil hides
+      // anything of the plant that falls below it.
+      data[offset + 12] =
+        this.groundHeightAt?.(plant.center.x, plant.center.z) ?? plant.center.y - plant.radius;
     }
 
     device.queue.writeBuffer(this.plantBuffer, 0, data);
@@ -1537,12 +1587,9 @@ export class WebGPURenderer {
       return;
     }
 
-    // Throttle the attempt, not only the success. `lastImpostorBakeTime` used to
-    // be stamped at the end of a bake that baked something, so a frame with no
-    // billboard-tier plant (a seed close to the eye is tier 0) returned before
-    // the stamp and the readback below - a blocking GPU map - ran again on the
-    // next frame, and the next: one full pipeline stall per frame, 60 fps down
-    // to 15.
+    // Stamp the attempt, not only the success: a frame with no billboard-tier
+    // plant returns below without baking, and used to run the readback again on
+    // every frame because nothing stamped the time.
     this.lastImpostorBakeTime = now;
 
     // Read render data to find plants in billboard tiers (2-4)
@@ -2111,10 +2158,9 @@ export class WebGPURenderer {
       }
     }
 
-    // Upload only the plants in frame. The buffer is pre-allocated for
-    // `maxPlants` joints - 82 MB at the defaults - and writing all of it every
-    // frame was 46 ms of that frame's CPU time on its own, enough to drop a
-    // 60 fps session to 15.
+    // Only the plants in frame have joints: the buffer is pre-allocated for
+    // `maxPlants` (82 MB at the defaults), and writing all of it every frame was
+    // 46 ms of CPU time on its own.
     const usedBytes = this.plantCount * MAX_JOINTS_PER_PLANT * 16 * 4;
     device.queue.writeBuffer(
       this.jointBuffer,

@@ -705,3 +705,20 @@ speck. `shaderSmoke.test.ts` grew three checks to hold all of this: every
 `@location` a vertex shader reads against the layout its pipeline declares (with
 the old rain layout as the negative case), and the `PlantRenderData` fields
 against `RENDER_STRIDE`.
+
+A review of that turn cut one of its own tests: a second stride check asserted on
+two arrays of literals written in the test itself, which can never fail. The check
+that reads the WGSL struct and the renderer constant stays, because both are the
+real data. Two more defects came out of looking at the rain again. Its pipeline
+blended with `srcFactor: one` - premultiplied - while the shader wrote straight
+alpha, so every drop mixed at full colour and the shower was pure white whatever
+the shader chose (E34). And the overlay's only soil occlusion was the analytic
+sphere, which sits below the drawn terrain, so rain fell through the hillside and
+the seed's buried half was painted over it (E35). Rain now carries the terrain
+height under each drop and wraps through the box height above it; plants carry
+`groundY` and discard what falls below, except in Root Sight. The rain volume is
+placed over the viewer when the instances are built rather than wrapped in the
+shader, because a wrap moves a drop off the column its ground was sampled at.
+The drops also got an aspect: a width floor of 7% of the streak, a round bead and a
+tail that narrows with height, so a drop reads as a droplet instead of a tick, and
+anything within 1.8 m of the eye shrinks away instead of covering the screen.

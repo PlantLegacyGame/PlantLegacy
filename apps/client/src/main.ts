@@ -5918,6 +5918,11 @@ async function initPlantRenderer(): Promise<void> {
           const gpuViewport = viewportSize();
           gpuRenderer.resize(gpuViewport.width, gpuViewport.height, renderer.getPixelRatio());
           gpuRenderer.setSunDirection(environmentRenderer?.getSunDirection() ?? sunLight.position);
+          // The overlay has no ground of its own: it needs the terrain height to
+          // stand the plants on and to keep the rain over the soil.
+          gpuRenderer.setGroundHeightAt((x, z) =>
+            planetTerrainY(renderConfig?.planetRadiusM ?? 0, x, z, getTerrainParams()),
+          );
           device.setDeviceLostCallback((reason) => {
             console.error('WebGPU device lost:', reason);
             recordSessionEvent('device.lost', { reason: String(reason) });
@@ -11729,6 +11734,7 @@ function renderFrame(deltaTime: number): void {
     // Keep WebGPU plant/ground lighting in sync with the visual sun every frame.
     webgpuRenderer?.setSunDirection(environmentRenderer.getSunDirection());
     webgpuRenderer?.setSunWarmth(environmentRenderer.getSunWarmth());
+    webgpuRenderer?.setRainAnchor(camera.position.x, camera.position.z);
     // Exposure grade: a lift at golden hour, a crush at night, from render.json.
     renderer.toneMappingExposure = environmentRenderer.getExposureGrade();
   }

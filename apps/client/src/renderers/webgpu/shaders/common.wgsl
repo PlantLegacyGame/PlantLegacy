@@ -74,6 +74,9 @@ struct PlantData {
   importance: f32,
   // C02b: OR of the plant's node mutation bits, for billboard tiers.
   mutationMask: u32,
+  // Terrain height under the plant, from the same function the ground is drawn
+  // from. Sway is measured from it and the soil hides what falls below it.
+  groundY: f32,
 }
 
 struct PlantRenderData {
@@ -81,11 +84,8 @@ struct PlantRenderData {
   visible: u32,
   projectedSize: f32,
   blendFactor: f32,
-  // Bottom of the plant's bounding sphere, written by the cull pass. Sway is
-  // measured from here rather than from world Y: the world sits on a planet
-  // whose surface is metres above y = 0, so world Y gave every plant - the seed
-  // included - the same sway and slid the whole thing sideways as one block.
-  baseY: f32,
+  // Terrain height under the plant, copied from PlantData by the cull pass.
+  groundY: f32,
 }
 
 // T04 appearance, per plant and per organ family (ADR-059).
@@ -208,8 +208,8 @@ fn lookEmissive(look: LookOrgan, worldPosition: vec3f, frame: FrameUniforms) -> 
   return look.glowPlus.rgb * (glow * 0.32 * pulse);
 }
 
-fn windOffset(position: vec3f, frame: FrameUniforms, swayStiffness: f32, baseY: f32) -> vec3f {
-  let height = max(0.0, position.y - baseY);
+fn windOffset(position: vec3f, frame: FrameUniforms, swayStiffness: f32, groundY: f32) -> vec3f {
+  let height = max(0.0, position.y - groundY);
   if (height < 0.1 || frame.windStrength < 0.01) {
     return position;
   }

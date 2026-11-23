@@ -135,7 +135,7 @@ fn lookForOrgan(plantIndex: u32, nodeType: f32) -> LookOrgan {
     );
 
     // C02b: GPU skinning - apply joint matrices
-    var worldPosition = windOffset(input.position, frame, swayStiffness, renderInfo.baseY);
+    var worldPosition = windOffset(input.position, frame, swayStiffness, renderInfo.groundY);
     // NOTE: Do NOT scale worldPosition by emergence from origin. JS pre-computes
     // emergent positions; emergence is used only for radius/fade effects below.
     
@@ -182,6 +182,13 @@ fn lookForOrgan(plantIndex: u32, nodeType: f32) -> LookOrgan {
  @fragment
  fn fs_main(input: VertexOutput, @builtin(front_facing) frontFacing: bool) -> @location(0) vec4f {
    if (soilOccludes(input.worldPosition)) {
+     discard;
+   }
+   // The analytic sphere `soilOccludes` tests sits below the drawn terrain, so
+   // the topsoil between them showed plants through it - the seed's buried half
+   // was painted over the ground. Nothing falls below the terrain it stands on.
+   // Root Sight opens the ground, so it keeps the roots below it.
+   if (frame.rootSightEnabled == 0u && input.worldPosition.y < renderData[input.plantIndex].groundY) {
      discard;
    }
 

@@ -13,6 +13,7 @@
 struct VertexInput {
   @location(0) instancePosition: vec3f,
   @location(1) velocity: f32,
+  @location(2) groundY: f32,
   @builtin(vertex_index) vertexIndex: u32,
 }
 
@@ -48,19 +49,10 @@ fn vs_main(input: VertexInput) -> VertexOutput {
   // dividend's sign, which would drop half the field below the box.
   let cycle = fract((home.y - frame.time * fallSpeed) / boxHeight);
 
-  // The field follows the eye. Each drop owns a world position, so the copy that
-  // falls outside the box wraps exactly one box width round to the far side;
-  // walking then moves the viewer through standing weather, and the volume never
-  // runs out behind you.
-  let eye = frame.cameraPos.xyz;
-  let boxWidth = max(rain.boxWidth, 0.001);
-  let halfWidth = boxWidth * 0.5;
-  let wrapped = (fract((home.xz - eye.xz + halfWidth) / boxWidth) - 0.5) * boxWidth;
-  let pos = vec3f(
-    eye.x + wrapped.x,
-    eye.y - boxHeight * 0.3 + cycle * boxHeight,
-    eye.z + wrapped.y,
-  );
+  // The column stands on the terrain: a drop wraps through the box height above
+  // the ground under it, so rain lands on the slope instead of falling through
+  // it. The box itself is placed over the viewer when the instances are built.
+  let pos = vec3f(home.x, input.groundY + cycle * boxHeight, home.z);
 
   // Each drop its own lean, so the shower is not one ruled line.
   let lean = (seed - 0.5) * 0.5;
@@ -69,8 +61,11 @@ fn vs_main(input: VertexInput) -> VertexOutput {
 
   // Short enough to read as a drop: a quarter of the old length at the top of the
   // speed range, and still varied per drop.
-  let streakLength = rain.streakLength * (0.35 + 0.5 * speedShare) * (0.5 + 0.9 * seed);
-  let width = rain.streakWidth * (0.7 + 1.1 * seed);
+  var streakLength = rain.streakLength * (0.35 + 0.5 * speedShare) * (0.5 + 0.9 * seed);
+  // A droplet keeps an aspect: the head has to be a few pixels wide or the quad
+  // is a subpixel hairline that reads as a white tick. The configured width is
+  // the floor, 7% of the streak the working width.
+  var width = max(rain.streakWidth * (0.7 + 1.1 * seed), streakLength * 0.07);
 
   // A triangle list has no four-vertex quad: drawing four vertices per instance
   // gave one triangle per drop, which is why rain read as white ticks. Six
@@ -86,6 +81,13 @@ fn vs_main(input: VertexInput) -> VertexOutput {
 
   // Face the camera in width, follow the world fall axis in length.
   let toEye = frame.cameraPos.xyz - pos;
+  let eyeDistance = length(toEye);
+  // A drop a hand's width from the eye covers most of the screen, and every one
+  // of those is a full-screen blended quad: shrink them away before they cost
+  // the fill. Water that close is a blur, not a streak.
+  let apart = smoothstep(0.4, 1.8, eyeDistance);
+  streakLength *= apart;
+  width *= apart;
   var side = cross(fall, toEye);
   if (dot(side, side) < 1e-6) {
     side = vec3f(1.0, 0.0, 0.0);
@@ -106,18 +108,21 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4f {
   let x = (input.uv.x - 0.5) * 2.0;
   let y = input.uv.y;
 
-  let head = 1.0 - smoothstep(0.55, 1.0, length(vec2f(x, (y - 0.12) * 4.0)));
-  let girth = mix(0.62, 0.14, y);
-  let tail = (1.0 - smoothstep(0.0, girth, abs(x))) * smoothstep(0.02, 0.24, y);
-  let shape = clamp(max(head, tail * 0.7), 0.0, 1.0);
+  // A droplet: a round bead low in the quad, and a tail that narrows as it
+  // climbs, so the silhouette tapers to a point instead of reading as a wedge.
+  let bead = 1.0 - smoothstep(0.3, 0.55, length(vec2f(x, (y - 0.16) * 2.2)));
+  let tailHalfWidth = mix(0.36, 0.04, smoothstep(0.16, 1.0, y));
+  let tail = (1.0 - smoothstep(tailHalfWidth * 0.55, tailHalfWidth, abs(x))) * smoothstep(0.16, 0.3, y);
+  let shape = clamp(max(bead, tail * 0.8), 0.0, 1.0);
 
   let speedShare = clamp(input.velocity / max(rain.maxVelocity, 0.001), 0.0, 1.0);
-  let alpha = shape * mix(0.9, 0.42, y) * (0.55 - 0.2 * speedShare);
+  let alpha = shape * mix(0.95, 0.5, y) * (0.7 - 0.25 * speedShare);
   if (alpha < 0.004) {
     discard;
   }
-  // Water, not a lamp: neutral grey, cooler in the tail, never additive. Kept
-  // under 0.6 so a drop caught close to the eye reads as grey water rather than
-  // a white speck against the soil.
-  return vec4f(mix(vec3f(0.45, 0.5, 0.55), vec3f(0.62, 0.66, 0.7), 1.0 - y), alpha);
+  // Water, not a lamp: sky-grey, cooler at the tail, never additive. Mixed by
+  // the alpha in the blend, so the colour is the lit value and the alpha the
+  // weight - the old pipeline blended it as if it were premultiplied, which is
+  // what made every drop pure white.
+  return vec4f(mix(vec3f(0.62, 0.68, 0.74), vec3f(0.88, 0.92, 0.96), 1.0 - y), alpha);
 }

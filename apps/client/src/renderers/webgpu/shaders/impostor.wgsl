@@ -116,7 +116,7 @@ fn vs_main(
     emergence = smoothstep(0.0, 0.9, elapsed) * input.growthProgress;
   }
 
-  var worldPosition = windOffset(input.position, frame, 0.3, renderInfo.baseY);
+  var worldPosition = windOffset(input.position, frame, 0.3, renderInfo.groundY);
   worldPosition *= emergence;
 
   // Impostor baking uses the unskinned rest pose. The baking bind group does
