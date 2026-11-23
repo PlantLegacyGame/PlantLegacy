@@ -39,6 +39,7 @@ const skyDuskScratch = new THREE.Color();
 const skyNightScratch = new THREE.Color();
 
 import {
+  APERTURE_SOIL_BELOW_FLOOR_M,
   apertureSoilParamsFor,
   createApertureSoilMesh,
   setApertureSoilLight,
@@ -1319,7 +1320,7 @@ export class EnvironmentRenderer {
       centreX: centre.x,
       centreZ: centre.z,
       mouthRadiusM: aperture * CAVITY_CUT_OVERREACH,
-      depthM: depthBelowLip + 1.2,
+      depthM: depthBelowLip + APERTURE_SOIL_BELOW_FLOOR_M,
     });
     const radius = Math.hypot(this.camera.position.x - centre.x, this.camera.position.z - centre.z);
     const insidePlan = radius < params.extentM - 0.25;

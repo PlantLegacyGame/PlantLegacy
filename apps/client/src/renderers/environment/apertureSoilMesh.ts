@@ -34,6 +34,8 @@ export const APERTURE_SOIL_TOP_INSET_M = 0.03;
 export const APERTURE_SOIL_VOXEL_M = 0.26;
 /** Clearance between the bowl's mouth and the soil's shaft wall. */
 export const APERTURE_SOIL_GAP_M = 0.02;
+/** How far below the bowl's floor the body's own floor sits. */
+export const APERTURE_SOIL_BELOW_FLOOR_M = 1.2;
 
 export interface ApertureSoilPalette {
   topsoil: THREE.Color;

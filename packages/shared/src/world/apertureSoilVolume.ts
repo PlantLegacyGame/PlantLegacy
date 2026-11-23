@@ -175,11 +175,25 @@ export function buildApertureSoilMesh(
   if (mesh.vertices === 0) return null;
 
   const depth = Math.max(0.2, params.depthM);
+  const voidRadius = Math.max(0.05, params.voidRadiusM);
   const strata = new Float32Array(mesh.vertices);
   for (let v = 0; v < mesh.vertices; v += 1) {
-    const x = mesh.positions[v * 3];
+    let x = mesh.positions[v * 3];
     const y = mesh.positions[v * 3 + 1];
-    const z = mesh.positions[v * 3 + 2];
+    let z = mesh.positions[v * 3 + 2];
+    // Surface nets can put a shaft vertex up to a voxel inside the field's zero
+    // crossing, and at a seedling's 30 cm mouth that is centimetres into the
+    // hole the bowl lines. Push those vertices back out to the void's own radius
+    // so the drawn wall honours the field at every size: no part of the body is
+    // ever inside the void, and so never inside the bowl's mouth.
+    const radial = Math.hypot(x - params.centreXM, z - params.centreZM);
+    if (radial > 1e-6 && radial < voidRadius) {
+      const push = voidRadius / radial;
+      x = params.centreXM + (x - params.centreXM) * push;
+      z = params.centreZM + (z - params.centreZM) * push;
+      mesh.positions[v * 3] = x;
+      mesh.positions[v * 3 + 2] = z;
+    }
     const top = ground(x, z) - params.topInsetM;
     strata[v] = Math.min(0.999, Math.max(0, (top - y) / depth));
   }
