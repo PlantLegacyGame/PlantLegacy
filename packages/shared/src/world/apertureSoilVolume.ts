@@ -18,9 +18,11 @@
  *   front of this body and nothing changes; from below, this body is in front of
  *   the sheet's back and the eye sees earth with a floor and a shaft wall
  *   instead. No shader edit, no second surface at the same depth to z-fight.
- * - **The void is the aperture**, a hair wider than the bowl's mouth, so the
- *   tuned bowl still lines the hole it was tuned for and the block never pokes
- *   through it.
+ * - **The void is the aperture**, a hair wider than the bowl's mouth at the top,
+ *   so the tuned bowl still lines the hole it was tuned for and the block never
+ *   pokes through it. Below the top the shaft is wider by the chord sag of the
+ *   meshed polygon, because a face between two vertices on the void can still
+ *   stand inside it.
  * - **The floor is deeper than the pit**, so the body contains the cavity rather
  *   than ending on its floor.
  *
@@ -137,14 +139,20 @@ export function apertureSoilSdf(
   const top = surface - params.topInsetM;
   const floor = surface - Math.max(0.2, params.depthM);
   const radius = Math.hypot(x - params.centreXM, z - params.centreZM);
+  const voidRadius = Math.max(0.05, params.voidRadiusM);
+  // The meshed wall is a polygon, not a circle: a chord between two wall
+  // vertices at radius r dips inside by about c^2 / (8 r), and a chord across
+  // the dual mesh spans up to a cell diagonal (c^2 ~ 3 step^2). At a seedling's
+  // 0.3 m shaft that is centimetres, and it showed as soil standing inside the
+  // bowl's wall although every vertex was already outside the void. Cut the
+  // wall wider by that sag below the top; the top keeps the narrow cut, so its
+  // edge still meets the sheet's and the bowl stays in front of the soil.
+  const step = Math.max(0.05, params.voxelM);
+  const wallRadius = voidRadius + (3 * step * step) / (8 * voidRadius);
+  const cutRadius = y < top - 0.005 ? wallRadius : voidRadius;
   // Negative inside: below the top, above the floor, inside the extent, outside
   // the void. Each term is the signed distance to one face of that intersection.
-  return Math.max(
-    y - top,
-    floor - y,
-    radius - Math.max(0.2, params.extentM),
-    Math.max(0.05, params.voidRadiusM) - radius,
-  );
+  return Math.max(y - top, floor - y, radius - Math.max(0.2, params.extentM), cutRadius - radius);
 }
 
 /**
@@ -166,11 +174,43 @@ export function buildApertureSoilMesh(
   ];
   if (counts[0] < 2 || counts[1] < 2 || counts[2] < 2) return null;
 
+  // One drawn-surface sample per column (x, z), interpolated between columns.
+  // The mesher asks the field for every sample on the grid, and the gradient
+  // normals add six more per vertex, so the same column's height was being
+  // fetched dozens of times: about 50 000 terrain calls for ~1 200 columns at a
+  // seedling's aperture, and that was the whole build. The surface varies over
+  // metres, not voxels, so a bilinear read of the column heights is enough - and
+  // it is exact at every grid point, where the field is sampled.
+  const columns = counts[0] * counts[2];
+  const heights = new Float64Array(columns).fill(Number.NaN);
+  const columnHeight = (ix: number, iz: number): number => {
+    const at = ix * counts[2] + iz;
+    const known = heights[at];
+    // NaN marks a column that has not been sampled yet.
+    if (!Number.isNaN(known)) return known;
+    const height = ground(bounds.min[0] + ix * step, bounds.min[2] + iz * step);
+    heights[at] = height;
+    return height;
+  };
+  const heightAt = (x: number, z: number): number => {
+    const fx = Math.min(counts[0] - 1, Math.max(0, (x - bounds.min[0]) / step));
+    const fz = Math.min(counts[2] - 1, Math.max(0, (z - bounds.min[2]) / step));
+    const ix = Math.floor(fx);
+    const iz = Math.floor(fz);
+    const tx = fx - ix;
+    const tz = fz - iz;
+    const ix1 = Math.min(counts[0] - 1, ix + 1);
+    const iz1 = Math.min(counts[2] - 1, iz + 1);
+    const near = columnHeight(ix, iz) * (1 - tx) + columnHeight(ix1, iz) * tx;
+    const far = columnHeight(ix, iz1) * (1 - tx) + columnHeight(ix1, iz1) * tx;
+    return near * (1 - tz) + far * tz;
+  };
+
   const mesh = surfaceNets({
     min: bounds.min,
     step,
     counts,
-    sdf: (x, y, z) => apertureSoilSdf(ground, params, x, y, z),
+    sdf: (x, y, z) => apertureSoilSdf(heightAt, params, x, y, z),
   });
   if (mesh.vertices === 0) return null;
 
@@ -194,7 +234,7 @@ export function buildApertureSoilMesh(
       mesh.positions[v * 3] = x;
       mesh.positions[v * 3 + 2] = z;
     }
-    const top = ground(x, z) - params.topInsetM;
+    const top = heightAt(x, z) - params.topInsetM;
     strata[v] = Math.min(0.999, Math.max(0, (top - y) / depth));
   }
   return { ...mesh, strata };

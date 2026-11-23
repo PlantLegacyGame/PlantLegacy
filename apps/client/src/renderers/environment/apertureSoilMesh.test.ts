@@ -6,6 +6,7 @@ import {
   buildApertureSoilMesh,
   type GroundHeight,
 } from '@plant-legacy/shared/world';
+import * as THREE from 'three';
 import {
   APERTURE_SOIL_BELOW_FLOOR_M,
   APERTURE_SOIL_EXTENT_M,
@@ -13,6 +14,8 @@ import {
   APERTURE_SOIL_MIN_DEPTH_M,
   APERTURE_SOIL_TOP_INSET_M,
   apertureSoilParamsFor,
+  createApertureSoilMesh,
+  setApertureSoilLight,
 } from './apertureSoilMesh.ts';
 import { CAVITY_CUT_OVERREACH, cavityDepthM } from './cavity/index.ts';
 
@@ -148,6 +151,78 @@ describe('the aperture body fits the bowl it is cut for', () => {
         );
       }
     }
+  });
+
+  it('keeps the shaft faces outside the bowl mouth, not just its vertices', () => {
+    // Vertices on the void can still be joined by a chord that dips inside it:
+    // at a seedling's 30 cm shaft the sag is nearly 3 cm, and the live body had
+    // soil standing over the bowl's wall by 14 mm while every vertex was
+    // outside. The field widens the wall by that sag below the top.
+    for (const apertureM of APERTURES_M) {
+      const { mouthM, params } = bodyFor(apertureM);
+      const body = buildApertureSoilMesh(bank, params);
+      assert.ok(body, `aperture ${apertureM}: nothing meshed`);
+      const position = body.positions;
+      const indices = body.indices;
+      let shallowest = Number.POSITIVE_INFINITY;
+      for (let t = 0; t < indices.length; t += 3) {
+        const corners = [indices[t], indices[t + 1], indices[t + 2]];
+        for (const [u, v] of [
+          [corners[0], corners[1]],
+          [corners[1], corners[2]],
+          [corners[2], corners[0]],
+        ] as const) {
+          for (const f of [0.25, 0.5, 0.75]) {
+            const x = position[u * 3] + (position[v * 3] - position[u * 3]) * f;
+            const y = position[u * 3 + 1] + (position[v * 3 + 1] - position[u * 3 + 1]) * f;
+            const z = position[u * 3 + 2] + (position[v * 3 + 2] - position[u * 3 + 2]) * f;
+            if (y > bank(x, z) - params.topInsetM - 0.002) continue;
+            const radius = radiusOf(params, x, z);
+            if (radius < shallowest) shallowest = radius;
+          }
+        }
+      }
+      assert.ok(
+        shallowest > mouthM + 0.005,
+        `aperture ${apertureM}: a shaft face is ${(mouthM - shallowest) * 1000} mm inside the ${mouthM.toFixed(3)} m mouth`,
+      );
+    }
+  });
+
+  it('fills the body with its own vertex colour, so the bands survive the dark', () => {
+    // Underground there is no scene light: the emissive term is all that is
+    // drawn. A single tinted fill made the three soil bands one flat brown, so
+    // the buried view had no strata while the pit's wall had them. The fill is
+    // white and the shader multiplies it by the vertex colour instead.
+    const { params } = bodyFor(1.4);
+    const mesh = createApertureSoilMesh(params, bank, {
+      topsoil: new THREE.Color('#51402a'),
+      subsoil: new THREE.Color('#80633e'),
+      deep: new THREE.Color('#625a4d'),
+    });
+    assert.ok(mesh, 'nothing meshed');
+    const material = mesh.material as THREE.MeshStandardMaterial;
+    assert.equal(material.vertexColors, true);
+    assert.deepEqual(
+      [material.emissive.r, material.emissive.g, material.emissive.b],
+      [1, 1, 1],
+      'a tinted fill is one flat colour underground',
+    );
+    // Scaling the fill with the scene's light must keep it neutral: the shader
+    // multiplies it by the vertex colour, so a tint here would flatten the
+    // bands again.
+    setApertureSoilLight(mesh, 1);
+    assert.ok(
+      material.emissive.r === material.emissive.g && material.emissive.g === material.emissive.b,
+      'the light level tinted the fill, so the bands are gone again',
+    );
+    const day = material.emissive.r;
+    setApertureSoilLight(mesh, 0.2);
+    assert.ok(day > 0 && material.emissive.r < day, 'the fill does not follow the light level');
+    assert.ok(
+      String(material.onBeforeCompile).includes('emissive * vColor'),
+      'the fill no longer multiplies the vertex colour',
+    );
   });
 
   it('reaches past the aperture in plan and below the bowl in depth', () => {

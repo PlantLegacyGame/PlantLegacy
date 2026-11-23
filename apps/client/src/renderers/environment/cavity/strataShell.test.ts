@@ -74,6 +74,29 @@ describe('strata shell', () => {
     assert.equal(shell.positions.length, shell.ringCount * shell.cols * 3);
   });
 
+  it('leaves the floor rings on the profile, so the cap is not scalloped', () => {
+    // The same radial wobble that reads as clods on a 1 m wall is a serrated
+    // ring where the floor narrows: the cap's edge was a torn grey plate. Rings
+    // narrower than 0.7 of the mouth carry no relief, so the floor is the
+    // profile's own cone and its edge is a clean circle.
+    const shell = buildStrataShell({ bands: CAVITY_STRATA_BANDS, cols: 48 });
+    const rings = strataRings(CAVITY_STRATA_BANDS, 3);
+    let checked = 0;
+    for (let ring = 0; ring < rings.length; ring += 1) {
+      if (rings[ring].r > 0.7) continue;
+      for (let c = 0; c < shell.cols; c += 1) {
+        const i = (ring * shell.cols + c) * 3;
+        const radius = Math.hypot(shell.positions[i], shell.positions[i + 2]);
+        assert.ok(
+          Math.abs(radius - rings[ring].r) < 1e-6,
+          `floor ring ${ring} is off the profile by ${(radius - rings[ring].r).toFixed(4)}`,
+        );
+        checked += 1;
+      }
+    }
+    assert.ok(checked > 0, 'no floor ring was checked');
+  });
+
   it('keeps the relief inside the wall, never through it', () => {
     for (let i = 0; i < 64; i += 1) {
       const relief = clodRelief((i / 64) * Math.PI * 2, i / 64, 0.045);

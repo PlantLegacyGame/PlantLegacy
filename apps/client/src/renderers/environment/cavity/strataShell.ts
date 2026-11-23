@@ -159,7 +159,13 @@ export function buildStrataShell(options: {
       // sliver of sky between the lip and the soil it cuts. Relief fades in below
       // that, where there is soil all round the wall to hide the wobble.
       const fade = Math.min(1, Math.max(0, (-spec.y - 0.28) / 0.22));
-      const wobble = ring === 0 ? 0 : clodRelief(angle, depthFraction, relief) * fade;
+      // ...and fades out again at the floor. The last rings are only half the
+      // mouth wide, so the same radial wobble that reads as clods on the wall is
+      // a scalloped ring at the bottom: the floor cap's edge was a torn grey
+      // plate with a serrated silhouette. Near the centre there is no wall left
+      // to give texture, so the profile's own radius is the right one.
+      const floorFade = Math.min(1, Math.max(0, (spec.r - 0.7) / 0.3));
+      const wobble = ring === 0 ? 0 : clodRelief(angle, depthFraction, relief) * fade * floorFade;
       const radius = spec.r * (1 + wobble);
       const index = (ring * cols + c) * 3;
       positions[index] = Math.cos(angle) * radius;
