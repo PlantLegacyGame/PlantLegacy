@@ -309,6 +309,41 @@ describe('the pit reads as a shaft from above', () => {
   });
 });
 
+describe("the rim casts the pit's own shadow", () => {
+  const source = readFileSync(
+    join(dirname(fileURLToPath(import.meta.url)), 'cavity', 'bowlMesh.ts'),
+    'utf8',
+  );
+
+  it('follows the sun ray to the mouth and shadows where it leaves outside it', () => {
+    // Analytic, no shadow map: from a fragment in the pit, walk towards the sun
+    // to the mouth's plane; if that point is outside the opening, the soil round
+    // the mouth is between it and the sun.
+    assert.match(source, /uniform vec3 uBowlSun;/);
+    assert.match(source, /if \(uBowlSun\.y > 0\.03\)/);
+    assert.match(
+      source,
+      /vec2 bowlExit = vBowlWorldPosition\.xz \+ uBowlSun\.xz \* \(bowlRise \/ uBowlSun\.y\);/,
+    );
+    assert.match(
+      source,
+      /float bowlExitGap = distance\(bowlExit, uBowlApertureCenter\) - uBowlApertureRadius;/,
+    );
+    assert.match(source, /\(1\.0 - BOWL_LIP_SHADOW \* bowlLipShadow\)/);
+  });
+
+  it('takes the sun the ground and the sky take', () => {
+    // One sun: the renderer writes the bowl's uniform from `bodies.sunDir`, the
+    // same vector the sky dome and the ground read, so the shadow cannot fall on
+    // the sunward side.
+    const renderer = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), '..', 'EnvironmentRenderer.ts'),
+      'utf8',
+    );
+    assert.match(renderer, /setCavityBowlSun\(this\.cavityBowl, this\.bodies\.sunDir\)/);
+  });
+});
+
 describe('which bowl skin the eye sees', () => {
   const bowlAt = (eye: THREE.Vector3): THREE.MeshBasicMaterial => {
     const bowl = createCavityBowl(new THREE.Color('#3a2a1c'), new THREE.Color('#6a5440'), 24, 12);

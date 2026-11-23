@@ -335,3 +335,53 @@ read as the same shape, and the absolute depth is carried by the measured
 geometry (9.5 m) rather than by brightness. Strata positions in metres rather
 than fractions of the pit would give a pit that visibly deepens with size; that
 is a palette decision for another pass.
+
+### Shading-only depth: what does not work, and what does
+
+**The negative result, so it is not tried again.** With the profile untouched, a
+ramp on the wall's own depth cannot make a pit read deep from straight above:
+
+- The ramp in this build (`1 − 0.45 · smoothstep(0.10, 1, d)`) already spans
+  0.999 → 0.557 of tone across the visible opening, rank-correlated −0.99 with
+  depth, and the pit still reads as a plate. The tone range sits in the thin lit
+  ring at the rim.
+- 45 % of the visible opening is one depth band (> 0.7 of the profile), and inside
+  that band the ramp moves the tone by only 20 %. That is what "flat disc" means
+  numerically.
+- A physically-shaped term (sky solid angle over the mouth) moves the same band
+  by 16 %: worse than the tuned one.
+- Concentrating the ramp in that band (`1 − 0.50 · smoothstep(0.55, 1, d)`) gives
+  the band a 59 % gradient, and the frame reads as a *decorated* plate: the
+  gradient traces the floor's clod relief as radial wedges, because on this
+  surface a fragment's height varies with angle as much as with depth. It was
+  measured at 2.5 m and 4.9 m and reverted, not committed.
+
+The reason is physical: a flat floor under a sky that is uniform over the mouth
+is uniformly lit. At noon there is no shadow on it anywhere, so the only thing a
+shading term can paint is the saucer's own noise.
+
+**What does read: the rim's own shadow.** The sun reaches a point in the pit only
+where the line from it towards the sun leaves through the mouth. That is computed
+per fragment, analytically, with no shadow map: walk the sun ray up to the mouth's
+plane and test the exit point against `uBowlApertureRadius` about
+`uBowlApertureCenter` (`BOWL_LIP_SHADOW` 0.55, edge soft over 6 % of the mouth).
+The bowl's sun uniform is written from `bodies.sunDir` each frame, the same vector
+the sky dome and the ground read, so the shadow cannot fall on the sunward side.
+
+Measured from straight above by casting rays through the opening and evaluating
+the shader's own test at each hit (`shadow = share of the visible opening whose
+sun ray leaves outside the mouth`):
+
+| mouth | time | sun elevation | shadowed share | what the frame does |
+|---|---|---|---|---|
+| 2.5 m | 12:00 | 68.2° | **0.10** | still a disc |
+| 2.5 m | 15:00 | 48.2° | **0.18** | still a disc |
+| 2.5 m | 17:16 | 13.4° | **0.67** | reads as a shaft: dark hole, lit sliver of floor |
+| 4.9 m | 12:00 | 68.2° | **0.35** | softly shaded, still disc-like |
+| 4.9 m | 15:00 | 48.2° | **0.53** | reads deep: shadowed half, lit floor with its strata |
+
+So the cue fixes the frames it can reach and leaves noon alone, which is correct
+rather than a failure: at noon the sun is overhead and the whole floor is lit.
+The top-down read at noon still needs a shape, and the shape is not being changed.
+Frames: `shadow-25-noon.png`, `shadow-25-1500.png`, `shadow-25-1716.png`,
+`shadow-49-noon.png`, `shadow-49-1500.png`.

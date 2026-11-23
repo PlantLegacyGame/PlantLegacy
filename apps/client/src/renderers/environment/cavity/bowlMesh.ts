@@ -148,6 +148,11 @@ export function createCavityBowl(
   // this from the sun, ambient and sky fill each frame.
   const lightUniform = { value: 1 };
   material.userData.lightUniform = lightUniform;
+  // Where the sun stands, as a unit vector towards it. The rim's shadow is the
+  // one depth cue a pit has that does not depend on the shape of its floor; see
+  // BOWL_LIP_SHADOW in the fragment shader.
+  const sunUniform = { value: new THREE.Vector3(0.2, 0.95, 0.24) };
+  material.userData.sunUniform = sunUniform;
   // The floor under the wall's lit value, at each end of the light range. Clamped
   // and ordered here rather than in the shader: a night fill above the day fill
   // would make the pit brighter at midnight than at noon, and glsl mix does not
@@ -184,6 +189,7 @@ export function createCavityBowl(
     shader.uniforms.uBowlSurfaceY = clipUniforms.uBowlSurfaceY;
     shader.uniforms.uBowlClipMode = clipUniforms.uBowlClipMode;
     shader.uniforms.uBowlLight = lightUniform;
+    shader.uniforms.uBowlSun = sunUniform;
     shader.uniforms.uBowlFillNight = fillUniforms.night;
     shader.uniforms.uBowlFillDay = fillUniforms.day;
     shader.uniforms.uBowlTopsoilColor = stratumUniforms.topsoil;
@@ -233,6 +239,7 @@ const float BOWL_MOUTH_KEEP_FRACTION = 1.03;
 uniform float uBowlSurfaceY;
 uniform float uBowlClipMode;
 uniform float uBowlLight;
+uniform vec3 uBowlSun;
 uniform float uBowlFillNight;
 uniform float uBowlFillDay;
 uniform vec3 uBowlTopsoilColor;
@@ -243,6 +250,11 @@ const float BOWL_BAND_SUBSOIL = ${BAND_SUBSOIL_FROM.toFixed(4)};
 const float BOWL_BAND_DEEP = ${BAND_DEEP_FROM.toFixed(4)};
 const float BOWL_PROFILE_DEPTH = ${CAVITY_PROFILE_DEPTH.toFixed(4)};
 const float BOWL_DEPTH_FALLOFF = ${BOWL_DEPTH_FALLOFF.toFixed(3)};
+// How much of the wall the rim's shadow takes, and how soft its edge is as a
+// fraction of the mouth's radius. Shading, not geometry: the shadow is the pit's
+// own, cast by the soil around its mouth.
+const float BOWL_LIP_SHADOW = 0.55;
+const float BOWL_LIP_SHADOW_SOFT = 0.06;
 float bowlHash(vec2 p) {
   p = fract(p * vec2(123.34, 456.21));
   p += dot(p, p + 45.32);
@@ -340,6 +352,25 @@ float bowlNoise(vec2 p) {
   // a hole - the lip's shadow, the near wall between the eye and the cavity, and
   // the way grain and clods break up a flat fill. Every factor stays near 1.0 so
   // the strata colours survive them.
+  // Lip shadow, analytically. The sun reaches a point in the pit only where the
+  // line from it towards the sun leaves through the mouth: follow the ray up to
+  // the mouth's plane and ask whether it is still inside the opening. A flat
+  // floor under a uniform sky is uniformly lit - which is why no depth ramp could
+  // make the floor read as a hole - and this crescent is the cue that says how
+  // far down it is, because its width is the pit's own depth against the sun's
+  // height. It is absent at noon, and that is correct: the sun is overhead and
+  // reaches the whole floor.
+  float bowlLipShadow = 0.0;
+  if (uBowlSun.y > 0.03) {
+    float bowlRise = max(uBowlSurfaceY - vBowlWorldPosition.y, 0.0);
+    vec2 bowlExit = vBowlWorldPosition.xz + uBowlSun.xz * (bowlRise / uBowlSun.y);
+    float bowlExitGap = distance(bowlExit, uBowlApertureCenter) - uBowlApertureRadius;
+    bowlLipShadow = smoothstep(
+      -BOWL_LIP_SHADOW_SOFT * uBowlApertureRadius,
+      BOWL_LIP_SHADOW_SOFT * uBowlApertureRadius,
+      bowlExitGap
+    );
+  }
   diffuseColor.rgb *=
     (0.88 + 0.24 * bowlGrain) *
     (0.9 + 0.2 * bowlClods) *
@@ -351,6 +382,7 @@ float bowlNoise(vec2 p) {
     (1.0 - BOWL_DEPTH_FALLOFF * smoothstep(0.10, 1.0, bowlDepth)) *
     (0.92 + 0.08 * bowlRimShadow) *
     bowlNearShade *
+    (1.0 - BOWL_LIP_SHADOW * bowlLipShadow) *
     // Daylight, but never to zero: a lit wall at night is lit by the sky it is
     // dug into, and going black would hide the strata the pit exists to show.
     mix(0.5, 1.0, uBowlLight);`,
@@ -441,7 +473,7 @@ float bowlNoise(vec2 p) {
   }`,
       );
   };
-  material.customProgramCacheKey = () => 'root-sight-bowl-dirt-v14';
+  material.customProgramCacheKey = () => 'root-sight-bowl-dirt-v15';
 
   const mesh = new THREE.Mesh(geometry, material);
   mesh.name = 'root-sight-bowl';
@@ -464,4 +496,18 @@ export function setCavityBowlLight(bowl: THREE.Mesh, level: number): void {
     | { value: number }
     | undefined;
   if (uniform) uniform.value = Math.max(0, level);
+}
+
+/**
+ * Tell the dug wall where the sun is, so the rim casts the pit's own shadow.
+ *
+ * Written from the renderer's own `bodies.sunDir`, the same vector the sky and
+ * the ground read, so the shadow falls on the side the light does.
+ */
+export function setCavityBowlSun(bowl: THREE.Mesh, direction: THREE.Vector3): void {
+  const uniform = (bowl.material as THREE.Material).userData.sunUniform as
+    | { value: THREE.Vector3 }
+    | undefined;
+  if (!uniform) return;
+  uniform.value.copy(direction).normalize();
 }

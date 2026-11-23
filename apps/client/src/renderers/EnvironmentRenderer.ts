@@ -52,6 +52,7 @@ import {
   createCavityBowl,
   createCavitySkirt,
   setCavityBowlLight,
+  setCavityBowlSun,
   updateCavityBowl,
   updateCavitySkirt,
 } from './environment/cavity/index.ts';
@@ -1385,6 +1386,9 @@ export class EnvironmentRenderer {
       this.hemisphereLight.intensity * 0.5;
     const level = THREE.MathUtils.clamp(total / CAVITY_DAYLIGHT_REFERENCE, 0.2, 1);
     setCavityBowlLight(this.cavityBowl, level);
+    // The rim's shadow needs the same sun the ground and the sky use, so the
+    // dark side of the pit is the side the light is not on.
+    setCavityBowlSun(this.cavityBowl, this.bodies.sunDir);
     if (this.apertureSoil) setApertureSoilLight(this.apertureSoil, level);
   }
 
