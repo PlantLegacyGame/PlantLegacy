@@ -284,7 +284,14 @@ export interface InputPayload {
 
 export interface StatePayload {
   tick: number;
-  plants: Array<{ id: string; totalBiomass: number; totalEnergy: number; totalUpkeep: number }>;
+  plants: Array<{
+    id: string;
+    totalBiomass: number;
+    totalEnergy: number;
+    totalUpkeep: number;
+    /** T06: unhealed structural damage against the uproot threshold (E23). */
+    structure?: { damageHp: number; threshold: number };
+  }>;
   worldBounds: { minX: number; maxX: number; minZ: number; maxZ: number };
   tileSize: number;
 }
@@ -318,7 +325,12 @@ export interface ErrorPayload {
 
 export interface ResourceUpdatePayload {
   tick: number;
-  tiles: Array<{
+  /**
+   * Changed tiles, or absent on a whole-grid answer (`fullGrid`), which carries
+   * the grid in `gridBase64` instead (E23: the whole-grid path had no type at
+   * all and the client's parser carried the only description of it).
+   */
+  tiles?: Array<{
     tileX?: number;
     tileZ?: number;
     light: number;
@@ -328,9 +340,35 @@ export interface ResourceUpdatePayload {
   width: number;
   height: number;
   tileSize: number;
+  /** Base64 of the full resource grid; only with `fullGrid: true`. */
+  gridBase64?: string;
+  fullGrid?: boolean;
   // ADR-019: Include plant energy/biomass for photosynthesis feedback
   totalEnergy?: number;
   totalBiomass?: number;
+  storedWater?: number;
+  storedMinerals?: number;
+  waterCapacity?: number;
+  mineralCapacity?: number;
+  /** Tiles the plant's roots actually cover, as the HUD counts them. */
+  coveredTileCount?: number;
+}
+
+/**
+ * What the weather pass broadcasts, written from the sender (`getBroadcast()`
+ * in `@plant-legacy/weather`) rather than from memory (E23).
+ */
+export interface WeatherUpdatePayload {
+  tick: number;
+  dayNumber: number;
+  timeOfDay: number;
+  isDay: boolean;
+  sunIntensity: number;
+  lightMultiplier: number;
+  weatherState: string;
+  conditionToken: string;
+  stateTimeRemainingS: number;
+  forecast: { nextWeatherState: string; timeUntilNextStateS: number };
 }
 
 export interface ResourceQueryPayload {
@@ -386,6 +424,12 @@ export interface GrowthEventNode {
 
 export interface GrowthEventPayload {
   plantId: string;
+  /**
+   * The plant's growth sequence after this event. The client mirrors nodes by
+   * it, so a client that missed an event can tell it has a gap (E23: the sender
+   * has always sent it and the type never declared it).
+   */
+  growthSeq?: number;
   /** Normal single-node growth. */
   newNode?: GrowthEventNode;
   /** Multi-node germination (radicle + cotyledons). */
@@ -455,6 +499,8 @@ export interface PlantCreatedPayload {
   plant: {
     id: string;
     ownerId: string;
+    /** The owner's display name when they are here to have one (E22). */
+    ownerName?: string;
     rootNodeId: string | null;
     totalBiomass: number;
     totalEnergy: number;

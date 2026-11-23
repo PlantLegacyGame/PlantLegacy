@@ -532,8 +532,11 @@ export const MESSAGE_SCHEMAS: Record<number, Record<string, FieldRule>> = {
     type: { type: 'string', required: true },
   },
   9: {
-    // CHAT_MESSAGE (client -> server)
+    // CHAT_MESSAGE (client -> server). `mode` is the channel the player picked
+    // (world/local/party); `resolveChatIntent` reads it, so it is typed here and
+    // not just left to the handler's cast.
     message: { type: 'string', required: true },
+    mode: { type: 'string' },
   },
   23: {
     // CHAT_BROADCAST (server -> client)
@@ -609,5 +612,24 @@ export const MESSAGE_SCHEMAS: Record<number, Record<string, FieldRule>> = {
   },
   49: {
     // RESPAWN (client -> server): nothing to say. The server picks the spot.
+  },
+  36: {
+    // MUTATION_SHED (client -> server). `plantId` must be the caller's own plant;
+    // the handler refuses anything else, and the schema refuses the shape it
+    // would have to guess at.
+    plantId: { type: 'string', required: true },
+    mutationId: { type: 'string', required: true },
+  },
+  37: {
+    // REROOT_INTENT (client -> server): the direction to throw the root plate.
+    dirX: { type: 'number', required: true },
+    dirZ: { type: 'number', required: true },
+  },
+  45: {
+    // MUTATION_LEVEL (client -> server). Without `cardId` the server deals the
+    // cards; with it, the card must come from that deal.
+    plantId: { type: 'string', required: true },
+    mutationId: { type: 'string', required: true },
+    cardId: { type: 'string' },
   },
 };

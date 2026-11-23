@@ -159,6 +159,28 @@ describe('validateMessage', () => {
     assert.ok(codes(19, { plant: { ...plant, ownerName: null } }).includes('message.field_type'));
   });
 
+  it('shapes the three client messages that used to be object-only', () => {
+    // E22: MUTATION_SHED, REROOT_INTENT and MUTATION_LEVEL had no schema, so
+    // validateMessage only proved the payload was an object and each handler
+    // did its own typeof guards.
+    assert.deepEqual(validateMessage(36, { plantId: 'p1', mutationId: 'm1' }).issues, []);
+    assert.deepEqual(validateMessage(37, { dirX: 1, dirZ: -1 }).issues, []);
+    assert.deepEqual(validateMessage(45, { plantId: 'p1', mutationId: 'm1' }).issues, []);
+    assert.deepEqual(
+      validateMessage(45, { plantId: 'p1', mutationId: 'm1', cardId: 'c1' }).issues,
+      [],
+    );
+    assert.ok(codes(36, { plantId: 'p1' }).includes('message.field_missing'));
+    assert.ok(codes(37, { dirX: 'east', dirZ: 0 }).includes('message.field_type'));
+    assert.ok(codes(45, { plantId: 'p1', mutationId: 5 }).includes('message.field_type'));
+  });
+
+  it('types the chat mode the server reads', () => {
+    assert.deepEqual(validateMessage(9, { message: 'hi', mode: 'world' }).issues, []);
+    assert.deepEqual(validateMessage(9, { message: 'hi' }).issues, []);
+    assert.ok(codes(9, { message: 'hi', mode: 3 }).includes('message.field_type'));
+  });
+
   it('renders issues via formatMessageIssue', () => {
     const result = validateMessage(1, {});
     const rendered = result.issues.map(formatMessageIssue);
