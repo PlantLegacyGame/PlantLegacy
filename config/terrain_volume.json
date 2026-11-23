@@ -1,0 +1,89 @@
+{
+  "_meta": {
+    "system": "terrain_volume",
+    "version": "0.1.0",
+    "schema": "extended-1",
+    "owner_task": "T56",
+    "status": "active",
+    "notes": "T56 first slice: one authored region of real 3D terrain - a rock arch with an underside and an overhang, generated from a signed-distance field and meshed by surface nets. Covers the region only; planet-wide chunks, streaming, root tunneling and the Root Sight cavity are later slices. The T25 height field remains the surface truth underneath."
+  },
+  "values": {
+    "enabled": {
+      "type": "boolean",
+      "value": true,
+      "notes": "Draw the authored volume region. Off leaves the world exactly as it was: one heightfield skin."
+    },
+    "centre_x_m": {
+      "type": "number",
+      "value": 11.0,
+      "range": [-600, 600],
+      "notes": "Centre of the authored region, in the same pole-local metres the terrain field uses."
+    },
+    "centre_z_m": {
+      "type": "number",
+      "value": 8.0,
+      "range": [-600, 600],
+      "notes": "Centre of the authored region, across the play area."
+    },
+    "voxel_size_m": {
+      "type": "number",
+      "value": 0.3,
+      "range": [0.1, 1],
+      "notes": "Grid step the signed-distance field is sampled on. Smaller finds finer rock and costs more samples."
+    },
+    "margin_m": {
+      "type": "number",
+      "value": 1.2,
+      "range": [0.2, 5],
+      "notes": "Air sampled round the solid on every side. Surface nets needs a closed ring of outside samples or the mesh ends open at the grid boundary."
+    },
+    "leg_depth_m": {
+      "type": "number",
+      "value": 1.4,
+      "range": [0.2, 8],
+      "notes": "How far below the drawn ground the arch's legs continue before they are cut off, so each foot disappears into the soil instead of ending on it."
+    },
+    "seed": {
+      "type": "integer",
+      "value": 20261123,
+      "range": [0, 2147483647],
+      "notes": "Deterministic variation of the rock's thickness and its strata, so the same region is the same rock on every machine."
+    },
+    "span_m": {
+      "type": "number",
+      "value": 10.0,
+      "range": [2, 40],
+      "notes": "Width of the arch's opening, measured between the two feet at ground level."
+    },
+    "rise_m": {
+      "type": "number",
+      "value": 3.0,
+      "range": [0.6, 20],
+      "notes": "Height of the arch's crown above its footing."
+    },
+    "thickness_m": {
+      "type": "number",
+      "value": 1.3,
+      "range": [0.3, 8],
+      "notes": "Thickness of the rock band. It is real thickness: the underside is a surface of its own."
+    },
+    "width_m": {
+      "type": "number",
+      "value": 2.6,
+      "range": [0.4, 20],
+      "notes": "Depth of the arch across its span - how wide the rock bridge is to walk under."
+    },
+    "bearing_deg": {
+      "type": "number",
+      "value": 38.0,
+      "range": [-180, 180],
+      "notes": "Direction the span runs, in degrees from +x towards +z."
+    },
+    "strata_band_m": {
+      "type": "number",
+      "value": 0.55,
+      "range": [0.1, 4],
+      "notes": "Vertical spacing of the rock's beds. Each vertex's bed fraction is the material the mesher carries into the renderer."
+    }
+  }
+}

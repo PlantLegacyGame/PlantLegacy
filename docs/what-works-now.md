@@ -1210,8 +1210,10 @@ divergence described below.
 **V5.4 extension program (approved 2026-11-09, not built):** reactive fauna, material
 simulation, volumetric terrain, parametric terrain features, streamed world
 objects, ecological succession, and cloud-native orchestration. See
-`DESIGN.md` Parts 11 and 16. Nothing in that list
-exists in code.
+`DESIGN.md` Parts 11 and 16. One piece of it is in code: T56's first slice draws
+one authored region as real 3D volume - a signed-distance field meshed by
+surface nets, with an underside, an overhang and bed colours - while the rest of
+the ground is still a heightfield skin. See [`tasks/T56.md`](./tasks/T56.md).
 
 The C02b WebGPU renderer is a v1 slice with impostor baking, VRAM pooling, GPU
 skinning, texture arrays, tier cross-fade, mutation signatures and a planet-body

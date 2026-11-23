@@ -126,6 +126,7 @@ owning task fills it.
 | `status` | T46 | stub | 0 |
 | `symbiosis` | T09 | stub | 0 |
 | `terrain` | T25 | active | 33 |
+| `terrain_volume` | T56 | active | 13 |
 | `territory` | T49 | stub | 0 |
 | `tumbling` | T06 | active | 10 |
 | `tutorial` | T33 | stub | 0 |
@@ -136,22 +137,21 @@ owning task fills it.
 | `world` | T03 | active | 17 |
 
 
-Total: **82 files**; 33 populated and 49 stubs (4 of them `draft`, 2 `deprecated`).
+Total: **83 files**; 34 populated and 49 stubs (4 of them `draft`, 2 `deprecated`).
 
 **This line owns the count.** Other documents link here rather than quoting a
 number (ADR-049).
-Populated: `accounts`, `chat`, `climate`, `compliance`, `controls`, `damage`, `daynight`, `dev`, `emotes`, `growth`, `items`, `mutations`, `mutation_visuals`, `net_proto`, `network`, `onboarding`, `ops`, `palette`, `physics`, `plant_renderer`, `render`, `reports`, `resources`, `root_sight`, `shop`, `spores`, `terrain`, `tumbling`, `ui`, `uproot`, `water`, `weather`, `world`.
+Populated: `accounts`, `chat`, `climate`, `compliance`, `controls`, `damage`, `daynight`, `dev`, `emotes`, `growth`, `items`, `mutations`, `mutation_visuals`, `net_proto`, `network`, `onboarding`, `ops`, `palette`, `physics`, `plant_renderer`, `render`, `reports`, `resources`, `root_sight`, `shop`, `spores`, `terrain`, `terrain_volume`, `tumbling`, `ui`, `uproot`, `water`, `weather`, `world`.
 
 ## Approved V5.4 config files (not created yet)
 
 These are specified in `DESIGN.md` Part 11 and named in the tables below. They
-are **not** in `config/` yet, so the validator count stays at 80.
+are **not** in `config/` yet, so the validator count stays at 83.
 
 | File | Owner | Purpose |
 |---|---|---|
 | `fauna.json` | T54 | Species, needs, senses, reflexes, animal vocalizations, influence maps, population caps, trap/struggle |
 | `materials.json` | T55 | Material/element definitions, reaction matrix, CA cadence, flow and temperature rules |
-| `terrain_volume.json` | T56 | Chunk size, world height, generation, material palette, LOD, collision, persistence |
 | `terrain_features.json` | T57 | Parametric feature schema, control points, blend and validation limits |
 | `world_objects.json` | T58 | Object types, behaviour state machines, persistence policy, interaction hooks |
 | `succession.json` | T59 | Stages, thresholds, seed bank, recovery pulses, disturbance resets, deep-time hooks |

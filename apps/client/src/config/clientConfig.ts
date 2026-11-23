@@ -9,6 +9,7 @@
  * RULE_3: every tunable here comes from config. Nothing is hardcoded.
  */
 
+import { DEFAULT_TERRAIN_VOLUME, type TerrainVolumeParams } from '@plant-legacy/shared/world';
 import { type BenchmarkPose, DEFAULT_BENCHMARK_POSES } from '../dev/benchmark.js';
 import { CAVITY_PALETTE } from '../renderers/environment/cavity/profile.ts';
 import { type ControlsBindingsSource, normalizeBindings } from './controlsBindings.ts';
@@ -1753,6 +1754,36 @@ export async function loadRootSightConfig(serverOrigin: string): Promise<RootSig
     cavityNightFill: CAVITY_PALETTE.nightFill,
     cavityDayFill: CAVITY_PALETTE.dayFill,
   });
+}
+
+export async function loadTerrainVolumeConfig(serverOrigin: string): Promise<TerrainVolumeParams> {
+  const fallback = DEFAULT_TERRAIN_VOLUME;
+  try {
+    const response = await fetch(`${serverOrigin}/config/terrain_volume`, { cache: 'no-store' });
+    if (!response.ok) return fallback;
+    const data = (await response.json()) as Record<string, unknown>;
+    const num = (key: string, value: number): number => {
+      const parsed = Number(data[key]);
+      return Number.isFinite(parsed) ? parsed : value;
+    };
+    return {
+      enabled: typeof data.enabled === 'boolean' ? data.enabled : fallback.enabled,
+      centreXM: num('centre_x_m', fallback.centreXM),
+      centreZM: num('centre_z_m', fallback.centreZM),
+      voxelM: num('voxel_size_m', fallback.voxelM),
+      marginM: num('margin_m', fallback.marginM),
+      legDepthM: num('leg_depth_m', fallback.legDepthM),
+      seed: Math.round(num('seed', fallback.seed)),
+      spanM: num('span_m', fallback.spanM),
+      riseM: num('rise_m', fallback.riseM),
+      thicknessM: num('thickness_m', fallback.thicknessM),
+      widthM: num('width_m', fallback.widthM),
+      bearingDeg: num('bearing_deg', fallback.bearingDeg),
+      strataBandM: num('strata_band_m', fallback.strataBandM),
+    };
+  } catch {
+    return fallback;
+  }
 }
 
 export async function loadTerrainConfig(serverOrigin: string): Promise<TerrainConfig> {

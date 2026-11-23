@@ -32,6 +32,11 @@ export {
   type SurfacePoint,
 } from './sphericalGrid.ts';
 export {
+  type SurfaceNetGrid,
+  type SurfaceNetMesh,
+  surfaceNets,
+} from './surfaceNets.ts';
+export {
   DEFAULT_SURFACE_WATER_OPTIONS,
   SurfaceWaterGrid,
   type SurfaceWaterOptions,
@@ -57,3 +62,14 @@ export {
   terrainUnitAt,
   terrainValueNoise,
 } from './terrainField.ts';
+export {
+  archFooting,
+  archSdf,
+  buildTerrainVolumeMesh,
+  DEFAULT_TERRAIN_VOLUME,
+  type GroundHeight,
+  type TerrainVolumeBounds,
+  type TerrainVolumeMesh,
+  type TerrainVolumeParams,
+  terrainVolumeBounds,
+} from './terrainVolume.ts';

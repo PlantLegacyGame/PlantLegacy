@@ -52,6 +52,7 @@ import {
   loadRootSightConfig,
   loadShopConfig,
   loadTerrainConfig,
+  loadTerrainVolumeConfig,
   loadUIConfig,
   type PhysicsConfig,
   type RenderConfig,
@@ -4078,6 +4079,7 @@ async function initC01(): Promise<void> {
     loadedDayNightConfig,
     loadedResourceTileConfig,
     loadedTerrainConfig,
+    loadedTerrainVolumeConfig,
     loadedPhysicsConfig,
     loadedShopConfig,
     paletteConfig,
@@ -4094,6 +4096,7 @@ async function initC01(): Promise<void> {
     loadDayNightConfig(httpOrigin),
     loadResourceTileConfig(httpOrigin),
     loadTerrainConfig(httpOrigin),
+    loadTerrainVolumeConfig(httpOrigin),
     loadPhysicsConfig(httpOrigin),
     loadShopConfig(httpOrigin),
     loadPaletteConfig(httpOrigin),
@@ -4522,6 +4525,8 @@ async function initC01(): Promise<void> {
         nightFill: rootSightConfig.cavityNightFill,
         dayFill: rootSightConfig.cavityDayFill,
       },
+      // T56 slice 1: the authored region the volume mesher draws.
+      volume: loadedTerrainVolumeConfig,
     },
   );
 

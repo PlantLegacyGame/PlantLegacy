@@ -1,7 +1,8 @@
 # Bugfix record — the twenty-one defects, Wave B
 
-**Status:** `[x]` for Wave B (items 5, 6, 8, 18, 20). Waves C–E of the same list
-are planned and **not started**; this record is one wave, per the task rules.
+**Status:** `[x]` for Wave B (items 5, 6, 8, 18, 20). Wave C is started as T56's
+first volume slice ([T56.md](./T56.md)); Waves D–E of the same list are planned
+and **not started**. This record is one wave, per the task rules.
 
 Wave A fixed the ten defects in the title camera, world camera, labels, controls
 and clock. Wave B is the weather-and-economy wave: what falls, what it lands on,

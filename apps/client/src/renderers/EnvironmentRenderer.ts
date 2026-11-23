@@ -14,7 +14,7 @@
  * - `rootSightUniforms.ts` the cutaway values shared with the plant renderer
  */
 
-import { riverPath } from '@plant-legacy/shared/world';
+import { riverPath, type TerrainVolumeParams } from '@plant-legacy/shared/world';
 import * as THREE from 'three';
 import type { RenderConfig } from '../config/clientConfig.js';
 import type { ClientWeatherState, ClientWeatherStateMachine } from './ClientWeatherStateMachine.js';
@@ -80,6 +80,7 @@ import {
 } from './environment/resourceGrid.js';
 import type { RootSightUniforms } from './environment/rootSightUniforms.js';
 import { createSkyDome, type SkyDome } from './environment/skyDome.js';
+import { createTerrainVolumeMesh } from './environment/terrainVolumeMesh.js';
 import {
   sampleUnderwater,
   type UnderwaterState,
@@ -127,6 +128,11 @@ export interface EnvironmentTuning {
    * documented palette from `cavity/profile.ts`.
    */
   cavity?: CavityPalette;
+  /**
+   * The authored T56 volume region (config/terrain_volume.json). Omitted by
+   * tests, which get no volume and exactly the world they had before.
+   */
+  volume?: TerrainVolumeParams;
 }
 
 export interface WeatherPayload {
@@ -176,6 +182,7 @@ export class EnvironmentRenderer {
   private planetBodyDrawCount = 0;
   // The cavity as real geometry: a dug bowl of earth under the opening.
   private cavityBowl: THREE.Mesh | null = null;
+  private terrainVolume: THREE.Mesh | null = null;
   private cavitySkirt: THREE.Mesh | null = null;
   // The soil's cut face at the aperture boundary, so the skin's edge is not a
   // see-through line with nothing behind it.
@@ -389,6 +396,19 @@ export class EnvironmentRenderer {
       // wall and covers the strata (see CAVITY_SKIRT_DEPTH_M).
       this.cavitySkirt = createCavitySkirt(this.cavityBowl);
       this.cavityBowl.add(this.cavitySkirt);
+      // 2b. T56 slice 1: real volume, one authored region. The rest of the
+      //     ground is still the T25 height field; here the field is a signed
+      //     distance over a 3D grid and the surface is meshed by surface nets,
+      //     so the body has an underside and an overhang instead of one skin.
+      //     Seated on the drawn surface, not the bare sphere.
+      if (tuning.volume) {
+        this.terrainVolume = createTerrainVolumeMesh(
+          tuning.volume,
+          (x, z) => planetTerrainY(config.planetRadiusM, x, z, getTerrainParams()),
+          new THREE.Color(config.soilMineralTint),
+        );
+        if (this.terrainVolume) scene.add(this.terrainVolume);
+      }
       // Water is scenery, not a Root Sight effect: rain lands on the ground and
       // runs into hollows, and the soil holds pools in pockets of its own all
       // over the place. Both are built here from the tuned hydrology.
@@ -1238,6 +1258,9 @@ export class EnvironmentRenderer {
       this.planetBodyMesh.geometry.setDrawRange(0, eyeUnder ? 0 : this.planetBodyDrawCount);
     }
     for (const shell of this.surfaceShells) shell.visible = !eyeUnder;
+    // The arch stands on the skin, so it is scenery of the surface: a buried
+    // eye is inside the earth and sees none of it.
+    if (this.terrainVolume) this.terrainVolume.visible = !eyeUnder;
   }
 
   /**
