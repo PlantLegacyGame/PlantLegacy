@@ -2171,7 +2171,11 @@ outcome the players have not built themselves.
   exact sphere and the body is a polyhedron, so the coarse ring's outer edge used
   to stop metres above the body. The body is now 384 x 192 facets and a perimeter
   skirt hangs from the ring's own edge, from the ring's own height function, down
-  past the facet sag (live: 1 240 m wide, 7.27 m deep).
+  past the facet sag (live: 1 240 m wide, 7.27 m deep). Flown to that edge: from
+  inside the ring the ground runs to a clean horizon, and from outside the wall
+  joins the lip to the body with no sky between them. The join is closed, not
+  invisible — the wall's vertical face catches no direct sun and reads as a dark
+  stripe, and the last 7.27 m of the world is a step rather than a seam.
 - **A buried eye can see the pit.** A 0.45 m bubble of soil is dropped around an
   eye that is under the drawn ground, in the shared soil shader and in the
   aperture body. The pose that used to be a brown wall now shows the shaft's far
@@ -2180,4 +2184,8 @@ outcome the players have not built themselves.
   the opening's column keeps it off too — that eye is under the sheet but not in
   the earth, and the pit's wall is a stride away. Measured: in the pit the
   shader's `uEyeUnderGround` is 0 and the wall beside the player is whole; on the
-  surface at the rim the ground round the mouth is intact.
+  surface at the rim the ground round the mouth is intact. At a grown **4.91 m**
+  mouth the same holds — the cut is off everywhere inside the pit — and it does
+  its job inside the soil skin just outside the mouth. It is a 0.45 m bubble, so
+  0.65 m outside the mouth in the earth the view is still soil: it was built to
+  see the pit from the skin, not from anywhere underground.

@@ -67,6 +67,38 @@ Measured in the running page after the client reloaded on the new code:
   buried eye. The `uRootSightEyeInPit < 0.5` clause is therefore a second,
   local guarantee at the discard, not the thing the measurement depends on, and
   it says so in the shader.
-- Not checked: the skirt at its own edge (1 240 m away — the geometry and its
-  numbers are asserted, no eye was flown there), and the near cut in a grown
-  4.9 m pit.
+- **The near cut at a grown 4.91 m mouth.** The pit was sized to a mature plant
+  by holding 24 root nodes on a 4.10 m ring in the client's node map (a page-level
+  interval kept them there while the server's state syncs wiped the map: the
+  simulation is paused and the nodes are not real grown roots — no dev action
+  grows a plant that far in reasonable time, and the numbers below are the
+  aperture those nodes size, 4.91 m, with `roots reach 4.16`). Inside it:
+  - 1.1 m from the centre, 1.0 m under the sheet: `eyeInPit` 1,
+    `uEyeUnderGround` **0**, the body not drawn, the frame the pit's far wall and
+    the sky over its rim, continuous — `screenshots/wave-c-49-inside.png`.
+  - 0.7 m from the wall (radius 4.22 m), 0.7 m under: `eyeInPit` 1, cut off, the
+    wall and floor whole — `screenshots/wave-c-49-beside-wall.png`.
+  - Inside the soil just outside the mouth (radius 5.12 m, 1.4 m down):
+    `eyeInPit` 0, `uEyeUnderGround` 1, body drawn with its cut on, and the
+    bubble opens the mouth — sky disc, rim silhouette, the seed in it —
+    `screenshots/wave-c-49-body-wall.png`.
+  - 0.65 m outside the mouth (radius 5.56 m, 0.7 m under): cut on, **and the
+    frame is still soil**. That is the bubble's radius, not a regression: it
+    clears 0.45 m around the eye and 0.2 m of earth is left between that and the
+    mouth. The cut makes the pit visible from *inside the soil skin* it was built
+    for, not from arbitrary depth in the earth.
+- **The skirt at its own edge.** Flew to the ring's outer edge (the ring is
+  ±620 m, so the skirt's 1 240 m is its full perimeter): `planet-terrain-skirt`
+  reports **1 240 m span, 7.27 m drop**, world Y 0 (the patch's own placement),
+  and the body is drawn. From 12 m inside the edge at eye height the ground runs
+  to a clean horizon with sky above it and no band of gap
+  (`screenshots/wave-c-skirt-eyelevel.png`). From outside — 40 m out at 4 m up
+  (`wave-c-skirt-outside.png`) and 8 m out at 8 m up
+  (`wave-c-skirt-close.png`) — the wall joins the ring's lip to the body with no
+  sky between the two surfaces. It does read as a **dark stripe**, because the
+  face is vertical and catches no direct sun, so the world's edge is closed
+  rather than invisible.
+- Not checked: the skirt's four corners up close (the loop is built to the same
+  square as the ring, and the shots above are along one edge), and whether that
+  7.27 m step at the world's edge should read as a cliff at all — the skirt was
+  asked to close a gap, and closing it is all that was measured.
