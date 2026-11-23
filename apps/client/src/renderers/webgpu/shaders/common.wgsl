@@ -287,7 +287,10 @@ fn soilOccludes(worldPos: vec3f) -> bool {
   // the opening is exposed whatever its depth, which is what the hole in the
   // ground actually is.
   if (frame.rootSightEnabled != 0u && frame.rootSightProgress > 0.05) {
-    let cavityRadius = frame.rootSightRadius * frame.rootSightProgress;
+    // `var`, not `let`: the aperture radius replaces this one below, and WGSL's
+    // `let` is immutable - as written the module failed to validate and the
+    // whole WebGPU pass fell back to three.js.
+    var cavityRadius = frame.rootSightRadius * frame.rootSightProgress;
     if (frame.rootSightApertureRadius > 0.0) {
       cavityRadius = frame.rootSightApertureRadius * frame.rootSightProgress;
     }

@@ -631,17 +631,33 @@ not draw the ground at all, and it has not run for a while:
   from `soil_mid`, `soil_wet` and `soil_shade` and `setSoilMoisture()` rewrites the
   buffer every frame, but no bind group names `soilUniformBuffer` and no shader
   declares its `@binding`. Recorded as **E28**.
-- **It cannot initialise.** `webgpu_enabled` true on this tree fails
-  `initialize()` on two WGSL modules: `soilOccludes()` in `common.wgsl` reassigns
-  a `let cavityRadius` (WGSL `let` is immutable), and `rain.wgsl` writes
-  `output.worldPosition` into a vertex output with no such member. The fallback to
-  three.js is complete and silent. Recorded as **E29**; the one-word `var` fix was
-  tried to get the path running, the rain module then failed, and the change was
-  reverted rather than left as a half-fixed dead path.
+- **It could not initialise.** `webgpu_enabled` true failed `initialize()` on two
+  WGSL modules: `soilOccludes()` in `common.wgsl` reassigned a `let cavityRadius`
+  (WGSL `let` is immutable), and `rain.wgsl` wrote `output.worldPosition` into a
+  vertex output with no such member. The fallback to three.js was complete and
+  silent. Recorded as **E29**.
 
-Verified live with `webgpu_enabled` set true and then restored to its shipped
-`false`: the world draws the palette ground with its clod form
-(`webgpu-requested-palette-ground2.png`), and the console shows the WebGPU
-initialisation failure that let it happen. So the deletion of the six soil keys
-changed the WebGPU path in no visible way - which is the confirmation asked for,
-and also why it took a check to notice the path is dead.
+All three were then fixed rather than recorded as open. The soil buffer and its
+plumbing are deleted (**E28** closed): `soilData`, `soilUniformBuffer`,
+`writeSoilPalette()`, `soilMoisture`, `setSoilMoisture()`, the allocation, the
+per-frame write and main.ts's per-frame call, along with `writeSrgbTriplet` and
+the palette import that only the buffer used. `cavityRadius` is a `var` and the
+`output.worldPosition` line is gone (**E29** closed); with `webgpu_enabled` true
+the page logs "WebGPU plant renderer initialized" and reports 195 vertices for
+the seed.
+
+What let it hide for so long was the smoke test: it checks braces, undefined
+functions, bindings and layouts, but it never looked at immutability or at
+struct members, so neither fault could fail `pnpm verify`. `shaderSmoke.test.ts`
+now has `no let is assigned twice` and `every struct field assignment names a
+declared field`, both negative-tested by re-introducing the two faults (the
+`let` check fails in all five modules because `common.wgsl` is shared, the
+member check in `rain`) and then restoring the fix. They are not a WGSL parser -
+there is no GPU in the test runner - but they are exactly the two classes of
+breakage that killed this pass.
+
+Two things the live check found. The palette ground is unchanged, as expected
+(`webgpu-requested-palette-ground2.png`, taken while the pass still fell back).
+And with the rain module finally compiling, a rainy frame shows rain drawn as
+soft grey ellipses a metre or two across - a new record, **E30**, since the pass
+had never drawn before. `webgpu_enabled` stays false in the shipped config.

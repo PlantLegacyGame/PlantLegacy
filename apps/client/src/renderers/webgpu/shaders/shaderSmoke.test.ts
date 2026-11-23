@@ -7,6 +7,14 @@
  * a function that is called but never defined (or defined twice), a binding
  * referenced without being declared, duplicate decorators, unbalanced braces,
  * and a storage struct whose WGSL layout drifted from the JS writer.
+ *
+ * Two more came out of the WebGPU pass being dead for months behind a silent
+ * three.js fallback (E28/E29 in `docs/bug-inventory.md`): a `let` that is
+ * assigned again, which WGSL rejects because `let` is immutable, and an
+ * assignment to a struct field the struct does not declare. Neither is a real
+ * WGSL parser - there is no GPU in the test runner - but they are the exact
+ * two faults that stopped `plant-cull` and `rain` from compiling, and a shader
+ * that cannot compile should fail here rather than quietly disappear.
  */
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -47,6 +55,73 @@ function definedFunctions(source: string): Map<string, number> {
     counts.set(match[1], (counts.get(match[1]) ?? 0) + 1);
   }
   return counts;
+}
+
+/**
+ * `let` names that are assigned again somewhere in the module.
+ *
+ * WGSL's `let` is immutable, so any second assignment fails validation. The
+ * declaration itself (`let x = ...`) is skipped by looking at what precedes the
+ * match; `==`, `<=`, `>=` and `!=` are excluded by the trailing `(?!=)`.
+ */
+function reassignedLets(source: string): string[] {
+  const names = new Set(
+    [...source.matchAll(/\blet\s+([A-Za-z_][A-Za-z0-9_]*)\s*(?::[^=]+)?=/g)].map((m) => m[1]),
+  );
+  const offenders: string[] = [];
+  for (const name of names) {
+    const assignment = new RegExp(`(?<![\\w.])${name}\\s*=(?!=)`, 'g');
+    for (const match of source.matchAll(assignment)) {
+      const before = source.slice(Math.max(0, (match.index ?? 0) - 4), match.index);
+      if (/\blet\s+$/.test(before)) continue;
+      offenders.push(name);
+      break;
+    }
+  }
+  return offenders;
+}
+
+/** Fields each struct declares, keyed by struct name. */
+function structFields(source: string): Map<string, Set<string>> {
+  const structs = new Map<string, Set<string>>();
+  for (const match of source.matchAll(/struct\s+([A-Za-z_][A-Za-z0-9_]*)\s*\{([\s\S]*?)\n\}/g)) {
+    structs.set(
+      match[1],
+      new Set(
+        [...match[2].matchAll(/^\s*(?:@[^)]*\)\s*)?([A-Za-z_][A-Za-z0-9_]*)\s*:/gm)].map(
+          (field) => field[1],
+        ),
+      ),
+    );
+  }
+  return structs;
+}
+
+/**
+ * Assignments that name a field their struct does not have.
+ *
+ * Only `var x: SomeStruct;` locals are followed: that is the shape a vertex
+ * output takes, and it is where `output.worldPosition = ...` slipped through.
+ */
+function unknownStructFields(source: string): string[] {
+  const structs = structFields(source);
+  const offenders: string[] = [];
+  for (const local of source.matchAll(
+    /\bvar\s+([A-Za-z_][A-Za-z0-9_]*)\s*:\s*([A-Za-z_][A-Za-z0-9_]*)\s*;/g,
+  )) {
+    const [, variable, type] = local;
+    const fields = structs.get(type ?? '');
+    if (!fields) continue;
+    const assignment = new RegExp(
+      `(?<![\\w.])${variable}\\.([A-Za-z_][A-Za-z0-9_]*)\\s*=(?!=)`,
+      'g',
+    );
+    for (const match of source.matchAll(assignment)) {
+      const field = match[1] ?? '';
+      if (!fields.has(field)) offenders.push(`${variable}.${field} (${type} has no ${field})`);
+    }
+  }
+  return offenders;
 }
 
 /** Names called as bare functions, excluding declarations and builtins. */
@@ -146,6 +221,14 @@ for (const [name, source] of Object.entries(MODULES)) {
       if (['if', 'for', 'while', 'switch', 'return', 'case'].includes(fn)) continue;
       assert.fail(`${name} calls undefined function ${fn}()`);
     }
+  });
+
+  test(`${name}: no let is assigned twice`, () => {
+    assert.deepEqual(reassignedLets(source), [], `${name} reassigns an immutable let`);
+  });
+
+  test(`${name}: every struct field assignment names a declared field`, () => {
+    assert.deepEqual(unknownStructFields(source), [], `${name} writes an undeclared struct field`);
   });
 
   test(`${name}: every declared binding has a unique group and binding`, () => {

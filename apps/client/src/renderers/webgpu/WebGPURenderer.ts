@@ -2,7 +2,6 @@ import { mulberry32 } from '@plant-legacy/shared/math';
 import * as THREE from 'three';
 import { type MutationLookStack, NEUTRAL_STACK } from '../plant/mutations.ts';
 import type { PlantNodeData } from '../plant/plantNodeData.js';
-import { worldColour } from '../worldPalette.ts';
 import { ImpostorAtlasSlots } from './impostorAtlasSlots.js';
 import { jointMatrixFor } from './jointMatrix.js';
 import { buildPlantMesh, type PlantRenderPlant } from './PlantMeshBuilder.js';
@@ -191,14 +190,6 @@ function writePlantLook(data: Float32Array, offset: number, stack: MutationLookS
 const GROWTH_ACTIVE_MS = 1100;
 const GROWTH_REBUILD_INTERVAL_MS = 100;
 
-/** Raw sRGB components (display space) for a #rrggbb string. */
-function writeSrgbTriplet(hex: string, out: Float32Array, offset: number): void {
-  const value = Number.parseInt(hex.replace('#', ''), 16);
-  out[offset] = ((value >> 16) & 0xff) / 255;
-  out[offset + 1] = ((value >> 8) & 0xff) / 255;
-  out[offset + 2] = (value & 0xff) / 255;
-}
-
 export interface WebGPURendererConfig {
   maxPlants: number;
   leafSize: number;
@@ -371,9 +362,6 @@ export class WebGPURenderer {
 
   private frameUniformBuffer: GPUBuffer | null = null;
   // Ground palette + moisture: 3 vec4 colours, moisture, padding = 16 floats.
-  private soilUniformBuffer: GPUBuffer | null = null;
-  private readonly soilData = new Float32Array(16);
-  private soilMoisture = 0.2;
   /**
    * AL-03 draw-distance lever: multiplies the projected-size tier thresholds.
    * Below 1 a plant must be closer before it earns a detailed tier, so the
@@ -497,33 +485,8 @@ export class WebGPURenderer {
     this.config = { ...DEFAULT_WEBGPU_RENDERER_CONFIG, ...config };
     this.ownRootColor.set(this.config.ownRootColor);
     this.rivalRootColor.set(this.config.rivalRootColor);
-    this.writeSoilPalette();
     // Pre-allocate joint matrix buffer to avoid per-frame GC pressure
     this.jointData = new Float32Array((this.config.maxPlants * JOINT_BUFFER_STRIDE) / 4);
-  }
-
-  /**
-   * Live soil moisture from the weather system (0 = dry, 1 = saturated).
-   * The palette itself comes from config and never changes at runtime.
-   */
-  setSoilMoisture(moisture: number): void {
-    this.soilMoisture = Math.max(0, Math.min(1, moisture));
-  }
-
-  private writeSoilPalette(): void {
-    // The soil colours are the palette's ramp, not `config/render.json`'s old
-    // hexes; `#rrggbb` is what `writeSrgbTriplet` parses, hence the prefix.
-    //
-    // Be aware of what this buffer is: nothing reads it. No bind group names
-    // `soilUniformBuffer` and no shader declares its `@binding`, and the ground
-    // inside this renderer is the three.js soil shader's, not a WebGPU pass -
-    // so the colours are written every frame into 64 bytes nobody samples. E28
-    // in `docs/bug-inventory.md` holds the bind-or-delete decision.
-    const hex = (role: string): string => `#${worldColour(role).getHexString()}`;
-    writeSrgbTriplet(hex('soil_mid'), this.soilData, 0);
-    writeSrgbTriplet(hex('soil_wet'), this.soilData, 4);
-    writeSrgbTriplet(hex('soil_shade'), this.soilData, 8);
-    this.soilData[12] = this.soilMoisture;
   }
 
   async initialize(): Promise<boolean> {
@@ -610,12 +573,6 @@ export class WebGPURenderer {
     this.frameUniformBuffer = allocateOrThrow(
       'WebGPU frame uniforms',
       FRAME_BYTES,
-      GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-    );
-
-    this.soilUniformBuffer = allocateOrThrow(
-      'WebGPU soil uniforms',
-      64,
       GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     );
 
@@ -2099,12 +2056,6 @@ export class WebGPURenderer {
     data[95] = this.sunWarmth;
 
     device.queue.writeBuffer(this.frameUniformBuffer, 0, data);
-
-    // Soil palette + moisture for the WebGPU ground pass (config-driven).
-    if (this.soilUniformBuffer) {
-      this.soilData[12] = this.soilMoisture;
-      device.queue.writeBuffer(this.soilUniformBuffer, 0, this.soilData);
-    }
 
     // C02b: GPU skinning - compute and upload joint matrices for each plant
     this.writeJointMatrices(device);

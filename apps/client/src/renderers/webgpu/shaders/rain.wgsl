@@ -63,7 +63,6 @@ fn vs_main(input: VertexInput) -> VertexOutput {
 
   output.uv = local.xy + vec2f(0.5, 0.5);
   output.velocity = velocity;
-  output.worldPosition = pos;
   output.clipPosition = frame.viewProjection * vec4f(
     pos + fall * (local.y * streakLength) + side * (local.x * width),
     1.0,

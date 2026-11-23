@@ -11731,7 +11731,6 @@ function renderFrame(deltaTime: number): void {
     webgpuRenderer?.setSunWarmth(environmentRenderer.getSunWarmth());
     // Exposure grade: a lift at golden hour, a crush at night, from render.json.
     renderer.toneMappingExposure = environmentRenderer.getExposureGrade();
-    webgpuRenderer?.setSoilMoisture(environmentRenderer.getSoilMoisture());
   }
 
   // Plant colliders follow the drawn skeleton, not a biomass guess. The
