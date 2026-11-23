@@ -200,6 +200,18 @@ describe('handlePlantCommand', () => {
     ]);
   });
 
+  it('keeps one heading when an angle is given, so the chain runs straight', () => {
+    const { ports, calls } = createPorts();
+    handlePlantCommand(ports, { type: 'dev_grow_roots', count: 4, angle: 0.75 }, both);
+    const growCalls = calls.filter((c) => c.startsWith('grow:'));
+    assert.deepEqual(growCalls, [
+      'grow:root-1:lateral_root:0.75',
+      'grow:n0.75:lateral_root:0.75',
+      'grow:n0.75:lateral_root:0.75',
+      'grow:n0.75:lateral_root:0.75',
+    ]);
+  });
+
   it('clamps the root count and stops at the first refusal', () => {
     const { ports, calls, responses } = createPorts({
       rootParent: () => null,

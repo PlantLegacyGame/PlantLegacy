@@ -138,6 +138,12 @@ export function handlePlantCommand(
       // the real thing.
       if (!ctx.hasPlant || !ctx.hasPlayer) return noPlant(ports, action);
       const steps = Math.max(1, Math.min(24, Number(action.count) || 6));
+      // A heading, in radians. Without one every segment turns 2.399 rad from the
+      // last, so a chain curls into a rosette ~0.75 m across however many nodes
+      // it grows - which is no way to make a pit a player can stand in. With one,
+      // the segments keep their heading and the reach is `count` segments long.
+      const heading =
+        typeof action.angle === 'number' && Number.isFinite(action.angle) ? action.angle : null;
       const grown: string[] = [];
       const rejected: string[] = [];
       // Chain from the node this command just grew, not from the plant's deepest
@@ -161,7 +167,7 @@ export function handlePlantCommand(
         // the root layer offers lateral roots (not `root`).
         const result = ports.growRoot(
           parent.id,
-          step * 2.399,
+          heading ?? step * 2.399,
           parent.hasRoots ? 'lateral_root' : 'radicle',
         );
         if (!result.ok) {

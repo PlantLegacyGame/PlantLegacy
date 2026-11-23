@@ -1022,9 +1022,10 @@ export class WebGPURenderer {
       entries: [
         { binding: 0, resource: frameBinding },
         { binding: 1, resource: { buffer: this.rainUniformBuffer } },
-        // The same ground map the mesh pass marches, so a drop behind a ridge is
-        // collapsed instead of drawn over the hill.
-        { binding: 2, resource: this.groundMapTexture!.createView() },
+        // The same ground map the mesh pass marches (binding 10 in
+        // `groundMap.wgsl`), so a drop behind a ridge is collapsed instead of
+        // drawn over the hill.
+        { binding: 10, resource: this.groundMapTexture!.createView() },
       ],
     });
 

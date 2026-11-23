@@ -42,11 +42,11 @@ const COMMON = read('common');
 
 /** The same concatenation `shaders/index.ts` performs for Vite. */
 const MODULES: Record<string, string> = {
-  mesh: `${COMMON}\n${read('skinning')}\n${read('mesh')}`,
+  mesh: `${COMMON}\n${read('skinning')}\n${read('groundMap')}\n${read('mesh')}`,
   billboard: `${COMMON}\n${read('billboard')}`,
   impostor: `${COMMON}\n${read('impostor')}`,
   cull: `${COMMON}\n${read('cull')}`,
-  rain: `${COMMON}\n${read('rain')}`,
+  rain: `${COMMON}\n${read('groundMap')}\n${read('rain')}`,
 };
 
 /** Functions the shader source defines (a module can define one twice). */

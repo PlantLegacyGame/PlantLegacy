@@ -179,55 +179,10 @@ fn lookForOrgan(plantIndex: u32, nodeType: f32) -> LookOrgan {
     );
   }
 
- @group(0) @binding(10) var groundHeightMap: texture_2d<f32>;
-
- const GROUND_MAP_SIZE: f32 = 64.0;
- const GROUND_MARCH_STEPS: u32 = 8u;
-
- /**
-  * Is a hill standing between the eye and this fragment?
-  *
-  * This pass composites on its own canvas, so the three.js ground cannot
-  * depth-test it: a plant in a valley was painted over the ridge in front of it,
-  * and a drop behind a hill over the hill. The terrain arrives as a coarse height
-  * map and the eye-to-fragment ray is walked over it. The fragment's own column
-  * is handled exactly by `groundY`; this is for what stands in between.
-  */
- fn terrainBlocks(worldPos: vec3f) -> bool {
-   if (frame.groundMapExtent <= 0.0) {
-     return false;
-   }
-   let eye = frame.cameraPos.xyz;
-   let toFragment = worldPos - eye;
-   if (dot(toFragment, toFragment) < 2.25) {
-     return false;
-   }
-   for (var i = 1u; i < GROUND_MARCH_STEPS; i = i + 1u) {
-     let t = f32(i) / f32(GROUND_MARCH_STEPS);
-     // The last fifth belongs to the fragment's own column, which `groundY`
-     // already tests exactly; a coarse texel there would cull what stands on it.
-     if (t > 0.8) {
-       break;
-     }
-     let p = eye + toFragment * t;
-     let uv = (p.xz - frame.groundMapOrigin) / frame.groundMapExtent;
-     if (uv.x < 0.0 || uv.y < 0.0 || uv.x >= 1.0 || uv.y >= 1.0) {
-       continue;
-     }
-     let texel = vec2i(vec2u(uv * GROUND_MAP_SIZE));
-     let height = textureLoad(groundHeightMap, texel, 0).r;
-     // Half a metre of slack: a 3 m texel cannot resolve a clod, and a plant on
-     // the near slope must not be culled by its own hillside.
-     if (p.y < height - 0.5) {
-       return true;
-     }
-   }
-   return false;
- }
 
  @fragment
  fn fs_main(input: VertexOutput, @builtin(front_facing) frontFacing: bool) -> @location(0) vec4f {
-   if (terrainBlocks(input.worldPosition)) {
+   if (groundBlocks(input.worldPosition)) {
      discard;
    }
    if (soilOccludes(input.worldPosition)) {
