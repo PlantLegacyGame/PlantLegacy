@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { describe, it } from 'node:test';
+import { fileURLToPath } from 'node:url';
 import * as THREE from 'three';
 import type { PlantNodeData } from '../plant/plantNodeData.js';
 import { plantExtent, plantLateralExtent, resolveCutawayRadius } from './rootSightCutaway.ts';
@@ -88,5 +91,52 @@ describe('root sight cutaway sizing', () => {
     assert.equal(resolveCutawayRadius(0.05, 1, 7), 0.7);
     assert.equal(resolveCutawayRadius(10, 1, 7), 7);
     assert.ok(resolveCutawayRadius(2, 1, 7) < 3.5);
+  });
+});
+
+describe('the pit is sized from the roots that are in the soil', () => {
+  const seed = node('seed', 4, { x: 0, y: 0, z: 0 });
+  const buried = node('r1', 0, { x: 1, y: -1, z: 0 }, { parentId: 'seed' });
+  // A root by type, in the air: crossing an open tunnel, or lying on the surface.
+  const inAir = node('r2', 0, { x: 9, y: 6, z: 0 }, { parentId: 'seed' });
+  const inSoil = (candidate: PlantNodeData): boolean => candidate.id !== 'r2';
+
+  it('ignores a root that is above the soil', () => {
+    // The node type says root; only the height frame says buried. A tip in the
+    // air has no soil to open, and sizing the hole from it widened the pit for a
+    // root the player could see.
+    const withAir = plantExtent([seed, buried, inAir], undefined, inSoil);
+    const soilOnly = plantExtent([seed, buried]);
+    assert.ok(Math.abs(withAir - soilOnly) < 1e-9, 'the airborne root still widened the cavity');
+    assert.ok(
+      plantLateralExtent([seed, buried, inAir], undefined, inSoil) <
+        plantLateralExtent([seed, buried, inAir]),
+    );
+    // Without the test it still counts, so the test is what makes the difference.
+    assert.ok(plantExtent([seed, buried, inAir]) > soilOnly);
+  });
+
+  it('falls back to every underground part when the test rejects them all', () => {
+    // A wrong height frame must not pin the pit at its minimum: the same rescue
+    // the cavity envelope makes.
+    const none = plantExtent([seed, buried], undefined, () => false);
+    assert.ok(Math.abs(none - plantExtent([seed, buried])) < 1e-9);
+  });
+});
+
+describe('the soil test reaches both extents', () => {
+  it('sizes the cavity and the mouth with the same predicate', () => {
+    const source = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'main.ts'),
+      'utf8',
+    );
+    assert.match(
+      source,
+      /plantExtent\(plantNodes\.values\(\), rootSightConfig, atOrBelowTheSoil\)/,
+    );
+    assert.match(
+      source,
+      /plantLateralExtent\(plantNodes\.values\(\), rootSightConfig, atOrBelowTheSoil\)/,
+    );
   });
 });

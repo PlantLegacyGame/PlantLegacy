@@ -379,11 +379,6 @@ vec3 soilBumpNormal(vec3 normal, vec2 uv, float strength) {
   dynamicSoil = mix(dynamicSoil, dynamicSoil * 1.12, smoothstep(0.45, 0.82, patches));
   dynamicSoil *= 0.95 + 0.1 * mix(0.5, grit, detailFade);
 
-  // Buried grit stones: small, sparse and only slightly greyer than the matrix.
-  // At low frequency they read as puddles, so they are kept fine and subtle.
-  float stones = smoothstep(0.86, 0.96, soilNoise(soilDetail * 24.0 + 17.3)) * detailFade;
-  dynamicSoil = mix(dynamicSoil, uSoilMineralColor * 0.6, stones * 0.22);
-
   // Dried fissures. Ridged noise gives narrow, connected seams instead of the
   // soft blobs plain noise produces, so the topsoil breaks into plates and
   // reads as dirt rather than a painted sheet.

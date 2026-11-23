@@ -100,7 +100,7 @@ import { clientNodeHealth, resolveDrawnProgress } from './render/plantProgress.j
 import { createQualityController, type QualityController } from './render/QualityController.js';
 import { rivalTagLabel } from './render/rivalTagLabel.js';
 import { DrawnGround } from './renderers/drawnGround.js';
-import { EnvironmentRenderer } from './renderers/EnvironmentRenderer.js';
+import { cavityPaletteFromWorld, EnvironmentRenderer } from './renderers/EnvironmentRenderer.js';
 import { apertureSoilHoldRadiusM } from './renderers/environment/apertureSoilMesh.ts';
 import {
   APERTURE_FLOOR_MARGIN_M,
@@ -3304,10 +3304,25 @@ function updateRootSight(deltaTime: number): void {
   soilCutawayUniforms.uRootSightEyeInPit.value =
     camera.position.y < groundUnderEye - 0.02 && eyeOverAperture() ? 1 : 0;
 
+  // A node only sizes the pit if it is *in the soil*. The node type says a part
+  // is a root; the height frame says whether it is buried. A root tip crossing an
+  // open tunnel, or one lying on the surface, is a root by type with no soil to
+  // open there, and sizing the hole from it widened the pit for a root the player
+  // could see in the air. This is the same test the cavity envelope applies below,
+  // defined once so the hole and its walls cannot disagree about the roots they
+  // are made of.
+  const soilMarginM = 0.15;
+  const planetRadius = renderConfig?.planetRadiusM ?? 0;
+  const terrainField = getTerrainParams();
+  const atOrBelowTheSoil = (node: PlantNodeData): boolean => {
+    if (planetRadius <= 0) return true;
+    const ground = planetTerrainY(planetRadius, node.position.x, node.position.z, terrainField);
+    return node.position.y <= ground + soilMarginM;
+  };
   // Size the pit to the plant, capped by the configured radius. A fixed 50-unit
   // cutaway around a seed was a crater with a speck in the middle.
   const cutawayRadius = resolveCutawayRadius(
-    plantExtent(plantNodes.values(), rootSightConfig),
+    plantExtent(plantNodes.values(), rootSightConfig, atOrBelowTheSoil),
     eased,
     rootSightConfig.cutawayRadius,
     rootSightConfig,
@@ -3330,7 +3345,7 @@ function updateRootSight(deltaTime: number): void {
   // roots. Root depth still deepens the cavity, it just no longer widens the
   // opening.
   const lateralRadius = resolveCutawayRadius(
-    plantLateralExtent(plantNodes.values(), rootSightConfig),
+    plantLateralExtent(plantNodes.values(), rootSightConfig, atOrBelowTheSoil),
     eased,
     rootSightConfig.cutawayRadius,
     rootSightConfig,
@@ -3384,14 +3399,8 @@ function updateRootSight(deltaTime: number): void {
     // count is a part that is above the surface: a stem or a leaf passing
     // overhead has no soil to remove, and a player standing in a cave with no
     // roots near them gets no hole punched in the ceiling above.
-    const soilMarginM = 0.15;
-    const planetRadius = renderConfig?.planetRadiusM ?? 0;
-    const terrainField = getTerrainParams();
-    const atOrBelowTheSoil = (node: PlantNodeData): boolean => {
-      if (planetRadius <= 0) return true;
-      const ground = planetTerrainY(planetRadius, node.position.x, node.position.z, terrainField);
-      return node.position.y <= ground + soilMarginM;
-    };
+    // `soilMarginM` and `atOrBelowTheSoil` come from above, where the pit's size
+    // is decided: one soil test for the hole and for the bubbles that dig it.
     for (const node of plantNodes.values()) {
       // The seed itself is in the soil but is not a root: on its own it has
       // opened nothing, so it must not excavate a cavity around the player.
@@ -4548,13 +4557,10 @@ async function initC01(): Promise<void> {
       // The dug wall's three strata and its sky fill, from
       // config/root_sight.json. Passed here because this renderer builds the
       // cavity shell, and the palette is presentation, not a Root Sight uniform.
-      cavity: {
-        topsoilColor: rootSightConfig.cavityTopsoilColor,
-        subsoilColor: rootSightConfig.cavitySubsoilColor,
-        deepColor: rootSightConfig.cavityDeepColor,
+      cavity: cavityPaletteFromWorld({
         nightFill: rootSightConfig.cavityNightFill,
         dayFill: rootSightConfig.cavityDayFill,
-      },
+      }),
       // T56 slice 1: the authored region the volume mesher draws.
       volume: loadedTerrainVolumeConfig,
     },

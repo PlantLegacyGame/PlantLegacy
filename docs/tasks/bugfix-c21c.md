@@ -512,3 +512,71 @@ item below, now the only thing left between this and a readable section.
 One number to keep honest: the two halves are different sessions, so the local
 tile light differs (HUD 74.6 before, 68.5 after). The weather is identical and
 pinned; the offset is the plant's site, not the sky.
+
+## 7. The pit's size. Which roots count, 2026-11-23
+
+The cavity and the mouth were sized from every node whose *type* is underground.
+`plantExtent` had no height frame, so a root tip crossing an open tunnel or lying
+on the surface - a root by type, in air - still added its reach to the pit's
+radius (capped by `cutaway_radius_m` only). The bubbles that dig the earth had
+already been filtered: `main.ts` built `atOrBelowTheSoil` from the planet radius
+and the terrain field with `soilMarginM` 0.15 and used it for `isUndergroundNode`.
+Two rules for one pit, and the one with the height frame was not the one setting
+its size.
+
+`plantExtent` and `plantLateralExtent` now take the caller's soil test
+(`InSoilTest`) and both are called with that same `atOrBelowTheSoil`, defined once
+above the sizing so the hole and its walls cannot disagree. A test that rejects
+every root falls back to every underground part - a wrong height frame must not
+pin the pit at its minimum, which is the rescue the envelope already made.
+
+What this does not change: the seed still anchors the reach (it is the plant's
+origin, not soil), and `growthProgress` still gates each node, so a requested-but-
+not-drawn root cannot open the pit early.
+
+## 8. The pit's earth, from the palette, 2026-11-23
+
+Two hex sets and a texture stack were painting the dirt. `config/render.json`
+carried `soil_dry_color` `#6B5539`, `soil_wet_color` `#2E2418` and a blue
+`soil_mineral_tint` `#5A8FA8` for the ground; `config/root_sight.json` carried
+`cavity_topsoil_color` `#51402a`, `cavity_subsoil_color` `#80633e` and
+`cavity_deep_color` `#625a4d` for the pit wall. Neither was the palette's own soil
+ramp, so the ground, the dug wall and the aperture body were three families of
+brown, and the shader's ridged crack noise drew dark lines across all of it.
+
+Now both read `config/palette.json` through `worldColour`:
+
+| surface | role | notes |
+|---|---|---|
+| ground, dry | `soil_mid` (soil.500) | "ground in plain light" |
+| ground, damp | `soil_wet` (soil.900) | the moisture mix spans the ramp |
+| ground, mineral fleck | `soil_shade` (soil.700) | was a blue that read as metal in the dirt |
+| pit lip | `soil_wet` | damp, root-woven topsoil |
+| pit wall | `soil_mid` | ochre subsoil |
+| pit floor | `soil_shade` | dark earth above the floor |
+
+`cavityPaletteFromWorld` (in `renderers/EnvironmentRenderer.ts`) builds the wall's
+three strata, so the palette roles stay in one file the world-palette test scans;
+`soil_mid`, `soil_shade` and `soil_wet` joined `WORLD_ROLES`.
+
+Two mappings were tried and are recorded so nobody repeats them. `soil_lit` at the
+floor is a *sunlit surface* tone: at that albedo the bowl's own facets and
+specular turned the pit floor into polished ceramic (`palette-dirt-inside.png`).
+`soil_wet` at the floor is so dark under the day fill that the pit read as a void
+with no bottom (`palette-dirt-inside2.png`). `soil_shade` keeps the floor visible
+and still darker than the wall (`palette-dirt-inside3.png`).
+
+The dark lines went with two config values: `soil_crack_strength` 0.18 -> 0 and
+`soil_pebble_strength` 0.18 -> 0, both still live knobs. The hardcoded grey grit
+layer in `shaderOverrides.ts` (`mix(dynamicSoil, uSoilMineralColor * 0.6, stones *
+0.22)`) was deleted outright - it was the one speckle nothing could tune. What
+remains on the surface is the moisture mix, the clod and patch variation and the
+fine grit; the ground now reads as flat palette dirt (`palette-dirt-ground.png`).
+
+Left for a later pass: `soil_dry_color`, `soil_wet_color`, `soil_mineral_tint`,
+`cavity_topsoil_color`, `cavity_subsoil_color` and `cavity_deep_color` are still
+declared in their config files and read into `clientConfig.ts`, but the client no
+longer paints from them. They pass `config:keys` on the documented blind spot (a
+key read into a struct nobody consumes still counts as read), which is exactly the
+kind of dead knob that check exists to find - delete them with the palette
+wiring in place, or repoint them.

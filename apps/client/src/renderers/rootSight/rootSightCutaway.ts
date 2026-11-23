@@ -65,6 +65,16 @@ function underground(node: PlantNodeData): boolean {
 }
 
 /**
+ * "This part is standing in soil, not in the air above it."
+ *
+ * Passed by the caller because only it holds the height frame. Used for the
+ * pit's size as well as for the cavity's own nodes: `underground()` reads the
+ * node's type, and a root tip crossing an open tunnel or lying on the surface is
+ * still a root by type while having no soil to open.
+ */
+export type InSoilTest = (node: PlantNodeData) => boolean;
+
+/**
  * How far the player's underground growth reaches from its seed, in metres.
  *
  * Canopy nodes are deliberately excluded: a stem reaching two metres up must
@@ -75,6 +85,7 @@ function ownRootExtent(
   nodes: Iterable<PlantNodeData>,
   sizing: RootSightSizing,
   horizontalOnly: boolean,
+  inSoil?: InSoilTest,
 ): number {
   const minExtent = Math.max(0.001, sizing.minExtentM);
   const own: PlantNodeData[] = [];
@@ -84,9 +95,25 @@ function ownRootExtent(
   if (own.length === 0) return minExtent;
 
   const root = own.find((node) => node.parentId === null) ?? own[0];
-  const roots = own.filter(underground);
-  if (roots.length === 0) return minExtent;
+  const roots = own.filter((node) => underground(node) && (!inSoil || inSoil(node)));
+  if (roots.length === 0) {
+    // A height frame that rejects every root is a broken frame, not a plant with
+    // no roots: fall back to every underground part, the same rescue the cavity
+    // envelope makes. Without it a wrong frame pins the pit at its minimum.
+    const undergroundOnly = own.filter(underground);
+    if (undergroundOnly.length === 0) return minExtent;
+    return extentOf(undergroundOnly, root, horizontalOnly, minExtent);
+  }
 
+  return extentOf(roots, root, horizontalOnly, minExtent);
+}
+
+function extentOf(
+  roots: PlantNodeData[],
+  root: PlantNodeData,
+  horizontalOnly: boolean,
+  minExtent: number,
+): number {
   let extent = minExtent;
   for (const node of roots) {
     // A newly requested node is in the plant graph at its full target position
@@ -110,8 +137,9 @@ function ownRootExtent(
 export function plantExtent(
   nodes: Iterable<PlantNodeData>,
   sizing: RootSightSizing = DEFAULT_ROOT_SIGHT_SIZING,
+  inSoil?: InSoilTest,
 ): number {
-  return ownRootExtent(nodes, sizing, false);
+  return ownRootExtent(nodes, sizing, false, inSoil);
 }
 
 /**
@@ -126,8 +154,9 @@ export function plantExtent(
 export function plantLateralExtent(
   nodes: Iterable<PlantNodeData>,
   sizing: RootSightSizing = DEFAULT_ROOT_SIGHT_SIZING,
+  inSoil?: InSoilTest,
 ): number {
-  return ownRootExtent(nodes, sizing, true);
+  return ownRootExtent(nodes, sizing, true, inSoil);
 }
 
 /**

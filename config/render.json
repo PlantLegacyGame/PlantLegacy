@@ -964,21 +964,21 @@
     },
     "soil_crack_strength": {
       "type": "number",
-      "value": 0.18,
+      "value": 0,
       "range": [
         0,
         1
       ],
-      "notes": "AL-04 dirt: how strongly dried fissures darken the soil. Ridged world-space noise, so the ground breaks into plates instead of reading as a painted sheet."
+      "notes": "AL-04 dirt: how strongly dried fissures darken the soil. Off by default: ridged noise draws dark lines over the ground, which read as scratches across the palette's flat dirt rather than as dry soil. Turn up only when a cracked crust is wanted."
     },
     "soil_pebble_strength": {
       "type": "number",
-      "value": 0.18,
+      "value": 0,
       "range": [
         0,
         1
       ],
-      "notes": "AL-04 dirt: small rounded stones mixed into the topsoil, in colour and in the bump normal, so the ground catches light like loose dirt."
+      "notes": "AL-04 dirt: small rounded stones mixed into the topsoil, in colour and in the bump normal, so the ground catches light like loose dirt. Off by default: the speckle breaks up the palette's flat dirt, which is the look the soil ramp is for."
     },
     "atmosphere_extinction_r": {
       "type": "number",

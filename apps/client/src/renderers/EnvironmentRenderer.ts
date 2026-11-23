@@ -146,6 +146,33 @@ export interface EnvironmentTuning {
   volume?: TerrainVolumeParams;
 }
 
+/**
+ * The dug wall's strata, from the palette's soil ramp.
+ *
+ * `config/root_sight.json` used to hold three hexes for this, so the face the
+ * player cut and the ground it was cut from drifted into two different browns.
+ * The wall is now the same family as the ground and the aperture body:
+ * `soil_shade` at the lip (its role is "ground under the canopy or in a pit"),
+ * `soil_mid` on the wall, `soil_shade` at the floor. Two mappings were tried and
+ * are worth not repeating: `soil_lit` at the floor, at which albedo the bowl's
+ * own facets and specular turned it into polished ceramic (a light soil is a
+ * *sunlit surface* tone, not the floor of a hole three metres down), and
+ * `soil_wet` there, which is so dark under the fill that the pit read as a void
+ * with no bottom. The day and night fills stay tunable: they are light, not paint.
+ */
+export function cavityPaletteFromWorld(fill: {
+  nightFill: number;
+  dayFill: number;
+}): CavityPalette {
+  return {
+    topsoilColor: worldColour('soil_wet').getStyle(),
+    subsoilColor: worldColour('soil_mid').getStyle(),
+    deepColor: worldColour('soil_shade').getStyle(),
+    nightFill: fill.nightFill,
+    dayFill: fill.dayFill,
+  };
+}
+
 export interface WeatherPayload {
   timeOfDay: number;
   isDay: boolean;

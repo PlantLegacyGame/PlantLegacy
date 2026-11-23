@@ -240,8 +240,16 @@ export function createGround(
         config.terrainMeshSubdivisions,
       );
 
+  // The palette owns the soil's colour. `soil_mid` is "ground in plain light"
+  // and `soil_wet` the damp step of the same ramp, so the ground, the dug wall and
+  // the aperture body are one family of browns instead of two hand-picked ones.
+  const soilDry = worldColour('soil_mid');
+  const soilWet = worldColour('soil_wet');
+  // The mineral accent darkens a soil rather than tinting it a foreign colour:
+  // the old blue made wet ground read as metal fittings scattered in the dirt.
+  const soilMineral = worldColour('soil_shade');
   const material = new THREE.MeshStandardMaterial({
-    color: new THREE.Color(config.soilDryColor),
+    color: soilDry.clone(),
     roughness: 0.95,
     metalness: 0.02,
     // Opaque on purpose: a transparent ground moves the whole terrain into the
@@ -262,10 +270,6 @@ export function createGround(
     // renderer's own scene fog would be a second, disagreeing air out here.
     fog: false,
   });
-
-  const soilDry = new THREE.Color(config.soilDryColor);
-  const soilWet = new THREE.Color(config.soilWetColor);
-  const soilMineral = new THREE.Color(config.soilMineralTint);
 
   material.onBeforeCompile = (shader) => {
     material.userData.shader = shader;
