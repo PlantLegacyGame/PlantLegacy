@@ -74,6 +74,14 @@ describe('handleConfigRequest', () => {
     assert.equal(await handleConfigRequest(req('/health'), dir), null);
   });
 
+  it('fails closed when the onboarding file cannot be read', async () => {
+    // INV-CFG-02: a broken onboarding.json used to answer 200 with a third
+    // copy of the text, so the game silently ran different onboarding.
+    const result = await handleConfigRequest(req('/config/onboarding'), join(dir, 'empty'));
+    assert.equal(result?.status, 500);
+    assert.deepEqual(result?.body, { error: 'config_unreadable', config: 'onboarding' });
+  });
+
   it('falls back to the route default when a system file is missing', async () => {
     const result = await handleConfigRequest(req('/config/daynight'), join(dir, 'empty'));
     assert.equal(result?.status, 200);

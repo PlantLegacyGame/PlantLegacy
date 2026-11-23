@@ -44,22 +44,14 @@ export async function handleConfigRequest(
         },
       };
     } catch {
-      // Fallback to defaults
+      // INV-CFG-02: fail closed. This route used to answer 200 with a *third*
+      // inline copy of the onboarding text, so a typo in `onboarding.json` moved
+      // the game into a silently different onboarding nobody could see. The
+      // client already keeps one default set for a failed fetch; a server that
+      // cannot read its own config says so instead of inventing content.
       return {
-        status: 200,
-        body: {
-          hint_card_lines: [
-            'WASD / Arrows: Move  |  Mouse: Orbit camera  |  Scroll: Zoom',
-            'You are a plant. Grow roots down, canopy up. Read light, water, minerals.',
-            'Other players are other plants. Compete, ally, or parasitize. The world simulates offline.',
-          ],
-          show_hint_card_duration_ms: 10000,
-          resource_tooltips: {
-            light: 'Light: canopy exposure. Higher = faster photosynthesis.',
-            water: 'Water: root access to moisture. Depletes near other roots.',
-            minerals: 'Minerals: root access to nutrients. Concentrated in soil layers.',
-          },
-        },
+        status: 500,
+        body: { error: 'config_unreadable', config: 'onboarding' },
       };
     }
   }

@@ -349,6 +349,26 @@ describe('PlantWorld', () => {
     );
   });
 
+  it('flags a removed plant dead instead of only dropping it from the map', () => {
+    const world = makeTestPlantWorld();
+    const plant = world.createPlant('player_1', 'world_0', 0, 0);
+    assert.equal(plant.dead, undefined, 'a live plant carries no death flag');
+    world.killPlant(plant.id, 'removed');
+    assert.equal(plant.dead, true, 'the body a caller still holds says it is dead');
+    assert.equal(world.getPlant(plant.id), undefined, 'and the world no longer hands it out');
+    const growth = world.tryGrow(
+      {
+        plantId: plant.id,
+        nodeId: Array.from(plant.nodes.keys())[0] ?? '',
+        direction: { x: 0, y: -1, z: 0 },
+        nodeType: 'radicle',
+        tick: 10,
+      },
+      10,
+    );
+    assert.equal(growth.success, false, 'a dead body cannot grow');
+  });
+
   it('gets plants by owner', () => {
     const world = makeTestPlantWorld();
     const plant1 = world.createPlant('player_1', 'world_0', 0, 0);
@@ -454,6 +474,28 @@ describe('PlantWorld', () => {
       (n) => n.type === 'cotyledon',
     );
     assert(cotyledons.length >= 2, 'two cotyledons should exist');
+
+    // E27: the first cotyledon ends the seed. The crown keeps its type and its
+    // place as the structural root, but it is no longer a fresh seed - which is
+    // what keeps the menu from offering a radicle and the prologue from accepting
+    // one, so a plant cannot germinate twice.
+    assert.equal(rootNode?.isSeed, false, 'a crown with cotyledons must not still be a seed');
+    const secondRadicle = world.tryGrow(
+      {
+        plantId: updatedPlant.id,
+        nodeId: updatedPlant.rootNodeId ?? crownId,
+        direction: { x: 0, y: -1, z: 0 },
+        nodeType: 'radicle',
+        tick: 900,
+      },
+      900,
+    );
+    assert.equal(
+      secondRadicle.success,
+      false,
+      'an established crown cannot sprout another radicle',
+    );
+    assert.equal(secondRadicle.reason, 'radicle_only_from_seed');
 
     // Now try to grow a stem from the established crown
     const rootId = updatedPlant.rootNodeId ?? crownId;

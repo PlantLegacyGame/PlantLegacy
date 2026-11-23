@@ -152,9 +152,10 @@ describe('ResourceWorld', () => {
 
   it('recharges groundwater from rain and limits deep-root uptake per step', () => {
     const world = makeWorld();
-    world.setRaining(true);
-    for (let i = 0; i < 40; i += 1) world.step(0.25, new Map(), 0, 1.0, 0.5);
-    world.setRaining(false);
+    // INV-RS-08: the only rain input is the weather moisture rate the simulation
+    // passes in (`step`'s third argument); the old `setRaining` flag is gone
+    // rather than a second authority that could disagree with the weather.
+    for (let i = 0; i < 40; i += 1) world.step(0.25, new Map(), 0.5, 1.0, 0.5);
 
     const afterStorm = world.getTileResourcesAt(0, 0);
     assert.ok(afterStorm, 'tile should exist');

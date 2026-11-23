@@ -293,7 +293,6 @@ export class ResourceWorld {
   private readonly height: number;
   private readonly config: ResourcesConfig;
   private readonly worldBounds: TileBounds;
-  private isRaining = false;
   private timeOfDay = 0.5;
   private tick = 0;
   // Soil passes (moisture, minerals, diffusion) recompute the whole 65k-tile
@@ -567,10 +566,6 @@ export class ResourceWorld {
 
   setTimeOfDay(timeOfDay: number): void {
     this.timeOfDay = timeOfDay;
-  }
-
-  setRaining(raining: boolean): void {
-    this.isRaining = raining;
   }
 
   getTileCoordinates(worldX: number, worldZ: number): { tileX: number; tileZ: number } {
@@ -930,8 +925,8 @@ export class ResourceWorld {
       // runoff that recharges the deeper groundwater cavity. This makes storms
       // refill the soil and the water table instead of painting every tile with
       // the same amount of moisture.
-      if (this.isRaining || weatherMoistureRate > 0) {
-        const rainGain = weatherMoistureRate > 0 ? weatherMoistureRate : this.config.rainGainPerS;
+      if (weatherMoistureRate > 0) {
+        const rainGain = weatherMoistureRate;
         const rainfall = rainGain * dt;
         const saturation = clamp(moisture / Math.max(1e-6, this.config.maxMoisture), 0, 1);
         const infiltrated = rainfall * (1 - 0.65 * saturation);

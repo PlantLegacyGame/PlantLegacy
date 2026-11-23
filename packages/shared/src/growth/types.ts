@@ -298,6 +298,13 @@ export interface Plant {
    * every pre-T06 save and every fresh seed is.
    */
   uproot?: PlantUprootState;
+  /**
+   * INV-GR-07: this body has been killed or removed. Set the moment
+   * `PlantWorld.killPlant` takes it out of the world, so a caller holding the
+   * reference can tell a corpse from a plant instead of mutating it. Absent on
+   * every live plant, and never persisted.
+   */
+  dead?: boolean;
 }
 
 /**

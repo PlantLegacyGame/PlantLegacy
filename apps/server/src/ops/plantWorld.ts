@@ -2195,6 +2195,10 @@ export class PlantWorld {
   tryGrow(intent: GrowthIntent, currentTick: number): GrowthResult {
     const plant = this.plants.get(intent.plantId);
     if (!plant) return { success: false, reason: 'plant_not_found' };
+    // INV-GR-07: a plant that has been removed is dead, not merely absent from the
+    // map. A caller holding a stale reference (an event queued before the death
+    // drained, say) used to keep mutating a body nothing would ever draw again.
+    if (plant.dead) return { success: false, reason: 'plant_dead' };
     if (currentTick < plant.growthCooldownUntil) {
       return { success: false, reason: 'growth_on_cooldown' };
     }
@@ -2460,6 +2464,18 @@ export class PlantWorld {
     parentNode.children.push(newNodeId);
     this.nodeSpatialIndex.add(newNode);
 
+    // E27: the crown stops being a seed when its first cotyledon opens. That is
+    // the rule the germination comment always described and nothing enforced, so
+    // `getAvailableGrowthTypes('seed')` kept offering a radicle, the prologue's
+    // `radicle_only_from_seed` kept accepting it, and a plant germinated twice -
+    // a second radicle off the same crown, a second energy charge and a second
+    // mutation roll. It is also the botanically right moment: the cotyledons *are*
+    // the seed's first leaves, and the epicotyl above them is what grows from here.
+    if (targetType === 'cotyledon') {
+      const crown = plant.rootNodeId ? plant.nodes.get(plant.rootNodeId) : undefined;
+      if (crown) crown.isSeed = false;
+    }
+
     // T04: the growth that just happened is both the investment adaptive
     // pressure remembers and the event a mutation can roll on.
     if (this.mutationConfig) {
@@ -2664,6 +2680,10 @@ export class PlantWorld {
       this.nodeSpatialIndex.remove(node);
     }
 
+    // INV-GR-07: death is a state, not just an absence from the map. Whoever
+    // still holds this body (a queued event, a stale owner entry) must be able
+    // to tell that it is gone instead of quietly mutating a corpse.
+    plant.dead = true;
     this.plants.delete(plantId);
     const ownerPlants = this.plantByOwner.get(plant.ownerId);
     if (ownerPlants) {
