@@ -242,6 +242,15 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
   // without rebuilding the tab. This is what makes the tile inspector update
   // about twice a second instead of freezing at the values from tab creation.
   const readOnlyBindings = new Map<HTMLElement, () => string | number>();
+  /**
+   * The last `GET /dev/config` answer. The game-switch rows used to be drawn
+   * with `() => false`, so the panel showed every switch off no matter what the
+   * server was running; and a control the panel cannot set must say so instead
+   * of pretending to be one (E21).
+   */
+  const devConfigValues: Record<string, unknown> = {};
+  /** Controls whose displayed state comes from the server answer above. */
+  const configRefreshers: Array<() => void> = [];
 
   // ===== TAB DEFINITIONS =====
   const tabs: Tab[] = [
@@ -1026,26 +1035,26 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
         addSection(container, 'Game Switches', [
           createToggle(
             'Germination Gate',
-            () => false,
+            () => devConfigValues.germination_gate === true,
             (v) => send(8, { type: 'dev_set_config', key: 'germination_gate', value: v }),
             'germination_gate',
           ),
           createToggle(
             'Germination Failure Kills Seed',
-            () => false,
+            () => devConfigValues.germination_failure_kills_seed === true,
             (v) =>
               send(8, { type: 'dev_set_config', key: 'germination_failure_kills_seed', value: v }),
             'germination_failure_kills_seed',
           ),
           createToggle(
             'Persistence Enabled',
-            () => false,
+            () => devConfigValues.persistence_enabled === true,
             (v) => send(8, { type: 'dev_set_config', key: 'persistence_enabled', value: v }),
             'persistence_enabled',
           ),
           createSelect(
             'Seed Size Class',
-            () => 'normal',
+            () => String(devConfigValues.seed_size_class ?? 'normal'),
             (v) => send(8, { type: 'dev_set_config', key: 'seed_size_class', value: v }),
             [
               { value: 'normal', label: 'Normal' },
@@ -1153,6 +1162,22 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
             createReadonly('Last p95', () => {
               const report = bench.getReport();
               return report ? `${report.overall.p95FrameMs.toFixed(1)} ms` : 'no run yet';
+            }),
+            // `config/dev.json` keeps these for the harness, which reads them
+            // through the same `GET /dev/config`; `applyDevConfig` answers
+            // `unknown_config_key`, so they are shown here as the read-only
+            // numbers they are rather than as fields nobody can change (E21).
+            createReadonly('Warmup (dev.json)', () => {
+              const ms = devConfigValues.benchmark_warmup_ms;
+              return typeof ms === 'number' ? `${ms} ms` : 'not loaded';
+            }),
+            createReadonly('Pose window (dev.json)', () => {
+              const ms = devConfigValues.benchmark_pose_ms;
+              return typeof ms === 'number' ? `${ms} ms` : 'not loaded';
+            }),
+            createReadonly('Poses (dev.json)', () => {
+              const poses = devConfigValues.benchmark_poses;
+              return Array.isArray(poses) ? `${poses.length} fixed` : 'not loaded';
             }),
           ]);
         }
@@ -1313,6 +1338,10 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
     };
     toggle.style.cssText +=
       ';display:flex;align-items:center;justify-content:flex-start;padding:0 2px';
+    configRefreshers.push(() => {
+      state = Boolean(getter());
+      update();
+    });
     const togWrapperRow = document.createElement('div');
     togWrapperRow.style.display = 'flex';
     togWrapperRow.style.alignItems = 'center';
@@ -1548,6 +1577,10 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
 
   // Apply config values to UI inputs
   function applyConfigToUI(config: Record<string, unknown>): void {
+    for (const [key, value] of Object.entries(config)) devConfigValues[key] = value;
+    // Reflect the answer before the element pass: the toggles carry their key
+    // on a label, not on an input, so the pass below never reached them.
+    for (const refresh of configRefreshers) refresh();
     // Update all input elements that have data-config-key attribute
     document.querySelectorAll('[data-config-key]').forEach((el) => {
       const key = el.getAttribute('data-config-key');
