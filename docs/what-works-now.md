@@ -810,9 +810,17 @@ Honest list. No feature promises (T42, RULE_13). Updated at every gate.
   world are a collapsed husk (root plate, arched dry stalk, curled leaves) resting
   on the soil and still, not the bone and turntable it used to be, and a drop's
   contact shadow lies in the ground's own plane instead of a flat disc at one
-  angle. The camera's framing target is floored at the drawn surface, which is
-  what kept a reload's first view under a hill. The card and husk have not been
-  looked at in a browser yet; see
+  angle. A plant carries the same kind of patch: one soft ellipse per plant, laid
+  in the ground plane under its foot and sized to its spread, because the shadow
+  map is too coarse to say where a stem meets the soil. The framing target is
+  floored at the drawn surface, the framing now writes the pivot's height itself
+  (the travel tween only carries it in plan, and the free rig has no other
+  writer), and the eye is lifted until its arm to the plant clears the ground it
+  crosses. Driven in the dev browser on 2026-11-23: a plant was killed with the
+  dev action, the card read, "Grow a new seed" clicked on the same socket, and
+  the new seed landed in frame (pivot 17.41 m on ground 17.34 m, eye 1.56 m
+  clear); the husk, a seed's patch and three drops' shadows on a bank were looked
+  at close up. See
   [`tasks/bugfix-death-respawn.md`](./tasks/bugfix-death-respawn.md).
 - **HUD pass (ADR-067):** one vitals card (top right) holds biomass, energy,
   light, water and minerals with bars where a capacity exists, the single clock

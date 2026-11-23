@@ -2226,6 +2226,31 @@ function frameCameraOnPlant(
     }
   }
   const destination = tempTarget.clone().addScaledVector(tempDirection, distance);
+  // The eye has to stand on the soil it is over. Three metres from the subject on
+  // a steep hill put it inside the slope, and the respawn frame was a wall of
+  // brown with the new seed behind it. Lift it until the arm - at its own end and
+  // along its length - clears the ground it crosses.
+  if (!rootSightFraming) {
+    const touch = renderConfig?.cameraGroundTouchM ?? 0.02;
+    let lift = 0;
+    for (const t of [0.45, 0.7, 1]) {
+      const sampleX = tempTarget.x + (destination.x - tempTarget.x) * t;
+      const sampleZ = tempTarget.z + (destination.z - tempTarget.z) * t;
+      const sampleY = tempTarget.y + (destination.y - tempTarget.y) * t;
+      const need = clientSurfaceY(sampleX, sampleZ, 0) + touch - sampleY;
+      if (need > 0) lift = Math.max(lift, need / t);
+    }
+    // A cap, so a camera framed against a cliff rises to look over it instead of
+    // climbing the whole wall and losing the plant below the frame.
+    if (lift > 0) destination.y += Math.min(lift, 8);
+  }
+  // The tween below carries the pivot in plan only, because the ground physics
+  // owns its height every frame. In the free-camera rig nothing else ever writes
+  // that height, so the target stayed at the world origin and the whole rig hung
+  // twenty metres under the seedling it had just framed. The framing decides the
+  // height here, where the ground clamp above has just worked out where the
+  // subject stands.
+  controls.target.y = tempTarget.y;
   // Recentring uses the same eased travel as a node focus: a Space press that
   // teleported the view was as disorienting as a node double-click was.
   startCameraFocus(tempTarget.clone(), destination);
@@ -5981,6 +6006,10 @@ async function initPlantRenderer(): Promise<void> {
     plantRenderer.setGroundQuery((x, z) =>
       planetTerrainY(renderConfig?.planetRadiusM ?? 0, x, z, getTerrainParams()),
     );
+    // A plant's contact patch is laid in the ground plane, so it has to know
+    // which way the ground faces: on a slope a flat disc cuts into the hill on
+    // one side and floats over it on the other, exactly as a drop's did.
+    plantRenderer.setGroundNormal((x, z) => surfaceNormalAt(x, z));
     // The drawn soil, not just the field: the seed rests on the triangle on
     // screen, which stands above the field wherever the mesh is coarse.
     plantRenderer.setGroundMesh(scene.getObjectByName('planet-terrain-detail') ?? null);

@@ -37,6 +37,11 @@ import {
 } from './environment/standardAtmosphere.js';
 import { type OrganKey, organRoleForNodeType, resolveOrganColours } from './organPalette.ts';
 import {
+  PlantContactShadows,
+  type PlantFootprint,
+  type SurfaceNormal,
+} from './PlantContactShadows.ts';
+import {
   geometryKey,
   lookAppliesTo,
   type MutationLook,
@@ -645,6 +650,10 @@ export class MeshPlantRenderer {
   /** The drawn ground mesh, so a seed can rest on the triangle, not the field. */
   private groundMesh: THREE.Object3D | null = null;
   private readonly groundRay = new THREE.Raycaster();
+  /** Terrain normal under a plant's foot; a flat patch on a hill cuts into it. */
+  private groundNormal: ((x: number, z: number) => SurfaceNormal | null | undefined) | null = null;
+  /** One contact patch per plant, laid in the ground plane like a drop's. */
+  private contactShadows!: PlantContactShadows;
 
   /** The height of the soil actually drawn under a point, or the field's fallback. */
   private drawnGroundY(x: number, z: number, fallback: number): number {
@@ -680,6 +689,17 @@ export class MeshPlantRenderer {
     this.groundQuery = query;
   }
 
+  /**
+   * The terrain normal under a point. The shadow map cannot tilt a patch, so a
+   * plant on a slope needs the surface it stands on to lie down on it.
+   */
+  setGroundNormal(
+    normal: ((x: number, z: number) => SurfaceNormal | null | undefined) | null,
+  ): void {
+    this.groundNormal = normal;
+    this.contactShadows?.setGroundNormal(normal);
+  }
+
   constructor(scene: THREE.Scene, quality: Partial<MeshQualityConfig> = {}) {
     if (!organPaletteApplied) {
       throw new Error(
@@ -690,6 +710,10 @@ export class MeshPlantRenderer {
     this.scene = scene;
     this.scene.add(this.meshGroup);
     this.meshGroup.visible = false;
+    this.contactShadows = new PlantContactShadows({
+      scene,
+      groundNormal: this.groundNormal ?? undefined,
+    });
   }
 
   /**
@@ -888,6 +912,55 @@ export class MeshPlantRenderer {
     }
 
     this.structureDirty = true;
+    this.updateContactShadows();
+  }
+
+  /**
+   * One footprint per plant: where its body meets the ground, and how far it
+   * spreads. A plant in the air (uprooted, tumbling) has no foot to shade, and a
+   * patch under a floating body was a decal hanging in the sky.
+   */
+  private updateContactShadows(): void {
+    type Foot = { x: number; y: number; z: number; spread: number };
+    const feet = new Map<string, Foot>();
+    for (const node of this.nodeMap.values()) {
+      const plantId = node.plantId ?? (node.isOwnPlant ? 'own' : 'rival');
+      const p = node.position;
+      const foot = feet.get(plantId);
+      if (!foot) {
+        feet.set(plantId, { x: p.x, y: p.y, z: p.z, spread: 0 });
+        continue;
+      }
+      // The lowest node is the foot: the seed, or the crown of a plant that
+      // rooted above its soil. Distance to it is the plant's spread in plan.
+      if (p.y < foot.y) {
+        foot.x = p.x;
+        foot.y = p.y;
+        foot.z = p.z;
+      }
+      foot.spread = Math.max(foot.spread, Math.hypot(p.x - foot.x, p.z - foot.z));
+    }
+
+    const footprints: PlantFootprint[] = [];
+    for (const [plantId, foot] of feet) {
+      const fieldY = this.groundQuery?.(foot.x, foot.z);
+      const groundY = Number.isFinite(fieldY)
+        ? this.drawnGroundY(foot.x, foot.z, fieldY as number)
+        : foot.y;
+      // A body more than a hand above its soil is airborne (uproot, tumble), and
+      // a body a metre under it is a root-only mirror: neither stands on the
+      // ground, so neither gets a contact patch.
+      const height = foot.y - groundY;
+      if (height > 0.35 || height < -1) continue;
+      footprints.push({
+        plantId,
+        x: foot.x,
+        z: foot.z,
+        groundY,
+        radius: Math.max(0.16, foot.spread * 0.55),
+      });
+    }
+    this.contactShadows.update(footprints);
   }
 
   /** Drop every mesh a segment owns; geometry is disposed, materials are shared. */
@@ -1594,10 +1667,13 @@ export class MeshPlantRenderer {
     this.rebuildIfNeeded();
     this.updateGrowth(deltaTime);
     this.meshGroup.visible = true;
+    // The shade belongs to the plant: it is drawn exactly when the body is.
+    this.contactShadows.setVisible(true);
   }
 
   setVisible(visible: boolean): void {
     this.meshGroup.visible = visible;
+    this.contactShadows.setVisible(visible);
   }
 
   setLOD(): void {
@@ -1657,6 +1733,7 @@ export class MeshPlantRenderer {
     }
     this.meshGroup.clear();
     this.scene.remove(this.meshGroup);
+    this.contactShadows.dispose();
     this.nodeMap.clear();
     this.childrenMap.clear();
     this.segments.clear();

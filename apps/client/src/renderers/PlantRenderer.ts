@@ -221,6 +221,18 @@ class PlantRenderer {
   }
 
   /**
+   * Terrain normal under a point, forwarded to the mesh pass so a plant's
+   * contact patch lies in the ground plane on a slope.
+   */
+  setGroundNormal(
+    normal:
+      | ((x: number, z: number) => { x: number; y: number; z: number } | null | undefined)
+      | null,
+  ): void {
+    this.meshRenderer?.setGroundNormal(normal);
+  }
+
+  /**
    * The drawn surfaces a click can land on, forwarded to the mesh pass.
    * Empty when the mesh pass has not been built yet, which is also when the
    * plant is not on screen.
