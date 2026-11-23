@@ -224,34 +224,42 @@ export function createClimateField(
   };
 }
 
-/** A climate config that is safe to run: every number is finite and in range. */
+/**
+ * A climate config that is safe to run: every number is finite and in range.
+ *
+ * The fallbacks are the shipped numbers in `config/climate.json`, not a second
+ * set of values. A missing key has to leave the world as it is: the sanitiser
+ * once carried its own lift (0.004 against the shipped 0.35) and would have
+ * quietly built a nearly dry planet. `climateField.test.ts` pins the two
+ * together.
+ */
 export function sanitizeClimateConfig(config: ClimateConfig): ClimateConfig {
   const num = (value: number, fallback: number): number =>
     Number.isFinite(value) ? value : fallback;
-  const windDirectionRad = num(config.windDirectionRad, 0);
+  const windDirectionRad = num(config.windDirectionRad, 0.7);
   return {
     ...config,
-    seed: Math.floor(num(config.seed, 1)),
+    seed: Math.floor(num(config.seed, 20261123)),
     systemScaleM: Math.max(10, num(config.systemScaleM, 900)),
     windSpeedMps: Math.max(0, num(config.windSpeedMps, 6)),
     windDirectionRad,
     orographicDistanceM: Math.max(1, num(config.orographicDistanceM, 120)),
-    orographicLift: Math.max(0, num(config.orographicLift, 0.004)),
+    orographicLift: Math.max(0, num(config.orographicLift, 0.35)),
     temperatureBaseC: num(config.temperatureBaseC, 14),
-    temperatureDaySwingC: Math.max(0, num(config.temperatureDaySwingC, 7)),
+    temperatureDaySwingC: Math.max(0, num(config.temperatureDaySwingC, 6)),
     temperatureSeasonSwingC: Math.max(0, num(config.temperatureSeasonSwingC, 9)),
     temperatureNoiseC: Math.max(0, num(config.temperatureNoiseC, 2)),
     altitudeLapseCPerM: Math.max(0, num(config.altitudeLapseCPerM, 0.0065)),
-    humidityBase: clamp01(num(config.humidityBase, 0.52)),
-    humiditySwing: Math.max(0, num(config.humiditySwing, 0.26)),
-    cloudThreshold: clamp01(num(config.cloudThreshold, 0.58)),
-    precipitationThreshold: Math.min(0.98, Math.max(0, num(config.precipitationThreshold, 0.28))),
-    snowThresholdC: num(config.snowThresholdC, 1.5),
-    stormCloudThreshold: clamp01(num(config.stormCloudThreshold, 0.82)),
-    stormChance: clamp01(num(config.stormChance, 0.055)),
+    humidityBase: clamp01(num(config.humidityBase, 0.7)),
+    humiditySwing: Math.max(0, num(config.humiditySwing, 0.3)),
+    cloudThreshold: clamp01(num(config.cloudThreshold, 0.6)),
+    precipitationThreshold: Math.min(0.98, Math.max(0, num(config.precipitationThreshold, 0.26))),
+    snowThresholdC: num(config.snowThresholdC, 2.5),
+    stormCloudThreshold: clamp01(num(config.stormCloudThreshold, 0.55)),
+    stormChance: clamp01(num(config.stormChance, 0.25)),
     reevaluateS: Math.max(5, num(config.reevaluateS, 90)),
     stormCooldownS: Math.max(0, num(config.stormCooldownS, 900)),
-    precipitationStart: clamp01(num(config.precipitationStart, 0.22)),
-    precipitationStop: clamp01(num(config.precipitationStop, 0.12)),
+    precipitationStart: clamp01(num(config.precipitationStart, 0.28)),
+    precipitationStop: clamp01(num(config.precipitationStop, 0.14)),
   };
 }

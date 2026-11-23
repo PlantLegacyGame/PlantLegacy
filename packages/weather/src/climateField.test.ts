@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { loadConfigDir } from '@plant-legacy/shared/config';
-import { type ClimateConfig, createClimateField } from './climateField.ts';
+import { type ClimateConfig, createClimateField, sanitizeClimateConfig } from './climateField.ts';
 import { loadClimateConfig, loadDayNightConfig, loadWeatherConfig } from './weather.ts';
 import {
   climateNextState,
@@ -182,12 +182,28 @@ function sampleWith(precipitation: number) {
   };
 }
 
+describe('the climate config', () => {
+  it('falls back to the shipped numbers, not a world nobody ships', () => {
+    // Every value is sanitised where the field is built. If a key goes missing,
+    // the fallback has to be the world that ships, not a second set of numbers
+    // kept in the sanitiser: its old lift was 0.004 against the shipped 0.35.
+    const blanked = Object.fromEntries(
+      Object.keys(CLIMATE).map((key) => [key, Number.NaN]),
+    ) as unknown as ClimateConfig;
+    assert.deepEqual(sanitizeClimateConfig(blanked), CLIMATE);
+  });
+});
+
 describe('thirty simulated days of climate-driven weather', () => {
   it('rains and snows sometimes, storms rarely, and never flickers', () => {
     const field = createClimateField(CLIMATE, hill);
     const machine = createWeatherStateMachine(WEATHER, DAY);
     const DAYS = 30;
     const totalS = DAYS * DAY.cycleLengthS;
+    // Winter is the quarter of the year centred on phase 0.75. The run covers a
+    // whole year in 30 days, so it passes through that quarter around days 19-26.
+    const WINTER_START = 0.625;
+    const WINTER_END = 0.875;
 
     weatherStateMachineSetClimate(machine, {
       sample: () =>
@@ -207,6 +223,8 @@ describe('thirty simulated days of climate-driven weather', () => {
     const transitions: string[] = [];
     let solid = 0;
     let snowing = 0;
+    let snowInWinter = 0;
+    let snowOutsideWinter = 0;
     let storms = 0;
     let last = weatherStateMachineGetWeatherState(machine);
 
@@ -220,7 +238,12 @@ describe('thirty simulated days of climate-driven weather', () => {
       }
       secondsInState[state] = (secondsInState[state] ?? 0) + 1;
       if (state === 'rain' || state === 'snow' || state.startsWith('thunderstorm')) solid += 1;
-      if (state === 'snow') snowing += 1;
+      if (state === 'snow') {
+        snowing += 1;
+        const season = (machine.totalElapsedS / totalS) % 1;
+        if (season >= WINTER_START && season < WINTER_END) snowInWinter += 1;
+        else snowOutsideWinter += 1;
+      }
     }
 
     const wetShare = solid / totalS;
@@ -230,7 +253,13 @@ describe('thirty simulated days of climate-driven weather', () => {
     // desert with a Markov chain.
     assert.ok(wetShare > 0.04 && wetShare < 0.4, `wet share ${wetShare.toFixed(3)}`);
     assert.ok(storms <= 8, `${storms} storms in ${DAYS} days is not rare`);
-    assert.ok(snowShare >= 0, `snow share ${snowShare.toFixed(3)}`);
+    // Snow is the one state that needs the whole year: it falls only once the
+    // seasonal curve has turned the air cold. The shipped run must reach winter
+    // and snow there, and nowhere else. A cosine curve put midwinter on the
+    // first day of autumn, which this catches.
+    assert.ok(snowShare > 0.005, `snow share ${snowShare.toFixed(4)}`);
+    assert.ok(snowInWinter > 0, 'no snow in the winter quarter');
+    assert.equal(snowOutsideWinter, 0, `${snowOutsideWinter} s of snow outside winter`);
     // A state lasting less than half a minute on average is a sky flickering.
     assert.ok(transitions.length < totalS / 45, `${transitions.length} transitions`);
 
@@ -241,7 +270,7 @@ describe('thirty simulated days of climate-driven weather', () => {
       assert.equal(transitions[i + 1], 'thunderstorm_aftermath');
     }
 
-    // Snow needs a cold hour under a wet sky; over a season of days it happens.
+    // It also has to rain: a field that only ever snows has a broken warm path.
     assert.ok(
       Object.keys(secondsInState).includes('rain'),
       `no rain in ${DAYS} days: ${JSON.stringify(secondsInState)}`,

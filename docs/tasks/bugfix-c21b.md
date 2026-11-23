@@ -82,7 +82,7 @@ gap that the snow check needed closed.
 | `setGround(groundY, position)`'s camera argument | Every frame passed `this.camera.position` and the function began with `void position;`. The column follows the ground under the eye, not the eye's x/z |
 | `mesh.position.y = eyeGroundY` in `follow()` | A second write of the value `setGround()` had already written that same frame, behind an `if (sampler)` that could not change the result |
 | `sanitizeClimateConfig` in `loadClimateConfig` | The config was sanitised on the way out of the loader *and* again in `WeatherSystem.connectClimate`, the only place that builds a field. One boundary now, where the field is built |
-| `WeatherSystem.getClimateSample()` | A public accessor with no caller; the state machine gets the sample through the binding it already owns |
+| `WeatherSystem.getClimateSample()` | A public accessor with no caller; the state machine gets the sample through the binding it already owns. **Restored in §4b:** the server's `weather changed` log is the caller that pass needed |
 | *(added)* Snow entry in the dev weather select | Not a cut but the one thing this pass had to add: the server's resolver, the machine and the renderer all accept `snow`, and the panel's list stopped one state short, which is exactly why a snow shower had never been seen |
 
 ## 4b. The full live day (2026-11-23, third pass)
@@ -128,6 +128,23 @@ longer exists. The server also logs one `weather changed` line per transition
 with tick, day, season and the field's temperature, humidity, cloud and
 precipitation; before it, the weather left no trace at all. The `snow` state and
 its 1.9% share still come from the simulation, not from this live day.
+
+## 4c. Snow in winter, and a pass over the pass (2026-11-23, fourth pass)
+
+The 30-day test asserted `snowShare >= 0`, which cannot fail: the 1.9% in §4b
+was reported by the measurement tool, not pinned by the suite. The test now
+records the season of every snowing second and requires snow in the winter
+quarter (phase 0.625–0.875) and none outside it. The shipped run snows on days
+20–26 for 2070 s, 1.92% of the run; the cosine curve of K25 would put that snow
+at the autumn equinox and fail the second assertion.
+
+| Cut | Why it was not pulling its weight |
+|---|---|
+| `tools/climate-day/measure.mjs`'s hand-copied config tables | About 110 lines re-mapped `climate.json`, `weather.json`, `daynight.json` and the terrain/render/world keys with their own fallbacks, and the fallbacks had drifted from the files they read: river width 7 m against 12, soil depth 1.2 against 1.6, rain start 0.22 against 0.28. It was the same mistake §4b removed from the test, one file over. The tool now loads the shipped configs through `loadConfigDir` and the server's own loaders, so a renamed key throws instead of measuring a world nobody ships |
+| `sanitizeClimateConfig`'s numeric fallbacks | A second set of numbers, and the wrong second set: orographic lift 0.004 against the shipped 0.35, storm chance 0.055 against 0.25, humidity 0.52 against 0.70. A config that lost a key would have built a nearly dry planet with no explanation. The fallbacks are now the shipped values, pinned by a test that blanks every number and asserts the result equals the loaded `config/climate.json` |
+| `dayNumber` in the replay's transition log | Added a quarter day before dividing by the day length, so a 3400 s transition (day 1 by every other count in the tool) printed as day 2. There is one count of the day now, from midnight, as `perDay` already used |
+| `wind_speed_mps` and `orographic_lift` notes | Both still described the broken physics: speed "drives orographic lift" and the lift was "per metre per second of upslope". After K26 the lift is set by the wind direction and the distance over the slope, and the unit is metres climbed per metre travelled |
+| `--log=/tmp/server-b.log` in the usage line | On Windows `/tmp` is `C:\tmp` to Node and something else to Git Bash: a path that only works in the shell it was written in. The example is a relative path now |
 
 ## 5. Records
 

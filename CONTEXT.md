@@ -710,9 +710,11 @@ ground, temperature from season, hour and altitude lapse, and rare storms from a
 coarser noise; the state machine keeps its durations and storm phases and asks
 the field, with hysteresis (0.28 start / 0.14 stop) and a 900 s storm cooldown.
 Over 30 simulated days with the corrected field: 23.8% wet, 2 storms, 7.1
-minutes per state, and snow 1.9% of the sky (the seasonal curve, orographic
-distance and humidity centre were corrected after a full live day found them;
-see `docs/tasks/bugfix-c21b.md` §4b). Every purse mutation now emits `LEDGER_ENTRY` (48, protocol
+minutes per state, and snow 1.92% of the sky in the winter quarter — asserted by
+the 30-day test, not just reported (the seasonal curve, orographic distance and
+humidity centre were corrected after a full live day found them; see
+`docs/tasks/bugfix-c21b.md` §4b and §4c). The sanitiser's fallbacks are the
+shipped numbers, so a missing key cannot silently build a different planet. Every purse mutation now emits `LEDGER_ENTRY` (48, protocol
 v5) with the label, item, count, signed amount and committed balance, one wording
 rule in `packages/shared/src/economy/ledger.ts`, and the inventory panel lists the
 last 14. Record: [`docs/tasks/bugfix-c21b.md`](./docs/tasks/bugfix-c21b.md).

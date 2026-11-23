@@ -33,7 +33,7 @@
         0,
         40
       ],
-      "notes": "Prevailing wind speed. Advects the field and drives orographic lift."
+      "notes": "Prevailing wind speed. Advects the field; the lift is set by the wind direction and the slope over the configured distance, not by how fast it blows."
     },
     "wind_direction_rad": {
       "type": "number",
@@ -60,7 +60,7 @@
         0,
         5
       ],
-      "notes": "Humidity gained per metre per second of upslope. Windward slopes cloud over first."
+      "notes": "Humidity gained per unit of upslope gradient (metres climbed per metre travelled). Windward slopes cloud over first."
     },
     "temperature_base_c": {
       "type": "number",

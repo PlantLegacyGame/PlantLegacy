@@ -28,13 +28,19 @@
  *
  * A live day can be read back from the server log as well, which is the
  * authoritative record of what the running world actually did:
- *   node tools/climate-day/measure.mjs --log=/tmp/server-b.log
+ *   node tools/climate-day/measure.mjs --log=path/to/server.log
  */
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { loadConfigDir, readBoolean, readNumber } from '../../packages/shared/src/config/index.ts';
 import { terrainHeightAt } from '../../packages/shared/src/world/terrainField.ts';
-import { WeatherSystem } from '../../packages/weather/src/weather.ts';
+import {
+  loadClimateConfig,
+  loadDayNightConfig,
+  loadWeatherConfig,
+  WeatherSystem,
+} from '../../packages/weather/src/weather.ts';
 
 const ROOT = path.resolve(fileURLToPath(new URL('../..', import.meta.url)));
 
@@ -46,104 +52,44 @@ function arg(name, fallback) {
 
 const hasFlag = (name) => process.argv.slice(2).includes(`--${name}`);
 
-async function values(system) {
-  const file = await readFile(path.join(ROOT, 'config', `${system}.json`), 'utf8');
-  return JSON.parse(file).values;
+// The shipped configs, through the same loaders the server and the 30-day test
+// use. A hand-copied table with its own fallbacks measures whatever the tool
+// remembers rather than what the game ships — its river was 7 m wide against 12
+// and its rain began at 0.22 against 0.28 — and a missing key now throws.
+const loaded = await loadConfigDir(path.join(ROOT, 'config'));
+if (!loaded.ok) {
+  const [issue] = loaded.issues;
+  throw new Error(`config load failed: ${issue ? `${issue.file}: ${issue.message}` : 'unknown'}`);
 }
-
-function numberFrom(table, key, fallback) {
-  const value = Number(table[key]?.value ?? fallback);
-  return Number.isFinite(value) ? value : fallback;
-}
-
-const [climateValues, weatherValues, dayNightValues, terrainValues, renderValues, worldValues] =
-  await Promise.all([
-    values('climate'),
-    values('weather'),
-    values('daynight'),
-    values('terrain'),
-    values('render'),
-    values('world'),
-  ]);
-
-const climate = {
-  seed: Math.round(numberFrom(climateValues, 'seed', 1)),
-  systemScaleM: numberFrom(climateValues, 'system_scale_m', 900),
-  windSpeedMps: numberFrom(climateValues, 'wind_speed_mps', 6),
-  windDirectionRad: numberFrom(climateValues, 'wind_direction_rad', 0.7),
-  orographicDistanceM: numberFrom(climateValues, 'orographic_distance_m', 120),
-  orographicLift: numberFrom(climateValues, 'orographic_lift', 0.35),
-  temperatureBaseC: numberFrom(climateValues, 'temperature_base_c', 14),
-  temperatureDaySwingC: numberFrom(climateValues, 'temperature_day_swing_c', 6),
-  temperatureSeasonSwingC: numberFrom(climateValues, 'temperature_season_swing_c', 9),
-  temperatureNoiseC: numberFrom(climateValues, 'temperature_noise_c', 2),
-  altitudeLapseCPerM: numberFrom(climateValues, 'altitude_lapse_c_per_m', 0.0065),
-  humidityBase: numberFrom(climateValues, 'humidity_base', 0.56),
-  humiditySwing: numberFrom(climateValues, 'humidity_swing', 0.3),
-  cloudThreshold: numberFrom(climateValues, 'cloud_threshold', 0.6),
-  precipitationThreshold: numberFrom(climateValues, 'precipitation_threshold', 0.26),
-  snowThresholdC: numberFrom(climateValues, 'snow_threshold_c', 2.5),
-  stormCloudThreshold: numberFrom(climateValues, 'storm_cloud_threshold', 0.55),
-  stormChance: numberFrom(climateValues, 'storm_chance', 0.25),
-  reevaluateS: numberFrom(climateValues, 'reevaluate_s', 90),
-  stormCooldownS: numberFrom(climateValues, 'storm_cooldown_s', 900),
-  precipitationStart: numberFrom(climateValues, 'precipitation_start', 0.28),
-  precipitationStop: numberFrom(climateValues, 'precipitation_stop', 0.14),
-};
-
-const weather = {
-  clearDurationMinS: numberFrom(weatherValues, 'clear_duration_min_s', 180),
-  clearDurationMaxS: numberFrom(weatherValues, 'clear_duration_max_s', 420),
-  rainDurationMinS: numberFrom(weatherValues, 'rain_duration_min_s', 120),
-  rainDurationMaxS: numberFrom(weatherValues, 'rain_duration_max_s', 300),
-  stormTelegraphDurationS: numberFrom(weatherValues, 'storm_telegraph_duration_s', 45),
-  stormActiveDurationS: numberFrom(weatherValues, 'storm_active_duration_s', 90),
-  stormAftermathDurationS: numberFrom(weatherValues, 'storm_aftermath_duration_s', 60),
-  rainMoistureGainPerS: numberFrom(weatherValues, 'rain_moisture_gain_per_s', 0.8),
-  stormMoistureGainPerS: numberFrom(weatherValues, 'storm_moisture_gain_per_s', 1.6),
-  clearLightMultiplier: numberFrom(weatherValues, 'clear_light_multiplier', 1),
-  rainLightMultiplier: numberFrom(weatherValues, 'rain_light_multiplier', 0.65),
-  stormLightMultiplier: numberFrom(weatherValues, 'storm_light_multiplier', 0.35),
-  stormWindDamageThreshold: numberFrom(weatherValues, 'storm_wind_damage_threshold', 18),
-  stormWindDamageRate: numberFrom(weatherValues, 'storm_wind_damage_rate', 1.5),
-  lightningFrequencyPerMinute: numberFrom(weatherValues, 'lightning_frequency_per_minute', 4),
-  lightningDamageRadius: numberFrom(weatherValues, 'lightning_damage_radius', 6),
-  lightningDamageAmount: numberFrom(weatherValues, 'lightning_damage_amount', 25),
-  forecastWindowS: numberFrom(weatherValues, 'forecast_window_s', 180),
-  biomeWeatherModifier: numberFrom(weatherValues, 'biome_weather_modifier', 1),
-};
-
-const dayNight = {
-  cycleLengthS: numberFrom(dayNightValues, 'cycle_length_s', 3600),
-  dayFraction: numberFrom(dayNightValues, 'day_fraction', 0.66),
-  dawnDuskTransitionS: numberFrom(dayNightValues, 'dawn_dusk_transition_s', 60),
-  conditionMapping: dayNightValues.condition_mapping?.value ?? {},
-};
+const { configs } = loaded;
+const climate = loadClimateConfig(configs);
+const weather = loadWeatherConfig(configs);
+const dayNight = loadDayNightConfig(configs);
 
 const terrainParams = {
-  seed: Math.round(numberFrom(terrainValues, 'seed', 1337)),
-  amplitudeM: numberFrom(terrainValues, 'surface_amplitude_m', 26),
-  baseFrequency: numberFrom(terrainValues, 'surface_base_frequency', 0.02),
-  octaves: Math.round(numberFrom(terrainValues, 'surface_octaves', 4)),
-  lacunarity: numberFrom(terrainValues, 'surface_lacunarity', 2),
-  gain: numberFrom(terrainValues, 'surface_gain', 0.5),
-  ridgeStrength: numberFrom(terrainValues, 'ridge_strength', 0.6),
-  patchRadiusM: numberFrom(terrainValues, 'patch_radius_m', 620),
-  rimFadeFraction: numberFrom(terrainValues, 'rim_fade_fraction', 0.28),
-  maxDepthM: numberFrom(terrainValues, 'max_depth_m', 12),
-  soilDepthM: numberFrom(renderValues, 'soil_depth_m', 1.2),
-  riverEnabled: terrainValues.river_enabled?.value !== false,
-  riverCenterZM: numberFrom(terrainValues, 'river_center_z_m', 0),
-  riverWidthM: numberFrom(terrainValues, 'river_width_m', 7),
-  riverDepthM: numberFrom(terrainValues, 'river_depth_m', 1.2),
-  riverPathCellM: numberFrom(terrainValues, 'river_path_cell_m', 2),
-  riverBankSlope: numberFrom(terrainValues, 'river_bank_slope', 0.9),
-  riverBankApronM: numberFrom(terrainValues, 'river_bank_apron_m', 12),
-  riverWaterDepthM: numberFrom(terrainValues, 'river_water_depth_m', 0.35),
-  riverLengthM: numberFrom(terrainValues, 'river_length_m', 320),
+  seed: Math.round(readNumber(configs, 'terrain', 'seed')),
+  amplitudeM: readNumber(configs, 'terrain', 'surface_amplitude_m'),
+  baseFrequency: readNumber(configs, 'terrain', 'surface_base_frequency'),
+  octaves: Math.round(readNumber(configs, 'terrain', 'surface_octaves')),
+  lacunarity: readNumber(configs, 'terrain', 'surface_lacunarity'),
+  gain: readNumber(configs, 'terrain', 'surface_gain'),
+  ridgeStrength: readNumber(configs, 'terrain', 'ridge_strength'),
+  patchRadiusM: readNumber(configs, 'terrain', 'patch_radius_m'),
+  rimFadeFraction: readNumber(configs, 'terrain', 'rim_fade_fraction'),
+  maxDepthM: readNumber(configs, 'terrain', 'max_depth_m'),
+  soilDepthM: readNumber(configs, 'render', 'soil_depth_m'),
+  riverEnabled: readBoolean(configs, 'terrain', 'river_enabled'),
+  riverCenterZM: readNumber(configs, 'terrain', 'river_center_z_m'),
+  riverWidthM: readNumber(configs, 'terrain', 'river_width_m'),
+  riverDepthM: readNumber(configs, 'terrain', 'river_depth_m'),
+  riverPathCellM: readNumber(configs, 'terrain', 'river_path_cell_m'),
+  riverBankSlope: readNumber(configs, 'terrain', 'river_bank_slope'),
+  riverBankApronM: readNumber(configs, 'terrain', 'river_bank_apron_m'),
+  riverWaterDepthM: readNumber(configs, 'terrain', 'river_water_depth_m'),
+  riverLengthM: readNumber(configs, 'terrain', 'river_length_m'),
 };
 
-const seasonLengthDays = numberFrom(worldValues, 'season_length_days', 90);
+const seasonLengthDays = Math.max(1, readNumber(configs, 'world', 'season_length_days'));
 const days = Math.max(1, Math.round(Number(arg('days', '1'))));
 const season = Math.max(1, Math.round(Number(arg('season', '1'))));
 const progress = Number(arg('progress', '0'));
@@ -391,7 +337,7 @@ for (let t = 0; t < totalSeconds; t += step) {
       t: Math.round(t),
       from: lastState,
       to: state,
-      dayNumber: Math.floor((t + daySeconds * 0.25) / daySeconds) + 1,
+      dayNumber: Math.floor(t / daySeconds) + 1,
       timeOfDay: Number(system.getTimeOfDay().toFixed(4)),
       seasonPhase: Number(phaseAt(t).toFixed(4)),
       sample: system.getClimateSample(),
