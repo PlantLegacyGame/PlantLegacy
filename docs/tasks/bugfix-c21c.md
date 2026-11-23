@@ -16,6 +16,7 @@ sizing or the surface view.
 |---|---|---|---|
 | 4 | The cavity rim is a polygon chord against a per-fragment cut, so in principle the lip and the cut can disagree by the chord error | The shader cuts the opening per pixel (exact); the bowl is geometry, one chord per column. The conform was already there — every rim vertex rises to its own ground, the lip borrows the top course's normals, and the opening is cut per fragment | **Nothing to fix, and the first version of this row got its number wrong.** A circle sampled at N columns sags `R · (1 − cos(π / N))`: **0.5 mm** at a 0.9 m mouth and **1.1 mm** at 2 m, at the shipped 96 columns. The 6.5 cm in the first draft was the arc length between columns, not the sag. The bowl stays at 96 columns. The sink stays at **0** as well, because `cavityBowl.test.ts` pins that a lip sunk below its ground opens a slot of sky at the mouth — the per-fragment cut plus the vertex conform is the right pair |
 | 7 | The far ground patch ended over a step: the patches are built on the *exact* sphere, the planet body is a polyhedron whose facets sit inside it, so at the ring's outer edge the ground stopped metres above the body | `SphereGeometry(radius, 256, 128)` sags `radius · (1 − cos(π / 256))` — 7.5 m at a 100 km radius — and only the inner patch had a wall hung off it (the soil slab), not the coarse ring | The body is built at **384 × 192** facets, and a **perimeter skirt** hangs off the coarse ring's own edge, from the ring's own height function, to `planetFacetSag(radius, 384) + 2` metres down. `planetSurface.test.ts` pins the skirt's top to the patch's edge, its depth past the facet sag, and its outward winding |
+| — | **The bowl was 20–32 % deeper than its depth budget**, so the pit and the earth body it is cut into had two floors: 5.73 m drawn against 4.75 m at a 2.5 m mouth, 12.3 m against 9.31 m at 4.9 m, with the shell's floor hanging *below* the cut's floor by up to 2.4 m | `verticalScale = depth / CAVITY_PROFILE_DEPTH` (1.02) scales the profile, but the rim conforms up to `reliefM` above the mouth plane before it is drawn, so the rim-to-floor depth came out as `budget + relief` — 1 m of relief on a 2.5 m mouth, 3 m on a 4.9 m one | `bowlVerticalScale(depthM, reliefM)` takes the rim's travel out of the wall: `(depthM − relief) / 1.02`, floored at 5 % of a wall so a cliff wider than the pit is deep cannot invert it. Pinned by three tests and measured live: rim-to-floor is exactly `cavityDepthM` at 0.63, 2.5 and 4.9 m (1.197 / 4.75 / 9.31), with the bowl's floor 0.45–0.57 m above the cut's floor instead of below it |
 | 13 | A buried eye was surrounded by dirt: the sheet's back faces, the slab's walls and underside, and (newly) the aperture body. The pit could be an arm's length away and the frame was still a brown wall | Every soil fragment is opaque, and being *inside* the earth means every direction is earth. The sheet had a partial answer (bubbles open with the cavity, back faces dropped in the pit) but nothing cut the body around the camera | One **camera-centred near-side cut**: a `SOIL_NEAR_CUT_M = 0.45 m` bubble of soil is dropped around a buried eye, in the soil shader (which the patches, the slab and the ring all share) and in the aperture body's own material (`setApertureSoilEye`, wired per frame from `syncApertureSoil`). Conditional on the eye being under the ground, so the surface view is untouched |
 
 ## 2. Config
@@ -27,6 +28,7 @@ No new keys. The numbers are code constants with comments:
 | `planetSurface.ts` | `PLANET_BODY_SEGMENTS` | 384 | Halves the facet sag; the skirt is sized from the same number |
 | `ground/shaderOverrides.ts` | `SOIL_NEAR_CUT_M` | 0.45 | The near distance of a camera: big enough not to be inside a shaded face, small enough that a stride away is a wall |
 | — | bowl columns | 96 (unchanged) | Measured chord sag is 0.5–1.1 mm below a millimetre-and-a-bit; density bought nothing |
+| `cavity/placement.ts` | `bowlVerticalScale` floor | 5 % of a wall | The one case the depth rule cannot win: a mouth wider than the pit is deep across a cliff, where the rim's own travel is the whole budget |
 
 ## 3. Tests
 
@@ -124,10 +126,12 @@ window.__plantLegacy.devCavity.setRadius(null); // back to the plant's own sizin
   before `rootCavityShape`, so the uniform, the cut volume, the ground sampling
   for the rim mode, the bowl, the earth body and the camera's "inside the
   opening" test all read the same two numbers. Nothing is duplicated.
-- A forced mouth is not capped by a seedling's seed pit, which is the one clamp
-  a dev number has to beat: `setRadius({ cavityM: 0.7, apertureM: 4.9 })` is a
-  4.9 m hole in a 0.7 m cavity, which is nonsense but not silently shrunk — the
-  caller sees the uniforms disagree instead.
+- A forced mouth is not capped by a seedling's seed pit: the value is used as
+  given. Measured afterwards (§6), the two numbers are not a pair the caller can
+  contradict: the cavity radius never reaches the cut, the bowl, the body or the
+  clamps, so `{cavityM: 0.7, apertureM: 4.9}` draws exactly the pit
+  `{cavityM: 7, apertureM: 4.9}` draws and the cavity figure only shows up in the
+  status line.
 - The two values stay separate because the shipped config keeps them separate:
   a 7 m cutaway sphere carries a 4.9 m mouth (0.7 of it), and forcing both to
   one number is how the bowl and the hole came to disagree before.
@@ -149,15 +153,26 @@ shader in exactly one place, the fused-envelope blend
 walls near the roots blend harder, and the HUD's `cutawayRadius 0.70` describes
 nothing that is on screen. Nothing clamps the mouth to the cavity.
 
-**The drawn bowl is 20–32 % deeper than the depth rule.** `verticalScale` is
-`depth / CAVITY_PROFILE_DEPTH` (1.02), but the geometry's top is the *conformed
-rim* — each lip vertex raised to its own ground, up to +0.21 native here and
-+0.33 on the slope — while its floor sits at −1.02. Measured rim→floor:
-**5.73 m** at a 2.5 m mouth (`cavityDepthM` says 4.75) and **12.3 m** at 4.9
-(9.31). The aperture body is built to `cavityDepthM + 0.6`, so the bowl's floor
-is ~0.4 m below the body's at 2.5 m and ~2.4 m below it at 4.9 m. No hole
-appeared in any of the shots — the slab that was built once is 13.9 m deep —
-but the pit and the earth it is cut into no longer share a floor at size.
+**The drawn bowl was 20–32 % deeper than the depth rule — fixed since.** The
+rim is conformed before it is drawn (each lip vertex raised to its own ground,
+up to +0.21 native here and +0.33 on the slope), and `verticalScale` was
+`depth / CAVITY_PROFILE_DEPTH` (1.02), so rim→floor came out as `budget +
+relief`: **5.73 m** at a 2.5 m mouth (budget 4.75) and **12.3 m** at 4.9 (9.31).
+`bowlVerticalScale` now takes the rim's travel out of the wall. Re-measured in
+the page, camera above ground so no eye bubble inflates the budget:
+
+| mouth | `cavityDepthM` | rim→floor drawn | cut depth | bowl floor above the cut's floor |
+|---|---|---|---|---|
+| 0.63 m | 1.197 m | **1.197 m** | 1.70 m | 0.45 m |
+| 2.5 m | 4.75 m | **4.75 m** | 5.25 m | 0.48 m |
+| 4.9 m | 9.31 m | **9.31 m** | 9.81 m | 0.57 m |
+
+The shell's floor now sits just above the cut's floor — the floor margin the
+cut volume was always built with — instead of hanging below it by up to 2.4 m,
+so the pit and the earth it is cut into share a floor again. With a buried eye
+the pit is deeper than the mouth rule on purpose: `cavityDepthM` takes the larger
+of the mouth rule and the deepest bubble (here an eye window 1.1 m across),
+which is why the same 0.63 m mouth reads 5.85 m with the camera in the earth.
 
 **From straight above, a pit reads as a plate.** At both sizes the mouth is
 filled by a grey, radially-streaked disc with a lobed edge, and the wall is a

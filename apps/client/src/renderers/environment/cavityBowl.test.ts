@@ -5,6 +5,7 @@ import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import * as THREE from 'three';
 import {
+  bowlVerticalScale,
   CAVITY_BOWL_RIM_FRACTION,
   CAVITY_DEPTH_TO_MOUTH,
   CAVITY_FLOOR_CLEARANCE_M,
@@ -342,6 +343,33 @@ function rimSamples(
   });
 }
 
+describe('the bowl wall takes the rim travel out of the depth', () => {
+  it('draws the whole depth in the wall on flat ground', () => {
+    // 1.02 units of profile, so the wall is the budget itself.
+    assert.ok(Math.abs(bowlVerticalScale(4.75, 0) - 4.75 / CAVITY_PROFILE_DEPTH) < 1e-9);
+  });
+
+  it('subtracts the rim relief, so rim-to-floor stays the budget', () => {
+    for (const [depth, relief] of [
+      [4.75, 0.9],
+      [9.31, 3.0],
+      [1.2, 0.1],
+    ]) {
+      const wall = bowlVerticalScale(depth, relief) * CAVITY_PROFILE_DEPTH;
+      assert.ok(
+        Math.abs(wall + relief - depth) < 1e-9,
+        `wall ${wall} + relief ${relief} != ${depth}`,
+      );
+    }
+  });
+
+  it('never inverts the wall, even when the relief is the whole budget', () => {
+    assert.ok(bowlVerticalScale(2.66, 17) > 0);
+    assert.ok(bowlVerticalScale(2.66, Number.NaN) > 0);
+    assert.ok(bowlVerticalScale(0, 0) > 0);
+  });
+});
+
 describe('terrain-following cavity rim', () => {
   it('keeps every rim vertex on or under the ground it cuts through', () => {
     const bowl = createCavityBowl(new THREE.Color('#3a2a1c'), new THREE.Color('#6a5440'), 24, 12);
@@ -357,21 +385,44 @@ describe('terrain-following cavity rim', () => {
     }
   });
 
-  it('holds the floor at the depth the roots asked for on a steep bank', () => {
+  it('spends a bank on the wall, so the pit is still the depth the roots asked for', () => {
     const bowl = createCavityBowl(new THREE.Color('#3a2a1c'), new THREE.Color('#6a5440'), 24, 12);
     const centre = new THREE.Vector3(0, 0, 0);
-    const steep = (x: number, z: number): number => 6 * x - z;
-    updateCavityBowl(bowl, centre, 2, 1, steep);
+    const bank = (x: number, z: number): number => 0.6 * x - 0.2 * z;
+    updateCavityBowl(bowl, centre, 2, 1, bank);
 
-    const intended = cavityBowlPlacement(2, 1, 2 * CAVITY_MOUTH_FRACTION * CAVITY_DEPTH_TO_MOUTH);
-    const wanted = intended.verticalScale * CAVITY_PROFILE_DEPTH;
-    // Never shallower than the roots asked for, and on a cliff the rim's own
-    // travel forces it deeper - that is the trade, not an inversion.
+    // A 1.4 m mouth wants a 2.66 m pit (the mouth's own depth rule). The rim's
+    // travel up this bank is part of that 2.66 m, not extra on top of it: the
+    // floor has to land on the depth the soil's cut was built to, or the pit and
+    // the earth body it is cut into end up with two floors.
+    const wanted = 2 * CAVITY_MOUTH_FRACTION * CAVITY_DEPTH_TO_MOUTH;
+    const rim = rimSamples(bowl, centre, bank);
+    const highestRim = Math.max(...rim.map((sample) => sample.worldY));
+    const floorY = bowl.position.y + lowestLocalY(bowl) * bowl.scale.y;
     assert.ok(
-      floorDepthOf(bowl) >= wanted - 1e-6,
-      `floor sits ${floorDepthOf(bowl).toFixed(2)} m down, wanted ${wanted.toFixed(2)} m`,
+      Math.abs(highestRim - floorY - wanted) < 1e-6,
+      `rim-to-floor is ${(highestRim - floorY).toFixed(3)} m, wanted ${wanted.toFixed(3)} m`,
     );
-    const lowestRim = Math.min(...rimSamples(bowl, centre, steep).map((s) => s.worldY));
+    assert.ok(Math.abs(floorDepthOf(bowl) - wanted) > 0.05, 'the bank cost the wall nothing');
+    for (const sample of rim) {
+      assert.ok(
+        Math.abs(sample.worldY - sample.ground) < 1e-3,
+        `rim vertex sits ${(sample.worldY - sample.ground).toFixed(3)} m off the bank`,
+      );
+    }
+  });
+
+  it('keeps a positive wall when the cliff is wider than the pit is deep', () => {
+    const bowl = createCavityBowl(new THREE.Color('#3a2a1c'), new THREE.Color('#6a5440'), 24, 12);
+    const centre = new THREE.Vector3(0, 0, 0);
+    const cliff = (x: number, z: number): number => 6 * x - z;
+    updateCavityBowl(bowl, centre, 2, 1, cliff);
+
+    // No scale can make this mouth 2.66 m deep and still reach both lips: the
+    // rim alone spans more than that. The shell keeps a positive wall instead of
+    // inverting, and the floor stays under the lowest lip.
+    assert.ok(bowl.scale.y > 0, 'the wall inverted');
+    const lowestRim = Math.min(...rimSamples(bowl, centre, cliff).map((s) => s.worldY));
     assert.ok(
       bowl.position.y + lowestLocalY(bowl) * bowl.scale.y < lowestRim,
       'the floor is above the lowest rim vertex',

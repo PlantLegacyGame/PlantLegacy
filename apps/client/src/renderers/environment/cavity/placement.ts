@@ -3,8 +3,9 @@
  *
  * Two rules live here, and they are the whole depth story:
  *
- * 1. **The mouth is a radius, the depth is a depth.** The shell is scaled by the
- *    depth the cavity asked for, and never by the slope.
+ * 1. **The mouth is a radius, the depth is a depth.** The shell is scaled so its
+ *    rim-to-floor depth is the depth the cavity asked for, and never by the
+ *    slope: the rim's own travel comes out of the wall (`bowlVerticalScale`).
  * 2. **The lip conforms by rising.** The bowl is anchored on the lowest ground
  *    under the rim, so every rim vertex reaches its own ground by moving up,
  *    which needs no more wall than the shell already has.
@@ -69,6 +70,29 @@ export interface RimFit {
 }
 
 /**
+ * The vertical scale that makes the shell's **rim-to-floor** depth the budget.
+ *
+ * The rim conforms to the ground, so the lip is not one plane: its highest
+ * vertex stands `reliefM` above its lowest. Scaling the profile by
+ * `depthM / CAVITY_PROFILE_DEPTH` therefore drew every pit `reliefM` deeper than
+ * the budget - 0.4 m at a 2.5 m mouth on a bank, 2.4 m at 4.9 m - and the floor
+ * fell below the floor of the earth body the pit is cut into. Taking the
+ * relief out of the wall instead pins the floor at `depthM` below the *highest*
+ * ground under the rim, which is the datum the soil's cut uses, so the pit and
+ * the earth around it share a floor.
+ *
+ * A mouth wider than it is deep across a cliff spends the whole budget on the
+ * rim's travel; the wall is then kept positive rather than inverted, and the cut
+ * hides the sliver of shell that hangs below it.
+ */
+export function bowlVerticalScale(depthM: number, reliefM: number): number {
+  const depth = Number.isFinite(depthM) ? Math.max(0.1, depthM) : 0.1;
+  const relief = Number.isFinite(reliefM) ? Math.max(0, reliefM) : 0;
+  const wall = Math.max(CAVITY_PROFILE_DEPTH * 0.05, depth - relief);
+  return wall / CAVITY_PROFILE_DEPTH;
+}
+
+/**
  * Measure the ground under the rim.
  *
  * The shell is **not** stretched to bridge a slope any more, and that is the
@@ -93,5 +117,7 @@ export function fitRimToGround(grounds: readonly number[], baseVerticalScale: nu
   }
   if (!Number.isFinite(highestGround)) highestGround = 0;
   if (!Number.isFinite(lowestGround)) lowestGround = 0;
+  // The base scale is handed back unchanged: how much of it survives is the
+  // caller's decision, and `bowlVerticalScale` is where that happens.
   return { highestGround, lowestGround, verticalScale: Math.max(0.01, baseVerticalScale) };
 }

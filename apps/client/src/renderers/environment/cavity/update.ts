@@ -6,7 +6,7 @@
 import type * as THREE from 'three';
 import type { CavityClipUniforms } from './bowlMesh.ts';
 import { CAVITY_CLIP_MODE_VALUE, cavityClipPolicy, isEyeInsideCavity } from './clip.ts';
-import { cavityBowlPlacement, fitRimToGround } from './placement.ts';
+import { bowlVerticalScale, cavityBowlPlacement, fitRimToGround } from './placement.ts';
 import {
   CAVITY_CUT_OVERREACH,
   CAVITY_MOUTH_FRACTION,
@@ -155,13 +155,17 @@ export function updateCavityBowl(
   // a deep one, which is what digging into a bank does. Anchoring on the ground
   // at the plant instead made the lip float over the downhill side and forced
   // the stretch-and-clamp pair that flattened the cut wall into a dish.
-  placement.verticalScale = fit.verticalScale;
-  bowl.scale.y = fit.verticalScale;
+  // The rim's own travel is height the wall must not also spend: the budget is
+  // the pit's *rim-to-floor* depth, not its mouth-plane depth (`bowlVerticalScale`).
+  // Without this the floor dropped below the budget wherever the mouth spanned a
+  // slope, and sat under the floor of the earth body the pit is cut into.
+  placement.verticalScale = bowlVerticalScale(depthM, fit.highestGround - fit.lowestGround);
+  bowl.scale.y = placement.verticalScale;
   bowl.position.y = fit.lowestGround + placement.rimOffsetY;
   mouthPlaneY = fit.lowestGround;
   applyClip();
 
-  const rimKey = `${centre.x.toFixed(2)}|${centre.z.toFixed(2)}|${placement.horizontalScale.toFixed(2)}|${fit.verticalScale.toFixed(3)}|${fit.highestGround.toFixed(2)}|${fit.lowestGround.toFixed(2)}`;
+  const rimKey = `${centre.x.toFixed(2)}|${centre.z.toFixed(2)}|${placement.horizontalScale.toFixed(2)}|${placement.verticalScale.toFixed(3)}|${fit.highestGround.toFixed(2)}|${fit.lowestGround.toFixed(2)}`;
   if (state.lastRimKey === rimKey) return;
   state.lastRimKey = rimKey;
 
@@ -171,7 +175,7 @@ export function updateCavityBowl(
     // the uphill side of the opening was a strip of cut-away soil with no bowl
     // behind it: a pale band the colour of the sky. Each rim vertex sits on its
     // own ground instead, exactly like the cut it backs.
-    const localY = (ground[k] + placement.rimOffsetY - bowl.position.y) / fit.verticalScale;
+    const localY = (ground[k] + placement.rimOffsetY - bowl.position.y) / placement.verticalScale;
     position.setY(rim[k], Math.max(0, localY));
   }
   position.needsUpdate = true;
