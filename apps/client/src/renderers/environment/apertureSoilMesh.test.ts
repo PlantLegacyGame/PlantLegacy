@@ -189,11 +189,42 @@ describe('the aperture body fits the bowl it is cut for', () => {
     }
   });
 
-  it('fills the body with its own vertex colour, so the bands survive the dark', () => {
-    // Underground there is no scene light: the emissive term is all that is
-    // drawn. A single tinted fill made the three soil bands one flat brown, so
-    // the buried view had no strata while the pit's wall had them. The fill is
-    // white and the shader multiplies it by the vertex colour instead.
+  it("cuts the earth's opening at the void, not a cell away from it", () => {
+    // The top annulus's inner vertices land on cell centres, and at a seedling's
+    // mouth that put the drawn opening at radius 0.38 m around a 0.23 m pit - a
+    // barrel of sky around the bowl when seen from underneath. The builder
+    // snaps that rim onto the void's circle at the top plane.
+    for (const apertureM of APERTURES_M) {
+      const { mouthM, params } = bodyFor(apertureM);
+      const body = buildApertureSoilMesh(bank, params);
+      assert.ok(body, `aperture ${apertureM}: nothing meshed`);
+      let rim = Number.POSITIVE_INFINITY;
+      for (let v = 0; v < body.vertices; v += 1) {
+        const x = body.positions[v * 3];
+        const y = body.positions[v * 3 + 1];
+        const z = body.positions[v * 3 + 2];
+        if (Math.abs(y - (bank(x, z) - params.topInsetM)) > 1e-3) continue;
+        const radius = radiusOf(params, x, z);
+        if (radius < rim) rim = radius;
+      }
+      assert.ok(Number.isFinite(rim), `aperture ${apertureM}: the body has no top rim`);
+      assert.ok(
+        Math.abs(rim - params.voidRadiusM) < 1e-6,
+        `aperture ${apertureM}: the opening is ${rim.toFixed(3)} m, the void ${params.voidRadiusM.toFixed(3)} m`,
+      );
+      assert.ok(
+        rim - mouthM <= APERTURE_SOIL_GAP_M + 1e-6,
+        `aperture ${apertureM}: the opening stands ${(rim - mouthM).toFixed(3)} m off the mouth`,
+      );
+    }
+  });
+
+  it('fills the body with one topsoil tint that follows the light', () => {
+    // The fill is the emissive term, the only thing drawn underground. It was a
+    // white emissive multiplied by `vColor` for one pass; the buried view showed
+    // no difference (at most 6/255 levels between the two), because the bands'
+    // luminance is too close for the fill to carry them, so the patch is cut.
+    // The bands ride the lit vertex colours; the fill stays the topsoil tint.
     const { params } = bodyFor(1.4);
     const mesh = createApertureSoilMesh(params, bank, {
       topsoil: new THREE.Color('#51402a'),
@@ -202,27 +233,17 @@ describe('the aperture body fits the bowl it is cut for', () => {
     });
     assert.ok(mesh, 'nothing meshed');
     const material = mesh.material as THREE.MeshStandardMaterial;
-    assert.equal(material.vertexColors, true);
-    assert.deepEqual(
-      [material.emissive.r, material.emissive.g, material.emissive.b],
-      [1, 1, 1],
-      'a tinted fill is one flat colour underground',
+    assert.equal(material.vertexColors, true, 'the bands no longer ride the vertex colours');
+    assert.ok(
+      !String(material.onBeforeCompile).includes('vColor'),
+      'a shader patch is back; it was cut because it measured flat',
     );
-    // Scaling the fill with the scene's light must keep it neutral: the shader
-    // multiplies it by the vertex colour, so a tint here would flatten the
-    // bands again.
     setApertureSoilLight(mesh, 1);
-    assert.ok(
-      material.emissive.r === material.emissive.g && material.emissive.g === material.emissive.b,
-      'the light level tinted the fill, so the bands are gone again',
-    );
-    const day = material.emissive.r;
+    const day = material.emissive.clone();
+    assert.ok(day.r > day.g && day.g > day.b, 'the fill is not the topsoil tint');
     setApertureSoilLight(mesh, 0.2);
-    assert.ok(day > 0 && material.emissive.r < day, 'the fill does not follow the light level');
-    assert.ok(
-      String(material.onBeforeCompile).includes('emissive * vColor'),
-      'the fill no longer multiplies the vertex colour',
-    );
+    assert.ok(day.r > 0 && material.emissive.r < day.r, 'the fill does not follow the light level');
+    assert.ok(material.emissive.r > material.emissive.b, 'dimming the fill lost its tint');
   });
 
   it('reaches past the aperture in plan and below the bowl in depth', () => {

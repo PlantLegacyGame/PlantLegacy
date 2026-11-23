@@ -126,26 +126,21 @@ export function createApertureSoilMesh(
     side: THREE.DoubleSide,
     // Sky fill, scaled per frame with the scene's light by
     // `setApertureSoilLight`, so the inside of the earth is not black at night.
-    // White, and multiplied by the vertex colour below: a single tinted fill is
-    // all that survives underground, where there is no scene light, and it made
-    // the body's three soil bands one flat brown - the underground view had no
-    // strata at all while the pit's wall had three.
-    emissive: new THREE.Color(1, 1, 1),
+    // One tinted fill, the topsoil's own colour. A per-vertex fill - a white
+    // emissive multiplied by `vColor` - was tried for the bands and cut: on the
+    // buried view it moved the frame by at most 6 of 255 levels, because the
+    // three bands sit too close in luminance for the fill to carry them. The
+    // bands ride the lit surfaces' vertex colours, as they do on the pit wall.
+    emissive: palette.topsoil.clone(),
     emissiveIntensity: 0.34,
   });
-  material.onBeforeCompile = (shader) => {
-    shader.fragmentShader = shader.fragmentShader.replace(
-      'vec3 totalEmissiveRadiance = emissive;',
-      'vec3 totalEmissiveRadiance = emissive * vColor;',
-    );
-  };
   const mesh = new THREE.Mesh(geometry, material);
   mesh.name = 'aperture-soil-volume';
   // It is the earth beside the pit, not an overlay: it receives the scene's
   // light, and its own faces are the only shadow casters down there.
   mesh.castShadow = false;
   mesh.receiveShadow = false;
-  mesh.userData.fillColour = new THREE.Color(1, 1, 1);
+  mesh.userData.fillColour = palette.topsoil.clone();
   mesh.userData.fillStrength = 0.34;
   return mesh;
 }

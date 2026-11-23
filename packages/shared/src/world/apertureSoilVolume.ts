@@ -20,9 +20,11 @@
  *   instead. No shader edit, no second surface at the same depth to z-fight.
  * - **The void is the aperture**, a hair wider than the bowl's mouth at the top,
  *   so the tuned bowl still lines the hole it was tuned for and the block never
- *   pokes through it. Below the top the shaft is wider by the chord sag of the
- *   meshed polygon, because a face between two vertices on the void can still
- *   stand inside it.
+ *   pokes through it. Below the top the shaft is wider by the sag the mesh
+ *   actually has - measured from the first pass, because a face between two
+ *   vertices on the void can still stand inside it - and by nothing more: the
+ *   shaft is a polygon, so widening it further only shows as a barrel around
+ *   the bowl.
  * - **The floor is deeper than the pit**, so the body contains the cavity rather
  *   than ending on its floor.
  *
@@ -134,25 +136,76 @@ export function apertureSoilSdf(
   x: number,
   y: number,
   z: number,
+  /** Radius of the shaft's wall below the top; defaults to the void's own. */
+  shaftRadiusM = Math.max(0.05, params.voidRadiusM),
 ): number {
   const surface = ground(x, z);
   const top = surface - params.topInsetM;
   const floor = surface - Math.max(0.2, params.depthM);
   const radius = Math.hypot(x - params.centreXM, z - params.centreZM);
   const voidRadius = Math.max(0.05, params.voidRadiusM);
-  // The meshed wall is a polygon, not a circle: a chord between two wall
-  // vertices at radius r dips inside by about c^2 / (8 r), and a chord across
-  // the dual mesh spans up to a cell diagonal (c^2 ~ 3 step^2). At a seedling's
-  // 0.3 m shaft that is centimetres, and it showed as soil standing inside the
-  // bowl's wall although every vertex was already outside the void. Cut the
-  // wall wider by that sag below the top; the top keeps the narrow cut, so its
-  // edge still meets the sheet's and the bowl stays in front of the soil.
-  const step = Math.max(0.05, params.voxelM);
-  const wallRadius = voidRadius + (3 * step * step) / (8 * voidRadius);
-  const cutRadius = y < top - 0.005 ? wallRadius : voidRadius;
+  // The top keeps the void's own radius so its edge still meets the sheet's
+  // cut; below it the wall may stand further out (see `shaftFaceSag`).
+  const cutRadius = y < top - 0.005 ? Math.max(voidRadius, shaftRadiusM) : voidRadius;
   // Negative inside: below the top, above the floor, inside the extent, outside
   // the void. Each term is the signed distance to one face of that intersection.
   return Math.max(y - top, floor - y, radius - Math.max(0.2, params.extentM), cutRadius - radius);
+}
+
+/**
+ * How far the meshed shaft's faces fall inside the void, metres.
+ *
+ * The wall's vertices sit on the void, but the triangle between two of them is
+ * a chord and dips inside it - by centimetres where the shaft is only a few
+ * voxels across. Measuring the mesh is the only honest way to know how much:
+ * the sag depends on the polygon surface nets happens to produce, not on a
+ * formula, and an earlier guess of three times a nominal chord over-widened the
+ * shaft into a barrel around a seedling's bowl.
+ */
+function shaftFaceSag(
+  mesh: SurfaceNetMesh,
+  params: ApertureSoilParams,
+  voidRadius: number,
+  heightAt: GroundHeight,
+  step: number,
+): number {
+  const shaftReach = voidRadius + 2 * step;
+  let minRadius = Number.POSITIVE_INFINITY;
+  const { positions, indices } = mesh;
+  for (let t = 0; t < indices.length; t += 3) {
+    const a = indices[t];
+    const b = indices[t + 1];
+    const c = indices[t + 2];
+    // The top annulus is a face at the sheet's cut, not the shaft's wall.
+    if (
+      positions[a * 3 + 1] >
+        heightAt(positions[a * 3], positions[a * 3 + 2]) - params.topInsetM - 0.01 ||
+      positions[b * 3 + 1] >
+        heightAt(positions[b * 3], positions[b * 3 + 2]) - params.topInsetM - 0.01 ||
+      positions[c * 3 + 1] >
+        heightAt(positions[c * 3], positions[c * 3 + 2]) - params.topInsetM - 0.01
+    ) {
+      continue;
+    }
+    const corners = [a, b, c];
+    const radii = corners.map((v) =>
+      Math.hypot(positions[v * 3] - params.centreXM, positions[v * 3 + 2] - params.centreZM),
+    );
+    if (Math.max(...radii) > shaftReach) continue;
+    for (const [u, v] of [
+      [a, b],
+      [b, c],
+      [c, a],
+    ] as const) {
+      for (const f of [0.25, 0.5, 0.75]) {
+        const x = positions[u * 3] + (positions[v * 3] - positions[u * 3]) * f;
+        const z = positions[u * 3 + 2] + (positions[v * 3 + 2] - positions[u * 3 + 2]) * f;
+        const radius = Math.hypot(x - params.centreXM, z - params.centreZM);
+        if (radius < minRadius) minRadius = radius;
+      }
+    }
+  }
+  return Number.isFinite(minRadius) ? Math.max(0, voidRadius - minRadius) : 0;
 }
 
 /**
@@ -206,16 +259,68 @@ export function buildApertureSoilMesh(
     return near * (1 - tz) + far * tz;
   };
 
+  const voidRadius = Math.max(0.05, params.voidRadiusM);
+
+  // How far the wall's faces will sag inside the void depends only on the shaft's
+  // own polygon, so measure it on a tiny slab around the aperture rather than
+  // meshing the whole body twice. The slab's grid is snapped to the body's, so
+  // surface nets produces the same cells it will in the real mesh.
+  const sag = ((): number => {
+    const reach = voidRadius + 2 * step;
+    const topHere = heightAt(params.centreXM, params.centreZM) - params.topInsetM;
+    const slabM = Math.min(Math.max(0.6, 2 * voidRadius), Math.max(0.6, params.depthM * 0.5));
+    const i0 = Math.floor((params.centreXM - reach - bounds.min[0]) / step);
+    const k0 = Math.floor((params.centreZM - reach - bounds.min[2]) / step);
+    const j0 = Math.floor((topHere - 0.02 - slabM - bounds.min[1]) / step);
+    const slabCounts: [number, number, number] = [
+      Math.ceil((2 * reach) / step) + 2,
+      Math.ceil(slabM / step) + 2,
+      Math.ceil((2 * reach) / step) + 2,
+    ];
+    const slab = surfaceNets({
+      min: [bounds.min[0] + i0 * step, bounds.min[1] + j0 * step, bounds.min[2] + k0 * step],
+      step,
+      counts: slabCounts,
+      sdf: (x, y, z) => apertureSoilSdf(heightAt, params, x, y, z, voidRadius),
+    });
+    return shaftFaceSag(slab, params, voidRadius, heightAt, step);
+  })();
+  // Only widen when a face would otherwise come within the 2 cm the void keeps
+  // from the bowl's mouth, and then by exactly that sag.
+  const wallRadius = sag > 0.015 ? voidRadius + sag + 0.004 : voidRadius;
   const mesh = surfaceNets({
     min: bounds.min,
     step,
     counts,
-    sdf: (x, y, z) => apertureSoilSdf(heightAt, params, x, y, z),
+    sdf: (x, y, z) => apertureSoilSdf(heightAt, params, x, y, z, wallRadius),
   });
   if (mesh.vertices === 0) return null;
 
+  // The top's hole is cut at the void's radius, but surface nets places the
+  // annulus's inner vertices at cell centres, which can be most of a cell away:
+  // at a seedling's 0.23 m mouth the earth's opening measured 0.38 m across, so
+  // a buried eye saw a barrel of sky around the pit. Snap those vertices onto
+  // the void's circle at the top plane; the wall below keeps the sag's margin.
+  const snapReach = voidRadius + 0.9 * step;
+  for (let v = 0; v < mesh.vertices; v += 1) {
+    let x = mesh.positions[v * 3];
+    const y = mesh.positions[v * 3 + 1];
+    let z = mesh.positions[v * 3 + 2];
+    const top = heightAt(x, z) - params.topInsetM;
+    if (y < top - step || y > top + 0.02) continue;
+    const radial = Math.hypot(x - params.centreXM, z - params.centreZM);
+    if (radial <= 1e-6 || radial > snapReach) continue;
+    const scale = voidRadius / radial;
+    x = params.centreXM + (x - params.centreXM) * scale;
+    z = params.centreZM + (z - params.centreZM) * scale;
+    mesh.positions[v * 3] = x;
+    // The surface can fall across the move, so read its height here, not at the
+    // vertex's old column.
+    mesh.positions[v * 3 + 1] = heightAt(x, z) - params.topInsetM;
+    mesh.positions[v * 3 + 2] = z;
+  }
+
   const depth = Math.max(0.2, params.depthM);
-  const voidRadius = Math.max(0.05, params.voidRadiusM);
   const strata = new Float32Array(mesh.vertices);
   for (let v = 0; v < mesh.vertices; v += 1) {
     let x = mesh.positions[v * 3];
