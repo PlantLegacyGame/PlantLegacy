@@ -385,3 +385,52 @@ rather than a failure: at noon the sun is overhead and the whole floor is lit.
 The top-down read at noon still needs a shape, and the shape is not being changed.
 Frames: `shadow-25-noon.png`, `shadow-25-1500.png`, `shadow-25-1716.png`,
 `shadow-49-noon.png`, `shadow-49-1500.png`.
+
+### The cue from inside the pit, and from eye level
+
+The crescent is a read from above. From the ground it has to survive a different
+question - does the eye inside the pit see a lit patch, or only a dark wall - so
+the same 4.9 m pit was checked from a player's eye level (1.7 m, downhill of the
+rim, the only side with room to see in) and from inside it (1.6 m under the
+mouth's plane), at 15:00 and at dusk.
+
+The site matters here: this pit sits on a bank, and the ground across its mouth
+spans **5.21 m**. The depth rule spends that out of the budget, so the floor is
+9.31 m below the uphill lip and only 4.09 m below the downhill one. That is the
+rule working, not a fault, but it means the uphill wall stands 5 m proud of the
+mouth's plane and fills the frame from inside.
+
+Share of the wall the lip test darkens, split by which side of the mouth it is on
+(sunward = the wall the sun is over, whose inner face is turned away from it):
+
+| time | sun elevation | sunward wall | sun-facing wall |
+|---|---|---|---|
+| 15:00 | 48.2° | **0.88** | **0.03** |
+| 17:16 | 13.4° | **0.97** | **0.63** |
+
+So it does not darken the wall the sun reaches: at 15:00 the sun-facing wall is
+97 % clear, and at dusk it loses 63 % because a 13° sun only grazes its top - which
+is the far lip's shadow, which is what should happen. The wall it darkens is the
+one whose inner face already turned away from the sun. That is right in geometry
+and wrong in lighting: `diffuseColor.rgb *= (1.0 - BOWL_LIP_SHADOW * shadow)` takes
+the ambient with it, so a surface that had no direct sun to lose still loses 45 %
+of its light. That is why the inside of the pit is uniformly pressed down and why
+the lit strip does not read:
+
+- **Eye level, 15:00** (`shadow-eyelevel-1500-downhill.png`): the pit reads as a
+  hole, clearly deep, but the cue doing the work is the rim's light against a dark
+  interior. The crescent itself is not identifiable as a crescent from this angle.
+- **Eye level, dusk** (`shadow-eyelevel-dusk.png`): same read, darker, with a faint
+  strip on the far wall and the floor almost black.
+- **Inside, 15:00** (`shadow-inside-lit-wall-1500.png`): the sun-facing wall shows
+  an ochre strip between two dark bands. It reads as a **stratum**, not as
+  sunlight, because the strata are ochre too - the shadow has no colour of its own
+  to tell them apart.
+- **Inside, dusk** (`shadow-inside-lit-wall-dusk.png`): a short band low on the
+  wall. It says the sun is low; it does not say how far down the floor is.
+
+Next pass, if the inside read matters: apply the lip shadow to the direct sun
+term only and leave the ambient and the strata alone, so the shaded wall keeps its
+structure and the lit strip has something to contrast against. Do not strengthen
+`BOWL_LIP_SHADOW` - the geometry is already at 0.88 on the wall it is entitled to
+shade, and more would only deepen the same flatness.
