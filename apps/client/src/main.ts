@@ -101,6 +101,7 @@ import { createQualityController, type QualityController } from './render/Qualit
 import { rivalTagLabel } from './render/rivalTagLabel.js';
 import { DrawnGround } from './renderers/drawnGround.js';
 import { EnvironmentRenderer } from './renderers/EnvironmentRenderer.js';
+import { apertureSoilHoldRadiusM } from './renderers/environment/apertureSoilMesh.ts';
 import {
   APERTURE_FLOOR_MARGIN_M,
   APERTURE_RIM_MARGIN_M,
@@ -2849,14 +2850,6 @@ function clampEyeToCavity(deltaTime: number): void {
   if (!(rootSightConfig?.cameraBurrowEnabled ?? false)) return;
   const radius = soilCutawayUniforms.uRootSightApertureRadius.value;
   if (!(radius > 0.05)) return;
-  // An eye standing anywhere in the opening - including pressed against its
-  // wall - is held at the wall rather than let through it. This used to ask
-  // whether the eye was inside the column *minus its clearance*, which is the
-  // line the clamp itself enforces: one more centimetre towards the wall and the
-  // clamp stopped running, so the dirt was left to the ground clamp and the eye
-  // was lifted to the surface. An eye in solid earth outside the opening is
-  // still left alone, and `clampEyeToGround` brings that one back up.
-  if (!eyeOverAperture()) return;
   const planetRadius = renderConfig?.planetRadiusM ?? 0;
   const groundY = planetTerrainY(
     planetRadius,
@@ -2868,6 +2861,32 @@ function clampEyeToCavity(deltaTime: number): void {
   // a hole in the ground the player may circle at any distance they like.
   if (camera.position.y >= groundY - 0.02) return;
   const centre = soilCutawayUniforms.uRootSightApertureCenter.value;
+  // A buried eye is held inside the aperture soil body's footprint as well, not
+  // only inside the opening. The body is the only earth the world draws under the
+  // aperture; outside it there is nothing but the ground sheet's back face, so an
+  // eye that strayed out there looked at a brown plane at arm's length with the
+  // pit somewhere behind it. `apertureSoilHoldRadiusM` is the same number the
+  // renderer uses to decide the body is in front of this eye, so the two cannot
+  // disagree about where "inside" ends. This runs before the opening's own hold
+  // and before its early return, because the eye it catches is by definition not
+  // over the opening.
+  const bodyHold = clampToCavity(
+    { x: camera.position.x, z: camera.position.z },
+    { x: centre.x, z: centre.z, radius: apertureSoilHoldRadiusM(radius) },
+    0,
+  );
+  if (bodyHold) {
+    camera.position.x = bodyHold.x;
+    camera.position.z = bodyHold.z;
+  }
+  // An eye standing anywhere in the opening - including pressed against its
+  // wall - is held at the wall rather than let through it. This used to ask
+  // whether the eye was inside the column *minus its clearance*, which is the
+  // line the clamp itself enforces: one more centimetre towards the wall and the
+  // clamp stopped running, so the dirt was left to the ground clamp and the eye
+  // was lifted to the surface. An eye in solid earth outside the opening is
+  // still left alone, and `clampEyeToGround` brings that one back up.
+  if (!eyeOverAperture()) return;
   // A look up is the way out: the wall stops sideways travel, not the rise.
   //
   // This runs before the wall clamp, not after it. `clampToCavity` returns null

@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { describe, it } from 'node:test';
+import { fileURLToPath } from 'node:url';
 import {
   apertureSoilBounds,
   apertureSoilSdf,
@@ -10,9 +13,11 @@ import * as THREE from 'three';
 import {
   APERTURE_SOIL_BELOW_FLOOR_M,
   APERTURE_SOIL_EXTENT_M,
+  APERTURE_SOIL_EYE_HOLD_M,
   APERTURE_SOIL_GAP_M,
   APERTURE_SOIL_MIN_DEPTH_M,
   APERTURE_SOIL_TOP_INSET_M,
+  apertureSoilHoldRadiusM,
   apertureSoilParamsFor,
   createApertureSoilMesh,
   nearCutHides,
@@ -323,5 +328,39 @@ describe('the near-side cut', () => {
     assert.equal(nearCut.enabled.value, 1);
     setApertureSoilEye(mesh, { x: 1, y: 2, z: 3 }, false);
     assert.equal(nearCut.enabled.value, 0);
+  });
+});
+
+describe('the hold a buried eye is kept to', () => {
+  it('is the body footprint less its margin, at every aperture size', () => {
+    for (const aperture of APERTURES_M) {
+      const params = apertureSoilParamsFor({
+        centreX: 0,
+        centreZ: 0,
+        mouthRadiusM: aperture * CAVITY_CUT_OVERREACH,
+        depthM: 0,
+      });
+      assert.equal(
+        apertureSoilHoldRadiusM(aperture),
+        Math.max(0.1, params.extentM - APERTURE_SOIL_EYE_HOLD_M),
+        `the hold disagrees with the body at a ${aperture} m aperture`,
+      );
+    }
+    assert.ok(apertureSoilHoldRadiusM(0.22) < APERTURE_SOIL_EXTENT_M);
+    assert.ok(apertureSoilHoldRadiusM(4.9) > 4.9);
+  });
+
+  it('is the same margin the renderer draws the body within', () => {
+    // The camera pulls a buried eye to `extentM - margin`; if the renderer kept
+    // its own copy of that number the eye could be held exactly where the body
+    // stops being drawn, and the sheet's back would come back.
+    const source = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), '..', 'EnvironmentRenderer.ts'),
+      'utf8',
+    );
+    assert.match(
+      source,
+      /insidePlan =\s*radius < params\.extentM - APERTURE_SOIL_EYE_HOLD_M \+ APERTURE_SOIL_HOLD_SLACK_M;/,
+    );
   });
 });

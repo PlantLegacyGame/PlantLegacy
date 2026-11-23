@@ -40,6 +40,8 @@ const skyNightScratch = new THREE.Color();
 
 import {
   APERTURE_SOIL_BELOW_FLOOR_M,
+  APERTURE_SOIL_EYE_HOLD_M,
+  APERTURE_SOIL_HOLD_SLACK_M,
   apertureSoilParamsFor,
   createApertureSoilMesh,
   setApertureSoilEye,
@@ -1325,7 +1327,10 @@ export class EnvironmentRenderer {
       depthM: depthBelowLip + APERTURE_SOIL_BELOW_FLOOR_M,
     });
     const radius = Math.hypot(this.camera.position.x - centre.x, this.camera.position.z - centre.z);
-    const insidePlan = radius < params.extentM - 0.25;
+    // The same margin the camera holds a buried eye to (`apertureSoilHoldRadiusM`),
+    // so the body is never withheld from an eye the clamp allows under the surface.
+    const insidePlan =
+      radius < params.extentM - APERTURE_SOIL_EYE_HOLD_M + APERTURE_SOIL_HOLD_SLACK_M;
     const depth = this.camera.position.y - surfaceY;
     const insideDepth = depth < -0.05 && depth > -(params.depthM - 0.2);
     const inside = insidePlan && insideDepth;

@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { describe, it } from 'node:test';
+import { fileURLToPath } from 'node:url';
 import {
   cavityEscapeLiftY,
   clampToCavity,
@@ -108,5 +111,28 @@ describe('cavity escape', () => {
   it('moves nothing for a zero or nonsensical lift', () => {
     assert.deepEqual(raiseEyeWithAim(-3, -1.5, 0), { eyeY: -3, aimY: -1.5 });
     assert.deepEqual(raiseEyeWithAim(-3, -1.5, Number.NaN), { eyeY: -3, aimY: -1.5 });
+  });
+});
+
+describe('the aperture soil body hold', () => {
+  it('keeps a buried eye inside the body, not just the opening', () => {
+    const source = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), '..', 'main.ts'),
+      'utf8',
+    );
+    // The lock: outside the body's footprint there is no earth in the world, only
+    // the ground sheet's back, so an eye under the surface there sees a brown plane
+    // at arm's length instead of the pit.
+    assert.match(
+      source,
+      /if \(bodyHold\) \{\s*camera\.position\.x = bodyHold\.x;\s*camera\.position\.z = bodyHold\.z;\s*\}/,
+    );
+    assert.match(source, /radius: apertureSoilHoldRadiusM\(radius\)/);
+    // And it has to run before the opening's own gate: the eye it catches is by
+    // definition not over the opening, so a later clamp would never see it.
+    const hold = source.indexOf('apertureSoilHoldRadiusM(radius)');
+    const gate = source.indexOf('if (!eyeOverAperture()) return;');
+    assert.ok(hold > 0 && gate > 0, 'the hold or the gate is missing');
+    assert.ok(hold < gate, "the body hold runs after the opening's gate and never fires");
   });
 });

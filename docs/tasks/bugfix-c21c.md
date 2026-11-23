@@ -476,3 +476,39 @@ Two changes would actually move the picture, in this order:
    inside; a section needs a filled face - a strata-banded slice through the body
    on the eye's side of the pit, with the bowl's near half clipped by the same
    plane, or the near bowl wall stands in front of the slice.
+
+### The hold: a buried eye stays inside the soil body
+
+The clip could not help because it was gated on the very thing that was missing.
+The gate is now closed from the other side: a buried Root Sight eye is held inside
+the aperture soil body's own footprint, so the body is always what surrounds it.
+
+- `APERTURE_SOIL_EYE_HOLD_M` (0.3 m) is the keep-out margin inside the footprint,
+  and `apertureSoilHoldRadiusM(aperture)` returns `max(3.6, aperture * 1.02 + 1.2)
+  - 0.3`: the seedling's 0.22 m pit holds the eye at **3.30 m**, the 4.9 m one at
+  **5.90 m**.
+- The lock is in `clampEyeToCavity`, **before** the opening's own gate, because
+  the eye it catches is by definition not over the opening. The renderer draws the
+  body within `extentM - APERTURE_SOIL_EYE_HOLD_M + APERTURE_SOIL_HOLD_SLACK_M`
+  (0.05 m of slack for the frame between the clamp and the draw), so the two
+  cannot disagree about where "inside" ends - the first attempt held the eye to
+  exactly the draw bound and the body blinked out on the boundary.
+
+Measured with the weather pinned clear server-side (`dev_set_weather`,
+`duration_s` 3600 - it survives the reloads the A/B needs) and the clock frozen at
+noon, eye 1.5 m under its own ground:
+
+| pit | before: plan 4.6 / 7.0 m, no hold | after: the held radius |
+|---|---|---|
+| 0.22 m | body `visible: false`; the sheet's underside across the frame with the plant's top through a thimble hole (`hold-before2-022.png`) | 3.30 m, `visible: true`; earth wall, floor and the trunk read as a space (`hold-after-022.png`) |
+| 4.9 m | body `visible: false`; the sheet's underside with a wedge of sky through the huge mouth (`hold-before2-49.png`) | 5.90 m, `visible: true`; uniform earth close around the eye (`hold-after-49.png`) |
+
+What it does and does not buy: the sheet's back face is gone from every buried
+pose, because wherever the eye can be, the body is drawn. At the 4.9 m pit the
+held frame is then a brown void - the body is a hollow shell and the eye is
+between its outer skin and its shaft - which is exactly the "cap the section"
+item below, now the only thing left between this and a readable section.
+
+One number to keep honest: the two halves are different sessions, so the local
+tile light differs (HUD 74.6 before, 68.5 after). The weather is identical and
+pinned; the offset is the plant's site, not the sky.

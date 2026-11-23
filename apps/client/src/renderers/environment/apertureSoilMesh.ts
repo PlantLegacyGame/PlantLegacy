@@ -18,7 +18,7 @@ import {
   type GroundHeight,
 } from '@plant-legacy/shared/world';
 import * as THREE from 'three';
-import { CAVITY_STRATA_BANDS } from './cavity/profile.ts';
+import { CAVITY_CUT_OVERREACH, CAVITY_STRATA_BANDS } from './cavity/profile.ts';
 import { SOIL_NEAR_CUT_M } from './ground/shaderOverrides.ts';
 
 /**
@@ -41,6 +41,24 @@ export const APERTURE_SOIL_TOP_INSET_M = 0.03;
 export const APERTURE_SOIL_VOXEL_M = 0.26;
 /** Clearance between the bowl's mouth and the soil's shaft wall. */
 export const APERTURE_SOIL_GAP_M = 0.02;
+/**
+ * How far inside the body's footprint a buried eye is kept.
+ *
+ * One number for the two halves of the same promise: the renderer draws the body
+ * only inside `extentM - this`, and the camera hold pulls a buried eye to
+ * `extentM - this`, so an eye that is under the surface always has the body in
+ * front of it instead of the back of the ground's sheet.
+ */
+export const APERTURE_SOIL_EYE_HOLD_M = 0.3;
+/**
+ * A frame's worth of slack past that hold, for the draw test alone.
+ *
+ * The camera clamp runs once per frame, before the render pass; a held eye sits
+ * exactly on the limit, and a float or a frame of travel past it must not be the
+ * reason the body stops being drawn. The clamp still keeps the eye inside; this
+ * only stops the two halves arguing over the boundary.
+ */
+export const APERTURE_SOIL_HOLD_SLACK_M = 0.05;
 /** How far below the bowl's floor the body's own floor sits. */
 export const APERTURE_SOIL_BELOW_FLOOR_M = 1.2;
 
@@ -58,6 +76,24 @@ export interface ApertureSoilPalette {
  * overreach), not the shader's cut radius: the bowl's rim is the visible edge of
  * the hole and the soil has to sit just behind it, never through it.
  */
+/**
+ * The plan radius a buried eye is held inside, for an aperture of `apertureRadiusM`.
+ *
+ * Takes the aperture's own radius (not the bowl's mouth) so the caller cannot
+ * forget the cut overreach the body is built from; the result is the body's
+ * footprint less the eye's keep-out margin.
+ */
+export function apertureSoilHoldRadiusM(apertureRadiusM: number): number {
+  const aperture = Number.isFinite(apertureRadiusM) ? Math.max(0.05, apertureRadiusM) : 0.05;
+  const extent = apertureSoilParamsFor({
+    centreX: 0,
+    centreZ: 0,
+    mouthRadiusM: aperture * CAVITY_CUT_OVERREACH,
+    depthM: 0,
+  }).extentM;
+  return Math.max(0.1, extent - APERTURE_SOIL_EYE_HOLD_M);
+}
+
 export function apertureSoilParamsFor(input: {
   centreX: number;
   centreZ: number;
