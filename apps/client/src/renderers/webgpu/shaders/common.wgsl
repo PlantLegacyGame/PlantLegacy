@@ -261,6 +261,21 @@ fn soilOccludes(worldPos: vec3f) -> bool {
     return false;
   }
 
+  // A buried eye sees soil in every direction but the air bubble around itself.
+  // This has to come before the sphere test: from inside the body the far
+  // intersection is always beyond the fragment, so the early outs below answered
+  // "not occluded" and the seed drew straight over the ground whenever the
+  // camera went under it.
+  if (frame.cameraUnderSoil != 0u) {
+    if (
+      frame.rootSightEyeWindow > 0.0 &&
+      distance(worldPos, frame.cameraPos.xyz) <= frame.rootSightEyeWindow * 1.5
+    ) {
+      return false;
+    }
+    return true;
+  }
+
   let centre = vec3f(frame.planetCenterX, frame.planetCenterY, frame.planetCenterZ);
   let ro = frame.cameraPos.xyz - centre;
   let toFragment = worldPos - frame.cameraPos.xyz;
@@ -303,19 +318,6 @@ fn soilOccludes(worldPos: vec3f) -> bool {
       return false;
     }
   }
-  if (frame.cameraUnderSoil != 0u) {
-    // A buried eye is exempt only inside the air bubble around itself. The old
-    // blanket `return false` stopped the eye's own cavity reading as solid dirt,
-    // but it did it for every fragment in the world: rival plants and their
-    // roots were drawn straight through hills from underground.
-    if (
-      frame.rootSightEyeWindow > 0.0 &&
-      distance(worldPos, frame.cameraPos.xyz) <= frame.rootSightEyeWindow * 1.5
-    ) {
-      return false;
-    }
-    return true;
-  }
   return true;
 }
 
@@ -324,8 +326,11 @@ struct RainUniforms {
   streakWidth: f32,
   maxVelocity: f32,
   particleCount: u32,
-  boxWidth: f32,
   boxHeight: f32,
+  // The tint and dimming the three.js drops take from the sky this frame.
+  level: f32,
+  _pad0: f32,
   _pad1: f32,
+  color: vec3f,
   _pad2: f32,
 }

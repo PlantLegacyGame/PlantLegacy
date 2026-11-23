@@ -308,6 +308,7 @@ export class EnvironmentRenderer {
   private ambientBaseline = 0;
   /** Scratch colour for the drops, reused so a storm allocates nothing per frame. */
   private readonly rainTint = new THREE.Color();
+  private rainLightLevel = 1;
   /** Eye below the drawn terrain: no rain is drawn inside the earth. */
   private eyeUnderSoil = false;
   /** The rain field samples the real terrain once the planet radius is known. */
@@ -1281,14 +1282,12 @@ export class EnvironmentRenderer {
       // sun turned golden hour into amber rain and a noon storm warm, which is
       // exactly the "weird colour" rain had.
       this.rainTint.copy(this.sunLight.color).lerp(this.sky.horizonColor, 0.7);
-      this.rain.setLight(
-        this.rainTint,
-        THREE.MathUtils.clamp(
-          0.25 + this.ambientLight.intensity * 1.6 + this.sunLight.intensity * 0.25,
-          0.2,
-          1,
-        ),
+      this.rainLightLevel = THREE.MathUtils.clamp(
+        0.25 + this.ambientLight.intensity * 1.6 + this.sunLight.intensity * 0.25,
+        0.2,
+        1,
       );
+      this.rain.setLight(this.rainTint, this.rainLightLevel);
     } else {
       this.rain.setVisible(false);
     }
@@ -1585,6 +1584,17 @@ export class EnvironmentRenderer {
   /** How warm the light is this frame: 0 high sun, 1 on the horizon. */
   public getSunWarmth(): number {
     return this.sunWarmthNow;
+  }
+
+  /**
+   * The tint and dimming the weather's drops take from the sky this frame.
+   *
+   * The WebGPU rain has to use the same values the three.js drops do, or it
+   * keeps its own colour while the sun sets: a hardcoded grey is white at dusk
+   * and a grey bar at midnight.
+   */
+  public getRainLight(): { color: THREE.Color; level: number } {
+    return { color: this.rainTint, level: this.rainLightLevel };
   }
 
   /** Renderer exposure for the current hour, from `render.json`. */

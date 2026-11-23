@@ -54,6 +54,17 @@ fn vs_main(input: VertexInput) -> VertexOutput {
   // it. The box itself is placed over the viewer when the instances are built.
   let pos = vec3f(home.x, input.groundY + cycle * boxHeight, home.z);
 
+  // No water inside the earth. This pass has no depth buffer to test against the
+  // drawn ground, so a drop beyond the planet's bulk - past a ridge, over the
+  // horizon - was painted on top of the dirt it should be behind. Collapsing the
+  // quad puts it outside the clip volume, where it costs nothing.
+  if (soilOccludes(pos)) {
+    output.uv = vec2f(0.0);
+    output.velocity = velocity;
+    output.clipPosition = vec4f(0.0, 0.0, -2.0, 1.0);
+    return output;
+  }
+
   // Each drop its own lean, so the shower is not one ruled line.
   let lean = (seed - 0.5) * 0.5;
   let fall = normalize(vec3f(lean, -1.0, lean * 0.35));
@@ -116,13 +127,15 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4f {
   let shape = clamp(max(bead, tail * 0.8), 0.0, 1.0);
 
   let speedShare = clamp(input.velocity / max(rain.maxVelocity, 0.001), 0.0, 1.0);
-  let alpha = shape * mix(0.95, 0.5, y) * (0.7 - 0.25 * speedShare);
+  // The light the drops fall through, and how much of it there is: the same
+  // sky-tinted colour and dimming the three.js drops use, so the shower goes
+  // grey-blue at dusk and nearly out at midnight instead of staying white.
+  let alpha = shape * mix(0.95, 0.5, y) * (0.7 - 0.25 * speedShare) * rain.level;
   if (alpha < 0.004) {
     discard;
   }
-  // Water, not a lamp: sky-grey, cooler at the tail, never additive. Mixed by
-  // the alpha in the blend, so the colour is the lit value and the alpha the
-  // weight - the old pipeline blended it as if it were premultiplied, which is
-  // what made every drop pure white.
-  return vec4f(mix(vec3f(0.62, 0.68, 0.74), vec3f(0.88, 0.92, 0.96), 1.0 - y), alpha);
+  // Water, not a lamp: the tinted light, cooler at the tail. Mixed by the alpha
+  // in the blend, so the colour is the lit value and the alpha the weight - the
+  // old pipeline blended it as if premultiplied, which made every drop white.
+  return vec4f(rain.color * mix(1.0, 0.86, 1.0 - y), alpha);
 }

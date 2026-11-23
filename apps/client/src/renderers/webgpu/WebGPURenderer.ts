@@ -91,6 +91,8 @@ const PLANT_STRIDE = PLANT_FLOATS * 4;
 const RENDER_STRIDE = 20;
 /** x, y, z, fall velocity and the terrain height under the drop. */
 const RAIN_INSTANCE_FLOATS = 5;
+/** Drops whose terrain height is sampled per frame while a new rain field builds. */
+const RAIN_GROUND_SLICE = 600;
 const WORKGROUP_SIZE = 64;
 const MAX_JOINTS_PER_PLANT = 64;
 const JOINT_MATRIX_STRIDE = 64; // 16 floats = 64 bytes per mat4x4
@@ -458,7 +460,11 @@ export class WebGPURenderer {
   private readonly ownRootColor = new THREE.Color(DEFAULT_WEBGPU_RENDERER_CONFIG.ownRootColor);
   private readonly rivalRootColor = new THREE.Color(DEFAULT_WEBGPU_RENDERER_CONFIG.rivalRootColor);
   // Pre-allocated per-frame uniform buffers to avoid GC pressure in the render loop
-  private readonly rainUniformData = new Float32Array(8);
+  private readonly rainUniformData = new Float32Array(12);
+  private readonly rainColor = new THREE.Color(1, 1, 1);
+  private rainLevel = 1;
+  private rainInstanceData: Float32Array | null = null;
+  private rainRefineCursor = -1;
   private jointData: Float32Array;
 
   public rootSightEnabled = false;
@@ -602,7 +608,7 @@ export class WebGPURenderer {
     );
 
     // Rain uniform buffer
-    const RAIN_UNIFORM_BYTES = 32; // 8 f32s = 32 bytes
+    const RAIN_UNIFORM_BYTES = 48; // 8 f32s, then the vec3f tint + pad
     this.rainUniformBuffer = allocateOrThrow(
       'WebGPU rain uniforms',
       RAIN_UNIFORM_BYTES,
@@ -1442,7 +1448,7 @@ export class WebGPURenderer {
   private createRainVertexBuffer(device: GPUDevice): void {
     // One instance per drop: world position, fall velocity, and the terrain
     // height under it, so the column stands on the slope it is falling onto.
-    const instanceData = this.buildRainInstances();
+    const instanceData = this.buildRainInstances(true);
     this.rainInstanceBuffer = device.createBuffer({
       label: 'Rain instance data',
       size: instanceData.byteLength,
@@ -1460,13 +1466,19 @@ export class WebGPURenderer {
    * The same fixed seed as the WebGL2 rain field, so both paths lay the drops
    * out identically and a screenshot is reproducible.
    */
-  private buildRainInstances(): Float32Array {
+  private buildRainInstances(exactGround = false): Float32Array {
     const particleCount = this.config.rainParticleCount;
     const boxWidth = this.config.rainBoxWidth;
     const boxHeight = this.config.rainBoxHeight;
     const anchorX = this.rainAnchor?.x ?? 0;
     const anchorZ = this.rainAnchor?.z ?? 0;
-    const data = new Float32Array(particleCount * RAIN_INSTANCE_FLOATS);
+    const length = particleCount * RAIN_INSTANCE_FLOATS;
+    // Reused between reseeds: an 80 KB allocation in the frame that crosses the
+    // anchor threshold is one more way to skip a frame.
+    if (this.rainInstanceData?.length !== length) {
+      this.rainInstanceData = new Float32Array(length);
+    }
+    const data = this.rainInstanceData;
     const rand = mulberry32(0x5eed1234);
     for (let i = 0; i < particleCount; i++) {
       const base = i * RAIN_INSTANCE_FLOATS;
@@ -1476,15 +1488,23 @@ export class WebGPURenderer {
       data[base + 1] = rand() * boxHeight; // fall phase
       data[base + 2] = z;
       data[base + 3] = 0.85 + rand() * 0.3; // velocity
-      data[base + 4] = this.groundHeightAt?.(x, z) ?? 0;
+      data[base + 4] = exactGround && this.groundHeightAt ? this.groundHeightAt(x, z) : 0;
     }
     return data;
+  }
+
+  /** The tint and dimming the weather's drops take from the sky this frame. */
+  setRainLight(color: THREE.Color, level: number): void {
+    // The weather tints are linear; this pass writes into an sRGB canvas, so the
+    // components are converted rather than written raw (raw came out near-black).
+    this.rainColor.copy(color).convertLinearToSRGB();
+    this.rainLevel = Math.max(0.05, Math.min(1, level));
   }
 
   /** Terrain height under (x, z), from the same function the ground is drawn from. */
   setGroundHeightAt(sample: (x: number, z: number) => number): void {
     this.groundHeightAt = sample;
-    this.rebuildRainField();
+    this.rebuildRainField(true);
   }
 
   /** Keep the rain over the viewer: reseed only when they walk out of the box. */
@@ -1497,10 +1517,17 @@ export class WebGPURenderer {
     this.rebuildRainField();
   }
 
-  private rebuildRainField(): void {
+  private rebuildRainField(exactGround = false): void {
+    if (!this.rainInstanceBuffer) return;
+    this.buildRainInstances(exactGround);
+    this.rainRefineCursor = exactGround || !this.groundHeightAt ? -1 : 0;
+    if (this.rainRefineCursor < 0) this.uploadRainField();
+  }
+
+  private uploadRainField(): void {
     const device = this.device.getDevice();
-    if (!device || !this.rainInstanceBuffer) return;
-    const data = this.buildRainInstances();
+    const data = this.rainInstanceData;
+    if (!device || !this.rainInstanceBuffer || !data) return;
     device.queue.writeBuffer(
       this.rainInstanceBuffer,
       0,
@@ -1508,6 +1535,28 @@ export class WebGPURenderer {
       0,
       data.byteLength,
     );
+  }
+
+  /**
+   * The terrain under every drop, a slice per frame.
+   *
+   * This runs each time the viewer walks out of the rain box (every 24 m), and
+   * 4000 terrain samples cost 5 ms: done in one frame it was a visible skip in
+   * the middle of a shower. The new field is uploaded when the last slice lands,
+   * so no drop is ever drawn standing on a guess.
+   */
+  private refineRainGround(): void {
+    const data = this.rainInstanceData;
+    const sample = this.groundHeightAt;
+    if (this.rainRefineCursor < 0 || !data || !sample) return;
+    const total = data.length / RAIN_INSTANCE_FLOATS;
+    const end = Math.min(total, this.rainRefineCursor + RAIN_GROUND_SLICE);
+    for (let i = this.rainRefineCursor; i < end; i++) {
+      const base = i * RAIN_INSTANCE_FLOATS;
+      data[base + 4] = sample(data[base], data[base + 2]);
+    }
+    this.rainRefineCursor = end >= total ? -1 : end;
+    if (this.rainRefineCursor < 0) this.uploadRainField();
   }
 
   private uploadPlantData(device: GPUDevice, plantData: PlantRenderPlant[]): void {
@@ -1820,6 +1869,7 @@ export class WebGPURenderer {
     }
 
     this.writeFrameUniforms(device, canvas.height);
+    this.refineRainGround();
 
     const encoder = device.createCommandEncoder({ label: 'WebGPU plant frame' });
 
@@ -1915,7 +1965,11 @@ export class WebGPURenderer {
     //    the roots.
 
     // 7. Rain (transparent, renders last on top)
+    // No rain inside the earth: a buried eye has soil over it, and the overlay
+    // has no depth to hide drops that fall behind the surface (the three.js
+    // field hides itself the same way when the eye goes under).
     if (
+      !this.cameraUnderSoil &&
       this.rainPipeline &&
       this.rainInstanceBuffer &&
       this.rainBindGroup &&
@@ -1928,8 +1982,11 @@ export class WebGPURenderer {
       rainData[1] = this.config.rainStreakWidth;
       rainData[2] = this.config.rainMaxVelocity;
       rainData[3] = this.rainParticleCount;
-      rainData[4] = this.config.rainBoxWidth;
-      rainData[5] = this.config.rainBoxHeight;
+      rainData[4] = this.config.rainBoxHeight;
+      rainData[5] = this.rainLevel;
+      rainData[8] = this.rainColor.r;
+      rainData[9] = this.rainColor.g;
+      rainData[10] = this.rainColor.b;
       // pad
       device.queue.writeBuffer(this.rainUniformBuffer, 0, rainData);
 

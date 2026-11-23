@@ -11735,6 +11735,8 @@ function renderFrame(deltaTime: number): void {
     webgpuRenderer?.setSunDirection(environmentRenderer.getSunDirection());
     webgpuRenderer?.setSunWarmth(environmentRenderer.getSunWarmth());
     webgpuRenderer?.setRainAnchor(camera.position.x, camera.position.z);
+    const rainLight = environmentRenderer.getRainLight();
+    webgpuRenderer?.setRainLight(rainLight.color, rainLight.level);
     // Exposure grade: a lift at golden hour, a crush at night, from render.json.
     renderer.toneMappingExposure = environmentRenderer.getExposureGrade();
   }

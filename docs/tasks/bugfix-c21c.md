@@ -722,3 +722,41 @@ shader, because a wrap moves a drop off the column its ground was sampled at.
 The drops also got an aspect: a width floor of 7% of the streak, a round bead and a
 tail that narrows with height, so a drop reads as a droplet instead of a tick, and
 anything within 1.8 m of the eye shrinks away instead of covering the screen.
+## 11. The rain takes the light, and a buried eye stops seeing through the dirt, 2026-11-23
+
+Asked why the rain was still a hardcoded sky grey and why the seed and the rain
+still came through the ground from underground:
+
+- **The colour was the noon sky, forever.** `rain.wgsl` had 0.62-0.96 written
+  into the fragment. That is the sRGB value of the sky the three.js drops are
+  tinted from at midday, so the shower kept it through sunset and moonlight -
+  the same complaint the palette tint was meant to answer. `getRainLight()` now
+  hands the WebGPU pass the exact tint and level `RainSystem.setLight()` gets,
+  the tint is encoded for a canvas that is not sRGB, and the alpha carries the
+  level. Read live: `d1d4d2` / 1.00 at noon, `8d9aaa` / 0.73 at dusk,
+  `8c99a9` / 0.79 at night (`rain-day-final`, `rain-dusk-final`,
+  `rain-night-final`). At dusk the drops are faint, which is what taking the
+  dusk light means; the alternative - a floor bright enough to read at midnight
+  - is the white rain again.
+- **A buried eye defeated its own occlusion.** `soilOccludes()` returned "not
+  occluded" for every ray whose sphere hit fell behind the eye or beyond the
+  fragment, which is *every* ray from inside the sphere, so the `cameraUnderSoil`
+  test under it never ran and plants drew through the earth (E37). The buried-eye
+  check is now first: soil everywhere but the eye's own bubble. Rain is skipped
+  entirely while the eye is under soil, as the three.js field does, and a drop
+  behind the planet's bulk is collapsed in the vertex shader, which is the
+  "rain through the dirt" seen from a distance. A camera parked 3.2 m down
+  (`devCavity.hold`) shows earth with no seed and no drops.
+- **The reseed was the skip.** 4000 terrain samples and a fresh 80 KB array in
+  the frame that crossed the anchor threshold: 5.4 ms, every 24 m walked (E38).
+  The field is laid out first and its heights filled 600 drops a frame, then
+  uploaded once; the ground error after the refine is 0.000 m. Frame times with
+  rain at 4000: p50 16.7 ms, p99 16.9 ms over 9 s of walking, and a 28 s standing
+  sample whose only 30 fps stretch matched neither a bake nor a readback - no
+  overlay hitches were found, and the dip is recorded rather than explained.
+
+Still open, unchanged: a hill *in front* of a plant or drop needs a ground depth
+pass in this canvas (E30), and the three.js weather still draws its own rain
+alongside (`rain_threejs_only` was the measurement that settled that). This turn
+only made the overlay's copies agree with the light and stand on the ground.
+
