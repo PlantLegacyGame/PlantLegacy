@@ -104,7 +104,21 @@ of mistake: a number taken from a world slightly different from the one drawn.
 
 The husk is also no longer pale bone-coloured: the dried stalk and leaves are
 olive-brown, and the leaf droops were backed off until every tip rests on or just
-above the soil instead of 4 cm through it.
+above the soil instead of 4 cm through it - measured at 0.7 mm into the soil, and
+pinned by a test that fails past 2 mm.
+
+A review of that pass found three more places where a number described a surface
+other than the one on screen:
+
+- A plant's footprint asked the analytic field which of its parts stood above the
+  soil, then seated the patch on the drawn mesh. On a bank the triangle can stand
+  half a metre over the field, so a buried root tip counted as standing and the
+  patch slid up the hill. One sampler now answers both questions.
+- The drop height sampler added `camera_ground_touch_m` - the camera's own
+  clearance - to the soil height, so every drop and every drop shadow rested 2 cm
+  in the air before its own lift. A clearance is not a ground height.
+- The enlarged husk's leaf tips reached 7.8 mm into the soil. The droop angles
+  moved 0.07 rad and the deepest point is now 0.7 mm under: contact, not burial.
 
 ## 6. Files
 

@@ -176,7 +176,10 @@ describe('world drops', () => {
     // lying in the soil.
     const box = new THREE.Box3().setFromObject(model);
     assert.ok(box.min.y <= rest + 0.002, `base at ${box.min.y}, anchor ${rest}`);
-    assert.ok(box.min.y > rest - 0.04, `base at ${box.min.y} is under the world`);
+    // A leaf may touch the soil, not sink into it: a body is a solid lying on a
+    // surface, and a tip 4 cm under it reads as buried debris.
+    // The test's soil is y = 0: a leaf may touch it, not enter it.
+    assert.ok(box.min.y > -0.002, `lowest point ${box.min.y} is under the soil`);
     // A whole plant's corpse is a hand long; a twig does not read as a body.
     const length = Math.max(box.max.x - box.min.x, box.max.z - box.min.z);
     assert.ok(length > 0.3, `body is only ${length.toFixed(2)} m long`);

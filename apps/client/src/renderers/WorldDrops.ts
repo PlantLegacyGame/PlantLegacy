@@ -277,8 +277,8 @@ function buildModel(
     const leaves: ReadonlyArray<readonly [number, number, number, number]> = piece
       ? [[0, 1.1, 1.5, 0.06]]
       : [
-          [0, 0.5, 1.42, 0.09],
-          [1, 2.4, 1.2, 0.07],
+          [0, 0.5, 1.49, 0.09],
+          [1, 2.4, 1.27, 0.07],
         ];
     for (const [index, turn, droop, reach] of leaves) {
       const budded = joints[index];

@@ -46,6 +46,17 @@ describe('plant footprints', () => {
     assert.equal(feet.length, 0);
   });
 
+  it('takes the soil it is given as the soil, so a drawn bank hides its roots', () => {
+    // The same node, 10.1 m up: standing on a soil at 10, buried in a drawn
+    // triangle at 10.5. The caller passes the drawn height, so the second case
+    // must not produce a foot from a root tip - that was the patch sliding up a
+    // hill that stood half a metre over the field.
+    const standing = plantFootprints([node(0, 0.1, 0)], () => 10);
+    assert.equal(standing.length, 1);
+    const buried = plantFootprints([node(0, 0.1, 0)], () => 10.5);
+    assert.equal(buried.length, 0);
+  });
+
   it('keeps a seed-sized floor for a one-node plant', () => {
     const feet = plantFootprints([node(0, 0, 0)], flat);
     assert.equal(feet[0]?.radius, 0.16);

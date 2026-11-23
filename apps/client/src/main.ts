@@ -8462,10 +8462,8 @@ const scene = new THREE.Scene();
  * the triangle the player is looking at - the shadow that hovers.
  */
 const drawnGround = new DrawnGround();
-drawnGround.setFallback(
-  (x, z) =>
-    planetTerrainY(renderConfig?.planetRadiusM ?? 0, x, z, getTerrainParams()) +
-    (renderConfig?.cameraGroundTouchM ?? 0.02),
+drawnGround.setFallback((x, z) =>
+  planetTerrainY(renderConfig?.planetRadiusM ?? 0, x, z, getTerrainParams()),
 );
 const worldDrops = new WorldDrops({
   scene,

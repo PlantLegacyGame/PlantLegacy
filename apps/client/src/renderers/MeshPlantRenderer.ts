@@ -648,8 +648,6 @@ export class MeshPlantRenderer {
 
   /** The soil as drawn, so a seed or a footprint rests on the triangle under it. */
   private readonly drawnGround = new DrawnGround();
-  /** Height field under a point; classifies roots from above-ground parts. */
-  private groundQuery: ((x: number, z: number) => number) | null = null;
   /** One contact patch per plant, laid in the ground plane like a drop's. */
   private contactShadows!: PlantContactShadows;
 
@@ -669,11 +667,11 @@ export class MeshPlantRenderer {
   /**
    * Give the mesh pass the terrain height function the ground is drawn from.
    *
-   * Without it the seed had only its stored contact point, which is a server
-   * coordinate: a coat could hover over soil that the client painted lower.
+   * It is only the fallback for the drawn mesh (a point with no triangle under
+   * it); nothing is seated on the field itself, because a seeding or a footprint
+   * placed there hovers over the triangle the player is looking at.
    */
   setGroundQuery(query: ((x: number, z: number) => number) | null): void {
-    this.groundQuery = query;
     this.drawnGround.setFallback(query);
   }
 
@@ -900,15 +898,19 @@ export class MeshPlantRenderer {
    * the drawn ground rather than the field under it.
    */
   private updateContactShadows(): void {
-    const query = this.groundQuery;
+    // One truth for both questions. "Is this part above the soil?" and "where
+    // does the patch lie?" have to ask the same surface, or on a bank - where the
+    // drawn triangle stands up to half a metre over the field - a buried root
+    // counts as standing and drags the patch to the top of the hill.
+    const soilY = (x: number, z: number): number => this.drawnGround.height(x, z);
     const footprints: PlantFootprint[] = plantFootprints(
       [...this.nodeMap.values()].map((node) => ({
         plantId: node.plantId,
         isOwnPlant: node.isOwnPlant,
         position: node.position,
       })),
-      (x, z) => query?.(x, z) ?? 0,
-    ).map((foot) => ({ ...foot, groundY: this.drawnGround.height(foot.x, foot.z) }));
+      soilY,
+    ).map((foot) => ({ ...foot, groundY: soilY(foot.x, foot.z) }));
     this.contactShadows.update(footprints);
   }
 
