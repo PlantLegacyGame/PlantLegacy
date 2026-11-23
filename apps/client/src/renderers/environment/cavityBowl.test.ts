@@ -268,6 +268,47 @@ describe('silhouette clip in the shader', () => {
   });
 });
 
+describe('the pit reads as a shaft from above', () => {
+  const source = readFileSync(
+    join(dirname(fileURLToPath(import.meta.url)), 'cavity', 'bowlMesh.ts'),
+    'utf8',
+  );
+
+  it('blends the grain to a plane on the floor, so the axis has no spokes', () => {
+    // The grain chart is a cylinder: angle x the mouth radius. At the centre the
+    // angle sweeps a full turn within centimetres, so the noise there was 96
+    // radial spokes converging on the floor - a grey plate with a spoke pattern,
+    // measured straight down at 2.5 m and 4.9 m mouths.
+    assert.match(source, /float bowlAxis = smoothstep\(0\.06, 0\.30, bowlRadius/);
+    assert.match(
+      source,
+      /mix\(\s*vBowlWorldPosition\.xz,\s*vec2\(bowlArc, vBowlWorldPosition\.y\),\s*bowlAxis\s*\)/,
+      'the floor is charted cylindrically again - the spokes are back',
+    );
+    // Both charts are metres, so the clods keep their size across the join.
+    assert.match(
+      source,
+      /float bowlArc = atan\(bowlAway\.y, bowlAway\.x\) \* max\(uBowlApertureRadius/,
+    );
+  });
+
+  it('darkens the pit with its depth, below the lit rim', () => {
+    // Every term in this shader is in the shell's own units, so 14 % of darkening
+    // spread over the whole profile changed nothing over the 5.7-9.5 m of wall an
+    // eye above the lip can see: the disc read flat at every mouth size.
+    assert.ok(source.includes('const BOWL_DEPTH_FALLOFF = 0.45'), 'the falloff is named');
+    assert.match(
+      source,
+      /\(1\.0 - BOWL_DEPTH_FALLOFF \* smoothstep\(0\.10, 1\.0, bowlDepth\)\)/,
+      'the depth falloff is flat again - the floor will read as a plate',
+    );
+    assert.match(
+      source,
+      /const float BOWL_DEPTH_FALLOFF = \$\{BOWL_DEPTH_FALLOFF\.toFixed\(3\)\};/,
+    );
+  });
+});
+
 describe('which bowl skin the eye sees', () => {
   const bowlAt = (eye: THREE.Vector3): THREE.MeshBasicMaterial => {
     const bowl = createCavityBowl(new THREE.Color('#3a2a1c'), new THREE.Color('#6a5440'), 24, 12);

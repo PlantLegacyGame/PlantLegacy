@@ -25,6 +25,21 @@ import { buildStrataShell } from './strataShell.ts';
 const BAND_SUBSOIL_FROM = CAVITY_STRATA_BANDS[1]?.from ?? 0.24;
 const BAND_DEEP_FROM = CAVITY_STRATA_BANDS[2]?.from ?? 0.58;
 
+/**
+ * How much of the wall's albedo its own depth takes away, lip to floor.
+ *
+ * The pit is lit by the sky over its mouth, so the deeper a fragment the less of
+ * that sky it sees. Measured straight down at a 4.9 m mouth the visible surface
+ * spans 5.7 m to 9.5 m below the lip, and 14 % of darkening spread over the
+ * whole profile changed almost nothing across that range: the pit was a flat grey
+ * disc with radial spokes, indistinguishable from a plate, and it read the same
+ * at 0.63 m, 2.5 m and 4.9 m because every shading term is in the shell's own
+ * units. The falloff is now concentrated in the lower part of the wall, which is
+ * the part an eye above the rim can see, so the disc has a real gradient from a
+ * lit rim ring to a dark floor.
+ */
+const BOWL_DEPTH_FALLOFF = 0.45;
+
 /** The clip uniforms, written per frame by `updateCavityBowl`. */
 export interface CavityClipUniforms {
   uBowlEye: { value: THREE.Vector3 };
@@ -227,6 +242,7 @@ uniform vec3 uBowlDeepColor;
 const float BOWL_BAND_SUBSOIL = ${BAND_SUBSOIL_FROM.toFixed(4)};
 const float BOWL_BAND_DEEP = ${BAND_DEEP_FROM.toFixed(4)};
 const float BOWL_PROFILE_DEPTH = ${CAVITY_PROFILE_DEPTH.toFixed(4)};
+const float BOWL_DEPTH_FALLOFF = ${BOWL_DEPTH_FALLOFF.toFixed(3)};
 float bowlHash(vec2 p) {
   p = fract(p * vec2(123.34, 456.21));
   p += dot(p, p + 45.32);
@@ -259,7 +275,19 @@ float bowlNoise(vec2 p) {
   // as concentric rings. A fixed chart radius is a plain cylinder unwrap, so the
   // same clod keeps its size from lip to floor.
   float bowlArc = atan(bowlAway.y, bowlAway.x) * max(uBowlApertureRadius, 0.05);
-  vec2 bowlWall = vec2(bowlArc, vBowlWorldPosition.y);
+  // ...but a cylinder unwrap has a singular axis. At the pit's centre the angle
+  // sweeps a full turn within a few centimetres, so the same noise is squeezed
+  // into 96 radial spokes converging on the floor's centre: measured from
+  // straight above, that is the "grey plate" the hole read as. The floor near the
+  // axis is close to horizontal, where the plane is the right chart, so the grain
+  // blends to world xz before the angle gets that fast. Both charts are metres,
+  // so the clods keep their size across the join.
+  float bowlAxis = smoothstep(0.06, 0.30, bowlRadius / max(uBowlApertureRadius, 0.05));
+  vec2 bowlWall = mix(
+    vBowlWorldPosition.xz,
+    vec2(bowlArc, vBowlWorldPosition.y),
+    bowlAxis
+  );
   float bowlGrain = bowlNoise(bowlWall * 24.0);
   float bowlClods = bowlNoise(bowlWall * 3.4 + 7.3);
   // Depth gradient instead of the old horizontal banding. The sin(y * 22)
@@ -316,9 +344,11 @@ float bowlNoise(vec2 p) {
     (0.88 + 0.24 * bowlGrain) *
     (0.9 + 0.2 * bowlClods) *
     (1.0 - 0.12 * bowlSeams) *
-    // 0.28 of depth darkening crushed the deepest band into the subsoil and
-    // left the pit a single brown mass. Depth still reads, the strata survive it.
-    (1.0 - 0.14 * bowlDepth) *
+    // Sky lost to the hole, concentrated in its lower half: the rim keeps its
+    // lit value and the floor is clearly down there. 0.14 was invisible over the
+    // range an eye above the lip can see, and 0.28 spread evenly over the whole
+    // profile crushed the deepest band into the subsoil.
+    (1.0 - BOWL_DEPTH_FALLOFF * smoothstep(0.10, 1.0, bowlDepth)) *
     (0.92 + 0.08 * bowlRimShadow) *
     bowlNearShade *
     // Daylight, but never to zero: a lit wall at night is lit by the sky it is
@@ -411,7 +441,7 @@ float bowlNoise(vec2 p) {
   }`,
       );
   };
-  material.customProgramCacheKey = () => 'root-sight-bowl-dirt-v13';
+  material.customProgramCacheKey = () => 'root-sight-bowl-dirt-v14';
 
   const mesh = new THREE.Mesh(geometry, material);
   mesh.name = 'root-sight-bowl';

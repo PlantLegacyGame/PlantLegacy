@@ -254,3 +254,70 @@ which no 60 fps eye catches. What the taper does *not* do is grow from a shallow
 dish; making it do that means easing `cavityDepthM` for the cut, the bowl and the
 body together, or the three come apart again — the bug this section is about.
 Not done, and not asked for.
+
+### Which mesh draws the disc, and the read from above
+
+**Attribution.** Vertical rays fired from straight above a 4.9 m mouth (eye
+26 m up; ground 20.37, cut from +0.50 to -9.82), skipping soil-sheet hits inside
+the cut the way the shader does:
+
+| plan radius | first surface hit | its height |
+|---|---|---|
+| 0.00 m | `root-sight-bowl` | -9.52 m |
+| 1.23 m | `root-sight-bowl` | -9.33 m |
+| 2.45 m | `root-sight-bowl` | -9.14 m |
+| 3.68 m | `root-sight-bowl` | -8.40 m |
+| 4.80 m | `root-sight-bowl` | -5.71 m |
+
+`root-sight-skirt` (192 vertices, the 96-column ring at 1.04 of the mouth) and
+`terrain-volume` were never the first surface at any radius. The disc is the
+**bowl's own floor and lower wall**, and it sits 5.7–9.5 m below the lip: the
+pit's real depth, not a plug near the surface. The earlier "hiding the skirt took
+the floor read with it" was the shared material hiding the bowl as well.
+
+**Why a shaft read as a plate**, measured rather than guessed:
+
+1. **46 % of the visible opening was one near-flat surface.** Casting rays
+   through the mouth from 7 m up (2.5 m mouth) and bucketing the hits by depth:
+   `0.11 / 0.10 / 0.11 / 0.22 / 0.46` of the visible area in each depth fifth.
+   The bottom flare (r 0.82 → 0.55 → 0 over the last 0.24 of the profile) is a
+   29° saucer, and it filled almost half the disc.
+2. **70 % of the visible interior was one stratum.** The deep band started at
+   0.58 of the depth, and an eye above the lip only ever sees the lower half of
+   the wall: the three-bed palette was there and exactly one bed was in view.
+3. **The grain chart had a singular axis.** It is `atan2 · mouthRadius` by
+   world height; at the centre the angle sweeps a full turn within centimetres,
+   so the noise was squeezed into 96 radial spokes converging on the floor —
+   the "grey plate with a hub" the screenshots show at both sizes.
+4. **The shading is in the shell's own units.** Depth darkening was 14 % over the
+   whole profile, which changed almost nothing across the 5.7–9.5 m an eye can
+   see, and it is identical at every mouth size. That is why the read was the
+   same at 0.63 m, 2.5 m and 4.9 m and never got attributed to the size: nothing
+   in the pit's shading knows how deep the pit is.
+
+**The change.** The bottom is a cone, not a saucer (`profile.ts`:
+`-0.72 r 0.88`, `-0.88 r 0.66`, `-0.98 r 0.38`, `-1.02 r 0`); the deep band
+starts at 0.80 so the subsoil is the bed an eye above the lip actually sees; the
+grain blends from the cylindrical chart to world xz near the axis; and the depth
+falloff is 0.45 below the first tenth of the wall instead of 0.14 over all of it.
+Two tests pin the shader's half of that, and the profile is data.
+
+**After**, same ray harness: visible area by depth fifth is now
+`0.30 / 0.13 / 0.19 / 0.12 / 0.25` — the bottom fifth halves, and every fifth is
+populated, so the opening carries a depth gradient instead of one flat tone. The
+depth rule is untouched by the reshape: rim→floor is 9.31 m at a 4.9 m mouth,
+4.75 m at 2.5 m, and on the plant's own 0.64 m mouth **9.204 m against a 9.204 m
+budget**. The roots still fit: the worst node is 3.5 cm outside the wall
+(3.2 cm under the old profile) and behind it, so it is hidden either way.
+
+Seen straight down at 2.5 m and 4.9 m the mouth is now a dark bed at the rim, the
+ochre subsoil band shrinking with depth, and a small dark floor with the roots on
+it — no spokes, no single grey disc. From 9 m out and 4.5 m up the wall, the
+strata and the floor read as they did.
+
+**What it still does not do.** The falloff is in profile units, so the pit is
+self-similar: a 0.63 m pit and a 4.9 m pit now read as the same funnel with the
+same small bottom, and the absolute depth is carried by the geometry (measured
+9.5 m) and by the strata break rather than by brightness. Strata positions in
+metres rather than fractions of the pit would give a pit that visibly deepens
+with size; that is a palette decision for another pass.
