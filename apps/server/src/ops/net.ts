@@ -369,6 +369,9 @@ export interface WeatherUpdatePayload {
   conditionToken: string;
   stateTimeRemainingS: number;
   forecast: { nextWeatherState: string; timeUntilNextStateS: number };
+  /** The dev clock: a paused or scaled clock has to read the same everywhere. */
+  timePaused: boolean;
+  timeScale: number;
 }
 
 export interface ResourceQueryPayload {
