@@ -229,6 +229,14 @@ class PlantRenderer {
     return this.meshRenderer?.pickSurfaces() ?? [];
   }
 
+  /**
+   * A head of one organ type, for the dev capture that measures its width and
+   * height against a flat background. Nothing in the game reads it.
+   */
+  headForCapture(nodeType: string): ReturnType<MeshPlantRenderer['buildHeadForCapture']> {
+    return this.meshRenderer?.buildHeadForCapture(nodeType) ?? null;
+  }
+
   /** The drawn ground mesh, forwarded to the mesh pass. */
   setGroundMesh(mesh: THREE.Object3D | null): void {
     this.meshRenderer?.setGroundMesh(mesh);

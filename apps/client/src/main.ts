@@ -134,12 +134,21 @@ import {
   ringFrameFor,
 } from './renderers/plant/growthGizmoGeometry.js';
 import {
+  captureHalfExtent,
+  HEAD_CAPTURE_SIZE,
+  type HeadCaptureReport,
+  headCaptureNotice,
+  measureSilhouette,
+  metresPerPixel,
+} from './renderers/plant/headCapture.ts';
+import {
   configureMutationVisuals,
   lookFromMutations,
   type MutationLook,
   readServerMutationMask,
 } from './renderers/plant/mutations.js';
 import { type NubReport, nubReport } from './renderers/plant/nubBulge.ts';
+import { headEmergence } from './renderers/plant/organEmergence.ts';
 import { PlantColliderManager } from './renderers/plant/PlantColliders.js';
 import type { PlantNodeData } from './renderers/plant/plantNodeData.js';
 import {
@@ -12700,6 +12709,18 @@ interface PlantLegacyDebugHandle {
   readonly devCavity: CavityProbe;
   /** How many nodes carry a nub, and by how much: the same rule the meshes use. */
   readonly devNubs: () => NubReport;
+  /**
+   * Dev-only: one head drawn alone on a flat background at a chosen growth
+   * progress, measured in pixels.
+   *
+   * The in-game captures sit on a hillside a few brightness levels away from the
+   * head, so they cannot be measured; this is the frame a width and a height can
+   * be read off without guessing.
+   */
+  readonly devHeadCapture: (
+    progress: number,
+    nodeType?: string,
+  ) => HeadCaptureReport | { error: string };
   /** Terrain height under a world x/z. The camera floor's datum, in metres. */
   readonly groundAt: (x: number, z: number) => number;
   /** AL-01 benchmark: start a run, poll it, read the last report. */
@@ -12769,6 +12790,135 @@ window.setInterval(() => {
 
 // Development handle for inspecting the live scene from the browser console.
 if (import.meta.env.DEV) {
+  /**
+   * One organ's head, drawn alone on black through one fixed orthographic
+   * frame, as a flat white silhouette.
+   *
+   * Written because the honest answer to "how much wider is the finished head"
+   * was not measurable from a screenshot: the head sat fifteen brightness
+   * levels above the hillside behind it, and every threshold over those frames
+   * either swallowed the ground or found nothing. Here the background is
+   * black, the head is white, and both states go through the same frame, so the
+   * two pixel counts are directly comparable. `headCapture.ts` holds the
+   * framing and the measurement; this is the three.js wiring.
+   */
+  const captureHeadSilhouette = (
+    progress: number,
+    nodeType = 'spore_sac',
+  ): HeadCaptureReport | { error: string } => {
+    const captured = plantRenderer?.headForCapture(nodeType) ?? null;
+    if (!captured) return { error: `no ${nodeType} head to capture` };
+    const head = captured.group;
+    // The ink hull is the outline pass, not the head: dropped so the silhouette
+    // is the lobes' own extent rather than the outline a pixel or two beyond.
+    for (const child of [...head.children]) {
+      if ((child as THREE.Mesh).renderOrder < 0) head.remove(child);
+    }
+    const flat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+    head.traverse((object) => {
+      const mesh = object as THREE.Mesh;
+      if (mesh.isMesh) mesh.material = flat;
+    });
+    head.position.set(0, 0, 0);
+    head.quaternion.identity();
+
+    /** Half-extent this head needs at one progress, in metres. */
+    const halfExtentAt = (at: number): number => {
+      const e = headEmergence(at);
+      head.scale.set(e.spread, e.alongStem, e.spread);
+      head.updateMatrixWorld(true);
+      const size = new THREE.Box3().setFromObject(head).getSize(new THREE.Vector3());
+      return captureHalfExtent(size.x / 2, size.y / 2);
+    };
+    // One frame for the whole growth, not for the state being captured: the rule
+    // is sampled across it and the tallest, widest moment wins. Every capture of
+    // this head then shares one metres-per-pixel, which is what makes two pixel
+    // counts comparable at all.
+    // From 0.05, not 0: an unemerged head is a point at the segment's end, and
+    // there is nothing to frame before it starts.
+    let halfExtentM = halfExtentAt(1);
+    for (let step = 1; step <= 20; step++) {
+      halfExtentM = Math.max(halfExtentM, halfExtentAt(step / 20));
+    }
+
+    const emergence = headEmergence(progress);
+    head.scale.set(emergence.spread, emergence.alongStem, emergence.spread);
+    head.updateMatrixWorld(true);
+    const centre = new THREE.Box3().setFromObject(head).getCenter(new THREE.Vector3());
+
+    const probeScene = new THREE.Scene();
+    probeScene.background = new THREE.Color(0x000000);
+    probeScene.add(head);
+    const probeCamera = new THREE.OrthographicCamera(
+      -halfExtentM,
+      halfExtentM,
+      halfExtentM,
+      -halfExtentM,
+      0.01,
+      100,
+    );
+    probeCamera.position.set(centre.x, centre.y, centre.z + 1);
+    probeCamera.up.set(0, 1, 0);
+    probeCamera.lookAt(centre);
+
+    const canvas = document.createElement('canvas');
+    canvas.width = HEAD_CAPTURE_SIZE;
+    canvas.height = HEAD_CAPTURE_SIZE;
+    const probe = new THREE.WebGLRenderer({
+      canvas,
+      antialias: false,
+      preserveDrawingBuffer: true,
+    });
+    probe.setClearColor(0x000000, 1);
+    probe.render(probeScene, probeCamera);
+
+    const readback = document.createElement('canvas');
+    readback.width = HEAD_CAPTURE_SIZE;
+    readback.height = HEAD_CAPTURE_SIZE;
+    // Every exit releases the probe. A discarded WebGLRenderer keeps its GL
+    // context alive until the collector gets to it, and a dev session that
+    // captures repeatedly would reach the browser's context limit and start
+    // failing with no scene to blame; the error path used to leak one outright.
+    const releaseProbe = (): void => {
+      probe.forceContextLoss();
+      probe.dispose();
+      flat.dispose();
+      head.parent?.remove(head);
+    };
+    const context = readback.getContext('2d');
+    if (!context) {
+      releaseProbe();
+      return { error: 'no 2d context for the capture readback' };
+    }
+    context.drawImage(canvas, 0, 0);
+    const pixels = context.getImageData(0, 0, HEAD_CAPTURE_SIZE, HEAD_CAPTURE_SIZE).data;
+    const luma = new Array<number>(HEAD_CAPTURE_SIZE * HEAD_CAPTURE_SIZE);
+    for (let i = 0; i < luma.length; i++) {
+      const at = i * 4;
+      luma[i] = (pixels[at] + pixels[at + 1] + pixels[at + 2]) / 3;
+    }
+    const extents = measureSilhouette(luma, HEAD_CAPTURE_SIZE, HEAD_CAPTURE_SIZE);
+    const dataUrl = readback.toDataURL('image/png');
+    releaseProbe();
+    if (!extents) return { error: `the ${nodeType} silhouette at ${progress} drew nothing` };
+    // A specimen capture measures the builder, not the plant, and says so.
+    const notice = headCaptureNotice(captured.source, nodeType);
+    if (notice) console.warn(`[PlantLegacy] ${notice}`);
+    return {
+      nodeType,
+      source: captured.source,
+      progress,
+      spread: emergence.spread,
+      alongStem: emergence.alongStem,
+      halfExtentM,
+      metresPerPixel: metresPerPixel(halfExtentM),
+      widthPx: extents.width,
+      heightPx: extents.height,
+      pixels: extents.pixels,
+      dataUrl,
+    };
+  };
+
   (window as Window & { __plantLegacy?: PlantLegacyDebugHandle }).__plantLegacy = {
     renderer,
     scene,
@@ -12833,6 +12983,7 @@ if (import.meta.env.DEV) {
       return plantBiomass;
     },
     devCavity: cavityProbe,
+    devHeadCapture: captureHeadSilhouette,
     /**
      * The plant as it is drawn, for browser checks that need an exact click point.
      * Read-only; nothing in the game reads it.

@@ -42,6 +42,7 @@ import {
   type PlantFootprint,
   plantFootprints,
 } from './PlantContactShadows.ts';
+import type { HeadCaptureSource } from './plant/headCapture.ts';
 import {
   geometryKey,
   lookAppliesTo,
@@ -52,6 +53,7 @@ import {
   organLook,
 } from './plant/mutations.ts';
 import { nubSwellForNode } from './plant/nubBulge.js';
+import { bladeEmergence, headEmergence } from './plant/organEmergence.js';
 import {
   applyLeafTranslucency,
   applySoilRamp,
@@ -809,6 +811,49 @@ export class MeshPlantRenderer {
     }
     this.materialVariants.set(key, material);
     return material;
+  }
+
+  /**
+   * The head group for one organ type, built for the dev capture in `main.ts`.
+   *
+   * A planted head is used when there is one, so the capture measures the head
+   * the player is looking at; otherwise the builder runs on a default specimen,
+   * so the capture answers the same on a bare page as on a grown plant. Nothing
+   * in the game reads it, and the growth rule scales whatever comes back.
+   */
+  buildHeadForCapture(nodeType: string): { group: THREE.Group; source: HeadCaptureSource } | null {
+    for (const segment of this.segments.values()) {
+      if (segment.nodeType === nodeType && segment.ornament) {
+        // Which head these pixels are about is part of the answer: a specimen
+        // that stood in for a planted head once passed for one.
+        return { group: segment.ornament.clone(true), source: 'planted' };
+      }
+    }
+    const specimen: MeshNode = {
+      id: `capture-${nodeType}`,
+      mutationFlags: 0,
+      position: new THREE.Vector3(),
+      radius: 0.05,
+      nodeType,
+      parentId: null,
+      children: [],
+      biomass: 1,
+      health: 1,
+      isOwnPlant: true,
+      growthProgress: 1,
+      spawnTime: 0,
+      age: 0,
+      firstSeenMs: 0,
+    };
+    const tip = new THREE.Vector3();
+    const axis = new THREE.Vector3(0, 1, 0);
+    if (nodeType === 'spore_sac') {
+      return { group: this.buildSporeSac(specimen, tip, axis), source: 'specimen' };
+    }
+    if (nodeType === 'flower') {
+      return { group: this.buildFlower(specimen, tip, axis), source: 'specimen' };
+    }
+    return null;
   }
 
   updatePlantData(nodes: PlantNodeData[]): void {
@@ -1589,13 +1634,19 @@ export class MeshPlantRenderer {
       const isCotyledon = seg.nodeType === 'cotyledon';
       const age = node.age > 0.01 ? node.age : (performance.now() - node.firstSeenMs) / 1000;
       const matureScale = isCotyledon ? 0.62 + 0.58 * THREE.MathUtils.clamp(age / 2.6, 0, 1) : 1;
-      const extended = node.growthProgress ?? 1;
-      const growthScale = 0.35 + 0.65 * extended * extended * (3 - 2 * extended);
+      // Blades and heads emerge from nothing as the segment extends (G04). They
+      // follow `currentProgress`, the same animated extension the tube uses, so
+      // an organ cannot be drawn finished before the part carrying it has
+      // arrived - and an already-grown plant, which syncs every part at progress
+      // 1, draws its leaves and flowers at full size on the first frame.
+      const emergence = bladeEmergence(currentProgress);
+      const bladeLength = emergence.length * matureScale;
+      const bladeWidth = emergence.width * matureScale;
       for (const leaf of seg.leafMeshes) {
-        leaf.scale.setScalar(growthScale * matureScale);
+        leaf.scale.set(bladeLength, bladeWidth, bladeWidth);
       }
       for (const pad of seg.leafInkMeshes) {
-        pad.scale.setScalar(growthScale * matureScale);
+        pad.scale.set(bladeLength, bladeWidth, bladeWidth);
       }
       if (seg.ornament) {
         const ornamentEnd = new THREE.Vector3().lerpVectors(
@@ -1604,7 +1655,11 @@ export class MeshPlantRenderer {
           currentProgress * currentProgress * (3 - 2 * currentProgress),
         );
         seg.ornament.position.copy(ornamentEnd);
-        seg.ornament.scale.setScalar(growthScale);
+        // Local +Y is the stem the head sits on (both builders turn the group
+        // that way), so the spread and the stand-off are separate scales: a
+        // bud is narrow and tall before it opens wide.
+        const head = headEmergence(currentProgress);
+        seg.ornament.scale.set(head.spread, head.alongStem, head.spread);
       }
     }
 

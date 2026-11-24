@@ -15,6 +15,8 @@ and it is committed, so the citation can never rot.
   not in the filename (`a15-above-before.png` / `a15-above-after.png` is fine).
 - If a row's evidence is a test, cite the test. Do not commit a capture that
   proves nothing the row does not already say.
+- How the growth frames (`g04-*`) were taken, and how to re-run the capture that
+  measured them: [`head-capture.md`](head-capture.md).
 
 ## Ad-hoc dumps — ignored
 
