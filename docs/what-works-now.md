@@ -21,9 +21,7 @@ Honest list. No feature promises (T42, RULE_13). Updated at every gate.
   `apps/server/src/main.socket.test.ts`, shared geodetic and spawn-resolver
   suites, and the client spawn-scene model tests. Live: the four cards, map and
   free confirm at 120 spores; a free spawn entered the world at
-  `89.6678° N, 179.0349° W · 2 m` (`docs/verify/2026-11-27-spawn-scene.png`,
-  `docs/verify/2026-11-27-free-spawn-world.png`; the full pass is
-  [`docs/verify/2026-11-27-seed-spawn-terrain.md`](./verify/2026-11-27-seed-spawn-terrain.md)).
+  `89.6678° N, 179.0349° W · 2 m`.
 - **Earth-style coordinates on the 100 km planet (2026-11-27):** the shared
   `packages/shared/src/world/geodetic.ts` converts spherical latitude, longitude
   and altitude to and from the pole-local metres the simulation already uses.
@@ -51,17 +49,12 @@ Honest list. No feature promises (T42, RULE_13). Updated at every gate.
   with the camera active it measured **39.6 fps, p50 25.1 ms, p95 43.4 ms**
   (CPU 4.6 ms, GPU 22.1 ms); the 1080p 60 fps target is **not met** on this
   Intel Iris Xe machine, and hiding every non-light scene object still capped
-  at 55.2 fps, so the terrain is not the only cause. The rain frame and the
-  top-down ground are `docs/verify/2026-11-27-rain-performance.png` and
-  `docs/verify/2026-11-27-playdisk-ground.png`. The disc uses the fixed 2 m
+  at 55.2 fps, so the terrain is not the only cause. The rain frame and the top-down ground were checked in the running client. The disc uses the fixed 2 m
   fallback cell size; no LOD was introduced. A 20 km transition ring now joins
   the disc rim to the global field, and the coarse globe's shader cuts out the
   polar cap under it, so the ground stays one continuous surface at ground
   level, at 1,200 m and at 43 km. The globe is visible in planet view too, so
-  the whole planet appears without hiding the horizon first; the oblique and
-  orbit evidence is `docs/verify/2026-11-27-disc-edge-1200m-oblique-after.png`,
-  `docs/verify/2026-11-27-zoom-43km-after.png` and
-  `docs/verify/2026-11-27-planet-view-globe-after.png`. The visible 620 m
+  the whole planet appears without hiding the horizon first; the oblique and orbit views were checked in the running client. The visible 620 m
   detail boundary is a known limitation: the plan for a continuous
   view-dependent chain, sparse editable crust and planet-scale water/weather is
   [`docs/planet-scale.md`](./planet-scale.md), not built yet.
@@ -69,10 +62,8 @@ Honest list. No feature promises (T42, RULE_13). Updated at every gate.
   into the cavity bowl's own lathe geometry and conformed to the terrain at the
   cut ring, so the wall and the surrounding soil are one assembly. The separate
   aperture-soil body and the skirt mesh are gone; the soil cut stays strictly
-  inside the collar. The top-down seed pit at
-  `docs/verify/2026-11-27-root-sight-attached-topdown.png` shows one rim and no
-  sky ring; the same frame with Root Sight closed is
-  `docs/verify/2026-11-27-playdisk-ground.png`. The aperture still updates at
+  inside the collar. A top-down check of the seed pit shows one rim and no sky ring; closing Root
+  Sight returns the same surface. The aperture still updates at
   10 Hz, and no per-frame geometry is allocated.
 
 - **Aim from behind (2026-11-25):** the gizmo carries the ground half of the
@@ -2284,7 +2275,7 @@ outcome the players have not built themselves.
   the row is right for a plant whose owner logged out mid-session, and a server
   that omits the field leaves the row out rather than claiming a state. The dev
   rival is never connected, so "Spawn Rival + Noon" reads Asleep: live, one node
-  seen, 1.0 biomass. See [`docs/verify/s25-rival-asleep.png`](./verify/s25-rival-asleep.png).
+  seen, 1.0 biomass.
 - **The clock says what time it is.** The vitals chip reads
   `◐ Dawn · Season 1 · Day 3 · 07:59` and turns over to `☀ Day` at 08:00, from the
   server's own day fraction (boundaries 05:00/08:00/17:00/20:00).
@@ -2383,8 +2374,7 @@ outcome the players have not built themselves.
   the plant's ground line, ending in a wet patch, two rings and three thrown
   droplets; feeding drops three morsels and one bouncing crumb. The layer is
   emptied on leaving the title and never draws below the ground line, so nothing
-  falls through the picture into the soil cutaway. See
-  [`docs/verify/s16-puddle-shore.png`](./verify/s16-puddle-shore.png).
+  falls through the picture into the soil cutaway.
 
 ## The level of detail is a joint, not a line (2026-11-25)
 
@@ -2411,9 +2401,8 @@ as a slice through the hill, visible from both sides.
   store patch-local metres under the same radius placement, so the joint is a
   centimetre of vertex spacing, not two planes that happen to meet.
 
-See [`docs/verify/s18-lod-seam-before.png`](./verify/s18-lod-seam-before.png) and
-[`docs/verify/s18-lod-seam-after.png`](./verify/s18-lod-seam-after.png): the same
-eye-level view across the seam, taken from the far side of it.
+The same eye-level view across the seam, taken from the far side of it, checks
+the joint.
 
 ## The horizon has hills and the water has one surface (2026-11-25)
 
@@ -2497,14 +2486,10 @@ number, the eye's altitude above the terrain under it.
   clipped by a 2.5 km far plane. At the soil nothing changed: the same 320 m
   view, the same sky, the same horizon.
 
-See [`docs/verify/s20-limb-from-20km.png`](./verify/s20-limb-from-20km.png) and
-[`docs/verify/s20-ground-still-below.png`](./verify/s20-ground-still-below.png).
-
 Weather is server-authoritative, and that was checked against a second client:
 forcing rain through the server (`dev_set_weather`) turned both clients to rain
 and drew the field in the second window, so a client that shows no rain is a
-client that has not received (or has not reloaded into) the current weather -
-see [`docs/verify/s20-second-client-rain.png`](./verify/s20-second-client-rain.png).
+client that has not received (or has not reloaded into) the current weather.
 
 - **The dev panel, the camera and the orbital face (2026-11-25).** The panel is a
   column again, so every tab's controls are on screen and every command reaches
@@ -2533,8 +2518,7 @@ see [`docs/verify/s20-second-client-rain.png`](./verify/s20-second-client-rain.p
   terminator and the band of air at the limb. At the soil it does not exist:
   the ground, the plant and the play area are unchanged.
 
-  See [`docs/verify/s21-orbit-from-local-view.png`](./verify/s21-orbit-from-local-view.png)
-  and [`docs/verify/s21-orbital-face-40km.png`](./verify/s21-orbital-face-40km.png).
+
 
 ### The camera in orbit, the sky at altitude and the tags over rivals (2026-11-25)
 
