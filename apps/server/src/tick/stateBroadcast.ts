@@ -32,6 +32,8 @@ export interface StateBroadcastInput {
   states: PlantStateSnapshot[];
   /** Crown position per plant, used for the interest-cell test. */
   positions: Map<string, { x: number; z: number }>;
+  /** Maximum plants per payload; the player's own plant is kept first. */
+  entityCap?: number;
 }
 
 export interface StateBroadcastResult {
@@ -74,11 +76,23 @@ export function broadcastPlantStates(
   }
 
   for (const player of input.players) {
-    const plants = input.states.filter((state) => {
-      if (state.id === player.plantId) return true;
-      const position = input.positions.get(state.id);
-      return position ? ports.isInRange(player.playerId, position.x, position.z) : false;
-    });
+    const cap =
+      input.entityCap === undefined || !Number.isFinite(input.entityCap)
+        ? Number.POSITIVE_INFINITY
+        : Math.max(0, Math.floor(input.entityCap));
+    const own = player.plantId
+      ? input.states.find((state) => state.id === player.plantId)
+      : undefined;
+    const plants: PlantStateSnapshot[] = cap > 0 && own ? [own] : [];
+    if (plants.length < cap) {
+      for (const state of input.states) {
+        if (state.id === own?.id) continue;
+        const position = input.positions.get(state.id);
+        if (!position || !ports.isInRange(player.playerId, position.x, position.z)) continue;
+        plants.push(state);
+        if (plants.length >= cap) break;
+      }
+    }
     const wrote = ports.send(
       player.playerId,
       JSON.stringify({

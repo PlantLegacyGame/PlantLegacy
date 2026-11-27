@@ -66,6 +66,18 @@ describe('terrain field', () => {
     assert.ok(worst < 0.05, `height jumped ${worst} m over 1 cm`);
   });
 
+  it('stays smooth across a one-metre step after the domain warp', () => {
+    // The warp displaces the sample point by up to half a base wavelength; if it
+    // were sampled faster than the relief it would fold the field into creases.
+    let worst = 0;
+    for (let z = -300; z <= 300; z += 37) {
+      const a = terrainHeightAt(params, 22.5, z);
+      const b = terrainHeightAt(params, 23.5, z);
+      worst = Math.max(worst, Math.abs(a - b));
+    }
+    assert.ok(worst < 0.35, `height jumped ${worst} m over 1 m`);
+  });
+
   it('clamps the terrain unit to [0, 1]', () => {
     for (let i = 0; i < 200; i += 1) {
       const unit = terrainUnitAt(params, i * 3.1, -i * 1.7);

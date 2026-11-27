@@ -30,6 +30,12 @@ jobs:
       - name: Config schema + rarity ban
         run: pnpm config:validate
 
+      - name: Config keys
+        run: pnpm config:keys
+
+      - name: Palette
+        run: pnpm palette:check
+
       - name: Unit tests
         run: pnpm test
 

@@ -1,11 +1,19 @@
 /**
- * The action bar: the game's verbs in one reachable row.
+ * The action rail: the game's verbs as one column of drawn buttons.
  *
  * Everything except movement used to be keyboard-only (G, I, T, E, H), with the
  * only list of keys buried in a debug readout. A player who never opens that
  * readout has no way to find the inventory, and a touch player has no way to use
- * it at all. The bar is the same set of verbs on both: a labelled pill with its
- * key badge on a desktop, a larger badge-less pill on a touch screen.
+ * it at all. The rail is the same set of verbs on both devices.
+ *
+ * It was a capsule of labelled pills along the bottom, under the hotbar: seven
+ * words with key badges stacked in a bar that read as one lump of chrome, sitting
+ * exactly where the pouch belongs (play-test 2026-11-26: "everything is in one
+ * place which doesn't make it fun and inventory is supposed to be down there not
+ * those buttons in a capsule"). The verbs are now a slim rail on the left edge,
+ * out of the bottom strip the hotbar owns, and each one is a drawing it takes a
+ * glance to read instead of a word it takes a second to. The words stay for
+ * assistive tech and for a hovering mouse, in the label and the tooltip.
  */
 
 export interface ActionBarAction {
@@ -33,81 +41,135 @@ export interface ActionBarAPI {
   destroy(): void;
 }
 
+/**
+ * One drawing per verb, in the same 24-unit line language as the item icons.
+ *
+ * Ids are the action ids `main.ts` builds the rail from; an id with no drawing
+ * gets the dot, so a new verb is visible before it is illustrated rather than
+ * invisible because it is not.
+ */
+const GLYPHS: Record<string, string> = {
+  // A seedling with the arrow it will grow along.
+  grow:
+    '<path d="M12 20.4v-6.2"/><path d="M12 14.2c0-3.4 2.4-5.6 5.6-5.6 0 3.4-2.4 5.6-5.6 5.6Z"/>' +
+    '<path d="M12 14.2c0-2.6-1.9-4.4-4.4-4.4 0 2.6 1.9 4.4 4.4 4.4Z" opacity=".7"/>' +
+    '<path d="M12 4.2 9.6 6.6M12 4.2l2.4 2.4M12 4.2v3.4" opacity=".8"/>',
+  // A root fork, for the sight that goes under the soil.
+  rootsight:
+    '<path d="M12 3.6v6.6"/>' +
+    '<path d="M12 10.2c0 3.2-2.2 5-4.6 6.4"/><path d="M12 10.2c0 3.2 2.2 5 4.6 6.4"/>' +
+    '<path d="M7.4 16.6c-1.2.9-1.8 2-1.9 3.4"/><path d="M16.6 16.6c1.2.9 1.8 2 1.9 3.4"/>' +
+    '<path d="M12 10.2v9.6" opacity=".55"/>',
+  // A satchel, for the pouch.
+  inventory:
+    '<path d="M5.6 8.6h12.8v10a2 2 0 0 1-2 2H7.6a2 2 0 0 1-2-2Z"/>' +
+    '<path d="M9 8.6V6.8a3 3 0 0 1 6 0v1.8"/>' +
+    '<path d="M9.4 13.2h5.2" opacity=".55"/>',
+  // A speech bubble.
+  chat:
+    '<path d="M4.4 6.6h15.2v9.2H11l-4.4 3.6v-3.6H4.4Z"/>' +
+    '<path d="M8.4 11.2h7.2" opacity=".55"/>',
+  // A face, for the emote wheel.
+  emotes:
+    '<circle cx="12" cy="12" r="8.4"/>' +
+    '<circle cx="9.4" cy="10.2" r=".9"/><circle cx="14.6" cy="10.2" r=".9"/>' +
+    '<path d="M8.8 14.4c.8 1.2 1.9 1.8 3.2 1.8s2.4-.6 3.2-1.8"/>',
+  // A lamp, for hints.
+  hints:
+    '<path d="M12 3.6a5.6 5.6 0 0 1 3.1 10.3v2.3H8.9v-2.3A5.6 5.6 0 0 1 12 3.6Z"/>' +
+    '<path d="M9.9 19h4.2" opacity=".7"/><path d="M10.6 21.2h2.8" opacity=".45"/>',
+  // Two bars, for the menu.
+  pause: '<path d="M9.4 5.6v12.8"/><path d="M14.6 5.6v12.8"/>',
+};
+
+const DOT_GLYPH = '<circle cx="12" cy="12" r="2.6" fill="currentColor" stroke="none"/>';
+
+function glyphFor(id: string): string {
+  return GLYPHS[id] ?? DOT_GLYPH;
+}
+
 const STYLE = `
   .pl-actionbar {
     position: fixed;
-    left: 50%;
-    bottom: calc(var(--hud-corner) + env(safe-area-inset-bottom, 0px));
-    transform: translateX(-50%);
+    left: calc(var(--hud-corner, 12px) + env(safe-area-inset-left, 0px));
+    top: 50%;
+    transform: translateY(-50%);
     z-index: 210;
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 4px;
+    gap: 5px;
     padding: 6px;
     box-sizing: border-box;
-    width: max-content;
-    max-width: calc(100vw - 2 * var(--hud-corner));
-    flex-wrap: nowrap;
-    justify-content: center;
     border: 1px solid var(--hud-border);
-    border-radius: 14px;
-    background: linear-gradient(180deg, rgba(18, 23, 14, 0.9), rgba(10, 13, 8, 0.94));
+    border-radius: 16px;
+    background: linear-gradient(180deg, rgba(18, 23, 14, 0.86), rgba(10, 13, 8, 0.92));
     box-shadow: var(--hud-shadow-sm);
     pointer-events: auto;
     transition: opacity 160ms ease;
   }
   .pl-actionbar[hidden] { display: none; }
+  /* A column, not a row: the bottom strip belongs to the hotbar and the pouch, so
+     the verbs stand where a thumb already rests on a phone and out of the way of
+     the ground the player is reading. */
   .pl-actionbar__row {
     display: flex;
+    flex-direction: column;
     align-items: center;
-    justify-content: center;
-    gap: 6px;
-    flex-wrap: nowrap;
+    gap: 5px;
   }
   .pl-actionbar__btn {
     position: relative;
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    min-height: 34px;
-    padding: 6px 12px;
+    display: grid;
+    place-items: center;
+    width: 42px;
+    height: 42px;
+    padding: 0;
     border: 1px solid transparent;
-    border-radius: 10px;
-    background: rgba(42, 52, 30, 0.55);
+    border-radius: 12px;
+    background: rgba(42, 52, 30, 0.5);
     color: var(--bone-200);
     font: inherit;
-    font-size: var(--hud-font-sm);
-    letter-spacing: 0.01em;
     cursor: pointer;
-    white-space: nowrap;
-    transition: background 140ms ease, border-color 140ms ease, transform 120ms ease;
+    transition: background 140ms ease, border-color 140ms ease, transform 120ms ease, color 140ms ease;
   }
   .pl-actionbar__btn:hover {
-    background: rgba(90, 144, 46, 0.28);
+    background: rgba(90, 144, 46, 0.26);
     border-color: var(--leaf-500);
+    color: var(--leaf-200);
   }
-  .pl-actionbar__btn:active { transform: scale(0.96); }
+  .pl-actionbar__btn:active { transform: scale(0.94); }
   .pl-actionbar__btn:focus-visible {
     outline: 2px solid var(--leaf-300);
     outline-offset: 2px;
   }
   .pl-actionbar__btn[aria-pressed='true'] {
-    background: linear-gradient(180deg, var(--leaf-500), var(--leaf-700));
+    background: linear-gradient(180deg, var(--leaf-400), var(--leaf-600));
     border-color: var(--leaf-300);
     color: #0d1408;
-    font-weight: 700;
   }
+  .pl-actionbar__glyph { display: block; width: 21px; height: 21px; }
   .pl-actionbar__key {
-    min-width: 16px;
-    padding: 0 4px;
+    position: absolute;
+    right: -3px;
+    bottom: -3px;
+    min-width: 13px;
+    padding: 0 3px;
     border-radius: 4px;
-    border: 1px solid rgba(239, 233, 216, 0.22);
-    background: rgba(8, 11, 6, 0.55);
+    border: 1px solid rgba(239, 233, 216, 0.18);
+    background: rgba(8, 11, 6, 0.86);
     color: var(--bone-300);
-    font-size: var(--hud-font-xs);
-    line-height: 15px;
+    font-size: 9px;
+    line-height: 12px;
     text-align: center;
+    letter-spacing: 0;
+    pointer-events: none;
+  }
+  .pl-actionbar__key[hidden] { display: none; }
+  .pl-actionbar__btn[aria-pressed='true'] .pl-actionbar__key {
+    border-color: rgba(13, 20, 8, 0.3);
+    background: rgba(13, 20, 8, 0.55);
+    color: var(--leaf-100);
   }
   .pl-actionbar__badge {
     position: absolute;
@@ -127,41 +189,25 @@ const STYLE = `
     pointer-events: none;
   }
   .pl-actionbar__badge[hidden] { display: none; }
-  .pl-actionbar__btn[aria-pressed='true'] .pl-actionbar__key {
-    border-color: rgba(13, 20, 8, 0.35);
-    background: rgba(13, 20, 8, 0.18);
-    color: #0d1408;
-  }
-  /* A finger has no keyboard: drop the badges and grow the target. This is the
-     only place the touch layout is chosen - by pointer capability, never by
+  /* A finger has no keyboard: drop the key badges and grow the target. This is
+     the only place the touch layout is chosen - by pointer capability, never by
      window width - so a desktop keeps its key badges however narrow the window
-     is, and only a device with no hovering pointer gets the thumb buttons. */
+     is, and only a device with no hovering pointer gets thumb buttons. */
   @media (hover: none) and (pointer: coarse) {
-    .pl-actionbar__btn { min-height: 48px; padding: 10px 16px; font-size: 0.86rem; }
+    .pl-actionbar__btn { width: 48px; height: 48px; }
+    .pl-actionbar__glyph { width: 24px; height: 24px; }
     .pl-actionbar__key { display: none; }
-    /* Seven thumb-sized verbs are wider than a phone held upright, and a row that
-       overflows the pane is a verb nobody can reach. The row wraps instead, and
-       each line shares its width; a landscape phone still fits one row, so the
-       bar only grows tall where it has to. */
-    .pl-actionbar__row { flex-wrap: wrap; gap: 4px; }
-    .pl-actionbar__btn { flex: 1 1 auto; justify-content: center; }
   }
-  @media (max-width: 560px) {
-    .pl-actionbar { gap: 3px; padding: 5px; }
+  @media (max-height: 520px) {
+    .pl-actionbar { gap: 3px; padding: 4px; }
     .pl-actionbar__row { gap: 3px; }
-    .pl-actionbar__btn { padding: 6px 8px; font-size: 0.78rem; }
-    /* The key badges stay: a narrow window is still a desktop. Only the coarse
-       pointer block above drops them. */
-  }
-  /* Only the very narrowest screens have to stack. */
-  @media (max-width: 380px) {
-    .pl-actionbar__row { flex-wrap: wrap; }
+    .pl-actionbar__btn { width: 34px; height: 34px; border-radius: 10px; }
+    .pl-actionbar__glyph { width: 17px; height: 17px; }
   }
   @media (prefers-reduced-motion: reduce) {
     .pl-actionbar__btn { transition: none; }
   }
 `;
-
 export function createActionBar(options: ActionBarOptions): ActionBarAPI {
   if (!document.getElementById('pl-actionbar-style')) {
     const style = document.createElement('style');
@@ -194,9 +240,23 @@ export function createActionBar(options: ActionBarOptions): ActionBarAPI {
       'aria-label',
       action.key ? `${action.label} (${action.key})` : action.label,
     );
-    const label = document.createElement('span');
-    label.textContent = action.label;
-    button.appendChild(label);
+    // The drawing, not the word. It is built here rather than set as innerHTML on
+    // the button so the key badge and the unread dot keep their own nodes.
+    const glyph = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    glyph.setAttribute('class', 'pl-actionbar__glyph');
+    glyph.setAttribute('viewBox', '0 0 24 24');
+    glyph.setAttribute('aria-hidden', 'true');
+    glyph.setAttribute('focusable', 'false');
+    glyph.setAttribute('fill', 'none');
+    glyph.setAttribute('stroke', 'currentColor');
+    glyph.setAttribute('stroke-width', '1.6');
+    glyph.setAttribute('stroke-linecap', 'round');
+    glyph.setAttribute('stroke-linejoin', 'round');
+    glyph.innerHTML = glyphFor(action.id);
+    button.appendChild(glyph);
+    // The word is still one hover away, and it is the whole tooltip: a player who
+    // does not recognise the drawing can find out without clicking it.
+    button.title = action.key ? `${action.label} (${action.key})` : action.label;
     const key = document.createElement('kbd');
     key.className = 'pl-actionbar__key';
     key.textContent = action.key ?? '';
@@ -225,17 +285,9 @@ export function createActionBar(options: ActionBarOptions): ActionBarAPI {
 
   options.mount.appendChild(bar);
 
-  // Publish our own height: the context hint stacks above the bar and reads this
-  // instead of guessing. A hidden bar reports 0, a wrapped one its new height.
-  const publishHeight = (): void => {
-    document.documentElement.style.setProperty(
-      '--pl-bar-offset',
-      `${bar.hidden ? 0 : Math.round(bar.getBoundingClientRect().height)}px`,
-    );
-  };
-  const observer = new ResizeObserver(publishHeight);
-  observer.observe(bar);
-  publishHeight();
+  // The rail is a column on the left now, so it no longer owns the bottom
+  // offset the hint and the pouch stack against: the hotbar publishes that
+  // (`--pl-bar-offset`), because the hotbar is what sits on the bottom edge.
 
   return {
     element: bar,
@@ -270,14 +322,12 @@ export function createActionBar(options: ActionBarOptions): ActionBarAPI {
     },
     setVisible: (visible) => {
       bar.hidden = !visible;
-      // A hidden element has no height, so measure again on the way back rather
-      // than waiting for a size change that may never come.
-      publishHeight();
     },
     destroy: () => {
-      observer.disconnect();
       bar.remove();
       buttons.clear();
+      badges.clear();
+      keyBadges.clear();
     },
   };
 }

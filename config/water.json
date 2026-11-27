@@ -8,19 +8,43 @@
     "notes": "Surface rain sheet only. The water table is simulated by the server per tile (resources.groundwater_*) and streamed to the client, so its depth is not tuned here."
   },
   "values": {
+    "water_table_cells": {
+      "type": "integer",
+      "value": 48,
+      "range": [8, 256],
+      "notes": "Samples along one side of the water-table height field the root readout builds. Was a literal in tick/waterTableGrid.ts (E26)."
+    },
+    "water_table_cell_size_m": {
+      "type": "number",
+      "value": 2,
+      "range": [0.25, 16],
+      "notes": "Spacing between water-table samples, metres. 48 x 2 m covers 96 m around the root."
+    },
+    "water_table_chunk_cells": {
+      "type": "integer",
+      "value": 576,
+      "range": [16, 4096],
+      "notes": "Samples per tick, so one call is bounded: 576 is a quarter of a 48x48 field, so an empty grid finishes in four ticks (0.2 s at 20 Hz) and a walking root never reads a stale table it could notice."
+    },
+    "water_table_move_tolerance_m": {
+      "type": "number",
+      "value": 0.5,
+      "range": [0, 8],
+      "notes": "How far the root may drift before a new field is started rather than reusing the finished one."
+    },
     "enabled": {
       "type": "boolean",
-      "value": false,
-      "notes": "Draw the water field at all: the rain sheet, the water table, the stream and the sea. Off while the current implementation is replaced: it drapes a flat sheet two centimetres over the terrain, so it floods slopes, covers the ground at eye level and reads as a teal film rather than water lying in basins. A realistic pass replaces it; until then the world is dry and nothing here is hidden behind a flag nobody can find."
+      "value": true,
+      "notes": "Draw standing water at all. The water is a depth field solved in `surfaceWaterField.ts` and drawn by `surfaceWaterMesh.ts`: one mesh whose height is the solve's own level (bed plus column) and whose shoreline ends where the column does, so a pool is level in its hollow and has a surface that reflects the sky. The soil shader reads the same field for the damp stain. Off removes the water mesh and leaves the world dry, but the hydrology keeps running so the ground still darkens after rain. The old sheet pipeline - rain film, water-table plane, river ribbon, sea - was deleted, not hidden."
     },
     "surface_cells": {
       "type": "integer",
-      "value": 72,
+      "value": 80,
       "range": [
         8,
         192
       ],
-      "notes": "Vertices per side of the surface sheet. Higher is finer and costs one vertex update per cell per frame."
+      "notes": "Samples per side of the standing-water field. This is the resolution of a puddle's shoreline, so it is the number that decides how round a pool is: 80 over the 128 m square is a 1.6 m cell, and marching squares still draws a curved shoreline between those samples. The solver runs at 20 Hz, so this is also the main cost of rain: 192 was more than five times the cells and made the camera stutter while it rained."
     },
     "surface_extent_m": {
       "type": "number",
@@ -33,39 +57,39 @@
     },
     "surface_flow_rate_per_s": {
       "type": "number",
-      "value": 0.55,
+      "value": 0.9,
       "range": [
         0,
         4
       ],
-      "notes": "Share of the head difference between cells that equalises per second. The shallow-water flow speed."
+      "notes": "Share of the head difference between cells that equalises per second. The shallow-water flow speed: higher runs a puddle into the hollow it belongs in sooner instead of leaving a ring under every landing."
     },
     "surface_infiltration_per_s": {
       "type": "number",
-      "value": 0.02,
+      "value": 0.00035,
       "range": [
         0,
         0.5
       ],
-      "notes": "Metres of standing water that soak into the soil per second."
+      "notes": "Metres of standing water that soak into the soil per second. It used to sit just above the rain rate so open ground stayed dry, which also meant rain could never make a puddle: the ground soaked it as fast as it fell. It is now well below the rain rate, so a shower builds a film that runs downhill, pools in hollows and soaks away over the next minute or two rather than never existing."
     },
     "surface_evaporation_per_s": {
       "type": "number",
-      "value": 0.01,
+      "value": 0.00003,
       "range": [
         0,
         0.1
       ],
-      "notes": "Metres of standing water lost to the air per second."
+      "notes": "Metres of standing water lost to the air per second. Evaporation is the slowest drain a puddle has: it is what dries the last film out of a hollow after the soil has stopped taking any."
     },
     "surface_max_depth_m": {
       "type": "number",
-      "value": 0.08,
+      "value": 0.24,
       "range": [
         0.02,
         3
       ],
-      "notes": "Deepest a puddle may get before the rest runs off."
+      "notes": "Deepest a hollow may fill before the rest runs off. At 8 cm a basin could not hold a puddle worth the name; 24 cm is a pool with a dark middle and a readable shore, and the body colour reaches water_deep about two thirds of the way down. The soil shader draws its damp stain from the same field."
     },
     "water_min_visible_depth_m": {
       "type": "number",
@@ -78,12 +102,12 @@
     },
     "rain_depth_per_s": {
       "type": "number",
-      "value": 0.0015,
+      "value": 0.0018,
       "range": [
         0,
         0.5
       ],
-      "notes": "Metres of rain depth added to the surface sheet per second while it is raining."
+      "notes": "Metres of rain depth added to the standing-water field per second while it is raining. It has to beat the infiltration rate or nothing ever stands: at 1.8 mm/s against 0.35 mm/s of soak the film gains about 1.5 mm a second, so a hollow holds a visible 2 cm pool after ten or fifteen seconds of rain and the slope above it has already sent its water down. The rate is scaled by the weather's own rain intensity, so a drizzle adds a tenth of this."
     },
     "water_absorption_per_m": {
       "type": "number",
@@ -111,12 +135,12 @@
     },
     "wet_ground_opacity": {
       "type": "number",
-      "value": 0.35,
+      "value": 0.5,
       "range": [
         0,
         1
       ],
-      "notes": "How dark the damp ground stain is where water stands, 0 (invisible) .. 1 (black). Wet dirt is darker than dry dirt, and this is what makes a puddle sit in darkened soil instead of on top of unchanged ground."
+      "notes": "How dark the damp ground stain is where water stands, 0 (invisible) .. 1 (black). Wet dirt is darker than dry dirt, and this is what makes a puddle sit in darkened soil instead of on top of unchanged ground. It is drawn by the soil shader from the field's dampness channel, so it follows the shoreline rather than a rim."
     },
     "wet_ground_halo_cells": {
       "type": "integer",
@@ -129,12 +153,12 @@
     },
     "wet_ground_dry_per_s": {
       "type": "number",
-      "value": 0.05,
+      "value": 0.02,
       "range": [
         0.005,
         2
       ],
-      "notes": "How fast damp ground fades once the water is gone, per second. This is the stain that stays after a puddle dries."
+      "notes": "How fast damp ground fades once the water is gone, per second. This is the stain that stays after a puddle dries: at 0.02 it holds for the better part of a minute, which is what a shore looks like after rain."
     },
     "wet_band_above_table_m": {
       "type": "number",
@@ -152,7 +176,7 @@
         0.005,
         0.5
       ],
-      "notes": "How far the rain sheet floats above the ground it is sampled from. The sheet grid is coarser than the drawn terrain, so without a lift the two surfaces intersect and z-fight. Raising it to 11 cm did not fix the sampled-height disagreement and floated the film above the soil across the whole map, so it stays at the geometric minimum."
+      "notes": "Height the surface sheet floats above the ground. This is only read by the retired sheet pipeline; the water the game draws now is part of the ground's own surface, so it needs no lift."
     },
     "water_near_discard_m": {
       "type": "number",
@@ -210,8 +234,8 @@
     },
     "ocean_enabled": {
       "type": "boolean",
-      "value": true,
-      "notes": "Draw the planet-wide sea. It is one sphere at sea_level_m around the planet body, so the water is the same surface everywhere: no sheet edge, no LOD seam, and coasts wherever the ground rises through it."
+      "value": false,
+      "notes": "Draw the planet-wide sea. Off: the world is dry land, so there is no ocean sphere, no orbital sea mask and no water at the horizon. Puddles, the river and the water table still come from the surface field. Sea_level_m is retained for the water table but is no longer a rendered level."
     },
     "sea_level_m": {
       "type": "number",

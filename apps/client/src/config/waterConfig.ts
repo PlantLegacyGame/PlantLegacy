@@ -10,7 +10,7 @@ import {
   DEFAULT_WATER_FIELD_TUNING,
   parseWaterTuning,
   type WaterFieldTuning,
-} from '../renderers/environment/waterFieldTuning.js';
+} from '../renderers/environment/waterFieldTuning.ts';
 
 export type WaterTuning = Partial<WaterFieldTuning>;
 

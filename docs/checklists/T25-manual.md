@@ -2,6 +2,19 @@
 
 Run `pnpm dev`, open `http://localhost:4173/?dev=1`.
 
+**Status: never walked.** Every box below is a browser or person check that no
+session has performed end to end. What the tests do pin, so the walk would mostly
+be confirming rather than discovering: `apps/server/src/ops/terrain.test.ts`
+(lowering only for a shallow tunnel, a deep tunnel that records volume and leaves
+the surface alone, the per-edit volume cap, a dry void collapsing into a dimple,
+and a snapshot that restores edits and voids),
+`physics/plantColliderPlan.test.ts` (which parts get a collider and how much),
+`world/soilPhysics.test.ts` (a void's own stability). What remains unverified
+by anything is the human part: walking 500 m over a rise, standing on a slope,
+or orbiting a mature plant without the camera sinking. A box left open here is a
+gap in verification, not a claim that the feature is missing — and a box ticked
+here would be a claim that somebody stood on the ground and looked.
+
 ## Ground
 
 - [ ] Walk 500 m from spawn: the ground rises and falls, and the horizon patch

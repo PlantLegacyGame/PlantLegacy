@@ -31,11 +31,16 @@ const APPLY = `
     vec3 atmoDelta = vAtmoWorld - cameraPosition;
     float atmoDist = length(atmoDelta);
     vec3 atmoView = atmoDist > 1e-4 ? atmoDelta / atmoDist : vec3(0.0, 1.0, 0.0);
-    gl_FragColor.rgb = atmoApply(
+    // The eye's own height is the half that was missing. With only the
+    // fragment's height, a plant, an arch or a wall standing on the play area
+    // was always fogged as sea-level air - so climbing to 40 km, where the air
+    // is thin, still mixed every mesh with the horizon's white in-scatter.
+    gl_FragColor.rgb = atmoApplyRay(
       gl_FragColor.rgb,
       atmoView,
       normalize(uAtmoSunDir),
       atmoDist,
+      max(0.0, cameraPosition.y),
       max(0.0, vAtmoWorld.y)
     );
   }

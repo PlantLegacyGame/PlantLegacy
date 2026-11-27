@@ -1,7 +1,14 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import type { ConfigFile } from '@plant-legacy/shared/config';
-import { type GrowthIntent, nodeAttachmentPoint, plantHealth } from '@plant-legacy/shared/growth';
+import {
+  type GrowthIntent,
+  getAvailableGrowthTypes,
+  MID_SEGMENT_BRANCH_TYPES,
+  nodeAttachmentPoint,
+  plantHealth,
+} from '@plant-legacy/shared/growth';
+import { buildGrowthOptions } from './growth/options.ts';
 import { canGrow } from './growth/rules.ts';
 import { loadGrowthConfig } from './growth.ts';
 import type { MutationDefinition, MutationsConfig } from './mutations/types.ts';
@@ -74,6 +81,7 @@ function makeTestResourcesConfig(): ReturnType<typeof loadResourcesConfig> {
       light_dirty_threshold: { type: 'number', value: 0.05, range: [0, 1] },
       resource_dirty_threshold: { type: 'number', value: 0.1, range: [0, 1] },
       diffusion_rate: { type: 'number', value: 0.1, range: [0, 1] },
+      soil_step_interval_s: { type: 'number', value: 0.25, range: [0.05, 2] },
       max_absorption_per_tick: { type: 'number', value: 10, range: [0, 100] },
       groundwater_base: { type: 'integer', value: 0, range: [0, 10000] },
       groundwater_capacity: { type: 'integer', value: 400, range: [0, 10000] },
@@ -1003,6 +1011,140 @@ describe('PlantWorld', () => {
     assert.equal(cotyledon.energyCost, 6);
   });
 
+  it('keeps a leafless seedling breathing and able to grow its first cotyledon', () => {
+    const world = makeTestPlantWorld();
+    world.setResourceProvider(() => ({ light: 50, moisture: 50, minerals: 50 }));
+    const plant = world.createPlant('p1', 'w1', 0, 0);
+    const seedId = plant.rootNodeId ?? '';
+
+    const germinated = world.tryGrow(
+      {
+        plantId: plant.id,
+        nodeId: seedId,
+        direction: { x: 0, y: -1, z: 0 },
+        nodeType: 'radicle',
+        tick: 1,
+      },
+      1,
+    );
+    assert.equal(germinated.success, true, germinated.reason);
+
+    // Let the radicle finish. There is still no photosynthetic organ, so this
+    // span must not respire the seed reserve to zero.
+    for (let i = 0; i < 40; i++) world.step(0.1, new Set([plant.id]), 2 + i);
+    const afterRadicle = world.getPlant(plant.id);
+    assert.ok(afterRadicle, 'the seedling is still alive');
+    assert.ok(!afterRadicle.dead, 'a root-first seedling does not starve');
+    assert.ok(
+      afterRadicle.totalEnergy >= 6,
+      `the first cotyledon is affordable, energy is ${afterRadicle.totalEnergy}`,
+    );
+
+    const crown = afterRadicle.rootNodeId ?? '';
+    const options = world.getGrowthOptions(plant.id, crown);
+    assert.ok(options);
+    const cotyledon = options.options.find((option) => option.type === 'cotyledon');
+    assert.ok(cotyledon);
+
+    // Even an older plant that arrives at zero gets the reserve floor on the
+    // next tick, instead of staying inert forever.
+    afterRadicle.totalEnergy = 0;
+    afterRadicle.growthCooldownUntil = 0;
+    world.step(0.1, new Set([plant.id]), 50);
+    assert.ok(
+      afterRadicle.totalEnergy >= cotyledon.energyCost,
+      `the floor restores the first-leaf cost, energy is ${afterRadicle.totalEnergy}`,
+    );
+
+    afterRadicle.growthCooldownUntil = 0;
+    const shoot = world.tryGrow(
+      {
+        plantId: plant.id,
+        nodeId: crown,
+        direction: { x: 0, y: 1, z: 0 },
+        nodeType: 'cotyledon',
+        tick: 60,
+      },
+      60,
+    );
+    assert.equal(shoot.success, true, shoot.reason);
+  });
+
+  it('restores the germination reserve to a lone seed that reached zero energy', () => {
+    const world = makeTestPlantWorld();
+    world.setResourceProvider(() => ({ light: 50, moisture: 50, minerals: 50 }));
+    const plant = world.createPlant('p1', 'w1', 0, 0);
+    plant.totalEnergy = 0;
+    plant.growthCooldownUntil = 0;
+
+    world.step(0.1, new Set([plant.id]), 1);
+    const capacity = world.getPlantCapacity(plant.id);
+    assert(capacity);
+    assert.ok(plant.totalEnergy > 0, 'a lone seed is not left inert at zero energy');
+    assert.ok(
+      plant.totalEnergy <= capacity.energy + 1e-9,
+      `the reserve stays inside capacity (${plant.totalEnergy} > ${capacity.energy})`,
+    );
+
+    const seedId = plant.rootNodeId ?? '';
+    const germinated = world.tryGrow(
+      {
+        plantId: plant.id,
+        nodeId: seedId,
+        direction: { x: 0, y: -1, z: 0 },
+        nodeType: 'radicle',
+        tick: 2,
+      },
+      2,
+    );
+    assert.equal(germinated.success, true, germinated.reason);
+  });
+
+  it('refuses a root that would eat the first-leaf reserve', () => {
+    const world = makeTestPlantWorld();
+    world.setResourceProvider(() => ({ light: 50, moisture: 50, minerals: 50 }));
+    const plant = world.createPlant('p1', 'w1', 0, 0);
+    const seedId = plant.rootNodeId ?? '';
+    assert.equal(
+      world.tryGrow(
+        {
+          plantId: plant.id,
+          nodeId: seedId,
+          direction: { x: 0, y: -1, z: 0 },
+          nodeType: 'radicle',
+          tick: 1,
+        },
+        1,
+      ).success,
+      true,
+    );
+    for (let i = 0; i < 40; i++) world.step(0.1, new Set([plant.id]), 2 + i);
+
+    const radicle = Array.from(plant.nodes.values()).find((node) => node.type === 'radicle');
+    assert.ok(radicle);
+    const options = world.getGrowthOptions(plant.id, radicle.id);
+    assert.ok(options);
+    const lateral = options.options.find((option) => option.type === 'lateral_root');
+    assert.ok(lateral);
+
+    // Enough to pay the root, but only one unit left for a leaf. The seed's
+    // first-leaf reserve must win.
+    plant.totalEnergy = lateral.energyCost + 1;
+    plant.growthCooldownUntil = 0;
+    const refused = world.tryGrow(
+      {
+        plantId: plant.id,
+        nodeId: radicle.id,
+        direction: { x: 0.2, y: -1, z: 0 },
+        nodeType: 'lateral_root',
+        tick: 60,
+      },
+      60,
+    );
+    assert.equal(refused.success, false);
+    assert.equal(refused.reason, 'seed_reserve');
+  });
+
   it('never moves a stored position while stepping', () => {
     const world = makeTestPlantWorld();
     const plant = world.createPlant('player_1', 'world_0', 0, 0);
@@ -1117,6 +1259,54 @@ describe('PlantWorld', () => {
     assert.equal(target.getAllPlants().length, 0);
   });
 
+  it('never offers a mid-segment part from the seed or the crown', () => {
+    const config = makeTestGrowthConfig();
+    const world = makeTestPlantWorld();
+    const plant = world.createPlant('player_1', 'world_0', 0, 0);
+    const seedId = plant.rootNodeId ?? Array.from(plant.nodes.keys())[0];
+    const seed = plant.nodes.get(seedId);
+    assert(seed);
+
+    // The client chooses the joint by projecting a press onto the part's own
+    // segment, so a part with no parent segment has no joint to choose. The seed
+    // is that part: its menu is radicle, cotyledon or stem, none of them
+    // mid-segment, which is why the client's "that press missed" copy has one
+    // case and no "this part has no segment" branch.
+    assert.equal(seed.parentId, null, 'the seed is the plant root');
+
+    const midSegment = new Set<string>(MID_SEGMENT_BRANCH_TYPES);
+    const offered = (options: { type: string }[]): string[] =>
+      options.filter((option) => midSegment.has(option.type)).map((option) => option.type);
+
+    // The same filter finds a mid-segment part where one belongs, so an empty
+    // answer below means "not offered", not "the filter never matches".
+    assert.ok(
+      getAvailableGrowthTypes('radicle', config).some((type) => midSegment.has(type)),
+      'a radicle should offer a mid-segment part',
+    );
+
+    // Every mid-segment organ unlocked at once: a mutation can hand the menu an
+    // organ the base rules never list, and the seed/crown menu is built by its own
+    // rule, before unlocked types are merged.
+    const unlocked = [...MID_SEGMENT_BRANCH_TYPES];
+
+    for (const isSeed of [true, false]) {
+      seed.isSeed = isSeed;
+      const label = isSeed ? 'seed' : 'crown';
+
+      const menu = world.getGrowthOptions(plant.id, seedId);
+      assert(menu, `${label}: the world answers for the root node`);
+      // Not vacuous: the menu really has something in it to not be mid-segment.
+      assert.ok(menu.options.length > 0, `${label}: has a menu at all`);
+      assert.deepEqual(offered(menu.options), [], `${label} offered a mid-segment part`);
+      assert.deepEqual(
+        offered(buildGrowthOptions(config, plant, seed, undefined, unlocked).options),
+        [],
+        `${label} offered a mid-segment part once a mutation unlocked it`,
+      );
+    }
+  });
+
   it('buds a lateral root part-way along the radicle and keeps it there', () => {
     const world = makeTestPlantWorld();
     const plant = world.createPlant('player_1', 'world_0', 0, 0);
@@ -1193,6 +1383,61 @@ describe('PlantWorld', () => {
     assert(restored);
     assert.equal(restored.attachFraction, 0.6);
     assert.ok(Math.abs((restored.parentAttachY ?? 0) - budAttachY) < 1e-9);
+  });
+
+  it('grows the lateral where the intent asked, not at the configured fraction', () => {
+    const world = makeTestPlantWorld();
+    const plant = world.createPlant('player_1', 'world_0', 0, 0);
+    const seedId = Array.from(plant.nodes.keys())[0];
+    world.setResourceProvider(() => ({ light: 50, moisture: 50, minerals: 50 }));
+
+    const germinated = world.tryGrow(
+      {
+        plantId: plant.id,
+        nodeId: seedId,
+        direction: { x: 0, y: -1, z: 0 },
+        nodeType: 'radicle',
+        tick: 1,
+      },
+      1,
+    );
+    assert(germinated.success, germinated.reason ?? 'germination');
+    for (let i = 0; i < 120; i++) world.step(0.1, new Set([plant.id]), 2 + i);
+
+    const updated = world.getPlant(plant.id);
+    assert(updated);
+    const radicle = Array.from(updated.nodes.values()).find((node) => node.type === 'radicle');
+    assert(radicle);
+    updated.storedWater = 1000;
+    updated.storedMinerals = 1000;
+    updated.totalEnergy = 5000;
+    for (let i = 0; i < 30; i++) world.step(0.1, new Set([plant.id]), 200 + i);
+
+    // The client sends where the gizmo drew the bud; the server must place the
+    // node there rather than at the configured 0.6 (G01).
+    const lateral = world.tryGrow(
+      {
+        plantId: plant.id,
+        nodeId: radicle.id,
+        direction: { x: 0.2, y: -1, z: 0 },
+        nodeType: 'lateral_root',
+        tick: 3,
+        attachFraction: 0.25,
+      },
+      300,
+    );
+    assert.equal(lateral.success, true, lateral.reason ?? 'lateral root');
+    const bud = lateral.newNode;
+    assert(bud);
+    assert.equal(bud.attachFraction, 0.25);
+    const start = {
+      x: radicle.parentAttachX ?? radicle.x,
+      y: radicle.parentAttachY ?? radicle.y,
+      z: radicle.parentAttachZ ?? radicle.z,
+    };
+    assert.ok(Math.abs((bud.parentAttachX ?? 0) - (start.x + (radicle.x - start.x) * 0.25)) < 1e-9);
+    assert.ok(Math.abs((bud.parentAttachY ?? 0) - (start.y + (radicle.y - start.y) * 0.25)) < 1e-9);
+    assert.ok(Math.abs((bud.parentAttachZ ?? 0) - (start.z + (radicle.z - start.z) * 0.25)) < 1e-9);
   });
 
   /**
@@ -1571,7 +1816,6 @@ describe('T04 mutation effects on growth', () => {
       upkeepMaxMultiplier: 10,
       upkeepBiomassFloor: 8,
       oversizeWiltPerS: 0.02,
-      oversizeLeakPerS: 0.05,
       levelUp: {
         maxLevel: 3,
         cardsPerOffer: 3,
@@ -1582,6 +1826,7 @@ describe('T04 mutation effects on growth', () => {
         baseBiomassFraction: 0.05,
         biomassFractionPerLevel: 0.05,
         minBiomassCost: 1,
+        maxEnergyShareOfCapacity: 0.8,
         upkeepPerLevel: 0.15,
         cardSteps: { sizeMultiplier: 1.15, energyUpkeepMultiplier: 0.92 },
         cardLabels: { sizeMultiplier: 'Larger form', energyUpkeepMultiplier: 'Leaner upkeep' },
@@ -1692,7 +1937,6 @@ describe('T04 mutation effects on growth', () => {
       upkeepMaxMultiplier: 10,
       upkeepBiomassFloor: 8,
       oversizeWiltPerS: 0.02,
-      oversizeLeakPerS: 0.05,
       levelUp: {
         maxLevel: 3,
         cardsPerOffer: 3,
@@ -1703,6 +1947,7 @@ describe('T04 mutation effects on growth', () => {
         baseBiomassFraction: 0.05,
         biomassFractionPerLevel: 0.05,
         minBiomassCost: 1,
+        maxEnergyShareOfCapacity: 0.8,
         upkeepPerLevel: 0.15,
         cardSteps: { sizeMultiplier: 1.15, energyUpkeepMultiplier: 0.92 },
         cardLabels: { sizeMultiplier: 'Larger form', energyUpkeepMultiplier: 'Leaner upkeep' },
@@ -1756,7 +2001,6 @@ describe('T04 mutation effects on growth', () => {
       upkeepMaxMultiplier: 10,
       upkeepBiomassFloor: 8,
       oversizeWiltPerS: 0.02,
-      oversizeLeakPerS: 0.05,
       levelUp: {
         maxLevel: 3,
         cardsPerOffer: 3,
@@ -1767,6 +2011,7 @@ describe('T04 mutation effects on growth', () => {
         baseBiomassFraction: 0.05,
         biomassFractionPerLevel: 0.05,
         minBiomassCost: 1,
+        maxEnergyShareOfCapacity: 0.8,
         upkeepPerLevel: 0.15,
         cardSteps: { sizeMultiplier: 1.15, energyUpkeepMultiplier: 0.92 },
         cardLabels: { sizeMultiplier: 'Larger form', energyUpkeepMultiplier: 'Leaner upkeep' },
@@ -1816,7 +2061,22 @@ describe('T04 mutation effects on growth', () => {
     plant.totalEnergy = 5000;
     plant.storedWater = 5000;
     plant.storedMinerals = 5000;
-    for (let i = 0; i < 100; i++) world.step(0.1, new Set([plantId]), shedTick + 1 + i);
+    world.step(0.1, new Set([plantId]), shedTick + 1);
+    const shrunkCapacity = world.getPlantCapacity(plantId);
+    assert(shrunkCapacity);
+    assert.ok(
+      plant.totalEnergy <= shrunkCapacity.energy + 1e-9,
+      `energy is clamped as the body shrinks (${plant.totalEnergy} > ${shrunkCapacity.energy})`,
+    );
+    assert.ok(
+      plant.storedWater <= shrunkCapacity.water + 1e-9,
+      `water is clamped as the body shrinks (${plant.storedWater} > ${shrunkCapacity.water})`,
+    );
+    assert.ok(
+      plant.storedMinerals <= shrunkCapacity.minerals + 1e-9,
+      `minerals are clamped as the body shrinks (${plant.storedMinerals} > ${shrunkCapacity.minerals})`,
+    );
+    for (let i = 1; i < 100; i++) world.step(0.1, new Set([plantId]), shedTick + 1 + i);
     const midway = plant.nodes.get(stemId);
     assert(midway);
     assert.ok(midway.biomass < bigMass, 'the excess tissue starts draining');
@@ -1846,7 +2106,6 @@ describe('T04 mutation effects on growth', () => {
       upkeepMaxMultiplier: 10,
       upkeepBiomassFloor: 8,
       oversizeWiltPerS: 0.02,
-      oversizeLeakPerS: 0.05,
       levelUp: {
         maxLevel: 2,
         cardsPerOffer: 3,
@@ -1857,6 +2116,7 @@ describe('T04 mutation effects on growth', () => {
         baseBiomassFraction: 0.05,
         biomassFractionPerLevel: 0.05,
         minBiomassCost: 1,
+        maxEnergyShareOfCapacity: 0.8,
         upkeepPerLevel: 0.15,
         cardSteps: { sizeMultiplier: 1.15, energyUpkeepMultiplier: 0.92 },
         cardLabels: { sizeMultiplier: 'Larger form', energyUpkeepMultiplier: 'Leaner upkeep' },
@@ -2122,7 +2382,6 @@ describe('mutation gallery', () => {
       upkeepMaxMultiplier: 10,
       upkeepBiomassFloor: 8,
       oversizeWiltPerS: 0.02,
-      oversizeLeakPerS: 0.05,
       levelUp: {
         maxLevel: 3,
         cardsPerOffer: 3,
@@ -2133,6 +2392,7 @@ describe('mutation gallery', () => {
         baseBiomassFraction: 0.05,
         biomassFractionPerLevel: 0.05,
         minBiomassCost: 1,
+        maxEnergyShareOfCapacity: 0.8,
         upkeepPerLevel: 0.15,
         cardSteps: { sizeMultiplier: 1.15, energyUpkeepMultiplier: 0.92 },
         cardLabels: { sizeMultiplier: 'Larger form', energyUpkeepMultiplier: 'Leaner upkeep' },

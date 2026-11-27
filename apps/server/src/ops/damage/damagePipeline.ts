@@ -77,8 +77,18 @@ export type DamagePipelineEvent =
   /**
    * A bolt that has been rolled, with its landing point. Sent whether or not it
    * found tissue, so the flash the client draws is the strike that happened.
+   * `plantsHit` and `totalDamage` are what the bolt actually did, measured after
+   * the size floor and the per-plant cap: the number a caller reports is the
+   * number this strike took, not a second constant that could disagree (E20).
    */
-  | { kind: 'strike'; x: number; z: number; radiusM: number };
+  | {
+      kind: 'strike';
+      x: number;
+      z: number;
+      radiusM: number;
+      plantsHit: number;
+      totalDamage: number;
+    };
 
 export interface DamagePipelineOptions {
   plantWorld: PlantWorld;
@@ -995,15 +1005,15 @@ export class DamagePipeline {
     const strikeDistance = strikeRadius * (0.15 + 5 * this.random() ** 2);
     const strikeX = root.x + Math.cos(strikeAngle) * strikeDistance;
     const strikeZ = root.z + Math.sin(strikeAngle) * strikeDistance;
-    // Announce the bolt at its landing point. The client used to roll its own
-    // flashes on a 3.5-9 s timer while this rolled damage on another, so the
-    // flash and the hit were unrelated; now the flash is the strike.
-    this.events.push({
-      kind: 'strike',
-      x: strikeX,
-      z: strikeZ,
-      radiusM: strikeRadius,
-    });
+    // Everything inside the radius of *where it landed* takes the hit, and the
+    // bolt records what it actually took. The event used to be pushed before the
+    // loop, so it could only describe where the bolt fell; a second copy of the
+    // damage number then had to live in weather.json for anything that wanted to
+    // say how hard it hit, and that copy drifted to 25 against the 8 the
+    // pipeline billed (E20). One authority now: the pipeline bills, and the
+    // event carries the sum it billed.
+    let plantsHit = 0;
+    let totalDamage = 0;
     for (const plant of plants) {
       const plantRoot = plant.rootNodeId ? plant.nodes.get(plant.rootNodeId) : undefined;
       if (!plantRoot) continue;
@@ -1021,7 +1031,20 @@ export class DamagePipeline {
       );
       if (strike <= 0) continue;
       this.applyDamage(plant.id, strike, 'weather', tick);
+      plantsHit += 1;
+      totalDamage += strike;
     }
+    // Announced after the loop: the client used to roll its own flashes on a
+    // 3.5-9 s timer while this rolled damage on another, so the flash and the
+    // hit were unrelated. Now the flash is the strike, and it carries the hit.
+    this.events.push({
+      kind: 'strike',
+      x: strikeX,
+      z: strikeZ,
+      radiusM: strikeRadius,
+      plantsHit,
+      totalDamage,
+    });
   }
 
   private processTerrainCollapse(tick: number): void {

@@ -13,13 +13,20 @@
  */
 
 import { escapeHtml } from './escape.ts';
+import { itemIconSvg } from './itemIcons.ts';
 
 export interface ShopItemView {
   id: string;
   name: string;
   description?: string;
   price: number;
-  /** Optional glyph or emoji used as the item mark. */
+  /**
+   * Optional glyph from the catalogue.
+   *
+   * Kept for a config that names one, but the mark is the item's own drawing:
+   * a row of glyphs (a diamond, a circle, a flower) is what the shop used to
+   * look like, and it named nothing (U10).
+   */
   icon?: string;
 }
 
@@ -41,8 +48,19 @@ export interface ShopPanelOptions {
   mount: HTMLElement;
   /** Balance of `currencyName`, when the game has one. */
   balance?: number | null;
+  /**
+   * What to say where the balance would go when there is no purse to show.
+   *
+   * The title screen opens this panel before any socket exists, so it has no
+   * balance: it used to print a confident `0 spores`, which read as "you spent
+   * everything" and was then undone by the 120 the server handed out on Play.
+   * A panel with no purse says so in words instead of inventing a zero.
+   */
+  balanceNote?: string;
   /** Called with the item id. Without it, buy buttons stay disabled. */
   onBuy?: (itemId: string) => void;
+  /** Why buying is closed here, when it is. Replaces the generic tooltip. */
+  buyNote?: string;
   onClose: () => void;
 }
 
@@ -167,8 +185,10 @@ const STYLE = `
     width: 44px; height: 44px; border-radius: 10px;
     display: grid; place-items: center;
     background: color-mix(in srgb, var(--palette-foliage-700) 12%, transparent);
+    color: var(--leaf-300);
     font-size: 1.3rem;
   }
+  .pl-shop__item-mark .pl-item-icon { display: block; }
   .pl-shop__item-name { font-size: 0.88rem; font-weight: 600; }
   .pl-shop__item-desc { font-size: 0.74rem; color: var(--ink-muted); line-height: 1.45; }
   .pl-shop__item-buy {
@@ -218,11 +238,15 @@ export function createShopPanel(options: ShopPanelOptions): ShopPanel {
   head.appendChild(heading);
 
   let balanceEl: HTMLElement | null = null;
-  let balanceValue = typeof options.balance === 'number' ? options.balance : 0;
+  let balanceValue = typeof options.balance === 'number' ? options.balance : null;
+  const balanceText = (value: number | null): string =>
+    value === null ? (options.balanceNote ?? '') : `${value} ${options.config.currencyName}`;
   if (options.config.currencyName) {
     balanceEl = document.createElement('div');
     balanceEl.className = 'pl-shop__balance';
-    balanceEl.textContent = `${balanceValue} ${options.config.currencyName}`;
+    balanceEl.textContent = balanceText(balanceValue);
+    // A note is prose, not a number: it must not line up with the purse column.
+    if (balanceValue === null) balanceEl.dataset.state = 'note';
     head.appendChild(balanceEl);
   }
 
@@ -252,7 +276,7 @@ export function createShopPanel(options: ShopPanelOptions): ShopPanel {
       const card = document.createElement('div');
       card.className = 'pl-shop__item';
       card.innerHTML = `
-        <div class="pl-shop__item-mark">${escapeHtml(item.icon ?? '\u25c8')}</div>
+        <div class="pl-shop__item-mark">${itemIconSvg(item.id, { size: 26 })}</div>
         <div class="pl-shop__item-name">${escapeHtml(item.name)}</div>
         ${item.description ? `<div class="pl-shop__item-desc">${escapeHtml(item.description)}</div>` : ''}
       `;
@@ -270,7 +294,7 @@ export function createShopPanel(options: ShopPanelOptions): ShopPanel {
         // skipped by the keyboard and by screen readers, so the reason would
         // never reach anyone who did not hover it with a mouse.
         buy.setAttribute('aria-disabled', 'true');
-        buy.title = 'Purchases are not open yet';
+        buy.title = options.buyNote ?? 'Purchases are not open yet';
       }
       card.appendChild(buy);
       body.appendChild(card);
@@ -312,8 +336,12 @@ export function createShopPanel(options: ShopPanelOptions): ShopPanel {
   return {
     element: scrim,
     setBalance(next: number): void {
-      balanceValue = Number.isFinite(next) ? Math.max(0, Math.round(next)) : 0;
-      if (balanceEl) balanceEl.textContent = `${balanceValue} ${options.config.currencyName}`;
+      const value = Number.isFinite(next) ? Math.max(0, Math.round(next)) : null;
+      balanceValue = value;
+      if (!balanceEl) return;
+      balanceEl.textContent = balanceText(value);
+      if (value === null) balanceEl.dataset.state = 'note';
+      else delete balanceEl.dataset.state;
     },
     destroy(): void {
       window.removeEventListener('keydown', onKey, true);

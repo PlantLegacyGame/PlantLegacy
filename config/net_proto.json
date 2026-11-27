@@ -53,6 +53,60 @@
       ],
       "description": "Short inbound burst a connection may spend before the rate limit applies"
     },
+    "max_connections_per_ip": {
+      "type": "integer",
+      "value": 32,
+      "range": [
+        1,
+        256
+      ],
+      "description": "Open WebSocket connections allowed from one client address before HELLO. Requires ops.trust_proxy to read X-Forwarded-For."
+    },
+    "full_grid_min_interval_ms": {
+      "type": "integer",
+      "value": 5000,
+      "range": [
+        500,
+        60000
+      ],
+      "description": "Minimum time between full ~262 KB resource-grid replies to one player"
+    },
+    "plant_sync_min_interval_ms": {
+      "type": "integer",
+      "value": 2000,
+      "range": [
+        250,
+        60000
+      ],
+      "description": "Minimum time between full visible-plant sync replies to one player"
+    },
+    "terrain_region_min_interval_ms": {
+      "type": "integer",
+      "value": 2000,
+      "range": [
+        250,
+        60000
+      ],
+      "description": "Minimum time between terrain-region replies to one player"
+    },
+    "action_rate_per_second": {
+      "type": "integer",
+      "value": 4,
+      "range": [
+        1,
+        30
+      ],
+      "description": "Sustained state-changing actions (shop, inventory, drops, mutations) allowed per player per second"
+    },
+    "action_burst": {
+      "type": "integer",
+      "value": 8,
+      "range": [
+        1,
+        60
+      ],
+      "description": "Short state-changing action burst allowed before the sustained rate applies"
+    },
     "tick_rate_hz": {
       "type": "integer",
       "value": 20,
@@ -61,24 +115,6 @@
         60
       ],
       "notes": "Server simulation tick rate"
-    },
-    "position_quantization": {
-      "type": "integer",
-      "value": 64,
-      "range": [
-        16,
-        256
-      ],
-      "notes": "Position quantization denominator (1/64 unit precision)"
-    },
-    "angle_quantization_bits": {
-      "type": "integer",
-      "value": 16,
-      "range": [
-        8,
-        32
-      ],
-      "notes": "Angle quantization in bits"
     },
     "keyframe_interval_ticks": {
       "type": "integer",
@@ -116,6 +152,12 @@
         20
       ],
       "notes": "Weather/day-night broadcast cadence; day length is minutes, so 2 Hz is smooth and costs 10x less than every tick"
+    },
+    "socket_heartbeat_ms": {
+      "type": "integer",
+      "value": 25000,
+      "range": [1000, 120000],
+      "notes": "Interval between liveness sweeps. Each sweep terminates the sockets that missed the previous ping, so a dead peer costs at most two intervals of broadcast. Was a literal SOCKET_HEARTBEAT_MS in main.ts (E25)."
     },
     "hello_timeout_ms": {
       "type": "integer",

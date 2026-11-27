@@ -5,6 +5,8 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import type { Pool, PoolClient } from 'pg';
 import type { AccountsConfig } from './config.ts';
+import { DEV_JWT_SECRET, resolveJwtSecret } from './jwtSecret.ts';
+import { nextFailedAttempt } from './lockout.ts';
 
 export interface Account {
   id: string;
@@ -361,15 +363,20 @@ export class AccountsService {
 
       const valid = await this.verifyPassword(password, account.passwordHash);
       if (!valid) {
-        const newFailedAttempts = account.failedLoginAttempts + 1;
-        let lockedUntil: Date | null = null;
-        if (newFailedAttempts >= this.config.lockoutMaxFailedAttempts) {
-          lockedUntil = new Date(Date.now() + this.config.lockoutDurationMin * 60 * 1000);
-        }
+        // INV-AU-05: one rule, in `lockout.ts`, because the inline copy here was
+        // also copied into the test and the test certified its own replica.
+        const failure = nextFailedAttempt(
+          { attempts: account.failedLoginAttempts, lockedUntil: account.lockedUntil },
+          {
+            maxAttempts: this.config.lockoutMaxFailedAttempts,
+            durationMs: this.config.lockoutDurationMin * 60 * 1000,
+          },
+          new Date(),
+        );
 
         await client.query(
           `UPDATE accounts SET failed_login_attempts = $1, locked_until = $2, updated_at = NOW() WHERE id = $3`,
-          [newFailedAttempts, lockedUntil, account.id],
+          [failure.attempts, failure.lockedUntil, account.id],
         );
 
         await client.query('COMMIT');
@@ -593,6 +600,16 @@ export class AccountsService {
     accountId: string,
     newDisplayName: string,
   ): Promise<Account | { error: string }> {
+    const allowed = await this.checkRateLimit(
+      accountId,
+      'display_name',
+      this.config.rateLimitDisplayNamePerMinute,
+      1,
+    );
+    if (!allowed) {
+      return { error: 'Too many display name changes. Please try again later.' };
+    }
+
     const validation = this.validateDisplayName(newDisplayName);
     if (!validation.valid) {
       return {
@@ -653,17 +670,13 @@ export class AccountsService {
 
   private getJwtSecret(): string {
     const secret = process.env.JWT_SECRET;
-    if (!secret) {
-      if (process.env.NODE_ENV === 'production') {
-        throw new Error('JWT_SECRET environment variable is required in production');
-      }
-      // Local dev fallback - log a warning
+    const resolved = resolveJwtSecret(process.env.NODE_ENV, secret);
+    if (resolved === DEV_JWT_SECRET) {
       console.warn(
         '[WARN] JWT_SECRET not set, using insecure default. Set JWT_SECRET in production.',
       );
-      return 'dev-secret-change-in-production';
     }
-    return secret;
+    return resolved;
   }
 
   private refreshTokenLookupHash(token: string): string {

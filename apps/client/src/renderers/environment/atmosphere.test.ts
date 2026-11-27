@@ -6,6 +6,7 @@ import {
   type AtmosphereParams,
   airMass,
   applyAtmosphere,
+  applyAtmosphereRay,
   atmosphereFromConfig,
   atmosphereUniformValues,
   DEFAULT_ATMOSPHERE,
@@ -13,7 +14,9 @@ import {
   heightDensity,
   inScatterColor,
   phaseHG,
+  RAY_SAMPLES,
   transmittance,
+  transmittanceRay,
 } from './atmosphere.ts';
 
 const SUN: [number, number, number] = [0, 1, 0];
@@ -105,16 +108,65 @@ test('config values are read and clamped', () => {
   assert.equal(params.horizonBoost, 0);
 });
 
+test('ray transmittance agrees with the single-height one on level ground', () => {
+  // Every view from inside the play area has both ends at about zero height, so
+  // the two-end model must not change what the world already looked like there.
+  const flat = transmittanceRay(5000, 2, 2, DEFAULT_ATMOSPHERE);
+  const old = transmittance(5000, 2, DEFAULT_ATMOSPHERE);
+  for (let i = 0; i < 3; i += 1) {
+    assert.ok(near(flat[i] ?? 0, old[i] ?? 0, 1e-6));
+  }
+});
+
+test('the air is integrated along the ray, so height at the eye matters', () => {
+  // 40 km up, looking at the ground: the chord is almost all thin air, so the
+  // surface must keep far more of its own colour than the sea-level model says.
+  const fromGround = transmittanceRay(40000, 2, 2, DEFAULT_ATMOSPHERE);
+  const fromSky = transmittanceRay(40000, 40000, 2, DEFAULT_ATMOSPHERE);
+  assert.ok((fromSky[0] ?? 0) > (fromGround[0] ?? 0) + 0.5);
+  // A middle altitude sits between the two, in every channel.
+  const fromHill = transmittanceRay(40000, 3000, 2, DEFAULT_ATMOSPHERE);
+  for (let i = 0; i < 3; i += 1) {
+    assert.ok((fromHill[i] ?? 0) > (fromGround[i] ?? 0));
+    assert.ok((fromHill[i] ?? 0) < (fromSky[i] ?? 0));
+  }
+});
+
+test('a ray that climbs keeps more light than one that stays low', () => {
+  // Looking up a slope: the far end is higher, and the chord must be thinner.
+  const level = transmittanceRay(3000, 10, 10, DEFAULT_ATMOSPHERE);
+  const climbing = transmittanceRay(3000, 10, 1500, DEFAULT_ATMOSPHERE);
+  assert.ok((climbing[0] ?? 0) > (level[0] ?? 0));
+});
+
+test('a surface seen through thin air keeps more of its own colour', () => {
+  const surface: [number, number, number] = [0.2, 0.3, 0.1];
+  const low = applyAtmosphereRay(surface, HORIZON, SUN, 40000, 2, 2, DEFAULT_ATMOSPHERE);
+  const high = applyAtmosphereRay(surface, HORIZON, SUN, 40000, 40000, 2, DEFAULT_ATMOSPHERE);
+  for (let i = 0; i < 3; i += 1) {
+    const surfaceChannel = surface[i] ?? 0;
+    assert.ok(Math.abs((high[i] ?? 0) - surfaceChannel) < Math.abs((low[i] ?? 0) - surfaceChannel));
+  }
+});
+
 test('uniform values cover every uniform the GLSL declares', () => {
   const values = atmosphereUniformValues(DEFAULT_ATMOSPHERE);
   for (const name of ATMOSPHERE_UNIFORMS) {
     assert.ok(name in values, `${name} has no value`);
     assert.ok(GLSL_ATMOSPHERE.includes(name), `${name} is not declared by the snippet`);
   }
-  for (const fn of ['atmoHeightDensity', 'atmoAirMass', 'atmoTransmittance', 'atmoPhaseHG']) {
+  for (const fn of [
+    'atmoHeightDensity',
+    'atmoAirMass',
+    'atmoTransmittance',
+    'atmoTransmittanceRay',
+    'atmoPhaseHG',
+  ]) {
     assert.ok(GLSL_ATMOSPHERE.includes(fn), `${fn} missing from the GLSL mirror`);
   }
   assert.ok(GLSL_ATMOSPHERE.includes('atmoApply'));
+  assert.ok(GLSL_ATMOSPHERE.includes('atmoApplyRay'));
+  assert.equal(RAY_SAMPLES, 4, 'the GLSL mirror integrates four midpoints');
 });
 
 test('the two mirrors keep the same phase normalisation', () => {

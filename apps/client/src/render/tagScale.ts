@@ -28,11 +28,15 @@ export interface TagScaleConfig {
 }
 
 export const DEFAULT_TAG_SCALE: TagScaleConfig = {
-  referenceDistanceM: 20,
-  referenceTextPx: 16,
-  falloff: 0.35,
-  minTextPx: 7,
-  maxTextPx: 22,
+  // A tag is a name written in the world, not a HUD caption: near enough it is
+  // the size of a sign, at twenty metres it is a line of small type, and a rival
+  // across the field is quiet. The old 20 m / 16 px / falloff 0.35 held almost
+  // the same size at every distance, which is why a row of them read as a wall.
+  referenceDistanceM: 12,
+  referenceTextPx: 14,
+  falloff: 0.85,
+  minTextPx: 6,
+  maxTextPx: 18,
 };
 
 /** Text height on screen for a tag at this distance, in CSS pixels. */

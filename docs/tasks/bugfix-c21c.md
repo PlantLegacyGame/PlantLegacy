@@ -37,7 +37,7 @@ No new keys. The numbers are code constants with comments:
 | `planetSurface.test.ts` (+2) | The skirt's top edge is `patchLocalSurfaceY` at every vertex (the patch's own edge, to float32); its depth clears the body's facet sag; it winds outward. The body is finer than 256 (sag more than halved) and its own geometry really carries facets |
 | `shaderOverrides.test.ts` (+1) | The soil discards a bubble around `uRootSightCamera` only while `eyeIsUnder` **and** only outside the opening's column (`uRootSightEyeInPit < 0.5`), and it is a bubble, not a half-space |
 | `cavityProbe.test.ts` (+5) | `devCavity.setRadius` keeps the cavity and the mouth apart, floors both, falls back to the cavity for a missing mouth, returns copies, and `setRadius(null)` clears it |
-| `apertureSoilMesh.test.ts` (+1) | The body's material carries the near-cut switch and a distance discard; `nearCutHides` is the shader's test as a function; `setApertureSoilEye` writes the eye and toggles the cut |
+| The aperture-soil material test (+1, removed with the body on 2026-11-27) | The body's material carried the near-cut switch and a distance discard; `nearCutHides` was the shader's test as a function; `setApertureSoilEye` wrote the eye and toggled the cut |
 
 ## 4. Browser pass — `localhost:4174/PlantLegacy/?dev=1`, 2026-11-23
 
@@ -817,47 +817,31 @@ Measured on a pose 26 m behind a 2.9 m ridge: with the map on, the drops over th
 ridge face are gone and only the ones in front remain; with it forced off they
 come back across the hill (`rain-ridge-on`, `rain-ridge-off`).
 
-The matured pit is not reachable from here, and the reason is structural rather
-than a missing pose. The mouth is sized from horizontal root reach
-(`plantLateralExtent`), roots are chains of 0.4 m segments (`lateral_root_node.
-segment_length`) that only reach metres when successive segments continue
-outward - which is what the player's aimed growth does - and the only dev route,
-`dev_grow_roots`, turns every next segment by 2.399 rad from the previous one and
-restarts from the radicle on each call, so its chains curl into a rosette. Measured
-across five calls: nodes 1 -> 25 -> 49 -> 73 -> 97, reach 0.52 -> 0.74 -> 0.75 ->
-0.75 m, aperture 0.64 -> 0.89 m. With the direction landed below it is 6.76 m out
-and a mouth 7.98 m across. It cannot produce a pit a person fits in, and the
-real growth path needs a selected plant, resources and a cooldown per node - tens
-of growths over minutes - which this session's clicks on the plant and G presses
-did not produce a node from. The shaft exemption itself is a plan-radius test, so
-the aperture size does not change its behaviour; it is verified at 2.8 m, 1.4 m
-and the 0.86 m dev-grown pit. The fix was a dev action that grows a straight
-chain, which is what landed next.
-
-`dev_grow_roots` now takes an optional `angle` in radians: when it is given, every
-segment of the chain keeps that heading instead of turning `step * 2.399` from the
-last, so one call is a straight root `count * 0.4 m` long. Three calls (24 segments
-each at 0.6, 2.6 and 4.4 rad, `dev_fill_resources` between) take the body to 73
-nodes with roots 6.76 m out and the mouth open at 7.98 m - deep and wide enough to
-stand in. Without an angle the old 2.399 fan stays the default, so the small dev
-pit behaves as it did.
+With a direction the pit is reachable in seconds. `dev_grow_roots` now takes an
+optional `angle` in radians: when it is given, every segment of the chain keeps
+that heading instead of turning `step * 2.399` from the last, so one call is a
+straight root `count * 0.4 m` long. Three calls (24 segments each at 0.6, 2.6 and
+4.4 rad, `dev_fill_resources` between) take the body to 73 nodes with roots
+6.76 m out and the mouth open at 7.98 m - deep and wide enough to stand in.
+Without an angle the old 2.399 fan stays the default, so the small dev pit still
+behaves as it did.
 
 The march is one file now. `shaders/groundMap.wgsl` holds `groundBlocks()`, the
 64-square map and one set of constants (8 steps, the last fifth left to the
 fragment's own exact column, 0.5 m of slack), and `shaders/index.ts` assembles it
-into `meshShader` and `rainShader` only. The rain copy and its 0.85 cutoff are gone
-and the rain bind group carries the map at binding 10 to match the plant layout;
-`shaderSmoke.test.ts` composes the modules the same way `index.ts` does, so the
-shared file is parsed in both passes.
+into `meshShader` and `rainShader` only. The rain copy and its 0.85 cutoff are
+gone and the rain bind group carries the map at binding 10 to match the plant
+layout; `shaderSmoke.test.ts` composes the modules the same way `index.ts` does,
+so the shared file is parsed in both.
 
-The pit floor found what both copies had missed: the map is baked from open ground
-and has no hole where the shaft was cut, so a buried eye standing in the pit
-walked texels of earth it was already under and culled the plant above the mouth.
-`groundBlocks()` now answers false outright for an eye that is under the soil
-inside the shaft - the same exemption `soilOccludes()` already made, for the same
-reason. On the floor of the 6.36 m pit, 2.6 m down and 2.2 m off the axis, the
-seed, its stem and the root fan above the mouth all draw with the default renderer,
-cut rim either side (`pit-floor-threejs`); from above, the same shaft shows the
-stem standing on the rim (`pit-surface-context`). With the WebGPU overlay enabled
-that pose came back as sky alone: the overlay still hides the plant from a buried
-eye, and that half is not resolved here.
+The pit floor found what both copies had missed: the map is baked from open
+ground and has no hole where the shaft was cut, so a buried eye standing in the
+pit walked texels of earth it was already under and culled the plant above the
+mouth. `groundBlocks()` now answers false outright for an eye that is under the
+soil inside the shaft - the same exemption `soilOccludes()` already made, for the
+same reason. On the floor of the 6.36 m pit, 2.6 m down and 2.2 m off the axis,
+the seed, its stem and the root fan above the mouth all draw with the default
+renderer, cut rim either side (`pit-floor-threejs`); from above, the same shaft
+shows the stem standing on the rim (`pit-surface-context`). With the WebGPU
+overlay enabled that pose came back as sky alone: the overlay still hides the
+plant from a buried eye, and that half is not resolved here.

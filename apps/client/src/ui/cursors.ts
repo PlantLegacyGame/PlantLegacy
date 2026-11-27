@@ -202,11 +202,10 @@ function stylesheet(): string {
   html[data-pl-cursor='plant'] .pl-title-plant__roots {
     cursor: ${pointer}, pointer;
   }
-  /* Grow mode aims at the soil with a crosshair; a leaf over the scene would
-     hide the one place the pointer's shape carries information. */
-  html[data-pl-cursor='plant'] body.is-grow-mode canvas {
-    cursor: crosshair;
-  }
+  /* Grow mode is not a different pointer. The aim it needs is drawn in the scene
+     (the arrow gizmo on the plant), so the crosshair that used to replace the leaf
+     here said nothing the arrow did not already say, and the pointer changed
+     shape under the player between two clicks of the same drag. */
   html[data-pl-cursor='plant'] input,
   html[data-pl-cursor='plant'] textarea {
     cursor: text;

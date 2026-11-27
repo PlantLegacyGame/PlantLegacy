@@ -36,26 +36,6 @@ export function sampleCurve(points: readonly (readonly [number, number])[], x: n
   return last[1];
 }
 
-const POSITION_SCALE = 64;
-
-export function quantizePosition(value: number): number {
-  return Math.round(value * POSITION_SCALE);
-}
-
-export function dequantizePosition(value: number): number {
-  return value / POSITION_SCALE;
-}
-
-export function quantizeAngle(radians: number): number {
-  const twoPi = Math.PI * 2;
-  const normalized = ((radians % twoPi) + twoPi) % twoPi;
-  return Math.round((normalized / twoPi) * 0xffff) & 0xffff;
-}
-
-export function dequantizeAngle(value: number): number {
-  return (value / 0xffff) * Math.PI * 2;
-}
-
 /**
  * FNV-1a 32-bit hash for deterministic string hashing.
  * Used to derive appearance randomness from stable node IDs.

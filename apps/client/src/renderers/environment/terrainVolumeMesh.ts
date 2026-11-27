@@ -26,6 +26,8 @@ export function createTerrainVolumeMesh(
   params: TerrainVolumeParams | undefined,
   ground: GroundHeight,
   rock: THREE.Color,
+  /** The ground's soil material; the volume must wear the same cut contract. */
+  soilMaterial?: THREE.MeshStandardMaterial,
 ): THREE.Mesh | null {
   if (!params) return null;
   const mesh = buildTerrainVolumeMesh(ground, params);
@@ -62,13 +64,31 @@ export function createTerrainVolumeMesh(
     colours[v * 3 + 2] = shade.b * grain;
   }
   geometry.setAttribute('color', new THREE.BufferAttribute(colours, 3));
+  // The volume stands inside the Root Sight aperture. Without the same cut
+  // attributes the ground shader reads, the arch keeps a solid ceiling over a
+  // hole the surface has already opened. They are one contract, not a second
+  // material: `aSurfaceCut` opts this mesh in, and `aSkirt`/`aSkirtTop` keep the
+  // shader's skirt lookup valid.
+  const cuts = new Float32Array(mesh.vertices).fill(1);
+  const skirts = new Float32Array(mesh.vertices);
+  geometry.setAttribute('aSurfaceCut', new THREE.BufferAttribute(cuts, 1));
+  geometry.setAttribute('aSkirt', new THREE.BufferAttribute(skirts, 1));
+  geometry.setAttribute(
+    'aSkirtTop',
+    new THREE.BufferAttribute(new Float32Array(mesh.positions), 3),
+  );
   geometry.computeBoundingSphere();
 
-  const material = new THREE.MeshStandardMaterial({
-    vertexColors: true,
-    roughness: 0.95,
-    metalness: 0.02,
-  });
+  const material = soilMaterial
+    ? soilMaterial.clone()
+    : new THREE.MeshStandardMaterial({
+        vertexColors: true,
+        roughness: 0.95,
+        metalness: 0.02,
+      });
+  // The soil material's shader is compiled for vertex colours on the ground;
+  // the volume's bed colours are vertex colours too.
+  material.vertexColors = true;
   const object = new THREE.Mesh(geometry, material);
   object.name = 'terrain-volume';
   // It is rock in the world, not an overlay: it casts and takes the same light

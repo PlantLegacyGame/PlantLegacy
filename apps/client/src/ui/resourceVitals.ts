@@ -53,6 +53,18 @@ export function formatVital(value: number, precision: 0 | 1 = 1): string {
   return precision === 0 ? String(Math.round(safe)) : safe.toFixed(1);
 }
 
+/**
+ * A capacity is shown at the precision it actually has. The old row rounded the
+ * maximum to a whole number while printing the store to one decimal, so a
+ * 5.8-root seedling at full water read `46.4/46` and looked over its cap. It
+ * was not: 5.8 x 8 = 46.4, and rounding the denominator down invented an
+ * overflow that never happened.
+ */
+function formatCapacity(capacity: number): string {
+  const rounded = Math.round(capacity);
+  return Math.abs(capacity - rounded) < 0.05 ? String(rounded) : capacity.toFixed(1);
+}
+
 export function vitalRow(input: VitalRowInput, thresholds = DEFAULT_VITAL_THRESHOLDS): VitalRow {
   const precision = input.precision ?? 1;
   const capacity =
@@ -69,19 +81,20 @@ export function vitalRow(input: VitalRowInput, thresholds = DEFAULT_VITAL_THRESH
         : fraction <= thresholds.lowFraction
           ? 'low'
           : 'ok';
+  const capacityText = capacity === null ? null : formatCapacity(capacity);
   return {
     id: input.id,
     label: input.label,
     valueText:
-      capacity === null
+      capacityText === null
         ? formatVital(value, precision)
-        : `${formatVital(value, precision)}/${Math.round(capacity)}`,
+        : `${formatVital(value, precision)}/${capacityText}`,
     fraction,
     tone,
     title:
-      capacity === null
+      capacityText === null
         ? `${input.label}: ${formatVital(value, precision)}`
-        : `${input.label}: ${formatVital(value, precision)} of ${Math.round(capacity)}`,
+        : `${input.label}: ${formatVital(value, precision)} of ${capacityText}`,
   };
 }
 

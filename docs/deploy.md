@@ -90,6 +90,7 @@ cd C:\Users\khmer\PlantLegacy
 @'
 NODE_ENV=staging
 CORS_ORIGINS=https://plantlegacygame.github.io,https://<current-tunnel>.trycloudflare.com,http://localhost:4173,http://127.0.0.1:4173,http://localhost:4174
+JWT_SECRET=<paste a 48-byte base64url secret>
 '@ | Set-Content ops/.env
 ```
 
@@ -181,7 +182,22 @@ locally.
   hold non-secret values such as `STAGING_SERVER_ORIGIN`.
 - Never paste a secret into a task record, a config file, a log line or an AI
   session. If one leaks, rotate it before continuing.
-- `DATABASE_URL` is the only secret the server needs today.
+- The server needs **two** secrets, not one:
+  - `DATABASE_URL` (its password) — the value Compose assembles from
+    `POSTGRES_USER` / `POSTGRES_PASSWORD`.
+  - `JWT_SECRET` (ADR-040) — signs account access and refresh tokens. It is
+    **required when `NODE_ENV=production`**: the server throws
+    `JWT_SECRET environment variable is required in production` at the first
+    account call instead of starting with a guessable key. In `local` and
+    `staging` an unset value falls back to the fixed string
+    `dev-secret-change-in-production` and logs a warning on every start, which is
+    fine on a laptop and not fine on the tunnel: anyone who has read
+    `.env.example` can mint a token. Generate one with
+    `node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"`
+    and put it in `ops/.env` beside `NODE_ENV`.
+- Rotating `JWT_SECRET` invalidates every issued access and refresh token, so
+  every signed-in player is signed out. Do it deliberately, not as part of a
+  routine deploy.
 
 | Probe | Meaning | Failure action |
 |---|---|---|

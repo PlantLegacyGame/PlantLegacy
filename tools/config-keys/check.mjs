@@ -27,6 +27,14 @@
  *
  * Rules are pinned by `check.test.mjs` against `fixtures/clean` and
  * `fixtures/broken`, including the CLI's exit codes.
+ *
+ * The blind spot to know about: a key read into a config object and never
+ * consumed still counts as read. `weather.lightning_damage_amount` is named in
+ * `packages/weather/src/weather.ts`, so this check passes, but the strike is
+ * billed from `damage.lightning_damage_amount` and the weather copy is dead —
+ * 25 against a live 8 (E20 in `docs/bug-inventory.md`). Seeing that needs data
+ * flow, not a name scan; this check answers "is the name used at all", not "is
+ * its value on any path that matters".
  */
 import fs from 'node:fs';
 import path from 'node:path';

@@ -109,6 +109,10 @@ describe('title growth ladder', () => {
     assert.equal(seed.tier.id, 'seed');
     assert.equal(seed.trunkOpacity, 0);
     assert.equal(seed.treeOpacity, 0);
+    // A seed is not a bare stick: the stem's six leaves open at (i + 1) / 6, so a
+    // reveal under the first threshold (1/6) hid every one of them and the bottom
+    // of the ladder was a green line. The pair has to be out at stage zero.
+    assert.ok(seed.leafReveal >= 1 / 3, `a seed opened a share of ${seed.leafReveal}`);
     const ancient = growthProfile(GROWTH_STAGES - 1);
     assert.equal(ancient.tier.id, 'ancient');
     assert.equal(ancient.trunkWidth, 1);

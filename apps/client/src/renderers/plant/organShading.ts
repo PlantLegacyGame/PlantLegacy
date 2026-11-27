@@ -27,74 +27,23 @@
  *
  * Everything here is uniforms and maths: no texture, no image, no atlas.
  */
+import { isRootOrgan, isWoodyOrgan, organMorphologyFor } from '@plant-legacy/shared/growth';
 import * as THREE from 'three';
 
-/** Taper exponents, taken from the root plate's own table. */
-const ORGAN_TAPER: Record<string, number> = {
-  // The plate: the taproot is 1.0 (a trunk needs a hard neck), laterals 0.95 (a
-  // root that thins to a hair for its last third has no visible body), feeders
-  // 0.9. Above 1 a segment necks down just under its parent.
-  taproot: 1.0,
-  root: 1.0,
-  radicle: 1.0,
-  lateral_root: 0.95,
-  rhizome: 0.95,
-  tuber: 0.95,
-  pneumatophore: 1.0,
-  root_hair: 0.9,
-  // Shoots keep the necked profile: a branch that is the same width where it
-  // leaves the trunk as it is at its tip is a pipe.
-  stem: 1.15,
-  branch: 1.15,
-  trunk: 1.15,
-  culm: 1.05,
-  vine: 1.05,
-  stolon: 1.0,
-  thorn: 1.15,
-  // Foliage and bodies are drawn as their own primitives.
-  leaf: 1,
-  cotyledon: 1,
-  flower: 1,
-  flower_centre: 1,
-  spore_sac: 1,
-  seed: 1,
-};
-
-/** The taper exponent this organ is drawn with. */
+/** The taper exponent this organ is drawn with, from the one morphology table. */
 export function organTaperExponent(nodeType: string, fallback: number): number {
-  return ORGAN_TAPER[nodeType.toLowerCase()] ?? fallback;
+  const type = nodeType.toLowerCase();
+  // The plate has two synthetic names that are not node types; keep their
+  // drawing rules without starting a second organ table.
+  if (type === 'taproot') return 1;
+  if (type === 'root_hair') return 0.9;
+  return organMorphologyFor(type).taperExponent ?? fallback;
 }
-
-const ROOT_TYPES = new Set([
-  'root',
-  'radicle',
-  'lateral_root',
-  'rhizome',
-  'tuber',
-  'pneumatophore',
-  'root_hair',
-]);
-const WOODY_TYPES = new Set([
-  'stem',
-  'branch',
-  'trunk',
-  'culm',
-  'vine',
-  'stolon',
-  'taproot',
-  'root',
-  'radicle',
-  'lateral_root',
-  'rhizome',
-  'tuber',
-  'pneumatophore',
-  'root_hair',
-  'seed',
-]);
 
 /** True for the organs the soil ramp applies to. */
 export function usesSoilRamp(nodeType: string): boolean {
-  return WOODY_TYPES.has(nodeType.toLowerCase());
+  const type = nodeType.toLowerCase();
+  return type === 'taproot' || type === 'root_hair' || isWoodyOrgan(type);
 }
 
 /**
@@ -108,7 +57,23 @@ export function usesSoilRamp(nodeType: string): boolean {
  */
 export function usesOwnInkColour(nodeType: string): boolean {
   const type = nodeType.toLowerCase();
-  return !ROOT_TYPES.has(type) && type !== 'seed';
+  if (type === 'taproot' || type === 'root_hair') return false;
+  return !isRootOrgan(type) && type !== 'seed';
+}
+
+/**
+ * The organ whose pigment the part is inked in.
+ *
+ * A node is not always one thing. A flower or a spore sac is a head on a stalk,
+ * and the stalk is drawn as a stem - green - while only the head is drawn in the
+ * node's own colour. Inked from the node type alone, the stalk took the petal's
+ * ink, so a green stem carried a maroon line and read as part of the flower
+ * rather than as the stem holding it up. The rule is the one the tube's material
+ * already follows: ink the part in the colour the part is drawn in.
+ */
+export function inkOrganFor(nodeType: string): string {
+  const type = nodeType.toLowerCase();
+  return type === 'flower' || type === 'spore_sac' ? 'stem' : type;
 }
 
 /** Default depth the bark fades into pale root over, in metres. */

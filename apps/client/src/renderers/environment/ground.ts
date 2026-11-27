@@ -10,21 +10,19 @@
  */
 import * as THREE from 'three';
 import type { RenderConfig } from '../../config/clientConfig.js';
-import { getTerrainParams } from '../terrain/terrainState.js';
+import { getTerrainParams } from '../terrain/terrainState.ts';
 import { worldColour } from '../worldPalette.ts';
-import { type AtmosphereParams, DEFAULT_ATMOSPHERE, GLSL_ATMOSPHERE } from './atmosphere.js';
+import { type AtmosphereParams, DEFAULT_ATMOSPHERE, GLSL_ATMOSPHERE } from './atmosphere.ts';
 import { cavityDepthM } from './cavity/profile.ts';
 import { applySoilFragmentShader, applySoilVertexShader } from './ground/shaderOverrides.ts';
 import { createSoilSlab } from './planetSoilSlab.ts';
 import {
   createPlanetBody,
-  createTerrainPatches,
-  createTerrainSkirt,
-  PLANET_BODY_SEGMENTS,
-  planetFacetSag,
+  createPlayDisk,
+  SOIL_SLAB_INSET_M,
+  SOIL_SLAB_SINK_M,
   TERRAIN_SKIN_M,
-  terrainOuterExtentM,
-} from './planetSurface.js';
+} from './planetSurface.ts';
 import type { RootSightUniforms } from './rootSightUniforms.js';
 
 export interface Ground {
@@ -60,11 +58,15 @@ const ATMOSPHERE_APPLY = `
     vec3 atmoDelta = vSoilWorldPos - cameraPosition;
     float atmoDist = length(atmoDelta);
     vec3 atmoView = atmoDist > 1e-4 ? atmoDelta / atmoDist : vec3(0.0, 1.0, 0.0);
-    gl_FragColor.rgb = atmoApply(
+    // Both ends of the ray, not just the surface: the air in front of a hill is
+    // the air the camera is standing in as well as the air on the hill, and from
+    // altitude the first term is what stops the planet washing out.
+    gl_FragColor.rgb = atmoApplyRay(
       gl_FragColor.rgb,
       atmoView,
       normalize(uSunDir),
       atmoDist,
+      atmoHeightAboveGround(cameraPosition),
       atmoHeightAboveGround(vSoilWorldPos)
     );
   }
@@ -80,6 +82,28 @@ export function getGroundShader(
   material: THREE.MeshStandardMaterial,
 ): GroundShaderUniforms | undefined {
   return material.userData.shader as GroundShaderUniforms | undefined;
+}
+
+/**
+ * Tell the soil shader how much the eye's ray opens per pixel.
+ *
+ * The vertical field of view and the real drawing-buffer height are the only
+ * inputs: this is the eye's resolution, so it does not change when a quadtree
+ * patch does. Pass 0 when the camera is orthographic or the size is unknown and
+ * the shader keeps its previous value.
+ */
+export function updateGroundPixelAngle(
+  material: THREE.MeshStandardMaterial,
+  camera: THREE.Camera,
+  heightPx: number,
+): void {
+  const uniforms = getGroundShader(material)?.uniforms;
+  if (!uniforms?.uPixelAngle) return;
+  const perspective = camera as THREE.PerspectiveCamera;
+  const fov = perspective.isPerspectiveCamera ? perspective.fov : 0;
+  const height = Math.max(1, heightPx);
+  if (!(fov > 0) || !Number.isFinite(fov)) return;
+  uniforms.uPixelAngle.value = (2 * Math.tan(THREE.MathUtils.degToRad(fov) * 0.5)) / height;
 }
 
 /** Push the sun's frame into the soil shader (position of the light is derived). */
@@ -217,6 +241,56 @@ export function setWaterTableDamping(
   if (uniforms.uWaterTableAvailable) uniforms.uWaterTableAvailable.value = 1.0;
 }
 
+/**
+ * Standing water the soil shader should draw, or null to leave the ground dry.
+ *
+ * The field is the whole state: the shader compares the water's surface height
+ * with the pixel's own, so "where is the puddle" is answered the same way
+ * everywhere the ground is drawn. See surfaceWaterField.ts.
+ */
+export interface SurfaceWaterSurface {
+  texture: THREE.Texture;
+  /** World XZ of the grid's lower-left corner. */
+  originX: number;
+  originZ: number;
+  cellSizeM: number;
+  cells: number;
+  /** How dark the damp shoreline goes, 0..1. */
+  dampOpacity: number;
+  /** How quickly light is eaten with depth, per metre. */
+  absorptionPerM: number;
+  /** Seconds the ripples and rings have been running. */
+  time: number;
+  /** 0..1, how hard it is raining right now. */
+  rainStrength: number;
+  /** Draw the field as settled snow instead of water. */
+  snow: boolean;
+}
+
+/** Point the soil shader at the standing-water field (or away from it). */
+export function setSurfaceWater(
+  material: THREE.MeshStandardMaterial,
+  surface: SurfaceWaterSurface | null,
+): void {
+  const uniforms = getGroundShader(material)?.uniforms;
+  if (!uniforms) return;
+  if (!surface) {
+    if (uniforms.uPuddleAvailable) uniforms.uPuddleAvailable.value = 0.0;
+    return;
+  }
+  if (uniforms.uPuddleField) uniforms.uPuddleField.value = surface.texture;
+  if (uniforms.uPuddleOrigin)
+    (uniforms.uPuddleOrigin.value as THREE.Vector2).set(surface.originX, surface.originZ);
+  if (uniforms.uPuddleCell) uniforms.uPuddleCell.value = surface.cellSizeM;
+  if (uniforms.uPuddleCells) uniforms.uPuddleCells.value = surface.cells;
+  if (uniforms.uPuddleDamp) uniforms.uPuddleDamp.value = surface.dampOpacity;
+  if (uniforms.uWaterAbsorption) uniforms.uWaterAbsorption.value = surface.absorptionPerM;
+  if (uniforms.uWaterTime) uniforms.uWaterTime.value = surface.time;
+  if (uniforms.uRainStrength) uniforms.uRainStrength.value = surface.rainStrength;
+  if (uniforms.uSnowCover) uniforms.uSnowCover.value = surface.snow ? 1.0 : 0.0;
+  if (uniforms.uPuddleAvailable) uniforms.uPuddleAvailable.value = 1.0;
+}
+
 const SOIL_PATCH_MARKER = 'c03-environment-ground-v2';
 
 export function createGround(
@@ -253,6 +327,8 @@ export function createGround(
   // rather than a shaded plane.
   const soilClodLift = worldColour('soil_lit');
   const soilHollow = worldColour('soil_shade');
+  // No vegetation yet: the "cover" is pale, dry earth, not foliage.
+  const soilCover = soilDry.clone().lerp(soilClodLift, 0.5);
   const material = new THREE.MeshStandardMaterial({
     color: soilDry.clone(),
     roughness: 0.95,
@@ -279,6 +355,9 @@ export function createGround(
   material.onBeforeCompile = (shader) => {
     material.userData.shader = shader;
     // Root Sight values are shared by reference with the transition update.
+    // One shared value for every surface that uses the soil material: the
+    // opening has to be cut in the fine patch, the coarse ring and the slab's
+    // underside with the same radius, or the cavity's lip shows a step.
     shader.uniforms.uRootSightProgress = soilUniforms.uRootSightProgress;
     shader.uniforms.uRootSightCenter = soilUniforms.uRootSightCenter;
     shader.uniforms.uRootSightApertureCenter = soilUniforms.uRootSightApertureCenter;
@@ -300,6 +379,9 @@ export function createGround(
     shader.uniforms.uSoilMineralColor = { value: soilMineral };
     shader.uniforms.uSoilClodLiftColor = { value: soilClodLift };
     shader.uniforms.uSoilHollowColor = { value: soilHollow };
+    // Land cover borrows the shade step of the foliage ramp: the ground's low
+    // growth is the same plant kingdom as the plant, a few steps down.
+    shader.uniforms.uSoilCoverColor = { value: soilCover };
     shader.uniforms.uSoilGrainStrength = { value: config.soilGrainStrength };
     shader.uniforms.uSoilMineralStrength = { value: config.soilMineralStrength };
     shader.uniforms.uSoilMoisture = { value: 0.2 };
@@ -331,11 +413,39 @@ export function createGround(
     shader.uniforms.uRiverMaskSize = { value: 1 };
     shader.uniforms.uRiverMaskAvailable = { value: 0.0 };
     shader.uniforms.uRiverDampStrength = { value: 0.3 };
+    // Standing water: a field the ground itself samples, so a pool's shore is
+    // where this surface crosses the water's height (see surfaceWaterField.ts).
+    shader.uniforms.uPuddleField = { value: null };
+    shader.uniforms.uPuddleOrigin = { value: new THREE.Vector2(0, 0) };
+    shader.uniforms.uPuddleCell = { value: 1 };
+    shader.uniforms.uPuddleCells = { value: 0 };
+    shader.uniforms.uPuddleAvailable = { value: 0.0 };
+    shader.uniforms.uWaterBodyColor = { value: worldColour('water_body') };
+    shader.uniforms.uWaterDeepColor = { value: worldColour('water_deep') };
+    // Water reflects the sky, so the reflection colour is the sky's, not a fourth
+    // water swatch: a pool takes on the colour of the hour it is looked at.
+    // The puddle's reflection is water-filtered, not a mirror of the near-white
+    // horizon. `sky_horizon` made every shallow film at a grazing angle a pale
+    // white island; the pool body's own role keeps the blue-green colour.
+    shader.uniforms.uWaterSkyColor = { value: worldColour('water_body') };
+    shader.uniforms.uWaterZenithColor = { value: worldColour('sky_zenith') };
+    shader.uniforms.uWaterAbsorption = { value: 1.6 };
+    shader.uniforms.uPuddleDamp = { value: 0.5 };
+    shader.uniforms.uWaterTime = { value: 0 };
+    shader.uniforms.uRainStrength = { value: 0 };
+    shader.uniforms.uSnowCover = { value: 0 };
     shader.uniforms.uPlanetCenter = {
       value: new THREE.Vector3(0, -Math.max(planetRadius, 0), 0),
     };
     shader.uniforms.uPlanetRadius = { value: planetRadius };
     shader.uniforms.uPlanetEnabled = { value: onPlanet ? 1.0 : 0.0 };
+    // Arc radius around the pole where the coarse globe is hidden. The fine
+    // transition ring (EnvironmentRenderer) covers this cut; planet view sets
+    // the radius to zero so the full globe is drawn there.
+    shader.uniforms.uFarReliefCutRadius = { value: 0 };
+    // Radians per pixel for this camera height; updated each frame from the real
+    // drawing buffer. The soil shader uses it for an LOD-independent footprint.
+    shader.uniforms.uPixelAngle = { value: 0.0015 };
     const atmoParams =
       (material.userData.atmosphereParams as AtmosphereParams | undefined) ?? DEFAULT_ATMOSPHERE;
     shader.uniforms.uAtmoExtinction = {
@@ -364,6 +474,12 @@ export function createGround(
     const values = new Float32Array(count);
     if (enabled) values.fill(1);
     target.geometry.setAttribute('aSurfaceCut', new THREE.BufferAttribute(values, 1));
+    // Only the coarse globe carries the far-relief cut. Every other soil mesh
+    // says zero so the shader never mistakes the play disc for the globe.
+    target.geometry.setAttribute(
+      'aFarRelief',
+      new THREE.BufferAttribute(new Float32Array(count), 1),
+    );
   };
 
   let mesh: THREE.Mesh | null = null;
@@ -381,48 +497,20 @@ export function createGround(
       // per-fragment position test, so cutting the body costs only the aperture
       // inside it. Every soil patch is cut for the same reason.
       setSurfaceCut(mesh, true);
-      // The planet's own vertices are kilometres apart, so the play area gets
-      // two metre-scale patches that carry the relief: a detailed inner patch
-      // and a coarser outer one out to the configured radius. A child of the
-      // planet mesh shares its local space, so the surfaces line up by
-      // construction. 500 m of walking sees real hills instead of the smooth
-      // ball that used to begin 90 m from the seed.
+      // One fixed disc for the whole playable radius, and one static globe
+      // behind it. No patches and no camera-selected resolution: the disc is
+      // built once at 2 m cells, its rim drops four metres into the globe, and
+      // the only edge is buried under the player's own ground.
       if (config.terrainAmplitudeM > 0) {
-        const patches = createTerrainPatches(
-          planetRadius,
-          getTerrainParams(),
+        const disk = createPlayDisk({
+          radiusM: planetRadius,
+          field: getTerrainParams(),
           material,
-          config.terrainMeshSubdivisions,
-        );
-        mesh.add(patches.inner);
-        mesh.add(patches.outer);
-        setSurfaceCut(patches.inner, true);
-        // The outer ring is cut too. It is the same ground, and leaving it
-        // solid meant a pit opened past the detail patch's ±88 m edge was
-        // covered by the ring standing a few millimetres above the body: Root
-        // Sight worked at spawn and silently stopped working after a reroot.
-        // The cut is a per-fragment position test, so a patch with nothing near
-        // the aperture pays only for that test.
-        setSurfaceCut(patches.outer, true);
-        terrainMeshes.push(patches.inner, patches.outer);
-        // The coarse ring is built on the exact sphere and the body is a
-        // polyhedron whose facets sit inside it, so the ground's outer edge is
-        // metres above the body it is supposed to be the surface of: an eye at
-        // that edge saw the ring floating over a gap. The skirt hangs off the
-        // ring's own edge, using the ring's own height function, and reaches
-        // past the body's facet sag. Not in `terrainMeshes`: it is a wall at the
-        // far edge of the world, not ground to walk on.
-        const skirt = createTerrainSkirt(
-          planetRadius,
-          getTerrainParams(),
-          material,
-          terrainOuterExtentM(getTerrainParams()),
-          TERRAIN_SKIN_M,
-          planetFacetSag(planetRadius, PLANET_BODY_SEGMENTS) + 2,
-          Math.max(24, Math.round(config.terrainMeshSubdivisions * 0.6)),
-        );
-        mesh.add(skirt);
-        setSurfaceCut(skirt, true);
+          playRadiusM: Math.max(20, config.terrainRadius),
+        });
+        mesh.add(disk);
+        setSurfaceCut(disk, true);
+        terrainMeshes.push(disk);
         // The soil has thickness. The patch is a sheet: without walls and an
         // underside, opening the ground revealed the back of that sheet and the
         // empty space behind it. The slab lines the patch with the depth the
@@ -446,8 +534,12 @@ export function createGround(
           field: getTerrainParams(),
           material,
           segments: Math.max(16, Math.round(config.terrainMeshSubdivisions * 0.75)),
-          extentM: Math.min(180, Math.max(20, getTerrainParams().patchRadiusM) * 2),
-          skinM: 0.02,
+          // Inside the fine patch's own square, and a centimetre under its surface:
+          // at the seam, a wall's top edge is a cut through the strata. See
+          // SOIL_SLAB_INSET_M.
+          extentM:
+            Math.min(180, Math.max(20, getTerrainParams().patchRadiusM) * 2) - SOIL_SLAB_INSET_M,
+          skinM: TERRAIN_SKIN_M - SOIL_SLAB_SINK_M,
           depthM: Math.max(0.2, bodyDepthM),
           // No hole: the underside now sits below the deepest floor the bowl can
           // reach, so the sheet no longer crosses the cavity. The option stays

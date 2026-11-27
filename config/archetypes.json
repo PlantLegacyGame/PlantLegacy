@@ -1,11 +1,71 @@
 {
   "_meta": {
     "system": "archetypes",
-    "version": "0.1.0",
+    "version": "1.0.0",
     "schema": "extended-1",
     "owner_task": "T12",
-    "status": "stub",
-    "notes": "Declared by T00. Populated by T12 per DESIGN.md Part 5."
+    "status": "active",
+    "notes": "Seed archetypes chosen in the spawn scene. Four playable seeds, each a set of multipliers applied through Plant traits; the shared resolver and the server both read this list. Descriptions are player-facing."
   },
-  "values": {}
+  "values": {
+    "definitions": {
+      "type": "array",
+      "item_type": "object",
+      "value": [
+        {
+          "id": "verdant",
+          "name": "Verdant",
+          "description": "A balanced seed. Even roots, even shoot, no bad season.",
+          "color": "#8fc45a",
+          "seed_scale": 1,
+          "growth_speed": 1.08,
+          "water_capacity": 1,
+          "mineral_capacity": 1,
+          "photosynthesis": 1.06,
+          "upkeep": 1,
+          "mutation_bias": "leaf"
+        },
+        {
+          "id": "deeproot",
+          "name": "Deeproot",
+          "description": "Slow above the soil, thirsty below it. Roots hold more water and reach farther.",
+          "color": "#b58a5a",
+          "seed_scale": 1.08,
+          "growth_speed": 0.9,
+          "water_capacity": 1.35,
+          "mineral_capacity": 1.1,
+          "photosynthesis": 0.95,
+          "upkeep": 1.04,
+          "mutation_bias": "root"
+        },
+        {
+          "id": "sunspire",
+          "name": "Sunspire",
+          "description": "Built for full light. Fast carbon, thin reserves, little patience for shade.",
+          "color": "#e0b85a",
+          "seed_scale": 0.94,
+          "growth_speed": 0.98,
+          "water_capacity": 0.86,
+          "mineral_capacity": 0.92,
+          "photosynthesis": 1.3,
+          "upkeep": 1.1,
+          "mutation_bias": "stem"
+        },
+        {
+          "id": "stoneheart",
+          "name": "Stoneheart",
+          "description": "Hardy and mineral-hungry. Leans on stored stone and survives lean weather.",
+          "color": "#8d9b90",
+          "seed_scale": 1.12,
+          "growth_speed": 0.86,
+          "water_capacity": 0.96,
+          "mineral_capacity": 1.4,
+          "photosynthesis": 0.9,
+          "upkeep": 0.84,
+          "mutation_bias": "root"
+        }
+      ],
+      "notes": "The first entry is the default when an old client sends no archetype."
+    }
+  }
 }

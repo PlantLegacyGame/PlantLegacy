@@ -216,7 +216,6 @@ export function loadWeatherConfig(configs: Map<string, ConfigFile>): WeatherConf
     stormWindDamageRate: readNumber(configs, 'weather', 'storm_wind_damage_rate'),
     lightningFrequencyPerMinute: readNumber(configs, 'weather', 'lightning_frequency_per_minute'),
     lightningDamageRadius: readNumber(configs, 'weather', 'lightning_damage_radius'),
-    lightningDamageAmount: readNumber(configs, 'weather', 'lightning_damage_amount'),
     forecastWindowS: readInteger(configs, 'weather', 'forecast_window_s'),
     biomeWeatherModifier: readNumber(configs, 'weather', 'biome_weather_modifier'),
   };

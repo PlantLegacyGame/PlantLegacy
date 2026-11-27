@@ -4,8 +4,15 @@ import { createServer } from 'node:http';
 import process from 'node:process';
 import { readNumber } from '@plant-legacy/shared/config';
 import { validateDisplayName } from '@plant-legacy/shared/displayName';
-import type { Plant } from '@plant-legacy/shared/growth';
+import type { Plant, PlantArchetypeTraits, PlantSpawnPoint } from '@plant-legacy/shared/growth';
 import { validateMessage } from '@plant-legacy/shared/protocol/messageSchemas';
+import {
+  localToGeodetic,
+  type OccupiedPoint,
+  resolveSpawn,
+  type SeedArchetype,
+  type SpawnSelection,
+} from '@plant-legacy/shared/world';
 import { loadTerrainFieldParams } from '@plant-legacy/shared/world/terrainFieldConfig';
 import {
   loadClimateConfig,
@@ -22,11 +29,17 @@ import {
   type PlantTarget,
 } from './dev/damageCommands.ts';
 import { handlePlantCommand, type PlantCommandPorts } from './dev/plantCommands.ts';
+import {
+  DEV_RIVAL_OWNER,
+  handleRivalCommand,
+  type RivalCommandPorts,
+} from './dev/rivalCommands.ts';
 import { handleWorldCommand, type WorldCommandPorts } from './dev/worldCommands.ts';
 import { handleConfigRequest } from './http/configRoutes.ts';
 import { loadAccountsConfig } from './ops/accounts/config.ts';
 import { createAccountsHandlers, createAuthMiddleware } from './ops/accounts/http.ts';
 import { AccountsService } from './ops/accounts/service.ts';
+import { addBlockedPlayer } from './ops/blockList.ts';
 import {
   type ChatConfig,
   loadChatConfig,
@@ -34,6 +47,8 @@ import {
   type ReportConfig,
 } from './ops/chat.ts';
 import { consumeChatBudget, resolveChatIntent } from './ops/chatService.ts';
+import { clientAddressFromRequest } from './ops/clientAddress.ts';
+import { admitsConnection, hasPlayerCapacity } from './ops/connectionLimit.ts';
 import {
   type ConnectionRegistry,
   connectionRegistryClearHelloTimer,
@@ -115,6 +130,7 @@ import {
   reconnectStateMachineReclaimByAccount,
   reconnectStateMachineReclaimByPlantId,
 } from './ops/reconnectStateMachine.ts';
+import { allowReply, createReplyBudget, type ReplyBudget } from './ops/replyBudget.ts';
 import { loadResourcesConfig, ResourceWorld } from './ops/resourceWorld.ts';
 import {
   createSeasonClock,
@@ -129,7 +145,8 @@ import {
 import { loadShopConfig, purchaseShopItem, type ShopConfig, type ShopPorts } from './ops/shop.ts';
 import { purchaseUnderLock } from './ops/shopPurchase.ts';
 import { type HeartbeatSocket, heartbeatTick } from './ops/socketHeartbeat.ts';
-import { loadSporeConfig, type SporeConfig } from './ops/spores.ts';
+import { loadSpawnConfig, type SpawnConfigBundle } from './ops/spawnConfig.ts';
+import { loadSporeConfig, type SporeConfig, spendSpores } from './ops/spores.ts';
 import { TerrainService } from './ops/terrain.ts';
 import { createTickClock, type TickClock, tickClockStart, tickClockStop } from './ops/tickClock.ts';
 import {
@@ -157,7 +174,7 @@ import {
   type PlantStateSnapshot,
   type StateBroadcastPorts,
 } from './tick/stateBroadcast.ts';
-import { WaterTableGridBuilder } from './tick/waterTableGrid.ts';
+import { WaterTableGridBuilder, type WaterTableGridOptions } from './tick/waterTableGrid.ts';
 import { broadcastWeather } from './tick/weatherBroadcast.ts';
 
 const STARTED_AT = Date.now();
@@ -171,7 +188,6 @@ const STARTED_AT = Date.now();
  * objects to parse on the client.
  */
 /** How often live sockets are pinged, and how long a missed pong is tolerated. */
-const SOCKET_HEARTBEAT_MS = 25_000;
 
 const COMPACT_GRID_TILE_THRESHOLD = 2048;
 const COMPACT_GRID_LIGHT_BASE = 80;
@@ -233,6 +249,10 @@ interface ConnectedPlayer {
   blocked: Set<string>;
   /** Timestamps of recent chat messages, for the per-minute rate limit. */
   chatTimestamps: number[];
+  /** Burst/sustained budget for state-changing actions that touch the store. */
+  actionBudget: ReturnType<typeof createTokenBucket>;
+  /** Cooldowns for replies whose cost is far larger than the request. */
+  replyBudget: ReplyBudget;
 }
 
 /**
@@ -360,8 +380,22 @@ class World {
   private budgetSubscription: { unsubscribe(): void } | null = null;
   private itemsConfig: ReturnType<typeof loadItemsConfig>;
   private sporeConfig: SporeConfig;
+  /** T12 archetypes, prices and playable bounds. Null keeps the legacy spawn. */
+  private spawnConfig: SpawnConfigBundle | null;
   private shopConfig: ShopConfig;
   private playerStateStore: PlayerStateStore | null;
+  /**
+   * Shape of the water-table field the readout samples (E26).
+   *
+   * Declared as a field rather than a constructor parameter property: Node runs
+   * the server by stripping types, and a parameter property is not erasable
+   * syntax, so `new World(...)` failed to load at boot.
+   */
+  private readonly waterTableOptions: WaterTableGridOptions;
+  /** Hard cap on concurrently connected players (`world.max_players_per_world`). */
+  private readonly maxPlayersPerWorld: number;
+  /** Cap on plants in one visibility answer / STATE payload (`world.per_client_entity_cap`). */
+  private readonly perClientEntityCap: number;
   /** Loaded before a HELLO creates or reclaims a player, keyed by account id. */
   private readonly restoredPlayerStates = new Map<string, PersistedPlayerState>();
   /** Accounts whose row could not be read; do not overwrite it this session. */
@@ -438,6 +472,7 @@ class World {
       ownPlantId: player.plantId,
       isInRange: (playerId, x, z) => this.interestManager.isPositionInRange(playerId, x, z),
       includeOwn: false,
+      limit: this.perClientEntityCap,
     });
     for (const plant of visible) {
       this.send(player.ws, MESSAGE_TYPE.PLANT_CREATED, this.plantCreatedPayload(plant));
@@ -479,10 +514,13 @@ class World {
         id: plant.id,
         ownerId: plant.ownerId,
         ownerName: this.ownerNameFor(plant.ownerId),
+        ownerOnline: this.players.has(plant.ownerId),
         rootNodeId: plant.rootNodeId,
         totalBiomass: plant.totalBiomass,
         totalEnergy: plant.totalEnergy,
         totalUpkeep: plant.totalUpkeep,
+        archetype: plant.archetype,
+        spawn: plant.spawn,
         nodes: Array.from(plant.nodes.values()).map((n) =>
           nodeWireFields(n, this.plantWorld.getNodeHealth(plant.id, n.id)),
         ),
@@ -536,6 +574,38 @@ class World {
 
   send(ws: WebSocket, type: number, payload: unknown): void {
     this.writeIfHealthy(ws, JSON.stringify({ type, payload }), type);
+  }
+
+  /**
+   * Spend one state-change token, or answer with the reason it was refused.
+   * Every caller behind this check either takes a row lock or writes the
+   * player-state table, so the socket-wide message bucket is not enough.
+   */
+  private allowStateChange(player: ConnectedPlayer): boolean {
+    if (
+      tokenBucketAllow(
+        player.actionBudget,
+        Date.now(),
+        this.config.actionRatePerSecond,
+        this.config.actionBurst,
+      )
+    ) {
+      return true;
+    }
+    this.send(player.ws, MESSAGE_TYPE.ERROR, {
+      code: 'action_rate_limit',
+      message: 'Too many actions. Slow down.',
+    });
+    return false;
+  }
+
+  /** Silence is deliberate: the client already only requests these occasionally. */
+  private allowExpensiveReply(
+    player: ConnectedPlayer,
+    kind: string,
+    minIntervalMs: number,
+  ): boolean {
+    return allowReply(player.replyBudget, kind, Date.now(), minIntervalMs);
   }
 
   /**
@@ -844,6 +914,10 @@ class World {
               x: event.x,
               z: event.z,
               radiusM: event.radiusM,
+              // What the bolt actually took, summed from the pipeline's own
+              // billing. A bolt that landed in the field reports zero.
+              plantsHit: event.plantsHit,
+              totalDamage: event.totalDamage,
             });
             break;
         }
@@ -914,6 +988,10 @@ class World {
     },
     shopConfig: ShopConfig = { enabled: false, currencyName: '', items: [] },
     playerStateStore: PlayerStateStore | null = null,
+    waterTableOptions: WaterTableGridOptions = {},
+    maxPlayersPerWorld = 10000,
+    perClientEntityCap = 1000,
+    spawnConfig: SpawnConfigBundle | null = null,
   ) {
     this.config = config;
     this.log = log;
@@ -935,8 +1013,12 @@ class World {
     }
     this.itemsConfig = itemsConfig;
     this.sporeConfig = sporeConfig;
+    this.spawnConfig = spawnConfig;
     this.shopConfig = shopConfig;
     this.playerStateStore = playerStateStore;
+    this.waterTableOptions = waterTableOptions;
+    this.maxPlayersPerWorld = maxPlayersPerWorld;
+    this.perClientEntityCap = perClientEntityCap;
     this.chatConfig = chatConfig;
     this.reportConfig = reportConfig;
     // One clock per world: the season is world state, not per-plant state, so a
@@ -1205,6 +1287,8 @@ class World {
       spores,
       blocked: new Set<string>(),
       chatTimestamps: [],
+      actionBudget: createTokenBucket(this.config.actionBurst, Date.now()),
+      replyBudget: createReplyBudget(),
     };
     // Do not write the starting kit here. A connect-time save races the first
     // purchase: it can capture the starting purse, lose the row lock because the
@@ -1256,22 +1340,126 @@ class World {
     return saved;
   }
 
+  /**
+   * Resolve a spawn selection against the config, current roots and terrain.
+   *
+   * The same shared resolver the client previews with, so the price it shows is
+   * the price this charges. Without a spawn config (unit harnesses constructed
+   * before T12) this keeps the old free near-origin spiral.
+   */
+  private chooseSpawn(selection: SpawnSelection | undefined):
+    | {
+        ok: true;
+        x: number;
+        z: number;
+        cost: number;
+        archetype: PlantArchetypeTraits | undefined;
+        spawn: PlantSpawnPoint | undefined;
+      }
+    | { ok: false; reason: string; message: string } {
+    if (!this.spawnConfig) {
+      const point = this.findSpawnPosition();
+      return { ok: true, ...point, cost: 0, archetype: undefined, spawn: undefined };
+    }
+    const occupied: OccupiedPoint[] = [];
+    for (const existing of this.plantWorld.getAllPlants()) {
+      const root = existing.rootNodeId ? existing.nodes.get(existing.rootNodeId) : undefined;
+      if (root) occupied.push({ x: root.x, z: root.z });
+    }
+    const result = resolveSpawn({
+      selection: selection ?? {},
+      archetypes: this.spawnConfig.archetypes,
+      config: this.spawnConfig.paid,
+      radiusM: this.spawnConfig.planetRadiusM,
+      occupied,
+      terrainHeightAt: (x, z) => this.terrain?.heightAt(x, z) ?? 0,
+    });
+    if (!result.ok) return { ok: false, reason: result.reason, message: result.message };
+    const geodetic = localToGeodetic(
+      { x: result.x, y: result.altitudeM, z: result.z },
+      this.spawnConfig.planetRadiusM,
+    );
+    geodetic.altitudeM = result.altitudeM;
+    const spawn: PlantSpawnPoint = {
+      latitudeDeg: geodetic.latitudeDeg,
+      longitudeDeg: geodetic.longitudeDeg,
+      altitudeM: result.altitudeM,
+      label: result.label,
+      areaId: result.area?.id ?? null,
+    };
+    return {
+      ok: true,
+      x: result.x,
+      z: result.z,
+      cost: result.cost,
+      archetype: this.archetypeTraits(result.archetype),
+      spawn,
+    };
+  }
+
+  private archetypeTraits(archetype: SeedArchetype): PlantArchetypeTraits {
+    return {
+      id: archetype.id,
+      name: archetype.name,
+      growthSpeed: archetype.growthSpeed,
+      waterCapacity: archetype.waterCapacity,
+      mineralCapacity: archetype.mineralCapacity,
+      photosynthesis: archetype.photosynthesis,
+      upkeep: archetype.upkeep,
+      mutationBias: archetype.mutationBias,
+    };
+  }
+
+  /** Balance the new player object will start with, before it exists. */
+  private projectedSporeBalance(accountId?: string): number {
+    if (accountId) {
+      const restored = this.restoredPlayerStates.get(accountId);
+      if (restored) return restored.spores;
+    }
+    return this.sporeConfig.startingBalance;
+  }
+
   addPlayer(
     ws: WebSocket,
     playerId: string,
     accountId?: string,
-  ): { plantId: string; welcome: WelcomePayload } {
+    selection?: SpawnSelection,
+  ):
+    | { plantId: string; welcome: WelcomePayload }
+    | { full: true }
+    | { refused: true; reason: string; message: string } {
+    if (!hasPlayerCapacity(this.players.size, this.maxPlayersPerWorld)) {
+      return { full: true };
+    }
     const ownerId = accountId ?? playerId;
     let plant: import('@plant-legacy/shared/growth').Plant;
 
     // INV-ID-01: One active plant per owner/account. If this owner already has an active plant, reuse it.
     const existingPlants = this.plantWorld.getPlantsByOwner(ownerId);
     const reusedPlant = existingPlants.length > 0;
+    let charged = 0;
     if (reusedPlant) {
+      // Reconnect/reclaim keeps the plant it already has and never charges for
+      // a selection the player made before the first plant existed.
       plant = existingPlants[0];
     } else {
-      const spawn = this.findSpawnPosition();
-      plant = this.plantWorld.createPlant(ownerId, 'world_0', spawn.x, spawn.z);
+      const spawn = this.chooseSpawn(selection);
+      if (!spawn.ok) {
+        return { refused: true, reason: spawn.reason, message: spawn.message };
+      }
+      const balance = this.projectedSporeBalance(accountId);
+      if (spawn.cost > 0 && balance < spawn.cost) {
+        return {
+          refused: true,
+          reason: 'insufficient_spores',
+          message: `That spawn costs ${spawn.cost} spores and you have ${balance}.`,
+        };
+      }
+      plant = this.plantWorld.createPlant(ownerId, 'world_0', spawn.x, spawn.z, {
+        archetype: spawn.archetype,
+        spawn: spawn.spawn,
+      });
+      charged = spawn.cost;
     }
     const plantId = plant.id;
 
@@ -1280,7 +1468,42 @@ class World {
     this.attachConnection(ws, playerId, plantId, accountId, 'HELLO timeout, closing connection');
 
     const player = this.createConnectedPlayer(ws, playerId, plantId, accountId);
+    // One entry per player, so a second window of the same browser - same stored
+    // playerId - used to overwrite the first. The old socket was left open and
+    // unlisted: it received nothing from then on, was never cleaned up, and the
+    // player watched a world that had stopped moving without a single complaint.
+    // Close it with the same reason the account path gives, so that window can
+    // say why it is still instead of pretending to be live.
+    const previous = this.players.get(playerId);
+    if (previous && previous.ws !== ws && previous.ws.readyState === WebSocket.OPEN) {
+      try {
+        this.send(previous.ws, MESSAGE_TYPE.ERROR, {
+          code: 'SESSION_REPLACED',
+          message: 'This plant is open in another window.',
+        });
+        previous.ws.close(4002, 'Session replaced');
+      } catch {
+        // Already gone between the lookup and the close.
+      }
+    }
     this.players.set(playerId, player);
+    if (charged > 0) {
+      const remaining = spendSpores(player.spores, charged, this.sporeConfig.maxBalance);
+      if (remaining === null) {
+        // The preflight read is the authority; a mismatch here would mean the
+        // same account changed its purse mid-join. Do not hand out a paid seed
+        // for free: remove it before the client ever sees WELCOME.
+        this.players.delete(playerId);
+        this.plantWorld.removePlant(plantId);
+        return {
+          refused: true,
+          reason: 'insufficient_spores',
+          message: 'Your spore balance changed while the seed was being planted.',
+        };
+      }
+      player.spores = remaining;
+      this.persistPlayerState(player);
+    }
 
     const welcome = this.buildWelcome(playerId, plant);
     const rootNode = plant.rootNodeId != null ? plant.nodes.get(plant.rootNodeId) : undefined;
@@ -1347,7 +1570,8 @@ class World {
    */
   respawnPlayerAsSeed(
     playerId: string,
-  ): { ok: true; plantId: string } | { ok: false; reason: string } {
+    selection?: SpawnSelection,
+  ): { ok: true; plantId: string } | { ok: false; reason: string; message?: string } {
     const player = this.players.get(playerId);
     if (!player) return { ok: false, reason: 'no_player' };
     if (player.plantId) {
@@ -1355,7 +1579,15 @@ class World {
       if (existing) return { ok: false, reason: 'plant_alive' };
     }
 
-    const spawn = this.findSpawnPosition();
+    const spawn = this.chooseSpawn(selection);
+    if (!spawn.ok) return { ok: false, reason: spawn.reason, message: spawn.message };
+    if (spawn.cost > 0 && player.spores < spawn.cost) {
+      return {
+        ok: false,
+        reason: 'insufficient_spores',
+        message: `That spawn costs ${spawn.cost} spores and you have ${player.spores}.`,
+      };
+    }
     // Same owner identity and world as addPlayer, so reclaim, persistence and
     // the one-plant-per-owner index all still see this plant.
     const plant = this.plantWorld.createPlant(
@@ -1363,7 +1595,17 @@ class World {
       'world_0',
       spawn.x,
       spawn.z,
+      { archetype: spawn.archetype, spawn: spawn.spawn },
     );
+    if (spawn.cost > 0) {
+      const remaining = spendSpores(player.spores, spawn.cost, this.sporeConfig.maxBalance);
+      if (remaining === null) {
+        this.plantWorld.removePlant(plant.id);
+        return { ok: false, reason: 'insufficient_spores', message: 'Not enough spores.' };
+      }
+      player.spores = remaining;
+      this.persistPlayerState(player);
+    }
     player.plantId = plant.id;
     connectionRegistrySetPlant(this.connectionRegistry, playerId, plant.id);
     this.registerClientAtPlant(playerId, plant);
@@ -1620,10 +1862,18 @@ class World {
     // reclaim. Only the client that was handed this plant's secret may take it
     // back; otherwise any player could claim someone else's dropped plant.
     if (!this.isReconnectTokenValid(plantId, reconnectToken)) {
-      this.log.warn('anonymous reclaim rejected: missing or invalid reconnect token', {
-        plantId,
-        newPlayerId,
-      });
+      // With persistence off there is no resident plant to reclaim on a rejoin;
+      // the client's saved token is expected to miss. That is a normal fallback,
+      // not a security warning, so keep it out of the warn stream. With
+      // persistence on an invalid token is still worth flagging.
+      if (this.persistenceEnabled) {
+        this.log.warn('anonymous reclaim rejected: missing or invalid reconnect token', {
+          plantId,
+          newPlayerId,
+        });
+      } else {
+        this.log.info('anonymous reclaim skipped: persistence off', { plantId, newPlayerId });
+      }
       return null;
     }
 
@@ -1978,10 +2228,12 @@ class World {
         }
         case MESSAGE_TYPE.RESPAWN: {
           const respawner = this.players.get(playerId);
-          const result = this.respawnPlayerAsSeed(playerId);
+          const request = payload as { spawn?: SpawnSelection };
+          const result = this.respawnPlayerAsSeed(playerId, request?.spawn);
           if (!result.ok && respawner) {
             this.send(respawner.ws, MESSAGE_TYPE.REJECT, {
               reason: result.reason,
+              message: result.message,
               originalType: MESSAGE_TYPE.RESPAWN,
             });
           }
@@ -2003,6 +2255,7 @@ class World {
             typeof shed?.mutationId === 'string' &&
             shed.plantId === player.plantId
           ) {
+            if (!this.allowStateChange(player)) break;
             const result = this.plantWorld.shedMutation(
               player.plantId,
               shed.mutationId,
@@ -2029,6 +2282,7 @@ class World {
           ) {
             break;
           }
+          if (!this.allowStateChange(player)) break;
           // No card: deal the cards and let the panel show the choice. A card:
           // take it, but only from the deal the server itself laid out.
           if (typeof level.cardId === 'string') {
@@ -2076,42 +2330,45 @@ class World {
           let tileX: number | undefined;
           let tileZ: number | undefined;
 
-          // Support full grid request for ground rendering
+          // Support full grid request for ground rendering. The reply is
+          // ~262 KB and re-encodes every tile, so one player cannot ask for it
+          // at message rate even though the request itself is tiny.
           if (query.fullGrid) {
             const player = this.players.get(playerId);
-            if (player?.plantId) {
-              const plant = this.plantWorld.getPlant(player.plantId);
-              if (plant) {
-                const gridWidth = this.resourceWorld.getWidth();
-                const gridHeight = this.resourceWorld.getHeight();
-                this.send(player.ws, MESSAGE_TYPE.RESOURCE_UPDATE, {
-                  tick: this.getTick(),
-                  gridBase64: encodeResourceGridBase64(
-                    gridWidth,
-                    gridHeight,
-                    this.resourceWorld.getAllTiles(),
-                  ),
-                  width: this.resourceWorld.getWidth(),
-                  height: this.resourceWorld.getHeight(),
-                  tileSize: this.resourceWorld.getTileSize(),
-                  totalEnergy: plant.totalEnergy,
-                  totalBiomass: plant.totalBiomass,
-                  storedWater: plant.storedWater,
-                  storedMinerals: plant.storedMinerals,
-                  waterCapacity:
-                    this.plantWorld.getPlantCapacity(plant.id)?.water ??
-                    computePlantCapacity(plant, this.plantWorld.getConfig()).water,
-                  mineralCapacity:
-                    this.plantWorld.getPlantCapacity(plant.id)?.minerals ??
-                    computePlantCapacity(plant, this.plantWorld.getConfig()).minerals,
-                  coveredTileCount: this.resourceWorld.getCoveredTileCount(plant),
-                  fullGrid: true,
-                });
-                // The client now holds the whole grid, so per-tick deltas may
-                // start: without this the grid never published a change at all.
-                this.resourceWorld.markFullGridSent();
-              }
+            if (!player?.plantId) break;
+            if (!this.allowExpensiveReply(player, 'full_grid', this.config.fullGridMinIntervalMs)) {
+              break;
             }
+            const plant = this.plantWorld.getPlant(player.plantId);
+            if (!plant) break;
+            const gridWidth = this.resourceWorld.getWidth();
+            const gridHeight = this.resourceWorld.getHeight();
+            this.send(player.ws, MESSAGE_TYPE.RESOURCE_UPDATE, {
+              tick: this.getTick(),
+              gridBase64: encodeResourceGridBase64(
+                gridWidth,
+                gridHeight,
+                this.resourceWorld.getAllTiles(),
+              ),
+              width: this.resourceWorld.getWidth(),
+              height: this.resourceWorld.getHeight(),
+              tileSize: this.resourceWorld.getTileSize(),
+              totalEnergy: plant.totalEnergy,
+              totalBiomass: plant.totalBiomass,
+              storedWater: plant.storedWater,
+              storedMinerals: plant.storedMinerals,
+              waterCapacity:
+                this.plantWorld.getPlantCapacity(plant.id)?.water ??
+                computePlantCapacity(plant, this.plantWorld.getConfig()).water,
+              mineralCapacity:
+                this.plantWorld.getPlantCapacity(plant.id)?.minerals ??
+                computePlantCapacity(plant, this.plantWorld.getConfig()).minerals,
+              coveredTileCount: this.resourceWorld.getCoveredTileCount(plant),
+              fullGrid: true,
+            });
+            // The client now holds the whole grid, so per-tick deltas may
+            // start: without this the grid never published a change at all.
+            this.resourceWorld.markFullGridSent();
             break;
           }
 
@@ -2156,22 +2413,26 @@ class World {
         }
         case MESSAGE_TYPE.PLANT_SYNC_REQUEST: {
           const player = this.players.get(playerId);
+          if (!player) break;
+          if (!this.allowExpensiveReply(player, 'plant_sync', this.config.plantSyncMinIntervalMs)) {
+            break;
+          }
           // Interest range, not connectivity: filtering by connected players left
           // every saved or offline plant out of the world for anyone who joined
           // after its owner left, even when it stood right beside them.
-          const syncPlants = player
-            ? selectVisiblePlants({
-                plants: this.plantWorld.getAllPlants(),
-                playerId,
-                ownPlantId: player.plantId,
-                isInRange: (pid, x, z) => this.interestManager.isPositionInRange(pid, x, z),
-              })
-            : [];
+          const syncPlants = selectVisiblePlants({
+            plants: this.plantWorld.getAllPlants(),
+            playerId,
+            ownPlantId: player.plantId,
+            isInRange: (pid, x, z) => this.interestManager.isPositionInRange(pid, x, z),
+            limit: this.perClientEntityCap,
+          });
           const syncPayload: PlantSyncPayload = {
             plants: syncPlants.map((p) => ({
               id: p.id,
               ownerId: p.ownerId,
               ownerName: this.ownerNameFor(p.ownerId),
+              ownerOnline: this.players.has(p.ownerId),
               rootNodeId: p.rootNodeId,
               totalBiomass: p.totalBiomass,
               totalEnergy: p.totalEnergy,
@@ -2218,7 +2479,7 @@ class World {
             })),
           };
 
-          if (player) this.send(player.ws, MESSAGE_TYPE.PLANT_SYNC, syncPayload);
+          this.send(player.ws, MESSAGE_TYPE.PLANT_SYNC, syncPayload);
           break;
         }
         case MESSAGE_TYPE.GROWTH_OPTIONS_REQUEST: {
@@ -2357,7 +2618,18 @@ class World {
           if (!player || !blockPayload?.targetPlayerId) break;
           if (blockPayload.targetPlayerId === playerId) break;
           if (blockPayload.blocked) {
-            player.blocked.add(blockPayload.targetPlayerId);
+            if (
+              !addBlockedPlayer(
+                player.blocked,
+                blockPayload.targetPlayerId,
+                this.chatConfig.blockListMax,
+              )
+            ) {
+              this.send(player.ws, MESSAGE_TYPE.ERROR, {
+                code: 'block_list_full',
+                message: 'Block list is full.',
+              });
+            }
           } else {
             player.blocked.delete(blockPayload.targetPlayerId);
           }
@@ -2401,6 +2673,13 @@ class World {
           const contextSnapshot = Array.isArray(reportPayload.contextSnapshot)
             ? reportPayload.contextSnapshot.slice(0, this.reportConfig.contextLineCount)
             : [];
+          const blocked = reportPayload.block
+            ? addBlockedPlayer(
+                reporter.blocked,
+                reportPayload.targetPlayerId,
+                this.chatConfig.blockListMax,
+              )
+            : false;
           const reportRecord = {
             reporterId: reporter.playerId,
             reporterName: reporter.displayName ?? 'Player',
@@ -2408,7 +2687,7 @@ class World {
             targetPlayerName: reportPayload.targetPlayerName ?? 'Unknown',
             reason: reportPayload.reason,
             freeText,
-            block: reportPayload.block ?? false,
+            block: blocked,
             contextSnapshot,
             timestamp: now,
           };
@@ -2416,11 +2695,6 @@ class World {
           // Nothing drains this list, so bound it and keep the newest reports.
           if (this.reports.length > this.reportConfig.maxStoredReports) {
             this.reports.splice(0, this.reports.length - this.reportConfig.maxStoredReports);
-          }
-
-          // T05: blocking is per reporter, so only this player stops seeing the target.
-          if (reportPayload.block) {
-            reporter.blocked.add(reportPayload.targetPlayerId);
           }
 
           // Plain confirmation - never tell reporter what action was taken
@@ -2443,6 +2717,15 @@ class World {
             !Number.isFinite(request.worldX) ||
             !Number.isFinite(request.worldZ) ||
             !Number.isFinite(request.radiusM)
+          ) {
+            break;
+          }
+          if (
+            !this.allowExpensiveReply(
+              player,
+              'terrain_region',
+              this.config.terrainRegionMinIntervalMs,
+            )
           ) {
             break;
           }
@@ -2485,14 +2768,14 @@ class World {
         case MESSAGE_TYPE.SHOP_PURCHASE: {
           const request = payload as { itemId: string };
           const buyer = this.players.get(playerId);
-          if (!buyer) break;
+          if (!buyer || !this.allowStateChange(buyer)) break;
           this.purchaseShopItem(buyer, String(request.itemId ?? ''));
           break;
         }
         case MESSAGE_TYPE.DROP_COLLECT: {
           const request = payload as { id: string };
           const collector = this.players.get(playerId);
-          if (!collector || !this.damagePipeline) break;
+          if (!collector || !this.damagePipeline || !this.allowStateChange(collector)) break;
           // The decision lives in `ops/dropPickup.ts`: a live drop pays once and
           // is removed, an unknown or already-spent id pays nothing.
           const pickup = pickupDrop(this.damagePipeline, this.sporeConfig, collector, request?.id);
@@ -2503,7 +2786,7 @@ class World {
         case MESSAGE_TYPE.INVENTORY_SLOT_USE: {
           const payload2 = payload as { slotIndex: number };
           const player2 = this.players.get(playerId);
-          if (!player2) break;
+          if (!player2 || !this.allowStateChange(player2)) break;
           void useInventorySlot(this.inventoryPorts(), player2, payload2.slotIndex).catch(
             (error: unknown) => {
               this.log.error('item use failed', {
@@ -2517,7 +2800,7 @@ class World {
         case MESSAGE_TYPE.INVENTORY_SLOT_SWAP: {
           const payload2 = payload as { fromIndex: number; toIndex: number };
           const player2 = this.players.get(playerId);
-          if (!player2) break;
+          if (!player2 || !this.allowStateChange(player2)) break;
           void swapInventorySlots(
             this.inventoryPorts(),
             player2,
@@ -2710,6 +2993,7 @@ class World {
       })),
       states: plantStates,
       positions: plantPositions,
+      entityCap: this.perClientEntityCap,
     });
     this.stateCadenceAccumulatorMs = stateBroadcast.nextAccumulatorMs;
     this.stateMessagesSent += stateBroadcast.sent;
@@ -2904,8 +3188,9 @@ class World {
   private advanceWaterTableGrid(playerId: string, x: number, z: number): void {
     let builder = this.waterTableBuilders.get(playerId);
     if (!builder) {
-      builder = new WaterTableGridBuilder((sx, sz) =>
-        this.resourceWorld.getWaterTableHeightAt(sx, sz),
+      builder = new WaterTableGridBuilder(
+        (sx, sz) => this.resourceWorld.getWaterTableHeightAt(sx, sz),
+        this.waterTableOptions,
       );
       this.waterTableBuilders.set(playerId, builder);
     }
@@ -3173,6 +3458,9 @@ class World {
       // World and clock state, then injuries: dev/worldCommands.ts and
       // dev/damageCommands.ts.
       if (handleWorldCommand(this.worldCommandPorts(ws), action)) return;
+      // A rival beside your own seed, in daylight: the rival-click check without
+      // a second browser profile: dev/rivalCommands.ts.
+      if (handleRivalCommand(this.rivalCommandPorts(ws, plant), action)) return;
       const crown = plant?.rootNodeId ? plant.nodes.get(plant.rootNodeId) : undefined;
       const damageTarget: PlantTarget | undefined =
         plant && player?.plantId && this.damagePipeline
@@ -3295,6 +3583,35 @@ class World {
   }
 
   /** The resource, tile and clock dev commands' view of this world. */
+  private rivalCommandPorts(
+    ws: WebSocket,
+    plant: import('@plant-legacy/shared/growth').Plant | undefined,
+  ): RivalCommandPorts {
+    return {
+      ownRoot: () => {
+        const root = plant?.rootNodeId ? plant.nodes.get(plant.rootNodeId) : undefined;
+        return root ? { x: root.x, z: root.z } : null;
+      },
+      hasRivalNear: (x, z, withinM) =>
+        this.plantWorld.getAllPlants().some((candidate) => {
+          if (!candidate.ownerId.startsWith(DEV_RIVAL_OWNER)) return false;
+          const root = candidate.rootNodeId ? candidate.nodes.get(candidate.rootNodeId) : undefined;
+          return root ? Math.hypot(root.x - x, root.z - z) <= withinM : false;
+        }),
+      spawnRival: (x, z) =>
+        this.plantWorld.createPlant(DEV_RIVAL_OWNER, 'world_0', x, z)?.id ?? null,
+      setDaylight: (fraction) => {
+        this.weatherSystem.setTimeOfDay(fraction);
+        this.broadcast(MESSAGE_TYPE.WEATHER_UPDATE, {
+          tick: this.getTick(),
+          ...this.weatherSystem.getBroadcast(),
+        });
+        return this.weatherSystem.getBroadcast().timeOfDay;
+      },
+      respond: (actionType, payload) => this.sendDevResponse(ws, actionType, payload),
+    };
+  }
+
   private worldCommandPorts(ws: WebSocket): WorldCommandPorts {
     return {
       applyResourceRates: (patch) => {
@@ -3648,7 +3965,7 @@ class World {
     this.applyPhotosynthesis(
       this.plantResourceView(plant),
       plant,
-      seconds * gain * health * detached,
+      seconds * gain * health * detached * Math.max(0.1, plant.archetype?.photosynthesis ?? 1),
     );
   }
 
@@ -3660,6 +3977,50 @@ class World {
    * The world clock, as the game itself runs it. The title screen is outside the
    * game loop, so it asks for this instead of keeping a second day.
    */
+  /** `/spawn/options`: the scene's archetypes, areas, bounds and balance. */
+  async getSpawnOptions(accountId?: string): Promise<Record<string, unknown>> {
+    const paid = this.spawnConfig?.paid ?? {
+      enabled: false,
+      playRadiusM: 620,
+      spacingM: 5,
+      exactCoordinateCost: 0,
+      namedAreas: [],
+    };
+    let balance = this.sporeConfig.startingBalance;
+    const authenticated = accountId !== undefined;
+    if (accountId) {
+      for (const player of this.players.values()) {
+        if (player.accountId === accountId) {
+          balance = player.spores;
+          break;
+        }
+      }
+      if (this.playerStateStore) {
+        try {
+          const saved = await this.playerStateStore.load(accountId);
+          if (saved) balance = saved.spores;
+        } catch (error) {
+          this.log.warn('spawn options balance load failed', {
+            accountId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+    }
+    return {
+      authenticated,
+      balance,
+      startingBalance: this.sporeConfig.startingBalance,
+      enabled: paid.enabled,
+      playRadiusM: paid.playRadiusM,
+      spacingM: paid.spacingM,
+      exactCoordinateCost: paid.exactCoordinateCost,
+      namedAreas: paid.namedAreas,
+      archetypes: this.spawnConfig?.archetypes ?? [],
+      planetRadiusM: this.spawnConfig?.planetRadiusM ?? 100_000,
+    };
+  }
+
   getWorldTime(): {
     timeOfDay: number;
     isDay: boolean;
@@ -3911,6 +4272,8 @@ async function main(): Promise<void> {
         mutationShedCooldownUntil: loaded.mutationShedCooldownUntil,
         mutationSignature: loaded.mutationSignature,
         uproot: loaded.uproot,
+        archetype: loaded.archetype,
+        spawn: loaded.spawn,
       };
       // One unreadable snapshot must not stop the world from booting. A single
       // corrupt row used to throw out of module init, which is why the server
@@ -4022,6 +4385,7 @@ async function main(): Promise<void> {
 
   const sporeConfig = loadSporeConfig(configs);
   const shopConfig = loadShopConfig(configs);
+  const spawnConfig = loadSpawnConfig(configs);
   const playerStateStore = database.pool
     ? new PlayerStateStore(database.pool, {
         itemDefinitions: itemsConfig.itemDefinitions,
@@ -4030,6 +4394,16 @@ async function main(): Promise<void> {
         onRepair: (message, meta) => log.warn(message, meta),
       })
     : null;
+
+  // E26: the water-table field's shape is config, not a literal in the builder.
+  // The root readout samples terrain per player, so a bigger field or a smaller
+  // slice is a tuning decision that has to be reachable without a rebuild.
+  const waterTableOptions = {
+    cells: Math.round(readNumber(configs, 'water', 'water_table_cells')),
+    cellSizeM: readNumber(configs, 'water', 'water_table_cell_size_m'),
+    chunkCells: Math.round(readNumber(configs, 'water', 'water_table_chunk_cells')),
+    moveToleranceM: readNumber(configs, 'water', 'water_table_move_tolerance_m'),
+  };
 
   const world = new World(
     netProtoConfig,
@@ -4057,6 +4431,10 @@ async function main(): Promise<void> {
     sporeConfig,
     shopConfig,
     playerStateStore,
+    waterTableOptions,
+    worldConfig.maxPlayersPerWorld,
+    worldConfig.perClientEntityCap,
+    spawnConfig,
   );
   if (terrainService) {
     plantWorld.setGrowthResistanceProvider((x, y, z) => terrainService.growthResistanceAt(x, y, z));
@@ -4257,6 +4635,19 @@ async function main(): Promise<void> {
       return;
     }
 
+    // T12: the spawn scene runs before a socket. Its archetypes, prices, areas
+    // and balance are read here; the server rechecks every selection on HELLO.
+    if (url.pathname === '/spawn/options' && request.method === 'GET') {
+      let accountId: string | undefined;
+      const authorization = request.headers.authorization;
+      if (authorization?.startsWith('Bearer ') && accountsService) {
+        const auth = await accountsService.verifyAccessToken(authorization.slice(7).trim());
+        if (!('error' in auth)) accountId = auth.accountId;
+      }
+      sendJson(response, 200, await world.getSpawnOptions(accountId));
+      return;
+    }
+
     if (url.pathname === '/') {
       sendJson(response, 200, {
         name: 'plant-legacy-server',
@@ -4329,6 +4720,11 @@ async function main(): Promise<void> {
     process.exit(1);
   });
 
+  // Sockets counted per address before HELLO. A guest receives the full grid as
+  // soon as they are admitted, so an unbounded pre-auth connection count is a
+  // cheap way to ask the server for hundreds of megabytes.
+  const connectionsByAddress = new Map<string, number>();
+
   // WebSocket server
   const wss = new WebSocketServer({ server, maxPayload: netProtoConfig.maxMessageSizeBytes });
 
@@ -4340,7 +4736,7 @@ async function main(): Promise<void> {
       log.warn('terminating unresponsive socket', { reason: 'missed heartbeat' });
       dead.terminate();
     }
-  }, SOCKET_HEARTBEAT_MS);
+  }, netProtoConfig.socketHeartbeatMs);
   heartbeat.unref();
 
   wss.on('connection', (ws: WebSocket, request: IncomingMessage) => {
@@ -4355,6 +4751,35 @@ async function main(): Promise<void> {
       ws.close(4001, 'Origin not allowed');
       return;
     }
+
+    // Origin-rejected sockets are not counted. Everything admitted from here on
+    // releases its slot exactly once, whether it closes, errors or times out.
+    const addressKey = clientAddressFromRequest(request, runtime.trustProxy);
+    const addressConnections = connectionsByAddress.get(addressKey) ?? 0;
+    if (!admitsConnection(addressConnections, netProtoConfig.maxConnectionsPerIp)) {
+      log.warn('websocket connection rejected: per-address cap reached', {
+        address: addressKey,
+        cap: netProtoConfig.maxConnectionsPerIp,
+      });
+      const full: ErrorPayload = {
+        code: 'SERVER_FULL',
+        message: 'Too many connections from this address. Try again later.',
+      };
+      // Queue the machine-readable refusal before the close frame. Closing first
+      // would leave a client with a bare 1013 and no reason it can act on.
+      ws.send(JSON.stringify({ type: MESSAGE_TYPE.ERROR, payload: full }));
+      ws.close(1013, 'Too many connections from this address');
+      return;
+    }
+    connectionsByAddress.set(addressKey, addressConnections + 1);
+    let addressSlotReleased = false;
+    const releaseAddressSlot = () => {
+      if (addressSlotReleased) return;
+      addressSlotReleased = true;
+      const remaining = (connectionsByAddress.get(addressKey) ?? 1) - 1;
+      if (remaining <= 0) connectionsByAddress.delete(addressKey);
+      else connectionsByAddress.set(addressKey, remaining);
+    };
 
     // Wait for HELLO with auth before creating player
     let helloReceived = false;
@@ -4374,6 +4799,7 @@ async function main(): Promise<void> {
       if (playerId) {
         world.removePlayer(playerId);
       }
+      releaseAddressSlot();
     };
 
     ws.on('message', (data: Buffer) => {
@@ -4449,7 +4875,7 @@ async function main(): Promise<void> {
         log.warn('websocket closed: hello timeout');
         ws.close(4008, 'Hello timeout');
       }
-    }, 10000);
+    }, netProtoConfig.helloTimeoutMs);
     helloTimeout.unref();
 
     async function handleHelloMessage(ws: WebSocket, payload: unknown) {
@@ -4495,6 +4921,20 @@ async function main(): Promise<void> {
       // account has no row; an existing one gets its pouch and purse back.
       if (accountId) await world.restorePlayerState(accountId);
 
+      const rejectServerFull = () => {
+        const error: ErrorPayload = {
+          code: 'SERVER_FULL',
+          message: 'The world is full. Try again later.',
+        };
+        ws.send(JSON.stringify({ type: MESSAGE_TYPE.ERROR, payload: error }));
+        ws.close(1013, 'Server full');
+      };
+      const rejectSpawn = (reason: string, message: string) => {
+        const error: ErrorPayload = { code: 'SPAWN_REFUSED', message: `${reason}: ${message}` };
+        ws.send(JSON.stringify({ type: MESSAGE_TYPE.ERROR, payload: error }));
+        ws.close(4003, 'Spawn refused');
+      };
+
       // Check if this account has a plant pending reclaim (reconnect window)
       let welcome: WelcomePayload;
       if (accountId) {
@@ -4512,9 +4952,20 @@ async function main(): Promise<void> {
           welcome = reclaimed.welcome;
           playerId = reclaimed.welcome.playerId;
         } else {
-          // No plant to reclaim, create new
-          playerId = `player_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-          const added = world.addPlayer(ws, playerId, accountId);
+          // No plant to reclaim, create new under the hard player cap. A
+          // successful reclaim above keeps its slot because the old player was
+          // removed from the map first; that is the reconnect allowance.
+          const newPlayerId = `player_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+          const added = world.addPlayer(ws, newPlayerId, accountId, hello.spawn);
+          if ('full' in added) {
+            rejectServerFull();
+            return;
+          }
+          if ('refused' in added) {
+            rejectSpawn(added.reason, added.message);
+            return;
+          }
+          playerId = newPlayerId;
           welcome = added.welcome;
         }
       } else {
@@ -4531,14 +4982,32 @@ async function main(): Promise<void> {
             playerId = reclaimed.welcome.playerId;
           } else {
             // No plant to reclaim, create new
-            playerId = `player_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-            const added = world.addPlayer(ws, playerId, undefined);
+            const newPlayerId = `player_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+            const added = world.addPlayer(ws, newPlayerId, undefined, hello.spawn);
+            if ('full' in added) {
+              rejectServerFull();
+              return;
+            }
+            if ('refused' in added) {
+              rejectSpawn(added.reason, added.message);
+              return;
+            }
+            playerId = newPlayerId;
             welcome = added.welcome;
           }
         } else {
           // No plantId, create new anonymous player
-          playerId = `player_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-          const added = world.addPlayer(ws, playerId, undefined);
+          const newPlayerId = `player_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+          const added = world.addPlayer(ws, newPlayerId, undefined, hello.spawn);
+          if ('full' in added) {
+            rejectServerFull();
+            return;
+          }
+          if ('refused' in added) {
+            rejectSpawn(added.reason, added.message);
+            return;
+          }
+          playerId = newPlayerId;
           welcome = added.welcome;
         }
       }

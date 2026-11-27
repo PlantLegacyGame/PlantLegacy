@@ -33,7 +33,7 @@ const WORLD_FILES = [
   './EnvironmentRenderer.ts',
   './environment/ground.ts',
   './environment/waterMaterial.ts',
-  './environment/waterField.ts',
+  './environment/surfaceWaterMesh.ts',
   './environment/ocean.ts',
   './environment/rainSystem.ts',
 ];

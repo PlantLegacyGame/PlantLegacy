@@ -44,8 +44,9 @@ export const ALLOWED = new Map([
   [
     'apps/server/src/main.ts',
     {
-      count: 3,
-      reason: 'adopts the committed row after COMMIT and builds the starting kit on a new player',
+      count: 5,
+      reason:
+        'adopts the committed row after COMMIT, builds the starting kit on a new player, and charges a paid seed at join/respawn',
     },
   ],
   ['apps/server/src/ops/inventory.ts', { count: 5, reason: 'the pouch primitives themselves' }],

@@ -104,12 +104,6 @@
       "range": [1.0, 20.0],
       "notes": "Radial damage impact of a lightning strike on ground or high canopy"
     },
-    "lightning_damage_amount": {
-      "type": "number",
-      "value": 25.0,
-      "range": [5.0, 100.0],
-      "notes": "Base damage dealt to nodes caught in a lightning strike radius"
-    },
     "forecast_window_s": {
       "type": "integer",
       "value": 180,

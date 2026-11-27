@@ -10,7 +10,7 @@
  */
 
 import { DEFAULT_TERRAIN_VOLUME, type TerrainVolumeParams } from '@plant-legacy/shared/world';
-import { type BenchmarkPose, DEFAULT_BENCHMARK_POSES } from '../dev/benchmark.js';
+import { type BenchmarkPose, DEFAULT_BENCHMARK_POSES } from '../dev/benchmark.ts';
 import { CAVITY_PALETTE } from '../renderers/environment/cavity/profile.ts';
 import { type ControlsBindingsSource, normalizeBindings } from './controlsBindings.ts';
 
@@ -71,9 +71,9 @@ export interface RenderConfig {
   cameraPanSpeed: number;
   cameraZoomSpeed: number;
   /**
-   * `free` is a flying eye: W/A/S/D follow the whole view vector and nothing
-   * follows the terrain or clamps the eye. `ground` is the old ground-following
-   * rig, kept as a switch so the change can be compared and reverted.
+   * `ground` is the default: the rig follows the terrain and keeps the eye out
+   * of the dirt. `free` is a flying eye - W/A/S/D follow the whole view vector
+   * and nothing follows the terrain or clamps the eye.
    */
   cameraMode: 'free' | 'ground';
   idleDropTimeoutMs: number;
@@ -87,6 +87,14 @@ export interface RenderConfig {
   planetViewFarMultiplier: number;
   planetViewMinDistanceMultiplier: number;
   planetViewNearMultiplier: number;
+  /** How close the orbit may come to the surface, in metres. */
+  planetViewClearanceM: number;
+  /** Wheel dolly rate in planet view. */
+  planetViewZoomSpeed: number;
+  /** Drag rotate rate in planet view. */
+  planetViewRotateSpeed: number;
+  /** Peak relief of the whole planet outside the play patches, in metres. */
+  planetReliefAmplitudeM: number;
   debugOverlayEnabled: boolean;
   pauseOnHidden: boolean;
   qualityTiers: Array<{
@@ -158,6 +166,8 @@ export interface RenderConfig {
   undergroundViewColor: string;
   // Growth aim gizmo (ring + curved arrow) proportions, in metres / multiples.
   growthAimRingScale: number;
+  // How far above its own ground a part still counts as standing on the soil.
+  growthAtSurfaceToleranceM: number;
   growthAimRingThickness: number;
   growthAimRingMin: number;
   growthAimGrabPx: number;
@@ -199,7 +209,6 @@ export interface RenderConfig {
   playerGravityMps2: number;
   /** How far above the ground the player spawns, in metres. */
   playerSpawnHeightM: number;
-  rootAuraRadius: number;
   // C02b: WebGPU plant renderer
   webgpuEnabled: boolean;
   webgpuMaxPlants: number;
@@ -211,14 +220,17 @@ export interface RenderConfig {
   webgpuHysteresisDemote: number;
   webgpuMinDwellTime: number;
   webgpuImpostorEnabled: boolean;
-  webgpuImpostorUpdateIntervalMs: number;
   webgpuVramBudgetBytes: number;
   webgpuVramMaxVertexBytes: number;
   webgpuVramMaxIndexBytes: number;
   webgpuTextureArraySize: number;
   webgpuTextureArrayLayers: number;
-  // C01: Node picking for growth selection
-  nodePickRadius: number;
+  // C01: Node picking. The sphere is this multiple of the part; your own parts
+  // take the hugging floor so the growth joint stays exact, another player's
+  // parts, which are only looked at, take the reach.
+  nodePickRadiusScale: number;
+  ownNodePickRadius: number;
+  rivalNodePickRadius: number;
 }
 
 export interface ControlsConfig {
@@ -290,6 +302,8 @@ export interface RootSightConfig {
   cutawayRadius: number;
   transitionMs: number;
   soilOpacity: number;
+  /** Radius of the highlight glow around each root node, metres (E19). */
+  auraRadius: number;
   /** Hole radius as a fraction of `cutawayRadius` (`aperture_radius_ratio`). */
   apertureRadiusRatio: number;
   /** Floor for the hole radius in metres (`aperture_min_m`). */
@@ -516,6 +530,14 @@ interface RenderConfigResponse {
   planetViewMinDistanceMultiplier?: number;
   planet_view_near_multiplier?: number;
   planetViewNearMultiplier?: number;
+  planet_view_clearance_m?: number;
+  planetViewClearanceM?: number;
+  planet_view_zoom_speed?: number;
+  planetViewZoomSpeed?: number;
+  planet_view_rotate_speed?: number;
+  planetViewRotateSpeed?: number;
+  planet_relief_amplitude_m?: number;
+  planetReliefAmplitudeM?: number;
   debug_overlay_enabled?: boolean;
   debugOverlayEnabled?: boolean;
   pause_on_hidden?: boolean;
@@ -622,6 +644,8 @@ interface RenderConfigResponse {
   undergroundViewColor?: string;
   growth_aim_ring_scale?: number;
   growthAimRingScale?: number;
+  growth_at_surface_tolerance_m?: number;
+  growthAtSurfaceToleranceM?: number;
   growth_aim_ring_thickness?: number;
   growthAimRingThickness?: number;
   growth_aim_ring_min?: number;
@@ -663,8 +687,6 @@ interface RenderConfigResponse {
   playerGravityMps2?: number;
   player_spawn_height_m?: number;
   playerSpawnHeightM?: number;
-  root_aura_radius?: number;
-  rootAuraRadius?: number;
   webgpu_enabled?: boolean;
   webgpuEnabled?: boolean;
   webgpu_max_plants?: number;
@@ -685,8 +707,6 @@ interface RenderConfigResponse {
   webgpuMinDwellTime?: number;
   webgpu_impostor_enabled?: boolean;
   webgpuImpostorEnabled?: boolean;
-  webgpu_impostor_update_interval_ms?: number;
-  webgpuImpostorUpdateIntervalMs?: number;
   webgpu_vram_budget_bytes?: number;
   webgpuVramBudgetBytes?: number;
   webgpu_vram_max_vertex_bytes?: number;
@@ -697,8 +717,12 @@ interface RenderConfigResponse {
   webgpuTextureArraySize?: number;
   webgpu_texture_array_layers?: number;
   webgpuTextureArrayLayers?: number;
-  node_pick_radius?: number;
-  nodePickRadius?: number;
+  node_pick_radius_scale?: number;
+  nodePickRadiusScale?: number;
+  own_node_pick_radius?: number;
+  ownNodePickRadius?: number;
+  rival_node_pick_radius?: number;
+  rivalNodePickRadius?: number;
 }
 
 interface ControlsConfigResponse extends ControlsBindingsSource {
@@ -794,6 +818,8 @@ interface RootSightConfigResponse {
   transitionMs?: number;
   soil_opacity?: number;
   soilOpacity?: number;
+  aura_radius?: number;
+  auraRadius?: number;
   aperture_radius_ratio?: number;
   apertureRadiusRatio?: number;
   aperture_min_m?: number;
@@ -985,6 +1011,16 @@ function normalizeRenderConfig(data: RenderConfigResponse, fallback: RenderConfi
       data.planet_view_near_multiplier ??
       data.planetViewNearMultiplier ??
       fallback.planetViewNearMultiplier,
+    planetViewClearanceM:
+      data.planet_view_clearance_m ?? data.planetViewClearanceM ?? fallback.planetViewClearanceM,
+    planetViewZoomSpeed:
+      data.planet_view_zoom_speed ?? data.planetViewZoomSpeed ?? fallback.planetViewZoomSpeed,
+    planetViewRotateSpeed:
+      data.planet_view_rotate_speed ?? data.planetViewRotateSpeed ?? fallback.planetViewRotateSpeed,
+    planetReliefAmplitudeM:
+      data.planet_relief_amplitude_m ??
+      data.planetReliefAmplitudeM ??
+      fallback.planetReliefAmplitudeM,
     debugOverlayEnabled:
       data.debug_overlay_enabled ?? data.debugOverlayEnabled ?? fallback.debugOverlayEnabled,
     pauseOnHidden: data.pause_on_hidden ?? data.pauseOnHidden ?? fallback.pauseOnHidden,
@@ -1068,6 +1104,10 @@ function normalizeRenderConfig(data: RenderConfigResponse, fallback: RenderConfi
       data.underground_view_color ?? data.undergroundViewColor ?? fallback.undergroundViewColor,
     growthAimRingScale:
       data.growth_aim_ring_scale ?? data.growthAimRingScale ?? fallback.growthAimRingScale,
+    growthAtSurfaceToleranceM:
+      data.growth_at_surface_tolerance_m ??
+      data.growthAtSurfaceToleranceM ??
+      fallback.growthAtSurfaceToleranceM,
     growthAimRingThickness:
       data.growth_aim_ring_thickness ??
       data.growthAimRingThickness ??
@@ -1109,7 +1149,6 @@ function normalizeRenderConfig(data: RenderConfigResponse, fallback: RenderConfi
       data.player_gravity_mps2 ?? data.playerGravityMps2 ?? fallback.playerGravityMps2,
     playerSpawnHeightM:
       data.player_spawn_height_m ?? data.playerSpawnHeightM ?? fallback.playerSpawnHeightM,
-    rootAuraRadius: data.root_aura_radius ?? data.rootAuraRadius ?? fallback.rootAuraRadius,
     webgpuEnabled: data.webgpu_enabled ?? data.webgpuEnabled ?? fallback.webgpuEnabled,
     webgpuMaxPlants: data.webgpu_max_plants ?? data.webgpuMaxPlants ?? fallback.webgpuMaxPlants,
     webgpuTier0Threshold:
@@ -1132,10 +1171,6 @@ function normalizeRenderConfig(data: RenderConfigResponse, fallback: RenderConfi
       data.webgpu_min_dwell_time ?? data.webgpuMinDwellTime ?? fallback.webgpuMinDwellTime,
     webgpuImpostorEnabled:
       data.webgpu_impostor_enabled ?? data.webgpuImpostorEnabled ?? fallback.webgpuImpostorEnabled,
-    webgpuImpostorUpdateIntervalMs:
-      data.webgpu_impostor_update_interval_ms ??
-      data.webgpuImpostorUpdateIntervalMs ??
-      fallback.webgpuImpostorUpdateIntervalMs,
     webgpuVramBudgetBytes:
       data.webgpu_vram_budget_bytes ?? data.webgpuVramBudgetBytes ?? fallback.webgpuVramBudgetBytes,
     webgpuVramMaxVertexBytes:
@@ -1154,7 +1189,12 @@ function normalizeRenderConfig(data: RenderConfigResponse, fallback: RenderConfi
       data.webgpu_texture_array_layers ??
       data.webgpuTextureArrayLayers ??
       fallback.webgpuTextureArrayLayers,
-    nodePickRadius: data.node_pick_radius ?? data.nodePickRadius ?? fallback.nodePickRadius,
+    nodePickRadiusScale:
+      data.node_pick_radius_scale ?? data.nodePickRadiusScale ?? fallback.nodePickRadiusScale,
+    ownNodePickRadius:
+      data.own_node_pick_radius ?? data.ownNodePickRadius ?? fallback.ownNodePickRadius,
+    rivalNodePickRadius:
+      data.rival_node_pick_radius ?? data.rivalNodePickRadius ?? fallback.rivalNodePickRadius,
   };
 }
 
@@ -1261,6 +1301,7 @@ function normalizeRootSightConfig(
     cutawayRadius: data.cutaway_radius ?? data.cutawayRadius ?? fallback.cutawayRadius,
     transitionMs: data.transition_ms ?? data.transitionMs ?? fallback.transitionMs,
     soilOpacity: data.soil_opacity ?? data.soilOpacity ?? fallback.soilOpacity,
+    auraRadius: data.aura_radius ?? data.auraRadius ?? fallback.auraRadius,
     apertureRadiusRatio:
       data.aperture_radius_ratio ?? data.apertureRadiusRatio ?? fallback.apertureRadiusRatio,
     apertureMinM: data.aperture_min_m ?? data.apertureMinM ?? fallback.apertureMinM,
@@ -1443,7 +1484,7 @@ export async function loadRenderConfig(serverOrigin: string): Promise<RenderConf
     cameraRecenterElevation: 0.27,
     cameraPanSpeed: 8.0,
     cameraZoomSpeed: 2.0,
-    cameraMode: 'free',
+    cameraMode: 'ground',
     idleDropTimeoutMs: 30000,
     shadowMapSize: 2048,
     shadowBias: -0.0005,
@@ -1451,8 +1492,12 @@ export async function loadRenderConfig(serverOrigin: string): Promise<RenderConf
     planetRadiusM: 100000,
     planetViewDistanceMultiplier: 3.0,
     planetViewFarMultiplier: 12.0,
-    planetViewMinDistanceMultiplier: 1.4,
+    planetViewMinDistanceMultiplier: 1.0002,
     planetViewNearMultiplier: 0.01,
+    planetViewClearanceM: 60,
+    planetViewZoomSpeed: 0.9,
+    planetViewRotateSpeed: 0.55,
+    planetReliefAmplitudeM: 650,
     debugOverlayEnabled: true,
     pauseOnHidden: true,
     qualityTiers: [
@@ -1528,6 +1573,7 @@ export async function loadRenderConfig(serverOrigin: string): Promise<RenderConf
     soilMineralStrength: 0.05,
     undergroundViewColor: '#241D16',
     growthAimRingScale: 1.6,
+    growthAtSurfaceToleranceM: 0.18,
     growthAimRingThickness: 0.004,
     growthAimRingMin: 0.02,
     growthAimGrabPx: 34,
@@ -1549,7 +1595,6 @@ export async function loadRenderConfig(serverOrigin: string): Promise<RenderConf
     cameraPivotHeightM: 1.6,
     playerGravityMps2: 9.81,
     playerSpawnHeightM: 3.5,
-    rootAuraRadius: 3.0,
     webgpuEnabled: false,
     webgpuMaxPlants: 10000,
     webgpuTier0Threshold: 300,
@@ -1560,13 +1605,14 @@ export async function loadRenderConfig(serverOrigin: string): Promise<RenderConf
     webgpuHysteresisDemote: 0.85,
     webgpuMinDwellTime: 0.5,
     webgpuImpostorEnabled: true,
-    webgpuImpostorUpdateIntervalMs: 5000,
     webgpuVramBudgetBytes: 256 * 1024 * 1024,
     webgpuVramMaxVertexBytes: 64 * 1024 * 1024,
     webgpuVramMaxIndexBytes: 16 * 1024 * 1024,
     webgpuTextureArraySize: 256,
     webgpuTextureArrayLayers: 16,
-    nodePickRadius: 0.35,
+    nodePickRadiusScale: 1.15,
+    ownNodePickRadius: 0.1,
+    rivalNodePickRadius: 0.35,
   });
 }
 
@@ -1670,6 +1716,7 @@ export async function loadRootSightConfig(serverOrigin: string): Promise<RootSig
     cutawayRadius: 7,
     transitionMs: 500,
     soilOpacity: 0.45,
+    auraRadius: 3,
     apertureRadiusRatio: 0.7,
     apertureMinM: 0.28,
     ownRootHighlightColor: '#4CAF50',

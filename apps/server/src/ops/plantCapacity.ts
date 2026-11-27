@@ -20,15 +20,20 @@ export function computePlantCapacity(plant: Plant, config: GrowthConfig): PlantC
     if (node.layer === 'root') rootBiomass += node.biomass;
   }
 
+  const waterMultiplier = Math.max(0.1, plant.archetype?.waterCapacity ?? 1);
+  const mineralMultiplier = Math.max(0.1, plant.archetype?.mineralCapacity ?? 1);
   return {
     energy: Math.max(
       config.energyCapacityFloor,
       plant.totalBiomass * config.energyCapacityPerBiomass,
     ),
-    water: Math.max(config.waterCapacityFloor, rootBiomass * config.waterCapacityPerRootBiomass),
+    water: Math.max(
+      config.waterCapacityFloor,
+      rootBiomass * config.waterCapacityPerRootBiomass * waterMultiplier,
+    ),
     minerals: Math.max(
       config.mineralCapacityFloor,
-      rootBiomass * config.mineralCapacityPerRootBiomass,
+      rootBiomass * config.mineralCapacityPerRootBiomass * mineralMultiplier,
     ),
   };
 }

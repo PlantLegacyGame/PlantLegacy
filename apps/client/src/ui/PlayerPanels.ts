@@ -9,6 +9,9 @@
 
 import { type LedgerEntry, ledgerEntryText } from '@plant-legacy/shared/economy';
 import { ownerCaption } from '../render/rivalTagLabel.ts';
+import { itemIconSvg } from './itemIcons.ts';
+import { mutationShedControl } from './mutationState.js';
+import { ownerPresence } from './ownerPresence.ts';
 import type { PlantPhase } from './PlantStatusHud.js';
 import {
   type HealthThresholds,
@@ -90,6 +93,11 @@ export interface InspectOtherView {
   owner?: string;
   /** The owner's display name, when the world sent one. */
   ownerName?: string;
+  /**
+   * Whether the owner is connected. Absent from an older server, in which case
+   * the panel says nothing rather than guessing from the missing name.
+   */
+  ownerOnline?: boolean;
   /** World id, so two rivals with no owner streamed can still be told apart. */
   plantId: string;
   parts: Array<{ type: string; count: number; biomass: number }>;
@@ -101,6 +109,12 @@ export interface InspectOtherView {
 export interface PlayerPanelsView {
   stats: PlantStatsSummary;
   phase: PlantPhase;
+  /** T12 seed identity, when the server sent it on WELCOME. */
+  archetype?: { id: string; name: string };
+  /** Where the seed was planted, as the player-faced geographic label. */
+  spawn?: { label: string };
+  spawnLatitudeDeg?: number;
+  spawnLongitudeDeg?: number;
   rerootWindowRemainingS: number | null;
   nodes: InspectNodeView[];
   mutations: InspectMutationView[];
@@ -124,6 +138,12 @@ export interface PlayerPanelsOptions {
    * with one, that card is taken and the level is applied.
    */
   onLevelMutation?: (mutationId: string, cardId?: string) => void;
+  /**
+   * Ask the server to shed a mutation, stopping its upkeep. This list is the
+   * only place that can: the retired bottom-left panel that used to carry the
+   * shed button was never mounted (D3).
+   */
+  onShed?: (mutationId: string) => void;
   /** Called after either panel closes, so the HUD can be restored. */
   onClose?: () => void;
 }
@@ -251,6 +271,27 @@ const STYLE = `
     align-items: baseline; padding: 3px 0;
     border-bottom: 1px solid rgba(126, 154, 74, 0.12); }
   .pl-other__row:last-child { border-bottom: none; }
+  /* Asleep or awake: the one fact about a rival's *player* the world shares.
+     A dot rather than a word alone, because it is read at a glance from across
+     the garden; the words carry the meaning, the colour only repeats it. */
+  .pl-other__state { display: none; align-items: center; gap: 8px;
+    padding: 4px 0 9px; margin-bottom: 5px;
+    border-bottom: 1px solid rgba(126, 154, 74, 0.16);
+    color: var(--ink-muted, #c9c2ad); }
+  #pl-inspect-panel[data-other='true'] .pl-other__state[data-state='awake'],
+  #pl-inspect-panel[data-other='true'] .pl-other__state[data-state='asleep'] {
+    display: flex;
+  }
+  .pl-other__dot { width: 7px; height: 7px; border-radius: 50%; flex: none;
+    background: var(--ink-dim, #9a937a); }
+  .pl-other__state[data-state='awake'] .pl-other__dot {
+    background: var(--sprout-300, #c8e86c);
+    box-shadow: 0 0 7px rgba(200, 232, 108, 0.75);
+  }
+  .pl-other__state[data-state='asleep'] .pl-other__dot {
+    background: var(--ink-dim, #9a937a);
+    box-shadow: inset 0 0 0 1px rgba(154, 147, 122, 0.5);
+  }
   .pl-other__type { color: var(--ink-muted, #c9c2ad); text-transform: capitalize; }
   .pl-other__count { color: var(--ink-dim, #9a937a); font-variant-numeric: tabular-nums; }
   .pl-other__biomass { color: var(--bone-100, #f7f4ed); font-variant-numeric: tabular-nums; }
@@ -281,10 +322,20 @@ const STYLE = `
   .pl-mutation__level { grid-column: 1 / -1; display: flex; align-items: center; gap: 6px;
     margin-top: 2px; }
   .pl-mutation__level span { color: var(--ink-dim, #9a937a); font-size: 0.62rem; }
-  .pl-mutation__levelup { font: 0.64rem system-ui, sans-serif; padding: 2px 8px;
-    border-radius: 5px; border: 1px solid rgba(200, 255, 128, 0.4); background: transparent;
+  /* The same 44x28 target as a shed button: a row's actions are one size
+     whether or not one of them is the dangerous one, and the panel's close is
+     28 CSS px tall. */
+  .pl-mutation__levelup { min-height: 28px; min-width: 44px; padding: 4px 10px;
+    font: 0.64rem system-ui, sans-serif; border-radius: 5px;
+    border: 1px solid rgba(200, 255, 128, 0.4); background: transparent;
     color: #dff3a0; cursor: pointer; }
   .pl-mutation__levelup:disabled { opacity: 0.4; cursor: default; }
+  .pl-mutation__shed { grid-column: 1 / -1; justify-self: start; margin-top: 3px;
+    min-height: 28px; min-width: 44px; padding: 4px 10px;
+    font: 0.64rem system-ui, sans-serif; border-radius: 5px;
+    border: 1px solid rgba(200, 150, 140, 0.4); background: transparent;
+    color: #e8c9c0; cursor: pointer; }
+  .pl-mutation__shed:disabled { opacity: 0.4; cursor: default; }
   .pl-card-deal { margin-top: 8px; padding-top: 6px; border-top: 1px dashed rgba(126, 154, 74, 0.16); }
   .pl-card-deal h4 { margin: 0 0 2px; font-size: 0.66rem; letter-spacing: 0.08em;
     text-transform: uppercase; color: var(--ink-dim, #9a937a); font-weight: 600; }
@@ -331,6 +382,7 @@ const STYLE = `
   .pl-slot {
     position: relative; display: grid; gap: 2px; min-height: 54px;
     padding: 7px 8px; border-radius: 9px; cursor: pointer;
+    color: var(--leaf-200, #dfee8e);
     border: 1px solid rgba(126, 154, 74, 0.28);
     background: linear-gradient(160deg, rgba(44, 52, 30, 0.72), rgba(25, 30, 19, 0.85));
     color: var(--bone-200, #efe9d8); text-align: left; font: inherit;
@@ -339,6 +391,10 @@ const STYLE = `
   .pl-slot.is-selected { border-color: var(--leaf-300, #c8ff80); box-shadow: 0 0 0 1px rgba(200, 255, 128, 0.35) inset; }
   .pl-slot.is-empty { color: var(--ink-dim, #9a937a); cursor: default; }
   .pl-slot__key { position: absolute; top: 4px; right: 6px; font-size: 0.6rem; color: var(--ink-dim, #9a937a); }
+  .pl-slot__icon { position: absolute; top: 6px; left: 7px; display: grid; place-items: center; opacity: 0.9; }
+  .pl-slot__icon:empty { display: none; }
+  .pl-slot__name { margin-top: 20px; }
+  .pl-slot__count { position: absolute; bottom: 5px; right: 7px; font-size: 0.72rem; }
   .pl-slot__name { font-weight: 600; overflow-wrap: anywhere; padding-right: 12px; }
   .pl-slot__count { color: var(--leaf-200, #dfee8e); font-variant-numeric: tabular-nums; }
 
@@ -477,6 +533,9 @@ export function createPlayerPanels(options: PlayerPanelsOptions = {}): PlayerPan
       <section class="pl-section pl-section--own"><h3 class="pl-section__title">Growth nodes</h3><div id="pl-nodes" class="pl-node-list"></div></section>
       <section class="pl-section pl-section--other">
         <h3 class="pl-section__title">Parts seen</h3>
+        <div id="pl-other-state" class="pl-other__state">
+          <span class="pl-other__dot"></span><span id="pl-other-state-text"></span>
+        </div>
         <div id="pl-other-rows" class="pl-other"></div>
         <div id="pl-other-summary" class="pl-panel__sub"></div>
       </section>
@@ -612,6 +671,13 @@ export function createPlayerPanels(options: PlayerPanelsOptions = {}): PlayerPan
     if (wasOpen && !next) options.onClose?.();
   }
 
+  // The panel refreshes every 200 ms while it is open, and the mutation rows used
+  // to be rebuilt on every pass: the button under the pointer was replaced between
+  // a press's down and up (so no click), and a focused row control lost focus five
+  // times a second. Rows are rebuilt only when the set they show changes, and the
+  // key that says so lives on the list itself: in a variable it could outlive the
+  // rows (after a dispose or an emptied list) and leave the block stale forever.
+
   function render(): void {
     if (!anyOpen()) return;
 
@@ -619,6 +685,12 @@ export function createPlayerPanels(options: PlayerPanelsOptions = {}): PlayerPan
     if (otherView) {
       inspect.dataset.other = 'true';
       text('#pl-inspect-sub', 'Another plant');
+      // Awake or asleep. The words first, so the state survives a colourblind
+      // read and a screenshot with the dot out of frame.
+      const presence = ownerPresence(otherView.ownerOnline);
+      const state = must<HTMLElement>(inspect, '#pl-other-state');
+      state.dataset.state = presence.state;
+      text('#pl-other-state-text', presence.text);
       const box = must<HTMLElement>(inspect, '#pl-other-rows');
       box.innerHTML = '';
       const parts = [...otherView.parts].sort((a, b) => b.biomass - a.biomass);
@@ -675,6 +747,22 @@ export function createPlayerPanels(options: PlayerPanelsOptions = {}): PlayerPan
 
     const body = must<HTMLElement>(inspect, '#pl-stat-body');
     body.innerHTML = '';
+    if (view.archetype) {
+      const row = document.createElement('div');
+      row.className = 'pl-stat-row';
+      row.innerHTML = '<span></span><b></b>';
+      (row.firstElementChild as HTMLElement).textContent = 'Seed';
+      (row.lastElementChild as HTMLElement).textContent = view.archetype.name;
+      body.appendChild(row);
+    }
+    if (view.spawn?.label) {
+      const row = document.createElement('div');
+      row.className = 'pl-stat-row';
+      row.innerHTML = '<span></span><b></b>';
+      (row.firstElementChild as HTMLElement).textContent = 'Planted';
+      (row.lastElementChild as HTMLElement).textContent = view.spawn.label;
+      body.appendChild(row);
+    }
     for (const [label, value] of plantStatRows(stats)) {
       const row = document.createElement('div');
       row.className = 'pl-stat-row';
@@ -685,7 +773,6 @@ export function createPlayerPanels(options: PlayerPanelsOptions = {}): PlayerPan
     }
 
     const mutationBox = must<HTMLElement>(inspect, '#pl-mutations');
-    mutationBox.innerHTML = '';
     const mutationEnergy = view.mutations.reduce(
       (sum, mutation) => sum + (mutation.energyPerSecond ?? 0),
       0,
@@ -706,94 +793,129 @@ export function createPlayerPanels(options: PlayerPanelsOptions = {}): PlayerPan
               : ''
           }`,
     );
-    if (view.mutations.length === 0) {
-      mutationBox.innerHTML = '<div class="pl-empty">None</div>';
-    } else {
-      for (const mutation of view.mutations) {
-        const row = document.createElement('div');
-        row.className = 'pl-mutation';
-        row.innerHTML =
-          '<span class="pl-mutation__head"><b></b><span class="pl-mutation__kind"></span></span>' +
-          '<span class="pl-mutation__numbers"></span>' +
-          '<span class="pl-mutation__bar"><i></i></span>';
-        (row.querySelector('.pl-mutation__head b') as HTMLElement).textContent = mutation.name;
-        (row.querySelector('.pl-mutation__kind') as HTMLElement).textContent = mutation.kind ?? '';
-        (row.querySelector('.pl-mutation__numbers') as HTMLElement).textContent =
-          `${(mutation.biomassPerSecond ?? 0).toFixed(3)} B/s \u00B7 ${(mutation.energyPerSecond ?? 0).toFixed(3)} E/s`;
-        const bar = row.querySelector<HTMLElement>('.pl-mutation__bar > i');
-        if (bar) {
-          const share =
-            mutationTotal > 0
-              ? ((mutation.energyPerSecond ?? 0) + (mutation.biomassPerSecond ?? 0)) / mutationTotal
-              : 0;
-          bar.style.transform = `scaleX(${Math.max(0, Math.min(1, share)).toFixed(3)})`;
-        }
+    const rowsKey = JSON.stringify([view.mutations, view.mutationLevelOffer ?? null]);
+    if (mutationBox.dataset.rowsKey !== rowsKey) {
+      mutationBox.dataset.rowsKey = rowsKey;
+      mutationBox.replaceChildren();
+      if (view.mutations.length === 0) {
+        mutationBox.innerHTML = '<div class="pl-empty">None</div>';
+      } else {
+        for (const mutation of view.mutations) {
+          const row = document.createElement('div');
+          row.className = 'pl-mutation';
+          row.innerHTML =
+            '<span class="pl-mutation__head"><b></b><span class="pl-mutation__kind"></span></span>' +
+            '<span class="pl-mutation__numbers"></span>' +
+            '<span class="pl-mutation__bar"><i></i></span>';
+          (row.querySelector('.pl-mutation__head b') as HTMLElement).textContent = mutation.name;
+          (row.querySelector('.pl-mutation__kind') as HTMLElement).textContent =
+            mutation.kind ?? '';
+          (row.querySelector('.pl-mutation__numbers') as HTMLElement).textContent =
+            `${(mutation.biomassPerSecond ?? 0).toFixed(3)} B/s \u00B7 ${(mutation.energyPerSecond ?? 0).toFixed(3)} E/s`;
+          const bar = row.querySelector<HTMLElement>('.pl-mutation__bar > i');
+          if (bar) {
+            const share =
+              mutationTotal > 0
+                ? ((mutation.energyPerSecond ?? 0) + (mutation.biomassPerSecond ?? 0)) /
+                  mutationTotal
+                : 0;
+            bar.style.transform = `scaleX(${Math.max(0, Math.min(1, share)).toFixed(3)})`;
+          }
 
-        // Levels: the player spends stored energy and biomass to raise a
-        // mutation, and picks the card themselves when the deal opens.
-        const level = mutation.level ?? 1;
-        const maxLevel = mutation.maxLevel ?? 1;
-        if (maxLevel > 1) {
-          const levelRow = document.createElement('div');
-          levelRow.className = 'pl-mutation__level';
-          const label = document.createElement('span');
-          label.textContent = `Level ${level}/${maxLevel}`;
-          levelRow.appendChild(label);
-          if (level < maxLevel) {
+          // Levels: the player spends stored energy and biomass to raise a
+          // mutation, and picks the card themselves when the deal opens.
+          const level = mutation.level ?? 1;
+          const maxLevel = mutation.maxLevel ?? 1;
+          if (maxLevel > 1) {
+            const levelRow = document.createElement('div');
+            levelRow.className = 'pl-mutation__level';
+            const label = document.createElement('span');
+            label.textContent = `Level ${level}/${maxLevel}`;
+            levelRow.appendChild(label);
+            if (level < maxLevel) {
+              const button = document.createElement('button');
+              button.type = 'button';
+              button.className = 'pl-mutation__levelup';
+              const costEnergy = mutation.levelCostEnergy ?? 0;
+              const costBiomass = mutation.levelCostBiomass ?? 0;
+              button.textContent = `Level up \u00B7 ${costEnergy.toFixed(0)} E + ${costBiomass.toFixed(0)} biomass`;
+              button.disabled = Boolean(mutation.levelBlocked);
+              button.title = mutation.levelBlocked
+                ? `Not now: ${mutation.levelBlocked.replace(/_/g, ' ')}`
+                : 'Spend stored resources and choose a card';
+              const id = mutation.id;
+              button.addEventListener('click', () => {
+                if (id) options.onLevelMutation?.(id);
+              });
+              levelRow.appendChild(button);
+            } else {
+              const done = document.createElement('span');
+              done.textContent = 'max';
+              levelRow.appendChild(done);
+            }
+            row.appendChild(levelRow);
+          }
+
+          // Shedding is the only way to stop paying a mutation's upkeep (E6), and
+          // this list is the only place it can be asked for.
+          const shed = mutationShedControl(mutation.id, view.mutationShedCooldownS ?? 0);
+          if (shed) {
             const button = document.createElement('button');
             button.type = 'button';
-            button.className = 'pl-mutation__levelup';
-            const costEnergy = mutation.levelCostEnergy ?? 0;
-            const costBiomass = mutation.levelCostBiomass ?? 0;
-            button.textContent = `Level up \u00B7 ${costEnergy.toFixed(0)} E + ${costBiomass.toFixed(0)} biomass`;
-            button.disabled = Boolean(mutation.levelBlocked);
-            button.title = mutation.levelBlocked
-              ? `Not now: ${mutation.levelBlocked.replace(/_/g, ' ')}`
-              : 'Spend stored resources and choose a card';
-            const id = mutation.id;
-            button.addEventListener('click', () => {
-              if (id) options.onLevelMutation?.(id);
-            });
-            levelRow.appendChild(button);
-          } else {
-            const done = document.createElement('span');
-            done.textContent = 'max';
-            levelRow.appendChild(done);
+            button.className = 'pl-mutation__shed';
+            button.textContent = 'shed';
+            button.disabled = shed.disabled;
+            button.title = shed.title;
+            button.addEventListener('click', () => options.onShed?.(shed.id));
+            button.dataset.mutationId = shed.id;
+            row.appendChild(button);
           }
-          row.appendChild(levelRow);
+          mutationBox.appendChild(row);
         }
-        mutationBox.appendChild(row);
+      }
+
+      // The deal, when the server has one open: three (or fewer) cards for the
+      // mutation the player asked to raise. Nothing is applied until a pick.
+      const offer = view.mutationLevelOffer;
+      if (offer && offer.cards.length > 0) {
+        const deal = document.createElement('div');
+        deal.className = 'pl-card-deal';
+        const heading = document.createElement('h4');
+        const target = view.mutations.find((mutation) => mutation.id === offer.mutationId);
+        heading.textContent = `Choose a card for ${target?.name ?? offer.mutationId}`;
+        deal.appendChild(heading);
+        for (const card of offer.cards) {
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.className = 'pl-card';
+          const title = document.createElement('b');
+          title.textContent = card.label;
+          const detail = document.createElement('span');
+          detail.textContent =
+            card.id === 'energyUpkeepMultiplier'
+              ? `\u00D7${card.step.toFixed(2)} upkeep`
+              : `\u00D7${card.step.toFixed(2)} ${card.id.replace(/([A-Z])/g, ' $1').toLowerCase()}`;
+          button.append(title, detail);
+          button.addEventListener('click', () =>
+            options.onLevelMutation?.(offer.mutationId, card.id),
+          );
+          deal.appendChild(button);
+        }
+        mutationBox.appendChild(deal);
       }
     }
 
-    // The deal, when the server has one open: three (or fewer) cards for the
-    // mutation the player asked to raise. Nothing is applied until a pick.
-    const offer = view.mutationLevelOffer;
-    if (offer && offer.cards.length > 0) {
-      const deal = document.createElement('div');
-      deal.className = 'pl-card-deal';
-      const heading = document.createElement('h4');
-      const target = view.mutations.find((mutation) => mutation.id === offer.mutationId);
-      heading.textContent = `Choose a card for ${target?.name ?? offer.mutationId}`;
-      deal.appendChild(heading);
-      for (const card of offer.cards) {
-        const button = document.createElement('button');
-        button.type = 'button';
-        button.className = 'pl-card';
-        const title = document.createElement('b');
-        title.textContent = card.label;
-        const detail = document.createElement('span');
-        detail.textContent =
-          card.id === 'energyUpkeepMultiplier'
-            ? `\u00D7${card.step.toFixed(2)} upkeep`
-            : `\u00D7${card.step.toFixed(2)} ${card.id.replace(/([A-Z])/g, ' $1').toLowerCase()}`;
-        button.append(title, detail);
-        button.addEventListener('click', () =>
-          options.onLevelMutation?.(offer.mutationId, card.id),
-        );
-        deal.appendChild(button);
-      }
-      mutationBox.appendChild(deal);
+    // The cooldown moves between server packets; write it onto the buttons that
+    // are already in the list rather than replacing them under the pointer. The
+    // buttons carry their own mutation id, so this holds no second list to fall
+    // out of step with them.
+    for (const button of mutationBox.querySelectorAll<HTMLButtonElement>('.pl-mutation__shed')) {
+      const id = button.dataset.mutationId;
+      if (!id) continue;
+      const control = mutationShedControl(id, view.mutationShedCooldownS ?? 0);
+      if (!control) continue;
+      button.disabled = control.disabled;
+      button.title = control.title;
     }
 
     const pressureBox = must<HTMLElement>(inspect, '#pl-pressure');
@@ -876,10 +998,16 @@ export function createPlayerPanels(options: PlayerPanelsOptions = {}): PlayerPan
       button.className = `pl-slot${slot ? '' : ' is-empty'}${selectedSlot === i ? ' is-selected' : ''}`;
       button.innerHTML =
         `<span class="pl-slot__key">${i === 9 ? '0' : i + 1}</span>` +
+        '<span class="pl-slot__icon"></span>' +
         `<span class="pl-slot__name"></span><span class="pl-slot__count"></span>`;
       // The server's item name wins over the pretty id (`essence_growth` is
       // "Growth Essence", not "Essence Growth"), matching the hotbar and detail.
       const gridDefinition = slot ? definitions.get(slot.itemId) : undefined;
+      // The slot shows the item's own drawing, the same one the shop sells: an
+      // item you bought in the shop and can find in the pouch has to look like
+      // one thing, and a name alone asks the player to read every slot.
+      const icon = button.querySelector<HTMLElement>('.pl-slot__icon');
+      if (icon) icon.innerHTML = slot ? itemIconSvg(slot.itemId) : '';
       (button.querySelector('.pl-slot__name') as HTMLElement).textContent = slot
         ? (gridDefinition?.name ?? prettyItemId(slot.itemId))
         : 'Empty';

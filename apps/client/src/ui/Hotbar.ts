@@ -12,6 +12,8 @@
  * with INVENTORY_SYNC, exactly as it feeds the inventory panel.
  */
 
+import { itemIconSvg } from './itemIcons.ts';
+
 export interface HotbarSlot {
   itemId: string;
   count: number;
@@ -50,7 +52,10 @@ const STYLE = `
   .pl-hotbar {
     position: fixed;
     left: 50%;
-    bottom: calc(var(--pl-hotbar-bottom, 84px) + env(safe-area-inset-bottom, 0px));
+    /* The bottom edge of the HUD. The verbs are a rail on the left now (they used
+       to be a capsule under this bar, where the pouch belongs), so the hotbar is
+       the only thing standing on the bottom of the screen and it sits on it. */
+    bottom: calc(var(--pl-hotbar-bottom, 12px) + env(safe-area-inset-bottom, 0px));
     transform: translateX(-50%);
     display: flex;
     gap: 6px;
@@ -93,7 +98,8 @@ const STYLE = `
     background: color-mix(in srgb, var(--pl-focus, #ffd27a) 16%, var(--pl-slot, #2a2318));
   }
   .pl-hotbar__slot.is-empty { opacity: 0.55; cursor: default; }
-  .pl-hotbar__icon { font-size: 18px; line-height: 1; }
+  .pl-hotbar__icon { display: grid; place-items: center; width: 20px; height: 20px; line-height: 1; }
+  .pl-hotbar__icon .pl-item-icon { display: block; }
   .pl-hotbar__count {
     position: absolute;
     right: 3px;
@@ -111,9 +117,9 @@ const STYLE = `
     color: var(--pl-ink-dim, #cbbfa4);
     opacity: 0.85;
   }
-  /* Phones: above the thumb's resting place, and above the action bar. */
+  /* Phones: on the bottom edge, clear of the home indicator. */
   @media (hover: none) and (pointer: coarse) {
-    .pl-hotbar { --pl-hotbar-bottom: 96px; gap: 3px; padding: 4px; }
+    .pl-hotbar { --pl-hotbar-bottom: 14px; gap: 3px; padding: 4px; }
     /* Ten slots at 44 px plus gaps is 478 px: it fits a 480 px phone edge to
        edge, and the bar is capped so it never overflows a narrower one. */
     .pl-hotbar {
@@ -174,12 +180,15 @@ export function createHotbar(options: HotbarOptions): HotbarAPI {
       button.title = slot
         ? `${name} (${hotbarKeyLabel(index)})`
         : `Empty (${hotbarKeyLabel(index)})`;
-      if (icon) icon.textContent = slot ? (definition?.icon ?? '◆') : '';
+      // The item's own drawing, not a diamond. A hotbar of one repeated glyph
+      // is a bar of identical buttons: a slot is only useful if the player knows
+      // what is in it without reading a tooltip (U10).
+      if (icon) icon.innerHTML = slot ? itemIconSvg(slot.itemId) : '';
       if (count) count.textContent = slot && slot.count > 1 ? String(slot.count) : '';
       // Roving tab stop: the bar is one stop in the page's tab order, and the
       // arrows walk it. Ten tab stops between the canvas and the next control
       // would trap a keyboard player in the hotbar.
-      button.tabIndex = index === (selected >= 0 ? selected : 0) ? 0 : -1;
+      button.tabIndex = index === Math.max(selected, 0) ? 0 : -1;
     }
   };
 
@@ -209,13 +218,27 @@ export function createHotbar(options: HotbarOptions): HotbarAPI {
     event.preventDefault();
     event.stopPropagation();
     const step = event.key === 'ArrowRight' ? 1 : -1;
-    const from = selected >= 0 ? selected : 0;
+    const from = Math.max(selected, 0);
     const next = (from + step + buttons.length) % buttons.length;
     api.select(next);
     buttons[next]?.focus();
   });
   options.mount.appendChild(element);
   paint();
+
+  // Publish the height of the bottom edge: the context hint and the panels that
+  // open upward (`--pl-bar-offset`) stack against it instead of guessing. It is
+  // this bar's height plus its own bottom inset, because this bar is now the
+  // lowest piece of chrome on the screen. A hidden bar reports 0.
+  const publishHeight = (): void => {
+    const rect = element.getBoundingClientRect();
+    const bottom = Number.parseFloat(getComputedStyle(element).bottom) || 0;
+    const total = element.hidden ? 0 : Math.round(rect.height + bottom);
+    document.documentElement.style.setProperty('--pl-bar-offset', `${total}px`);
+  };
+  const observer = new ResizeObserver(publishHeight);
+  observer.observe(element);
+  publishHeight();
 
   const api: HotbarAPI = {
     element,
@@ -249,8 +272,12 @@ export function createHotbar(options: HotbarOptions): HotbarAPI {
     },
     setVisible(visible) {
       element.hidden = !visible;
+      // A hidden element has no size, so measure again on the way back rather
+      // than waiting for a size change that may never come.
+      publishHeight();
     },
     destroy() {
+      observer.disconnect();
       element.remove();
       buttons = [];
     },

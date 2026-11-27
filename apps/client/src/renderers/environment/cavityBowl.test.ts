@@ -382,8 +382,9 @@ describe('which bowl skin the eye sees', () => {
 /** How far the floor sits below the mouth plane, metres. */
 function floorDepthOf(bowl: THREE.Mesh): number {
   const position = bowl.geometry.getAttribute('position');
+  const limit = (bowl.geometry.userData.collarBase as number | undefined) ?? position.count;
   let floorY = bowl.position.y;
-  for (let i = 0; i < position.count; i += 1) {
+  for (let i = 0; i < limit; i += 1) {
     if (Math.abs(position.getY(i)) < 1e-4) continue; // rim ring: not the floor
     floorY = Math.min(floorY, bowl.position.y + position.getY(i) * bowl.scale.y);
   }
@@ -393,10 +394,31 @@ function floorDepthOf(bowl: THREE.Mesh): number {
 /** Lowest point of the shell, in its own local units. */
 function lowestLocalY(bowl: THREE.Mesh): number {
   const position = bowl.geometry.getAttribute('position');
+  const limit = (bowl.geometry.userData.collarBase as number | undefined) ?? position.count;
   let lowest = 0;
-  for (let i = 0; i < position.count; i += 1) lowest = Math.min(lowest, position.getY(i));
+  for (let i = 0; i < limit; i += 1) lowest = Math.min(lowest, position.getY(i));
   return lowest;
 }
+
+describe('the attached rim collar', () => {
+  it('is part of the one shell and follows the conformed rim', () => {
+    const bowl = createCavityBowl(new THREE.Color('#3a2a1c'), new THREE.Color('#6a5440'), 24, 12);
+    const surface = (x: number): number => 0.6 * x;
+    updateCavityBowl(bowl, new THREE.Vector3(0, 0, 0), 2, 1, surface);
+    const position = bowl.geometry.getAttribute('position');
+    const base = bowl.geometry.userData.collarBase as number;
+    const columns = bowl.geometry.userData.cols as number;
+    assert.ok(base > 0 && columns > 0, 'the collar was not appended to the shell');
+    for (let c = 0; c < columns; c += 1) {
+      const top = base + c * 2;
+      assert.ok(
+        Math.abs(position.getY(top) - position.getY(c)) < 1e-6,
+        'the collar top left the rim',
+      );
+      assert.ok(position.getY(top + 1) < position.getY(top), 'the collar does not reach down');
+    }
+  });
+});
 
 /** World height of a rim vertex, and the ground it should be buried in. */
 function rimSamples(

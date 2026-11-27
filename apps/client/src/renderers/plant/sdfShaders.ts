@@ -424,7 +424,14 @@ void main() {
     vec3 toFragment = p - uCameraPos;
     float dist = length(toFragment);
     vec3 viewDir = dist > 1e-4 ? toFragment / dist : normalize(uCameraDir);
-    col = atmoApply(col, viewDir, normalize(uSunDir), dist, max(0.0, p.y));
+    col = atmoApplyRay(
+      col,
+      viewDir,
+      normalize(uSunDir),
+      dist,
+      max(0.0, uCameraPos.y),
+      max(0.0, p.y)
+    );
   }
 
   // Gamma correction

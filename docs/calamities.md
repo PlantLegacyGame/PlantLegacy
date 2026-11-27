@@ -315,7 +315,7 @@ the core, and a label with the radius and affected count.
 The server owns definitions, instances, the natural deck, exposure and damage.
 Clients render what the server sends and never decide that a plant died.
 
-Proposed protocol additions (next breaking version; the wire is v4 today):
+Proposed protocol additions (next breaking version; the wire is v5 today):
 
 | Message | Direction | Purpose |
 |---|---|---|

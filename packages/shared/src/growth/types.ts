@@ -266,6 +266,25 @@ export interface PlantMutation {
   cards?: string[];
 }
 
+export interface PlantArchetypeTraits {
+  id: string;
+  name: string;
+  growthSpeed: number;
+  waterCapacity: number;
+  mineralCapacity: number;
+  photosynthesis: number;
+  upkeep: number;
+  mutationBias: string;
+}
+
+export interface PlantSpawnPoint {
+  latitudeDeg: number;
+  longitudeDeg: number;
+  altitudeM: number;
+  label: string;
+  areaId: string | null;
+}
+
 export interface Plant {
   id: string;
   ownerId: string;
@@ -298,6 +317,13 @@ export interface Plant {
    * every pre-T06 save and every fresh seed is.
    */
   uproot?: PlantUprootState;
+  /**
+   * T12 seed archetype. Absent on old saves and on plants created by callers
+   * that predate the spawn scene; those read as the default balanced traits.
+   */
+  archetype?: PlantArchetypeTraits;
+  /** Where the seed was planted, in the player-facing geographic layer. */
+  spawn?: PlantSpawnPoint;
   /**
    * INV-GR-07: this body has been killed or removed. Set the moment
    * `PlantWorld.killPlant` takes it out of the world, so a caller holding the
@@ -462,6 +488,29 @@ export interface GrowthGeometryTunables {
   segmentTaperExponent?: number;
   /** Where a child's tube starts, as a fraction of the parent's radius. */
   socketInsetRatio?: number;
+  /**
+   * Per-organ shape and stage overrides from `growth.json`.
+   *
+   * The compiled registry in `organMorphology.ts` is the fallback and the
+   * exhaustive type check; this is the config-owned layer that lets a designer
+   * change an organ without a code change. `stages` is four `[length, width,
+   * detail]` frames in the order initiation, juvenile, expansion, mature.
+   */
+  organMorphology?: Record<string, OrganMorphologyOverride>;
+}
+
+/** The config-shaped subset of one organ's morphology. */
+export interface OrganMorphologyOverride {
+  family?: string;
+  cross_section?: string;
+  sides?: number;
+  taper_exponent?: number;
+  bend?: number;
+  tip?: string;
+  appendages?: readonly string[];
+  visual_type?: number;
+  stage_labels?: readonly string[];
+  stages?: readonly (readonly [number, number, number])[];
 }
 
 /** Where a growth step starts and ends: the parent's surface and the child's spot. */

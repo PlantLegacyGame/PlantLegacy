@@ -72,6 +72,47 @@ export const AIR_STATE: UnderwaterState = {
   amount: 0,
 };
 
+/** What the sea's height over one column needs to know. */
+export interface SeaHeightInput {
+  /** The eye's place on the pole's tangent plane, metres. */
+  x: number;
+  z: number;
+  /** How far the local tangent dome reaches, metres. */
+  domeReachM: number;
+  /** The body's water sphere, metres; 0 when there is no planet-scale sea. */
+  planetSeaRadiusM: number;
+  /** The body's radius, metres; 0 on a flat world. */
+  planetRadiusM: number;
+  /** What the local dome answers for this column, metres. */
+  domeSurfaceY: number;
+}
+
+/**
+ * The sea's height over an eye's column, or null where no sea is above it.
+ *
+ * Two bodies of water, one surface: the dome is a tangent grid over the pole
+ * and answers exactly there, while the rest of the body is a sphere about the
+ * planet's centre. The dome's own answer is a parabola around the pole, which
+ * is the same surface to within a fifth of a metre at its six-kilometre rim and
+ * four hundred metres out at forty kilometres. Sampling it that far away put an
+ * eye two kilometres over open water nine kilometres *under* it - the whole
+ * frame underwater, fog at a twelfth of its reach, and the sea's swell with
+ * nothing left to read through. Past the dome's reach the answer is the
+ * sphere's, and above the sphere's own horizon there is no water over the
+ * column at all (the root has no answer), so null is an honest reply.
+ */
+export function seaSurfaceHeightOver(input: SeaHeightInput): number | null {
+  const horizontal = Math.hypot(input.x, input.z);
+  const withinDome = input.domeReachM > 0 && horizontal <= input.domeReachM;
+  if (withinDome || !(input.planetSeaRadiusM > 0) || !(input.planetRadiusM > 0)) {
+    return input.domeSurfaceY;
+  }
+  const under =
+    input.planetSeaRadiusM * input.planetSeaRadiusM - input.x * input.x - input.z * input.z;
+  if (!(under > 0)) return null;
+  return -input.planetRadiusM + Math.sqrt(under);
+}
+
 /** The highest surface over this column of water that the eye is below. */
 export function sampleUnderwater(
   eyeY: number,

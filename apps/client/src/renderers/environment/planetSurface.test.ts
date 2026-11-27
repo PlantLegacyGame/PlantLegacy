@@ -4,10 +4,16 @@ import { DEFAULT_TERRAIN_FIELD } from '@plant-legacy/shared/world';
 import * as THREE from 'three';
 import {
   createPlanetBody,
+  createPlayDisk,
+  createTerrainFarField,
   createTerrainPatch,
   createTerrainPatches,
   createTerrainSkirt,
+  FAR_FIELD_EXTENT_M,
+  FAR_FIELD_RELIEF_M,
+  farFieldRelief,
   PLANET_BODY_SEGMENTS,
+  PLAY_DISK_CELL_M,
   patchLocalSurfaceY,
   planetFacetSag,
   planetGravity,
@@ -16,6 +22,8 @@ import {
   planetSurfaceY,
   planetTerrainY,
   planetUp,
+  SOIL_SLAB_INSET_M,
+  surfaceUpAt,
   TERRAIN_SKIN_M,
   terrainRelief,
 } from './planetSurface.ts';
@@ -75,6 +83,11 @@ describe('planet surface', () => {
     assert.ok(point.y > planetSurfaceY(RADIUS, 20, 20));
   });
 
+  it('answers world up for the flat world and planet up otherwise', () => {
+    assert.deepEqual(surfaceUpAt(0, 10, -4).toArray(), [0, 1, 0]);
+    assert.ok(surfaceUpAt(RADIUS, 30, -20).distanceTo(planetUp(RADIUS, 30, -20)) < 1e-12);
+  });
+
   it('gives gravity that points at the planet centre, opposite the surface up', () => {
     const up = planetUp(RADIUS, 30, -20);
     const gravity = planetGravity(RADIUS, 30, -20);
@@ -115,8 +128,62 @@ describe('planet surface', () => {
       planetTerrainY(RADIUS, x, z, { ...FIELD, amplitudeM: 0 }),
       planetSurfaceY(RADIUS, x, z) + TERRAIN_SKIN_M,
     );
-    // Past the patch the ground is the sphere again, so the patch rim is seamless.
-    assert.equal(terrainRelief(FIELD.patchRadiusM + 5, 0, FIELD), 0);
+    // At the patch rim the authored relief has faded to nothing and the far
+    // field has not started, so the two share the bare sphere: the seam is one
+    // surface, not a step.
+    const rim = FIELD.patchRadiusM;
+    assert.equal(terrainRelief(rim, 0, FIELD), 0);
+    assert.equal(farFieldRelief(rim, 0, FIELD), 0);
+    // The ring's hole is a square, so every point on its edge is on the seam.
+    for (const [x, z] of [
+      [rim, rim],
+      [rim, -rim * 0.5],
+      [-rim, rim * 0.25],
+      [0, -rim],
+    ] as const) {
+      assert.equal(farFieldRelief(x, z, FIELD), 0, `the far field lifts the seam at ${x}, ${z}`);
+    }
+    assert.ok(Math.abs(terrainRelief(rim + 2, 0, FIELD) - terrainRelief(rim - 2, 0, FIELD)) < 0.2);
+    // Past the rim there is relief again. The far field is sunk so most of it is
+    // sea, so it may dip under the sphere - the planet body is drawn under the
+    // water there and the trough only deepens the sea.
+    let farMin = Number.POSITIVE_INFINITY;
+    let farMax = Number.NEGATIVE_INFINITY;
+    let farEdge = 0;
+    for (let i = -12; i <= 12; i += 1) {
+      for (let j = -12; j <= 12; j += 1) {
+        const relief = farFieldRelief(i * 250, j * 250, FIELD);
+        farMin = Math.min(farMin, relief);
+        farMax = Math.max(farMax, relief);
+        if (Math.hypot(i * 250, j * 250) > 900) farEdge = Math.max(farEdge, relief);
+      }
+    }
+    assert.ok(farMin > -12, 'the far field is deeper than the sea can cover');
+    assert.ok(farEdge > 4, 'the far field has no hills');
+    assert.ok(farMax < FIELD.amplitudeM + FAR_FIELD_RELIEF_M + 2, 'the far field is unbounded');
+  });
+
+  it('carries far hills on the horizon ring, wide and proud of the sphere', () => {
+    const mesh = createTerrainFarField(RADIUS, FIELD, new THREE.MeshBasicMaterial());
+    const positions = mesh.geometry.getAttribute('position');
+    let indented = 0;
+    let outer = 0;
+    for (let i = 0; i < positions.count; i += 1) {
+      const x = positions.getX(i);
+      const z = positions.getZ(i);
+      const distance = Math.hypot(x, z);
+      outer = Math.max(outer, distance);
+      // Local Y is the drop, the relief and the skin. The ring may not sit
+      // inside the sphere it is the surface of, or the body would cover it.
+      const relief = positions.getY(i) - planetSurfaceY(RADIUS, x, z);
+      if (distance >= FIELD.patchRadiusM - 1e-6 && relief < -1e-3) indented += 1;
+    }
+    assert.equal(indented, 0, 'the horizon ring sinks into the planet body');
+    assert.ok(outer > 2500, 'the horizon ring does not reach the horizon');
+    // The ring covers the whole outer square, from the authored ring's edge.
+    mesh.geometry.computeBoundingBox();
+    const box = mesh.geometry.boundingBox;
+    assert.ok(box && Math.abs(box.min.x + FAR_FIELD_EXTENT_M / 2) < 1e-3);
   });
 
   it('carries the relief on a metre-scale patch instead of the planet sphere', () => {
@@ -180,8 +247,8 @@ describe('planet surface', () => {
       assert.ok(Math.abs(box.min.x + FIELD.patchRadiusM) < 1e-3);
     }
 
-    // The outer patch is a ring: its centre is cut away where the detailed
-    // patch sits, so the two LODs never draw coincident ground surfaces.
+    // The ring is a hole, not a sheet under the detailed patch: no triangle may
+    // lie wholly inside the inner square.
     const innerExtent = 180;
     const outerIndex = outer.geometry.getIndex();
     assert.ok(outerIndex);
@@ -203,7 +270,7 @@ describe('planet surface', () => {
         if (inside) centreTriangles += 1;
       }
     }
-    assert.equal(centreTriangles, 0, 'outer patch still covers the detailed patch');
+    assert.equal(centreTriangles, 0, 'the outer ring still overlaps the detailed patch');
   });
 
   it('stores patch heights in patch-local metres, not in planet radii', () => {
@@ -310,6 +377,110 @@ describe('the coarse ring and the body under it', () => {
     const c = new THREE.Vector3(positions.getX(loop), positions.getY(loop), positions.getZ(loop));
     const normal = b.clone().sub(a).cross(c.clone().sub(a)).normalize();
     assert.ok(normal.dot(outward) > 0, 'the skirt faces inward');
+  });
+
+  it('meets the fine sheet on a shared boundary instead of passing under it', () => {
+    // The ring's first loop is the fine sheet's own edge, vertex for vertex.
+    // Nothing overlaps and nothing sinks: the seam is one polyline with the same
+    // heights on both sides. A T-junction or a second, slightly different edge
+    // would open the hairline the old underlap was hiding.
+    const { inner, outer } = createTerrainPatches(RADIUS, FIELD, new THREE.MeshBasicMaterial(), 64);
+    const half = 180 / 2;
+    const innerPositions = inner.geometry.getAttribute('position');
+    const edge = new Map<string, number>();
+    for (let i = 0; i < innerPositions.count; i += 1) {
+      const x = innerPositions.getX(i);
+      const z = innerPositions.getZ(i);
+      if (Math.abs(Math.abs(x) - half) < 1e-4 || Math.abs(Math.abs(z) - half) < 1e-4) {
+        edge.set(`${x.toFixed(4)},${z.toFixed(4)}`, innerPositions.getY(i));
+      }
+    }
+    assert.ok(edge.size > 0, 'the fine sheet has no boundary to share');
+
+    const positions = outer.geometry.getAttribute('position');
+    const segments = Number(outer.userData.terrainEdgeSegments);
+    assert.ok(segments > 0, 'the ring did not record its boundary resolution');
+    const loopCount = segments * 4;
+    assert.equal(
+      loopCount,
+      edge.size,
+      'the ring boundary and the fine edge do not share every vertex',
+    );
+    for (let i = 0; i < loopCount; i += 1) {
+      const x = positions.getX(i);
+      const z = positions.getZ(i);
+      const key = `${x.toFixed(4)},${z.toFixed(4)}`;
+      const innerY = edge.get(key);
+      assert.notEqual(innerY, undefined, `ring boundary vertex ${i} is not on the fine edge`);
+      assert.ok(
+        Math.abs(positions.getY(i) - (innerY as number)) < 1e-4,
+        `ring boundary vertex ${i} is not at the fine height`,
+      );
+    }
+
+    // The ring has no centre: every vertex is outside the inner square. The
+    // old underlap kept a sheet in there and relied on the fine patch to hide it.
+    let inside = 0;
+    for (let i = 0; i < positions.count; i += 1) {
+      if (Math.abs(positions.getX(i)) < half - 1e-6 && Math.abs(positions.getZ(i)) < half - 1e-6) {
+        inside += 1;
+      }
+    }
+    assert.equal(inside, 0, 'the ring still passes under the fine sheet');
+    assert.equal(inner.position.y, outer.position.y, 'the two patches are on different placements');
+  });
+
+  it('does not build a vertical apron at the seam', () => {
+    // The apron closed the hairline but was itself a four-metre wall, visible
+    // from inside the play area as a white band down every valley that crossed
+    // the square. The shared edge is the closure now; no wall should come back.
+    const patches = createTerrainPatches(RADIUS, FIELD, new THREE.MeshBasicMaterial(), 32);
+    assert.equal('apron' in patches, false, 'a vertical apron is back at the seam');
+  });
+
+  it("keeps the soil slab's walls off the seam", () => {
+    // The slab's walls used to stand on the patch's own square, which is also the
+    // level of detail seam: wherever the coarse ring interpolated above the fine
+    // patch, a slice of wall - a century of strata - showed above the ground there.
+    // The walls are inset, so their top edge is under interior ground.
+    const innerExtent = Math.min(180, 620 * 2);
+    const slabHalf = innerExtent / 2 - SOIL_SLAB_INSET_M;
+    const seamHalf = innerExtent / 2;
+    assert.ok(slabHalf < seamHalf, 'the slab wall is still on the seam');
+    // Two metres of inset would leave the wall inside the ring's own hole edge
+    // (the seam minus the ring's overlap), where the fine sheet still covers it.
+    assert.ok(SOIL_SLAB_INSET_M >= 2, 'the inset is thinner than the ring overlap');
+  });
+
+  it('builds one fixed play disk whose vertices follow the terrain field', () => {
+    const disk = createPlayDisk({
+      radiusM: RADIUS,
+      field: FIELD,
+      material: new THREE.MeshBasicMaterial(),
+      playRadiusM: 40,
+    });
+    assert.equal(disk.userData.playDiskCellM, PLAY_DISK_CELL_M);
+    const positions = disk.geometry.getAttribute('position');
+    const rings = disk.userData.playDiskRings as number;
+    const segments = disk.userData.playDiskSegments as number;
+    // Every surface vertex is exactly the height function the server and the
+    // slab use; the rim wall below it is the only extra column.
+    for (let i = 0; i < 1 + rings * segments; i += 1) {
+      const x = positions.getX(i);
+      const z = positions.getZ(i);
+      const expected = patchLocalSurfaceY(RADIUS, x, z, FIELD, TERRAIN_SKIN_M);
+      assert.ok(Math.abs(positions.getY(i) - expected) < 1e-4, `vertex ${i} left the field`);
+    }
+    // The wall reaches below the deepest rim vertex, so the globe cannot show
+    // through under the edge.
+    const rimStart = 1 + (rings - 1) * segments;
+    const wallStart = 1 + rings * segments;
+    let lowestRim = Number.POSITIVE_INFINITY;
+    for (let i = rimStart; i < wallStart; i += 1)
+      lowestRim = Math.min(lowestRim, positions.getY(i));
+    for (let i = wallStart; i < wallStart + segments; i += 1) {
+      assert.ok(positions.getY(i) <= lowestRim - 1, 'the rim wall does not close the seam');
+    }
   });
 
   it('builds the planet body finer than the sag the skirt was sized for', () => {

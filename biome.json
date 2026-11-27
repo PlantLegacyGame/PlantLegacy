@@ -6,6 +6,7 @@
       "!**/node_modules",
       "!**/dist",
       "!**/.tmp",
+      "!**/.tmp-dev",
       "!config",
       "!tools/abyssal-garden-reference",
       "!**/*.md"

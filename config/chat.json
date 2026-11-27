@@ -31,6 +31,12 @@
       "value": 500,
       "range": [40, 2000],
       "notes": "Longest chat message the server accepts from one player, in characters."
+    },
+    "block_list_max": {
+      "type": "integer",
+      "value": 512,
+      "range": [16, 4096],
+      "notes": "Largest per-connection block list. New unique ids are refused at the cap; re-blocking is idempotent."
     }
   }
 }

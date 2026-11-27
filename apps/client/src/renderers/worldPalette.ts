@@ -24,6 +24,9 @@ export const WORLD_ROLES = [
   'sunlight',
   'sky_bounce',
   'sky_horizon',
+  // The top of the sky, so a puddle's reflection is the sky's own gradient and
+  // not one flat tint of it.
+  'sky_zenith',
   'soil_lit',
   'soil_mid',
   'soil_shade',

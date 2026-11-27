@@ -16,6 +16,9 @@ secrets.md
 *.log
 coverage/
 .tmp/
+.tmp-dev/
+# A stray frame/scratch buffer at the root is not source.
+/*.bin
 
 # Local capture artifacts: screenshots taken while checking a change, never
 # committed. Root-level PNG dumps, the two scratch folders, and each browser

@@ -1,3 +1,4 @@
+import { setOrganMorphologyOverrides } from './organMorphology.ts';
 import type {
   AttachmentPart,
   GrowthGeometryTunables,
@@ -141,6 +142,7 @@ export function setGrowthGeometryTunables(tunables: GrowthGeometryTunables = {})
         : DEFAULT_SOCKET_INSET_RATIO,
     ),
   );
+  setOrganMorphologyOverrides(tunables.organMorphology);
 }
 
 export function getJointFlareRatio(): number {

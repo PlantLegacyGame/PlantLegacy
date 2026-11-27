@@ -73,7 +73,7 @@ Before the fix, every bot lost its new radicle two seconds after growing it:
 A root tunnel is a `TerrainEdit`; dry soil collapses it at `collapse_cadence_hz`;
 `DamagePipeline.processTerrainCollapse` billed that collapse to every plant whose
 root was inside the radius — including the plant that dug it. The radicle has
-0.54 biomass and `terrain_collapse_damage` is 1, so the first root was destroyed,
+0.54 biomass and `terrain_collapse_damage` was 1 at the time (15 today), so the first root was destroyed,
 the menu offered a new radicle, and the player looped.
 
 Fixed by carrying the digging plant on the void and on the collapse edit, and

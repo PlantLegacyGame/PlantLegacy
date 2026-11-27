@@ -114,7 +114,13 @@ fn main(@builtin(global_invocation_id) globalId: vec3u) {
 
   let sizePx = radiusNdc * 2.0 * frame.viewportHeight;
   var tier = tierForSize(sizePx);
-  let previousTier = plant.lastTier;
+  // The previous tier comes from `renderData`, which only this pass writes.
+  // It used to come from `plants[].lastTier`, but the renderer re-uploads that
+  // buffer whole every frame with the initial "promote me" tier, so the last
+  // tier was never the last tier: every plant took the promotion branch every
+  // frame and the 0.85 demotion factor could not fire, which put both the
+  // mesh->impostor and impostor->mesh swaps at the same size (E42).
+  let previousTier = renderData[index].tier;
 
   // Hysteresis compares against the tier the plant would occupy with a
   // shrunk/expanded projected size. Clamping (rather than reverting to the
@@ -139,26 +145,29 @@ fn main(@builtin(global_invocation_id) globalId: vec3u) {
   // Cross-fade blend factor: 0.0 = pure mesh, 1.0 = pure billboard. Only the
   // mesh/billboard boundary (tiers 1 <-> 2) cross-fades; other tiers are
   // single-LOD, and the own plant never fades at all.
-  let crossesBoundary =
-    previousTier < 4u &&
-    ((previousTier < 2u && stableTier >= 2u && stableTier < 4u) ||
-      (previousTier >= 2u && previousTier < 4u && stableTier < 2u));
-  let isTransitioning = crossesBoundary && isOwn <= 0.5;
-  // Dwell has to accumulate across frames for the fade to ramp; resetting it
-  // to zero every frame while transitioning made blend snap from 0 to 1 (a pop).
-  var dwellTime = 0.0;
-  if (isTransitioning) {
-    dwellTime = plant.dwellTime + frame.deltaTime;
+  //
+  // The factor is its own state: it is read back from `renderData` and stepped
+  // by `deltaTime / minDwellTime` towards the tier's look, so the fade ramps
+  // over the dwell instead of snapping on the frame the tier changed. It used
+  // to be recomputed from a dwell timer kept in `plants[]`, which the renderer
+  // re-uploads with a full timer every frame - and the transition test only
+  // held on the frame the tier changed, so even an intact timer could not have
+  // ramped (E43).
+  let targetBlend = select(0.0, 1.0, stableTier >= 2u);
+  let previousBlend = renderData[index].blendFactor;
+  var blend = targetBlend;
+  // `previousTier` above 2 means the plant was tier 3 or culled: it has no mesh
+  // to fade against, and a plant coming back into view takes its look at once.
+  // The own plant needs no case of its own: it is pinned to tier 0, so its
+  // target is already 0 and its blend is already there.
+  if (previousTier <= 2u && stableTier <= 2u) {
+    let step = frame.deltaTime / max(frame.minDwellTime, 0.001);
+    if (previousBlend < targetBlend) {
+      blend = min(targetBlend, previousBlend + step);
+    } else {
+      blend = max(targetBlend, previousBlend - step);
+    }
   }
 
-  var blend = 0.0;
-  if (isTransitioning) {
-    blend = clamp(dwellTime / max(frame.minDwellTime, 0.001), 0.0, 1.0);
-  } else if (stableTier >= 2u) {
-    blend = 1.0;
-  }
-
-  plants[index].lastTier = stableTier;
-  plants[index].dwellTime = dwellTime;
   renderData[index] = PlantRenderData(stableTier, 1u, sizePx, blend, plant.groundY);
 }

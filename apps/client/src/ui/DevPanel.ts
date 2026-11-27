@@ -26,6 +26,8 @@ export interface DevPanelAPI {
 }
 
 export interface DevPanelConfig {
+  /** Absolute URL of the server's dev-config endpoint (`GET`/`POST`). */
+  devConfigUrl: string;
   environmentRenderer: {
     setTimeOfDay: (t: number) => void;
     setTimeFrozen: (frozen: boolean) => void;
@@ -85,9 +87,21 @@ export interface DevPanelConfig {
   };
   camera: {
     setPlanetView: (enabled: boolean) => void;
+    /** Dev-only: re-aim the orbit at the lit side after a time change. */
+    framePlanetTowardSun: () => void;
     setDistance: (dist: number) => void;
+    /** Dollying to a distance and looking down from an elevation, in degrees. */
+    setPose: (distance: number, elevationDeg: number) => void;
+    getDistance: () => number;
+    getSmoothing: () => number;
+    getBounds: () => { min: number; max: number; planetRadiusM: number };
     setSmoothing: (s: number) => void;
     setBounds: (min: number, max: number) => void;
+    /** Back to the starting view, after a long-range shot. */
+    resetView: () => void;
+    /** Dev-only: the orbit cap and spring arm, so a long shot can be framed. */
+    unclamped: () => boolean;
+    setUnclamped: (enabled: boolean) => void;
   };
   ui: {
     setTextScale: (scale: number) => void;
@@ -156,6 +170,11 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
     top: 60px;
     right: 20px;
     z-index: 10000;
+    /* The panel is a column: header, tabs, search field, content. Without this
+       the browser default laid the whole panel out as a row - seven tabs
+       stacked down one 130 px strip, the content in another, both clipped -
+       and every control was unreadable. */
+    flex-direction: column;
     background: linear-gradient(180deg, var(--bark-900) 0%, var(--bark-800) 100%);
     border: 2px solid var(--leaf-600);
     border-radius: 12px;
@@ -215,6 +234,8 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
     ">
     <div class="dp-content" style="
       padding:12px 16px;
+      flex:1 1 auto;
+      min-height:0;
       max-height:calc(100vh - 200px);
       overflow-y:auto;
       scrollbar-width:thin;
@@ -854,10 +875,15 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
       label: 'Camera',
       build: (container, cfg) => {
         const cam = cfg.camera;
+        // The fields used to show constants (0.05, 10, 200) no matter what the
+        // camera actually had, so the panel's own reading disagreed with the
+        // view it was editing. They read the live rig now.
+        const bounds = cam.getBounds();
+        const planetRadius = bounds.planetRadiusM > 0 ? bounds.planetRadiusM : 100_000;
         addSection(container, 'Settings', [
           createNumberInput(
             'Smoothing',
-            () => 0.05,
+            () => cam.getSmoothing(),
             (v) => cam.setSmoothing(v),
             0,
             0.5,
@@ -865,51 +891,59 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
           ),
           createNumberInput(
             'Min Distance',
-            () => 10,
+            () => cam.getBounds().min,
             (v) => {
               const max =
-                (document.getElementById('dev-cam-max') as HTMLInputElement)?.valueAsNumber ?? 200;
+                (document.getElementById('dev-cam-max') as HTMLInputElement)?.valueAsNumber ??
+                cam.getBounds().max;
               cam.setBounds(v, max);
             },
             1,
-            100,
+            planetRadius,
             1,
             'm',
           ),
           createNumberInput(
             'Max Distance',
-            () => 200,
+            () => cam.getBounds().max,
             (v) => {
               const min =
-                (document.getElementById('dev-cam-min') as HTMLInputElement)?.valueAsNumber ?? 10;
+                (document.getElementById('dev-cam-min') as HTMLInputElement)?.valueAsNumber ??
+                cam.getBounds().min;
               cam.setBounds(min, v);
             },
             50,
-            1000,
+            planetRadius * 5,
             10,
             'm',
           ),
         ]);
+        addSection(container, 'Measurement', [
+          createToggle(
+            'Unclamped Distance',
+            () => cam.unclamped(),
+            (v) => cam.setUnclamped(v),
+          ),
+        ]);
         addSection(container, 'Presets', [
           createButtonGroup('Quick', [
-            { label: 'Top Down', action: () => cam.setDistance(150) },
-            { label: 'Side View', action: () => cam.setDistance(80) },
-            { label: 'Close Up', action: () => cam.setDistance(20) },
-            { label: 'Far View', action: () => cam.setDistance(300) },
+            { label: 'Top Down', action: () => cam.setPose(150, 78) },
+            { label: 'Side View', action: () => cam.setPose(80, 6) },
+            { label: 'Close Up', action: () => cam.setPose(20, 24) },
+            { label: 'Far View', action: () => cam.setPose(300, 12) },
           ]),
           createButtonGroup('Planet', [
             { label: 'Orbit Planet', action: () => cam.setPlanetView(true) },
+            // The local rig can pull out to the whole body too; the difference
+            // is that this one keeps the player's patch as the orbit target, so
+            // the planet turns under a fixed point of interest.
+            {
+              label: 'From Local',
+              action: () => cam.setPose(planetRadius * 2.4, 32),
+            },
             { label: 'Local View', action: () => cam.setPlanetView(false) },
           ]),
-          createButtonGroup('Reset', [
-            {
-              label: 'Reset Defaults',
-              action: () => {
-                cam.setBounds(10, 200);
-                cam.setSmoothing(0.05);
-              },
-            },
-          ]),
+          createButtonGroup('Reset', [{ label: 'Reset View', action: () => cam.resetView() }]),
         ]);
       },
     },
@@ -1030,6 +1064,12 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
             { label: 'Dawn', action: () => send(8, { type: 'dev_set_time', time_of_day: 0.25 }) },
             { label: 'Noon', action: () => send(8, { type: 'dev_set_time', time_of_day: 0.5 }) },
             { label: 'Dusk', action: () => send(8, { type: 'dev_set_time', time_of_day: 0.75 }) },
+          ]),
+          // The rival-click check in one press: a second seed beside yours, in
+          // daylight. Without it the check needed a second browser profile and a
+          // clock move (germination is gated by light).
+          createButtonGroup('Rival', [
+            { label: 'Spawn Rival + Noon', action: () => send(8, { type: 'dev_spawn_rival' }) },
           ]),
         ]);
         addSection(container, 'Game Switches', [
@@ -1526,6 +1566,9 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
   // ===== API =====
   function show(): void {
     visible = true;
+    // Re-read the server every time the panel opens: another client or a reset
+    // can have changed a switch since it was last shown (E21).
+    void loadConfig();
     panel.style.display = 'block';
     document.body.style.overflow = 'hidden';
     searchEl.style.display = 'block';
@@ -1560,7 +1603,7 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
   // Load dev config from server
   async function loadConfig(): Promise<void> {
     try {
-      const response = await fetch('/dev/config', { credentials: 'omit' });
+      const response = await fetch(config.devConfigUrl, { credentials: 'omit' });
       if (!response.ok) {
         console.warn('[DevPanel] Failed to load config:', response.status);
         return;
@@ -1605,7 +1648,7 @@ export function createDevPanel(config: DevPanelConfig): DevPanelAPI {
   async function resetToDefaults(): Promise<void> {
     if (!confirm('Reset all dev config to defaults?')) return;
     try {
-      const response = await fetch('/dev/config', {
+      const response = await fetch(config.devConfigUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ reset: true }),

@@ -55,6 +55,11 @@ function checkValue(
   if (value === null && rule.nullable === true) {
     return;
   }
+  // An optional field present as `undefined` is how an in-memory payload
+  // omits it; JSON would drop the key. Do not fail the whole message for it.
+  if (value === undefined && !rule.required) {
+    return;
+  }
 
   switch (rule.type) {
     case 'string':
@@ -252,6 +257,51 @@ const tile: FieldRule = {
   },
 };
 
+const spawnSelection: FieldRule = {
+  type: 'object',
+  required: false,
+  fields: {
+    archetypeId: { type: 'string' },
+    areaId: { type: 'string' },
+    latitudeDeg: { type: 'number' },
+    longitudeDeg: { type: 'number' },
+  },
+};
+
+/** The archetype wire shape; optional on WELCOME and PLANT_CREATED. */
+const archetypeWire: FieldRule = {
+  type: 'object',
+  required: false,
+  fields: {
+    id: { type: 'string', required: true },
+    name: { type: 'string', required: true },
+    // WELCOME and PLANT_CREATED carry the plant-owned trait subset, not the
+    // spawn scene's cosmetic card fields.
+    description: { type: 'string' },
+    color: { type: 'string' },
+    seedScale: { type: 'number' },
+    growthSpeed: { type: 'number', required: true },
+    waterCapacity: { type: 'number', required: true },
+    mineralCapacity: { type: 'number', required: true },
+    photosynthesis: { type: 'number', required: true },
+    upkeep: { type: 'number', required: true },
+    mutationBias: { type: 'string', required: true },
+  },
+};
+
+/** Where the seed landed, in the user-facing geodetic frame. */
+const spawnWire: FieldRule = {
+  type: 'object',
+  required: false,
+  fields: {
+    latitudeDeg: { type: 'number', required: true },
+    longitudeDeg: { type: 'number', required: true },
+    altitudeM: { type: 'number', required: true },
+    label: { type: 'string', required: true },
+    areaId: { type: 'string', required: false, nullable: true },
+  },
+};
+
 export const MESSAGE_SCHEMAS: Record<number, Record<string, FieldRule>> = {
   // Client -> Server
   1: {
@@ -263,6 +313,9 @@ export const MESSAGE_SCHEMAS: Record<number, Record<string, FieldRule>> = {
     // The name other players see. Optional so an old client still connects;
     // the server sanitizes it and falls back to 'Player'.
     displayName: { type: 'string' },
+    // T12 seed selection. Absent means free random spawn, which is what every
+    // pre-spawn-scene client sends.
+    spawn: spawnSelection,
   },
   2: {
     // INPUT
@@ -353,6 +406,8 @@ export const MESSAGE_SCHEMAS: Record<number, Record<string, FieldRule>> = {
       type: 'array',
       items: { type: 'object', fields: fullNode.fields as Record<string, FieldRule> },
     },
+    archetype: archetypeWire,
+    spawn: spawnWire,
   },
   11: {
     // STATE
@@ -435,6 +490,10 @@ export const MESSAGE_SCHEMAS: Record<number, Record<string, FieldRule>> = {
           // The owner's display name for the tag over their plant, when they
           // are connected. Optional: an offline plant has only its id.
           ownerName: { type: 'string', required: false },
+          // Whether the owner is at the keyboard. The tag used to answer this
+          // only by omission - a nameless plant was an absent player - which is
+          // a rule a reader cannot see; the panel says it in words instead.
+          ownerOnline: { type: 'boolean', required: false },
           rootNodeId: { type: 'string', required: false, nullable: true }, // null for ungerminated plants
           totalBiomass: { type: 'number', required: true },
           totalEnergy: { type: 'number', required: true },
@@ -458,6 +517,7 @@ export const MESSAGE_SCHEMAS: Record<number, Record<string, FieldRule>> = {
         // Same display name as PLANT_SYNC, so a rival that sprouts next to the
         // player is tagged without waiting for the next full sync.
         ownerName: { type: 'string', required: false },
+        ownerOnline: { type: 'boolean', required: false },
         rootNodeId: { type: 'string', required: false, nullable: true }, // null for ungerminated plants
         totalBiomass: { type: 'number', required: true },
         totalEnergy: { type: 'number', required: true },
@@ -466,6 +526,8 @@ export const MESSAGE_SCHEMAS: Record<number, Record<string, FieldRule>> = {
           type: 'array',
           items: { type: 'object', fields: fullNode.fields as Record<string, FieldRule> },
         },
+        archetype: archetypeWire,
+        spawn: spawnWire,
       },
     },
   },
@@ -539,10 +601,15 @@ export const MESSAGE_SCHEMAS: Record<number, Record<string, FieldRule>> = {
     mode: { type: 'string' },
   },
   23: {
-    // CHAT_BROADCAST (server -> client)
+    // CHAT_BROADCAST (server -> client). A chat line carries `message`; an
+    // emote carries `emoteId` + `type: 'emote'` and deliberately has no message
+    // text. Requiring `message` here made every emote fail validation and the
+    // client dropped the broadcast as malformed.
     playerId: { type: 'string', required: true },
     playerName: { type: 'string', required: true },
-    message: { type: 'string', required: true },
+    message: { type: 'string' },
+    emoteId: { type: 'string' },
+    type: { type: 'string' },
     timestamp: { type: 'number', required: true },
   },
   27: {
@@ -611,7 +678,9 @@ export const MESSAGE_SCHEMAS: Record<number, Record<string, FieldRule>> = {
     id: { type: 'string', required: true },
   },
   49: {
-    // RESPAWN (client -> server): nothing to say. The server picks the spot.
+    // RESPAWN (client -> server). `spawn` is the same optional selection HELLO
+    // accepts; absent keeps the free random seed.
+    spawn: spawnSelection,
   },
   36: {
     // MUTATION_SHED (client -> server). `plantId` must be the caller's own plant;

@@ -45,6 +45,8 @@ export default defineConfig({
       // The title screen reads the world clock before any socket exists.
       '/world': serverOrigin,
       '/config': serverOrigin,
+      // The seed scene's archetypes, areas, bounds and balance.
+      '/spawn': serverOrigin,
       // Dev-tool probes and actions (/dev/config). Without this the browser asked
       // Vite, got a 404, and the dev panel refused to open in the very
       // environment it is allowed in.

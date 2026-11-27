@@ -12,7 +12,7 @@
       "type": "integer",
       "value": 10000,
       "range": [10, 50000],
-      "description": "Design target for max players per world"
+      "description": "Hard cap on concurrent players in the world; a new HELLO is refused with SERVER_FULL at the cap. Reconnects that reclaim their existing plant are still allowed."
     },
     "reconnect_window_min": {
       "type": "number",

@@ -36,15 +36,18 @@ C01's asset loader will fail the build when a file has no entry in this manifest
 ## Notes
 
 The client bundles third-party **code** dependencies through pnpm (Three.js,
-Vite, `@vitejs/plugin-legacy`, `ws`, `pg`, `bcryptjs`, `jsonwebtoken`); their licenses travel with the
-packages in `node_modules`, and none are committed as asset files. The UI still
-uses system fonts and hand-written CSS. No image, model, texture, sound or font
-file is committed, so the asset manifest stays empty.
+Rapier, Vite, `@vitejs/plugin-legacy`, `ws`, `pg`, `bcryptjs`, `jsonwebtoken`,
+`@node-rs/argon2`); their licenses travel with the packages in `node_modules`,
+and none are committed as asset files. `pnpm docs:check` fails when a declared
+dependency has no row below, so a new package cannot arrive unattributed. The UI
+still uses system fonts and hand-written CSS. No image, model, texture, sound or
+font file is committed, so the asset manifest stays empty.
 
 ### Server runtime dependencies
 
 | Package | Version | License | Purpose |
 |---|---|---|---|
+| `@dimforge/rapier3d-compat` | 0.21.0 | Apache-2.0 | Rapier physics: plant capsule colliders and the ground trimesh the crawl and damage pipeline test against. Collision geometry only, never a determinism authority (ADR-083) |
 | `@node-rs/argon2` | 2.2.2 | MIT | Argon2id password hashing (`argon2_*` in `config/accounts.json`) |
 | `bcryptjs` | 2.4.3 | MIT | Legacy bcrypt password-hash verification only (`bcrypt_cost` in `config/accounts.json`) |
 | `jsonwebtoken` | 9.0.2 | MIT | JWT access/refresh tokens |
@@ -55,6 +58,7 @@ file is committed, so the asset manifest stays empty.
 
 | Package | Version | License | Purpose |
 |---|---|---|---|
+| `@dimforge/rapier3d-compat` | 0.21.0 | Apache-2.0 | Rapier physics: plant colliders, the ground trimesh and the Rapier world the client steps for collision (ADR-083) |
 | `three` | 0.187.0 | MIT | 3D rendering |
 | `ws` | 8.22.1 | MIT | WebSocket client |
 
@@ -63,6 +67,7 @@ file is committed, so the asset manifest stays empty.
 | Package | Version | License | Purpose |
 |---|---|---|---|
 | `@biomejs/biome` | 2.6.4 | MIT | Lint + format |
+| `@types/bcryptjs` | 2.4.6 | MIT | bcryptjs types |
 | `@types/node` | 24.19.2 | MIT | Node types |
 | `@types/pg` | 8.11.0 | MIT | pg types |
 | `@types/ws` | 8.18.2 | MIT | ws types |

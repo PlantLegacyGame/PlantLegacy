@@ -14,6 +14,10 @@ before(async () => {
     JSON.stringify({ values: { day_length_s: { value: 600 }, season_length_days: { value: 4 } } }),
   );
   await writeFile(
+    join(dir, 'terrain_volume.json'),
+    JSON.stringify({ values: { enabled: { value: true }, centre_x_m: { value: 21 } } }),
+  );
+  await writeFile(
     join(dir, 'palette.json'),
     JSON.stringify({
       values: {
@@ -47,6 +51,14 @@ describe('handleConfigRequest', () => {
     assert.deepEqual(result?.body, { day_length_s: 600, season_length_days: 4 });
   });
 
+  it('serves the volume region the client builds terrain from', async () => {
+    // The route list is hand-maintained, so a system the client fetches has to
+    // be named here or it silently runs on compiled-in defaults.
+    const result = await handleConfigRequest(req('/config/terrain_volume'), dir);
+    assert.equal(result?.status, 200);
+    assert.deepEqual(result?.body, { enabled: true, centre_x_m: 21 });
+  });
+
   it('serves the palette the UI tokens resolve against', async () => {
     const result = await handleConfigRequest(req('/config/palette'), dir);
     assert.equal(result?.status, 200);
@@ -68,9 +80,12 @@ describe('handleConfigRequest', () => {
     assert.deepEqual(body.essence, { hud: 50 });
   });
 
-  it('answers nothing for a path it does not serve, so the caller can 404', async () => {
+  it('answers nothing for a path it does not serve or a file that is missing', async () => {
     assert.equal(await handleConfigRequest(req('/config/not_a_system'), dir), null);
     assert.equal(await handleConfigRequest(req('/config/'), dir), null);
+    // A named system with no file is a 404 too, not `{}`: an empty body would
+    // read like a config whose every key had been removed.
+    assert.equal(await handleConfigRequest(req('/config/daynight'), join(dir, 'empty')), null);
     assert.equal(await handleConfigRequest(req('/health'), dir), null);
   });
 
@@ -82,9 +97,15 @@ describe('handleConfigRequest', () => {
     assert.deepEqual(result?.body, { error: 'config_unreadable', config: 'onboarding' });
   });
 
-  it('falls back to the route default when a system file is missing', async () => {
-    const result = await handleConfigRequest(req('/config/daynight'), join(dir, 'empty'));
+  it('serves a system no route names, so a new config file cannot 404', async () => {
+    // The route used to be a hand-maintained list: a file the client fetched but
+    // nobody added answered 404 and the client ran on compiled-in defaults.
+    await writeFile(
+      join(dir, 'unlisted_system.json'),
+      JSON.stringify({ values: { answer: { value: 42 } } }),
+    );
+    const result = await handleConfigRequest(req('/config/unlisted_system'), dir);
     assert.equal(result?.status, 200);
-    assert.deepEqual(result?.body, {});
+    assert.deepEqual(result?.body, { answer: 42 });
   });
 });

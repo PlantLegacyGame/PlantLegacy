@@ -15,9 +15,12 @@ shedding rule does not.
 
 - `PlantWorld.step()` returns `{ activeMs, nearMs, dormantMs, totalMs }`.
 - Tiers are **scheduled, not scaled**: `near` and `dormant` accumulate elapsed
-  milliseconds and step once per interval (`nearTickRateHz`,
-  `dormantTickRateHz`). A tier therefore runs at exactly its configured rate
-  instead of being stretched by a per-tick `dt` multiplier.
+  milliseconds and step once per interval. Near has a rate of its own
+  (`near_tick_rate_hz`, 5); Dormant is configured as an interval
+  (`dormant_step_interval_sec`, 30) and the code takes its reciprocal
+  (`dormantTickRateHz` = 1/30 Hz), which is why there is no
+  `dormant_tick_rate_hz` key. A tier therefore runs at exactly its configured
+  rate instead of being stretched by a per-tick `dt` multiplier.
 - `checkTickBudget` runs on **every tick** (not every 100) and publishes
   `GAME_EVENTS.TICK_BUDGET_WARNING` when Active's share of the tick exceeds
   `tick_budget_active_share`, **or** when Active time exceeds
@@ -40,6 +43,7 @@ shedding rule does not.
 | `tick_budget_active_share` | 0.7 | Max Active share of tick time before a warning |
 | `tick_budget_warn_threshold_ms` | 40 | Active-time warning threshold |
 | `near_tick_rate_hz` | 5 | Near-tier step rate |
+| `dormant_step_interval_sec` | 30 | Dormant tier steps once per 30 s (1/30 Hz) |
 | `snapshot_interval_ticks` | 6000 | Persistence slice interval |
 | `metrics_path` | `/metrics` | Where the tick window is served; empty disables it |
 | `metrics_window_ticks` | 300 | Samples kept (15 s at 20 Hz) |

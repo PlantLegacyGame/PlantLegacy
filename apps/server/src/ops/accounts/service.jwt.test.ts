@@ -26,6 +26,7 @@ const config: AccountsConfig = {
   rateLimitSignupPerHour: 5,
   rateLimitLoginPerMinute: 10,
   rateLimitRefreshPerMinute: 20,
+  rateLimitDisplayNamePerMinute: 5,
   lockoutMaxFailedAttempts: 5,
   lockoutDurationMin: 15,
   argon2MemoryKib: 8192,

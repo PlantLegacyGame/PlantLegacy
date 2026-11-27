@@ -65,7 +65,6 @@ function config(overrides: Partial<MutationsConfig> = {}): MutationsConfig {
     upkeepMaxMultiplier: 10,
     upkeepBiomassFloor: 8,
     oversizeWiltPerS: 0.02,
-    oversizeLeakPerS: 0.05,
     levelUp: {
       maxLevel: 3,
       cardsPerOffer: 3,
@@ -76,6 +75,7 @@ function config(overrides: Partial<MutationsConfig> = {}): MutationsConfig {
       baseBiomassFraction: 0.05,
       biomassFractionPerLevel: 0.05,
       minBiomassCost: 1,
+      maxEnergyShareOfCapacity: 0.8,
       upkeepPerLevel: 0.15,
       cardSteps: {
         sizeMultiplier: 1.15,
@@ -442,6 +442,20 @@ describe('T04 mutation levels', () => {
     assert.equal(checkLevelUp(p, cfg, 'leafy').reason, 'insufficient_biomass');
 
     assert.equal(checkLevelUp(p, cfg, 'not_held').reason, 'mutation_not_held');
+  });
+
+  it('never bills more energy than a share of what the plant can store (C11)', () => {
+    const cfg = config();
+    const p = plant();
+    p.totalBiomass = 500;
+    // Uncapped, this body owes 10 + 500 energy for its first level.
+    assert.equal(levelUpCost(p, cfg, 1).energy, 510);
+    // Against a 200 E tank the bill stops at 80% of it, so a full tank pays.
+    assert.equal(levelUpCost(p, cfg, 1, 200).energy, 160);
+    p.mutations = [{ id: 'leafy', acquiredTick: 1, nodeId: null, level: 1 }];
+    p.totalEnergy = 200;
+    assert.equal(checkLevelUp(p, cfg, 'leafy', 200).ok, true);
+    assert.equal(checkLevelUp(p, cfg, 'leafy').reason, 'insufficient_energy');
   });
 
   it('deals only cards the mutation can grow into, and never repeats one', () => {

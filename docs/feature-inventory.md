@@ -35,9 +35,9 @@ Defects live in `bug-inventory.md`, values in `config/`, task scope in `DESIGN.m
 
 | ID | Feature | Task | Code home | Status | Open issues | Next action | Pri |
 |---|---|---|---|---|---|---|---|
-| F08 | WebSocket protocol v4 handshake | T03P | `ops/net.ts`, `shared/protocol` | ✔ | INV-NET-16 client keeps its own message table | — | P2 |
+| F08 | WebSocket protocol v5 handshake | T03P | `ops/net.ts`, `shared/protocol` | ✔ | INV-NET-16 client keeps its own message table | — | P2 |
 | F09 | 20 Hz tick, STATE/KEYFRAME cadence, broadcast budget | T03 | `tick/`, `broadcastCadence.ts` | ✔ | 1-B live check blocked | — | P2 |
-| F10 | Interest management and per-client entity caps | T03 | `ops/interestManager.ts` | ✔ | DEF-11 partial | — | P2 |
+| F10 | Interest management and per-client entity caps | T03 | `ops/interestManager.ts`, `ops/plantVisibility.ts`, `tick/stateBroadcast.ts` | ✔ | DEF-11 partial: `per_client_entity_cap` now caps plant sync, range announcements and STATE/KEYFRAME; the separate entity-list/detail-level path still has no caller | — | P2 |
 | F11 | Reclaim, reconnect window and away deltas | T03 | `main.ts`, `ops/persistence/` | ✔ | — | — | P3 |
 | F12 | Input heartbeat (camera is client-side) | T03P | `main.ts`, `shared/protocol` | ✔ | by design | — | P3 |
 | F13 | Payload validation on both boundaries | T03P | `shared/protocol/messageSchemas.ts` | ✔ | — | — | P3 |
@@ -67,7 +67,7 @@ Defects live in `bug-inventory.md`, values in `config/`, task scope in `DESIGN.m
 | F27 | Mutation upkeep with a biomass floor | T04 | `ops/plantWorld.ts` | ✔ | E6 closed | — | P3 |
 | F28 | Mutation shedding and cooldown | T04 | `ops/plantWorld.ts` | ✔ | — | — | P3 |
 | F29 | Level-up cards (`MUTATION_LEVEL`) | T04 | `ops/mutations/service.ts` | ✔ | — | — | P3 |
-| F30 | Visual signatures and the mutation panel | T04 | `config/mutation_visuals.json`, `ui/MutationPanel.ts` | ✔ | C1–C10 closed | — | P3 |
+| F30 | Visual signatures and the mutation list in Inspect | T04 | `config/mutation_visuals.json`, `ui/PlayerPanels.ts`, `ui/mutationState.ts` | ✔ | C1–C10 closed | — | P3 |
 | F31 | Dev mutation gallery | T04 | `ops/plantWorld.ts` | ✔ | — | — | P3 |
 
 ## Damage and uproot
@@ -88,9 +88,9 @@ Defects live in `bug-inventory.md`, values in `config/`, task scope in `DESIGN.m
 |---|---|---|---|---|---|---|---|
 | F39 | Spore purse: earn, spend, cap | T13 | `ops/spores.ts`, `config/spores.json` | ✔ | — | — | P3 |
 | F40 | Shop catalogue and server-checked purchase | C05 | `ops/shop.ts`, `ui/ShopPanel.ts` | ✔ | — | — | P2 |
-| F41 | Pouch, ten slots, hotbar and number keys | T08A | `ui/Hotbar.ts`, `player_state` | ◐ | Item use and slot swap not RMW | T08A | P0 |
+| F41 | Pouch, ten slots, hotbar and number keys | T08A | `ui/Hotbar.ts`, `player_state` | ✔ | — | — | P3 |
 | F42 | Item definitions, names and Use | T08A | `config/items.json`, `ops/items.ts` | ◐ | I1/I2 browser pass | Verify in browser | P1 |
-| F43 | `player_state` restart copy of pouch and purse | T08A | `ops/persistence/`, `accounts` | ✔ | Awards still follow the live object | T08A | P2 |
+| F43 | `player_state` restart copy of pouch and purse | T08A | `ops/persistence/`, `accounts` | ✔ | — | — | P3 |
 | F44 | World drops: spawn, expire, collect | T06/T08A | `renderers/WorldDrops.ts`, `ops/dropPickup.ts` | ✔ | T06 checklist | — | P2 |
 | F45 | Spore chip and purse HUD | T13 | `ui/SporeChip.ts` | ✔ | — | — | P3 |
 
@@ -117,10 +117,10 @@ Defects live in `bug-inventory.md`, values in `config/`, task scope in `DESIGN.m
 | F57 | One-tick plant interpolation | P0/2-B | `render/PlantInterpolation.ts` | ◐ | Dormant visual cue | — | P2 |
 | F58 | Sky, sun/moon arcs, atmosphere and fog | C03 | `environment/atmosphere.ts`, `celestial.ts` | ✔ | A03 needs HDR/post | — | P1 |
 | F59 | Rain, snow, lightning and server strikes | C03/T07 | `rainSystem.ts`, `lightningBolt.ts` | ✔ | F16, F20, F21 closed | — | P2 |
-| F60 | Water: film, table, river, sea, underwater | T31/C03 | `environment/waterField.ts`, `waterMaterial.ts`, `ocean.ts` | ◐ | D01/D04: still surfaces | T55 water | P0 |
+| F60 | Water: film, table, river, sea, underwater | T31/C03 | `environment/waterMaterial.ts`, `surfaceWaterField.ts`, `waterFieldTuning.ts`, `ocean.ts`, `underwater.ts` | ◐ | D01/D04: still surfaces | T55 water | P0 |
 | F61 | Root Sight cutaway, aperture, bowl, occlusion | T02 | `rootSight/`, `environment/cavity/` | ◐ | A1, A8, R1–R5, U03 | D02 real geometry | P0 |
 | F62 | Surface cutaway and coverage edge | T25/C03 | `environment/ground/shaderOverrides.ts` | ◐ | D02 removes the discard | — | P1 |
-| F63 | Ink, outlines and organ shading | C02 | `plant/organShading.ts`, `plant/mutations.ts` | ✔ | C120–C133 closed | — | P3 |
+| F63 | Ink, outlines and organ shading | C02 | `plant/organShading.ts`, `plant/mutations.ts` | ✔ | C-120–C-133 closed (the hyphenated Fixed list in `bug-inventory.md`) | — | P3 |
 | F64 | Camera rig: orbit, pan, zoom, recenter, clamps | C01 | `main.ts` camera block, `player/cameraAim.ts`, `player/cameraOrbit.ts`, `player/recenterView.ts` | ◐ | U01, U02, U05 fixed and measured; U04 | Free camera after D02 | P0 |
 | F65 | Underwater medium | T31 | `environment/underwater.ts` | ◐ | D04 volume | — | P2 |
 
@@ -155,6 +155,7 @@ Defects live in `bug-inventory.md`, values in `config/`, task scope in `DESIGN.m
 | F85 | Staging deploy (Pages + compose + tunnel) | O01 | `.github/workflows`, `ops/` | ◐ | Quick-tunnel URL churn | — | P2 |
 | F86 | Audio system | C06 | `config/audio.json` (stub) | ✗ | Title creak only | — | P3 |
 | F87 | Text catalogue and localisation | C01 | — | ✗ | Inline strings in builders | — | P3 |
+| F88 | Per-socket limits: inbound token bucket, backlog refusal, ping/pong sweep, HELLO deadline | T03P | `ops/rateLimiter.ts`, `ops/socketHeartbeat.ts`, `ops/connectionRegistry.ts` | ✔ | E25: the heartbeat interval is the one limit with no config key | — | P2 |
 
 ## Approved, not built
 

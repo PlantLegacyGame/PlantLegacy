@@ -8,8 +8,7 @@ function makeTestConfig(
   overrides: Partial<{
     protocolVersion: number;
     tickRateHz: number;
-    positionQuantization: number;
-    angleQuantizationBits: number;
+    socketHeartbeatMs: number;
     worldBounds: { minX: number; maxX: number; minZ: number; maxZ: number };
   }> = {},
 ): ReturnType<typeof loadNetProtoConfig> {
@@ -32,17 +31,13 @@ function makeTestConfig(
       max_buffered_bytes: { type: 'integer', value: 4194304, range: [65536, 67108864] },
       max_messages_per_second: { type: 'integer', value: 120, range: [1, 1000] },
       message_burst: { type: 'integer', value: 240, range: [1, 5000] },
+      max_connections_per_ip: { type: 'integer', value: 32, range: [1, 256] },
+      full_grid_min_interval_ms: { type: 'integer', value: 5000, range: [500, 60000] },
+      plant_sync_min_interval_ms: { type: 'integer', value: 2000, range: [250, 60000] },
+      terrain_region_min_interval_ms: { type: 'integer', value: 2000, range: [250, 60000] },
+      action_rate_per_second: { type: 'integer', value: 4, range: [1, 30] },
+      action_burst: { type: 'integer', value: 8, range: [1, 60] },
       tick_rate_hz: { type: 'integer', value: overrides.tickRateHz ?? 20, range: [10, 60] },
-      position_quantization: {
-        type: 'integer',
-        value: overrides.positionQuantization ?? 64,
-        range: [16, 256],
-      },
-      angle_quantization_bits: {
-        type: 'integer',
-        value: overrides.angleQuantizationBits ?? 16,
-        range: [8, 32],
-      },
       keyframe_interval_ticks: { type: 'integer', value: 10, range: [1, 60] },
       world_bounds: {
         type: 'object',
@@ -56,6 +51,11 @@ function makeTestConfig(
       client_send_rate_hz: { type: 'integer', value: 20, range: [5, 60] },
       weather_send_rate_hz: { type: 'integer', value: 2, range: [1, 20] },
       hello_timeout_ms: { type: 'integer', value: 5000, range: [1000, 30000] },
+      socket_heartbeat_ms: {
+        type: 'integer',
+        value: overrides.socketHeartbeatMs ?? 25000,
+        range: [1000, 120000],
+      },
       reconnect_window_ms: { type: 'integer', value: 300000, range: [30000, 86400000] },
     },
   };
@@ -80,13 +80,28 @@ describe('loadNetProtoConfig', () => {
     assert.equal(config.maxMessageSizeBytes, 16384);
     assert.equal(config.maxMessagesPerSecond, 120);
     assert.equal(config.messageBurst, 240);
+    assert.equal(config.maxConnectionsPerIp, 32);
+    assert.equal(config.fullGridMinIntervalMs, 5000);
+    assert.equal(config.plantSyncMinIntervalMs, 2000);
+    assert.equal(config.terrainRegionMinIntervalMs, 2000);
+    assert.equal(config.actionRatePerSecond, 4);
+    assert.equal(config.actionBurst, 8);
     assert.equal(config.tickRateHz, 20);
-    assert.equal(config.positionQuantization, 64);
-    assert.equal(config.angleQuantizationBits, 16);
     assert.equal(config.keyframeIntervalTicks, 10);
     assert.equal(config.clientSendRateHz, 20);
     assert.equal(config.weatherSendRateHz, 2);
     assert.equal(config.helloTimeoutMs, 5000);
+    assert.equal(config.socketHeartbeatMs, 25000);
+    // E24: the wire is unquantized — the two keys and both helpers are gone, so
+    // this config cannot promise precision the senders never apply.
+    assert.equal('positionQuantization' in config, false);
+  });
+
+  it('reads the liveness sweep interval from config', () => {
+    // E25: the interval decides how long a half-dead peer keeps costing the
+    // broadcast loop, so it is a ranged config value like every other limit on
+    // this path, not a module constant.
+    assert.equal(makeTestConfig({ socketHeartbeatMs: 40000 }).socketHeartbeatMs, 40000);
   });
 
   it('loadNetProtoConfig reads snake_case world_bounds from config', () => {
@@ -105,9 +120,17 @@ describe('loadNetProtoConfig', () => {
         max_buffered_bytes: { type: 'integer', value: 4194304, range: [65536, 67108864] },
         max_messages_per_second: { type: 'integer', value: 120, range: [1, 1000] },
         message_burst: { type: 'integer', value: 240, range: [1, 5000] },
+        max_connections_per_ip: { type: 'integer', value: 32, range: [1, 256] },
+        full_grid_min_interval_ms: { type: 'integer', value: 5000, range: [500, 60000] },
+        plant_sync_min_interval_ms: { type: 'integer', value: 2000, range: [250, 60000] },
+        terrain_region_min_interval_ms: {
+          type: 'integer',
+          value: 2000,
+          range: [250, 60000],
+        },
+        action_rate_per_second: { type: 'integer', value: 4, range: [1, 30] },
+        action_burst: { type: 'integer', value: 8, range: [1, 60] },
         tick_rate_hz: { type: 'integer', value: 20, range: [10, 60] },
-        position_quantization: { type: 'integer', value: 64, range: [16, 256] },
-        angle_quantization_bits: { type: 'integer', value: 16, range: [8, 32] },
         keyframe_interval_ticks: { type: 'integer', value: 10, range: [1, 60] },
         world_bounds: {
           type: 'object',
@@ -116,6 +139,7 @@ describe('loadNetProtoConfig', () => {
         client_send_rate_hz: { type: 'integer', value: 20, range: [5, 60] },
         weather_send_rate_hz: { type: 'integer', value: 2, range: [1, 20] },
         hello_timeout_ms: { type: 'integer', value: 5000, range: [1000, 30000] },
+        socket_heartbeat_ms: { type: 'integer', value: 25000, range: [1000, 120000] },
         reconnect_window_ms: { type: 'integer', value: 300000, range: [30000, 86400000] },
       },
     };

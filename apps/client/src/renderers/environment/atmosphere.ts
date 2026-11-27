@@ -119,6 +119,44 @@ export function transmittance(
 }
 
 /**
+ * Transmittance along a ray whose two ends sit at different heights.
+ *
+ * The single-height version asks the air density at the *surface* point, which
+ * is right for a world seen from inside its own air and wrong for every other
+ * view: standing 40 km up, a hill 20 km away was still fogged with sea-level
+ * air, so the whole planet washed toward the sky's white while the sky itself
+ * went dark. Density is integrated along the chord instead - four midpoints
+ * between the eye's height and the target's - which is what gives distant
+ * terrain the graded, bluer haze of aerial perspective and leaves the near
+ * ground almost untouched.
+ */
+export function transmittanceRay(
+  distanceM: number,
+  eyeHeightM: number,
+  targetHeightM: number,
+  params: AtmosphereParams,
+  samples = RAY_SAMPLES,
+  out: Rgb = [1, 1, 1],
+): Rgb {
+  const distance = Math.max(0, distanceM);
+  const steps = Math.max(1, Math.floor(samples));
+  let density = 0;
+  for (let i = 0; i < steps; i += 1) {
+    const t = (i + 0.5) / steps;
+    density += heightDensity(eyeHeightM + (targetHeightM - eyeHeightM) * t, params);
+  }
+  density /= steps;
+  const boost = 1 + params.horizonBoost * (1 - density);
+  out[0] = Math.exp(-params.extinction[0] * distance * density * boost);
+  out[1] = Math.exp(-params.extinction[1] * distance * density * boost);
+  out[2] = Math.exp(-params.extinction[2] * distance * density * boost);
+  return out;
+}
+
+/** How many midpoints the ray transmittance integrates; the GLSL mirror uses 4. */
+export const RAY_SAMPLES = 4;
+
+/**
  * Henyey-Greenstein phase, normalised so an isotropic lobe (g = 0) equals 1.
  * The GLSL mirror returns the same numbers; keep the two in step.
  */
@@ -169,6 +207,25 @@ export function applyAtmosphere(
   out: Rgb = [0, 0, 0],
 ): Rgb {
   const t = transmittance(distanceM, heightM, params);
+  const scatter = inScatterColor(viewDir, sunDir, params);
+  out[0] = surface[0] * t[0] + scatter[0] * (1 - t[0]);
+  out[1] = surface[1] * t[1] + scatter[1] * (1 - t[1]);
+  out[2] = surface[2] * t[2] + scatter[2] * (1 - t[2]);
+  return out;
+}
+
+/** Blend a surface toward the air in front of it, with both heights known. */
+export function applyAtmosphereRay(
+  surface: readonly [number, number, number],
+  viewDir: readonly [number, number, number],
+  sunDir: readonly [number, number, number],
+  distanceM: number,
+  eyeHeightM: number,
+  targetHeightM: number,
+  params: AtmosphereParams,
+  out: Rgb = [0, 0, 0],
+): Rgb {
+  const t = transmittanceRay(distanceM, eyeHeightM, targetHeightM, params);
   const scatter = inScatterColor(viewDir, sunDir, params);
   out[0] = surface[0] * t[0] + scatter[0] * (1 - t[0]);
   out[1] = surface[1] * t[1] + scatter[1] * (1 - t[1]);
@@ -231,6 +288,32 @@ vec3 atmoInScatter(vec3 viewDir, vec3 sunDir) {
   float phase = atmoPhaseHG(dot(viewDir, sunDir), uAtmoSunPhaseG);
   float sunColumn = max(1.0, uAtmoScaleHeight) * atmoAirMass(clamp(sunDir.y, 0.0, 1.0));
   return exp(-uAtmoExtinction * sunColumn) * uAtmoInScatter * phase;
+}
+
+// Density integrated along the chord between the eye and the surface. Four
+// midpoints is enough for a smooth exponential and cheap enough for the ground.
+vec3 atmoTransmittanceRay(float distanceM, float eyeHeightM, float targetHeightM) {
+  float density = 0.0;
+  for (int i = 0; i < 4; i++) {
+    float t = (float(i) + 0.5) * 0.25;
+    density += atmoHeightDensity(mix(eyeHeightM, targetHeightM, t));
+  }
+  density *= 0.25;
+  float boost = 1.0 + uAtmoHorizonBoost * (1.0 - density);
+  return exp(-uAtmoExtinction * max(0.0, distanceM) * density * boost);
+}
+
+vec3 atmoApplyRay(
+  vec3 surface,
+  vec3 viewDir,
+  vec3 sunDir,
+  float distanceM,
+  float eyeHeightM,
+  float targetHeightM
+) {
+  vec3 t = atmoTransmittanceRay(distanceM, eyeHeightM, targetHeightM);
+  vec3 scatter = atmoInScatter(viewDir, sunDir);
+  return surface * t + scatter * (1.0 - t);
 }
 
 vec3 atmoApply(vec3 surface, vec3 viewDir, vec3 sunDir, float distanceM, float heightM) {

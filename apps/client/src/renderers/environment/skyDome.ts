@@ -45,6 +45,9 @@ const SKY_FRAGMENT_SHADER = /* glsl */ `
   // Without this the dome paints sky downwards too, and that reads as a pale
   // floor under the ground instead of the inside of the earth.
   uniform float uEyeUnderGround;
+  // 1 while the eye stands in the Root Sight opening's own column: under the
+  // ground sheet, but with the mouth open on to the real sky above it.
+  uniform float uEyeInPit;
   uniform vec3 uEarthColor;
   // Seconds since the world was entered: cloud bands drift, so the sky is not a
   // painted backdrop with a fixed picture on it.
@@ -52,6 +55,17 @@ const SKY_FRAGMENT_SHADER = /* glsl */ `
   // 0 in clear air, 1 in a full storm: overcast thickens and darkens the cloud
   // layer instead of the sky only changing colour.
   uniform float uStorm;
+  // How much of the air column is still overhead: 1 at the soil, 0 in space.
+  // The sky IS that column glowing, so it dims to space as the eye climbs into
+  // thinner air; the fog on the ground reads the same number.
+  uniform float uAirDensity;
+  // 0 below the cloud deck, 1 above it. The deck is a layer in the air, not a
+  // picture on the sky, so it is not between the eye and the sky once crossed.
+  uniform float uCloudAbove;
+  // Where the planet's own edge is in the dome, as a direction y: from the eye
+  // the last air is seen along a tangent that dips below the astronomical
+  // horizon by the curvature of the planet, and that is where the limb glows.
+  uniform float uLimbY;
 
   float hash21(vec2 p) {
     p = fract(p * vec2(123.34, 456.21));
@@ -63,6 +77,30 @@ const SKY_FRAGMENT_SHADER = /* glsl */ `
     p = fract(p * 0.1031);
     p += dot(p, p.yzx + 33.33);
     return fract((p.x + p.y) * p.z);
+  }
+
+  // One star field for the whole dome. A direction-space lattice keeps every
+  // star round and stable as the camera turns; the cell is larger than the
+  // first pass so the stars survive the narrow band of sky above a normal
+  // orbit. Called from both halves of the sky: space does not stop at the
+  // astronomical horizon, and a planet seen from outside sits *in* the stars.
+  vec3 starField(vec3 dir) {
+    // 140 cells per radian: a star every 0.4 degrees, which at a phone's field
+    // of view is one every few dozen pixels. The old 105 left the half of the
+    // sky below the horizon so empty that the fix read as "still no stars".
+    vec3 starSpace = dir * 140.0;
+    vec3 cell = floor(starSpace);
+    vec3 local = fract(starSpace) - 0.5;
+    float present = smoothstep(0.962, 0.992, hash31(cell));
+    vec3 jitter = vec3(
+      hash31(cell + 1.7),
+      hash31(cell + 9.1),
+      hash31(cell + 17.3)
+    ) - 0.5;
+    float point = 1.0 - smoothstep(0.05, 0.14, length(local - jitter * 0.55));
+    float twinkle = 0.65 + 0.35 * sin(hash31(cell + 3.0) * 80.0);
+    vec3 starTint = mix(vec3(0.62, 0.75, 1.0), vec3(1.0, 0.9, 0.72), hash31(cell + 5.3));
+    return starTint * present * point * twinkle * 1.6;
   }
 
   float valueNoise2(vec2 p) {
@@ -88,25 +126,81 @@ const SKY_FRAGMENT_SHADER = /* glsl */ `
       #include <colorspace_fragment>
       return;
     }
+    // The eye in the opening is under the sheet too, and its sky overhead is
+    // real: the mouth is open, so the cone above it must stay sky (R23). Its
+    // half below the horizon is not - there is no air under the soil to paint -
+    // and the dome's below-horizon air is a pale wash that reads as a sheet of
+    // sky lying along the bottom of the frame with the ground along the top.
+    // So this eye keeps the sky it can see up through the mouth and gets earth
+    // everywhere its view is under the water table of the world.
+    if (uEyeInPit > 0.5 && dir.y < 0.0) {
+      gl_FragColor = vec4(uEarthColor, 1.0);
+      #include <colorspace_fragment>
+      return;
+    }
     // Nothing below the horizon is sky. Either the ground covers it or the eye is
     // under it, and painting space down there is what put a black band across the
     // world whenever the eye sat below the surface or looked through a cut: the
     // band was this dome's lower half, proven by tagging its shader magenta and
     // watching exactly that region change.
+    float air = clamp(uAirDensity, 0.0, 1.0);
+    // One share for both halves of the dome. Above and below the horizon had
+    // different arithmetic (the half below kept a third of its haze at any
+    // altitude while the half above it went to space), so the two met in a line
+    // across the sky. Everything below reads the same number now.
+    // No floor. A 3% sliver of a dawn horizon is still a visible pink wash over
+    // the whole of space, which is what the sky looked like from orbit: a lit
+    // haze where the planet should be alone with the stars.
+    float airShare = smoothstep(0.0, 0.25, air);
+    // From altitude the eye looks over the planet's own edge into space. The
+    // edge is not the astronomical horizon: the planet's curvature drops it by
+    // the dip, and the air along that tangent is the bright rim of a planet seen
+    // from outside.
+    float limbY = -clamp(uLimbY, 0.0, 0.95);
+    // A rim needs air to glow. The 0.35 floor drew one in vacuum too - a wide
+    // band of horizon colour in the half of the sky the planet is not in - so a
+    // planet seen from outside sat inside a coloured circle. The thin halo that
+    // should survive out here is a few percent, and the orbital shell paints the
+    // body's own bright edge at the disc.
+    // A rim needs air to glow, and nothing else in space does. The old floor put
+    // six percent of the horizon colour into the vacuum at every altitude, which
+    // is what made the sky above the planet-view disc read as violet rather than
+    // black; a planet's edge from outside is a thin bright line, not a wash.
+    float limb = exp(-abs(dir.y - limbY) * 16.0) * air;
+    // Vacuum is black. The 0.003/0.005/0.012 "space" this used to mix to was a
+    // navy that the tonemapper pushed to violet once the sun's glare was added on
+    // top of it (see the glare term below): space from orbit looked like a lit
+    // room, not a void.
+    vec3 space = uHorizonColor * limb * 0.85;
+    // Declared before the hemisphere split: the below-horizon branch needs the
+    // same night factor to decide how many stars survive under the body.
+    float night = 1.0 - smoothstep(-0.15, 0.20, uSunDir.y);
+    vec3 sky;
     if (dir.y < 0.0) {
-      // Nothing below the horizon is sky, and nothing there may read as a
-      // surface either. This branch used to mix the soil's own tan into the
-      // haze, which drew a flat tan wall behind the terrain wherever a ridge did
-      // not cover it. Below the horizon is the horizon's own air, dimming with
-      // depth: the ground cuts it off, and what shows past a ridge is haze.
+      // Below the horizon is the planet: its air, then the ground it lies on.
+      // How much air is left decides which one the eye sees, and keyed to
+      // 1 - air it was the wrong way round - a climb to 10 km painted three
+      // quarters of the ground's place black before any body covered it, which
+      // is the "bottom half is random colours" seen from a cloud deck.
       float below = clamp(-dir.y, 0.0, 1.0);
-      gl_FragColor = vec4(uHorizonColor * (1.0 - 0.45 * below), 1.0);
-      #include <colorspace_fragment>
-      return;
-    }
+      vec3 ground = uHorizonColor * (1.0 - 0.45 * below);
+      sky = mix(space, ground, airShare);
+      // From altitude the lower half of the frame is still sky before a body
+      // covers it. The old early return made it opaque ground at every height,
+      // so half the stars vanished the moment the eye left the soil. Only the
+      // share that has actually become air hides them; the planet mesh (drawn
+      // in front of the dome) hides the rest.
+      float lowStarSky = max(night, 1.0 - smoothstep(0.02, 0.35, air));
+      sky += starField(dir) * lowStarSky * (1.0 - airShare);
+      // This branch used to return here, before the solar and lunar discs. In
+      // planet view the eye looks *down* at the body, so every ray that can see
+      // a sun or moon beyond its limb has dir.y < 0 - and the bodies were
+      // skipped in exactly the view that wanted them. Fall through to the
+      // discs now; the ground has already been mixed in above.
+    } else {
     float h = clamp(dir.y, 0.0, 1.0);
     float grad = pow(1.0 - h, 2.2);
-    vec3 sky = mix(uZenithColor, uHorizonColor, grad);
+    sky = mix(uZenithColor, uHorizonColor, grad);
 
     // Soft haze right at the horizon.
     sky = mix(sky, uHorizonColor, (1.0 - smoothstep(0.0, 0.18, h)) * 0.35);
@@ -115,33 +209,28 @@ const SKY_FRAGMENT_SHADER = /* glsl */ `
     // the view; at night the high sky becomes the near-black of space while the
     // horizon retains a little airglow, so the planet reads as a body inside
     // space rather than a flat painted dome.
-    float night = 1.0 - smoothstep(-0.15, 0.20, uSunDir.y);
     float spaceMask = smoothstep(0.02, 0.52, h) * night;
-    sky = mix(sky, vec3(0.003, 0.005, 0.012), spaceMask * 0.97);
+    sky = mix(sky, vec3(0.0), spaceMask * 0.97);
+    // The same air, seen from above it. At the soil nothing changes; past a
+    // few scale heights the gradient is the last of the air at the limb and
+    // the rest of the dome is space, whatever the sun is doing.
+    // No floor on the sky's share. A 1% sliver of the horizon colour left above
+    // the air was enough to draw a straight seam right across the sky at the
+    // astronomical horizon - the eye saw two 8-bit steps meeting, not a sky.
+    sky = mix(space, sky, airShare);
+    // The planet's edge itself is below this branch (see the horizon test): the
+    // rim of the atmosphere is painted where the eye looks over the planet's
+    // curve, not around the sky above it.
 
-    // Stars are sampled in a 3D direction lattice. The old 2D atan/asin grid
+    // Stars are what the sky is when the air is not lit. From the soil that
+    // only happens at night; the higher the eye climbs the more of the sky is
+    // the black they shine in, so above most of the shell they hold at noon.
+    // They are sampled in a 3D direction lattice: the old 2D atan/asin grid
     // collapsed near the celestial poles and stretched into large sideways
-    // discs; a direction-space lattice keeps every star round and stable as the
-    // camera turns. Star points are deliberately sub-pixel-small.
-    if (night > 0.01 && dir.y > 0.005) {
-      // Fewer, slightly larger cells than the first pass: at a normal orbit the
-      // sky occupies only a narrow band above the horizon, and sub-pixel stars
-      // disappeared there. These stay round points rather than the old stretched
-      // 2D-polar discs.
-      vec3 starSpace = dir * 105.0;
-      vec3 cell = floor(starSpace);
-      vec3 local = fract(starSpace) - 0.5;
-      float present = smoothstep(0.972, 0.994, hash31(cell));
-      vec3 jitter = vec3(
-        hash31(cell + 1.7),
-        hash31(cell + 9.1),
-        hash31(cell + 17.3)
-      ) - 0.5;
-      float point = 1.0 - smoothstep(0.04, 0.12, length(local - jitter * 0.55));
-      float twinkle = 0.65 + 0.35 * sin(hash31(cell + 3.0) * 80.0);
-      vec3 starTint = mix(vec3(0.62, 0.75, 1.0), vec3(1.0, 0.9, 0.72), hash31(cell + 5.3));
-      sky += starTint * present * point * twinkle * night * 1.35;
-    }
+    // discs, while a direction-space lattice keeps every star round and stable
+    // as the camera turns. Star points are deliberately sub-pixel-small.
+    float starSky = max(night, 1.0 - smoothstep(0.02, 0.35, air));
+    if (starSky > 0.01) sky += starField(dir) * starSky;
 
     // Light, procedural cloud bands projected on a virtual plane. The plane
     // drifts with time and the bands are layered at two scales, so it reads as
@@ -162,8 +251,12 @@ const SKY_FRAGMENT_SHADER = /* glsl */ `
         mix(uHorizonColor, vec3(1.0), 0.55 * (1.0 - storm)) *
         (0.65 + 0.35 * clamp(uSunIntensity, 0.0, 1.0)) *
         (1.0 - storm * 0.55);
-      float coverage = mix(0.30, 0.95, storm) * (1.0 - night * 0.65);
-      sky = mix(sky, cloudColor, clouds * cloudFade * coverage);
+      // Clouds are air. Above the shell there is none, and a deck drawn on the
+      // dome over a planet seen from orbit is a white veil across the disc.
+      float coverage = mix(0.30, 0.95, storm) * (1.0 - night * 0.65) * airShare;
+      // Once the eye is over the deck there is no cloud between it and the sky:
+      // the bands belong to the air below, not to the dome.
+      sky = mix(sky, cloudColor, clouds * cloudFade * coverage * (1.0 - uCloudAbove));
     }
 
     // Golden-hour scattering: a wide warm lobe around the sun plus a band lying
@@ -172,7 +265,10 @@ const SKY_FRAGMENT_SHADER = /* glsl */ `
       float wide = max(0.0, dot(dir, normalize(uSunDir)));
       float lobe = pow(wide, 6.0) * 0.11;
       float band = pow(1.0 - smoothstep(0.0, 0.34, h), 3.0) * 0.07;
-      sky += uSunColor * (lobe + band) * uSunWarmth;
+      // Scattering is an air effect. In vacuum the sun is a disc with a tight
+      // corona, not a two-degree smear of warm haze.
+      sky += uSunColor * (lobe + band) * uSunWarmth * airShare;
+    }
     }
 
     // The solar disc.
@@ -195,11 +291,14 @@ const SKY_FRAGMENT_SHADER = /* glsl */ `
       float limb = 0.42 + 0.58 * pow(mu, 0.6);
       vec3 discColor = mix(uSunColor * vec3(1.0, 0.70, 0.48), uSunColor, limb);
       float intensity = clamp(uSunIntensity, 0.0, 2.0);
+      // Glare is scattering, so it fades with the air; the corona is the tight
+      // ring that survives in vacuum and keeps the disc from looking pasted on.
+      float airGlow = smoothstep(0.0, 0.05, air);
       float glare =
-        exp(-sunAngle * 130.0) * 0.55 +
-        exp(-sunAngle * 16.0) * 0.11;
+        (exp(-sunAngle * 130.0) * 0.55 + exp(-sunAngle * 16.0) * 0.11) * airGlow;
+      float corona = exp(-sunAngle * 900.0) * 1.1;
       sky += discColor * disc * limb * (2.4 + 0.8 * intensity);
-      sky += uSunColor * glare * (0.55 + 0.45 * intensity);
+      sky += uSunColor * (glare * (0.55 + 0.45 * intensity) + corona);
     }
 
     // The lunar disc.
@@ -215,8 +314,12 @@ const SKY_FRAGMENT_SHADER = /* glsl */ `
       const float MOON_RADIUS = 0.027;
       float moonAcross = clamp(moonAngle / MOON_RADIUS, 0.0, 1.0);
       float moonDisc = 1.0 - smoothstep(0.93, 1.0, moonAcross);
+      // A moon is a body, not a weather light: the night multiplier dims its
+      // halo but must not make it vanish under a clear sky at moonrise, which is
+      // what "I only see a sun" was. It still builds with its own elevation.
       float moonLevel = clamp(uMoonIntensity, 0.0, 1.0);
-      if (moonDisc > 0.002 && moonLevel > 0.002) {
+      float moonShow = 0.62 + 0.38 * moonLevel;
+      if (moonDisc > 0.002) {
         vec3 pole = abs(moonC.y) > 0.97 ? vec3(1.0, 0.0, 0.0) : vec3(0.0, 1.0, 0.0);
         vec3 right = normalize(cross(pole, moonC));
         vec3 faceUp = cross(moonC, right);
@@ -231,12 +334,12 @@ const SKY_FRAGMENT_SHADER = /* glsl */ `
         // A moon is grey rock, not blue light: the night colour is a tint on it,
         // not its albedo.
         vec3 moonRock = mix(uMoonColor, vec3(1.0, 0.98, 0.94), 0.55);
-        vec3 moonSurface = moonRock * (albedo * dustLimb + highlands) * 1.9;
-        sky = mix(sky, moonSurface, moonDisc * moonLevel);
+        vec3 moonSurface = moonRock * (albedo * dustLimb + highlands) * 2.6;
+        sky = mix(sky, moonSurface, moonDisc * moonShow);
       }
       float moonGlow =
         exp(-moonAngle * 60.0) * 0.20 + exp(-moonAngle * 11.0) * 0.055;
-      sky += uMoonColor * moonGlow * moonLevel;
+      sky += uMoonColor * moonGlow * moonShow;
     }
 
     gl_FragColor = vec4(sky, 1.0);
@@ -283,8 +386,13 @@ export function createSkyDome(
       uMoonColor: { value: new THREE.Color(config.sunColorNight) },
       uMoonIntensity: { value: 0 },
       uEyeUnderGround: { value: 0 },
+      uEyeInPit: { value: 0 },
       uCloudTime: { value: 0 },
       uStorm: { value: 0 },
+      // Set every frame from the eye's altitude above the terrain.
+      uAirDensity: { value: 1 },
+      uCloudAbove: { value: 0 },
+      uLimbY: { value: 0 },
       // The earth tone as configured, not quartered. At a quarter it was #0e0a07
       // - black to any eye - and every patch of "ground" painted with it read as
       // a hole in the world.

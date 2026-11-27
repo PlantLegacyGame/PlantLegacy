@@ -50,7 +50,9 @@ interface LabelEntry {
  * instead of being upscaled from a 78 px raster.
  */
 const TEXT_BASELINE_PX = 78;
-const TEXT_PADDING_PX = 34;
+// Only enough room for the shadow to fall. The plate is gone (see `paintLabel`),
+// so the old 34 px of capsule margin would be a border of empty texture.
+const TEXT_PADDING_PX = 10;
 const MAX_CHARS = 30;
 
 /** The display density the tag texture is drawn at, capped like the renderer's. */
@@ -86,18 +88,22 @@ function paintLabel(
   if (!text) return;
 
   ctx.font = font;
-  ctx.fillStyle = 'rgba(8, 16, 12, 0.82)';
-  ctx.strokeStyle = 'rgba(156, 222, 126, 0.95)';
-  ctx.lineWidth = 6 * (fontPx / TEXT_BASELINE_PX);
-  ctx.beginPath();
-  ctx.roundRect(3, 3, width - 6, height - 6, height / 2 - 3);
-  ctx.fill();
-  ctx.stroke();
-
-  ctx.fillStyle = '#f2fbec';
+  // A name, not a capsule: no plate, no outline, no status dot. On a small tag the
+  // plate was most of what was on screen, and a rounded box with a border fights
+  // the sky, the soil and the plant all at once. The shadow is the whole of its
+  // contrast budget and is enough over all three.
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
+  ctx.shadowColor = 'rgba(4, 10, 8, 0.72)';
+  ctx.shadowBlur = 7 * (fontPx / TEXT_BASELINE_PX);
+  ctx.shadowOffsetY = 1.5 * (fontPx / TEXT_BASELINE_PX);
+  ctx.fillStyle = 'rgba(243, 250, 236, 0.94)';
   ctx.fillText(shown, width / 2, height / 2 + 3 * (fontPx / TEXT_BASELINE_PX));
+  // The context is reused for the next repaint; a shadow left set would draw a
+  // second, offset copy of the name.
+  ctx.shadowColor = 'transparent';
+  ctx.shadowBlur = 0;
+  ctx.shadowOffsetY = 0;
 }
 
 export function createPlantLabelLayer(scene: THREE.Scene): PlantLabelLayer {

@@ -182,8 +182,8 @@
     },
     "title_parallax_hover": {
       "type": "number",
-      "value": 0.35,
-      "notes": "Share of the pointer offset the background follows when not dragging. Title screen only.",
+      "value": 0,
+      "notes": "Share of the pointer offset the background follows when not dragging. Zero by default: the scene used to slide after a pointer that was only crossing the menu, so the whole picture drifted while the player was reading it. The drag is now the only thing that moves the title. Title screen only.",
       "range": [
         0,
         1

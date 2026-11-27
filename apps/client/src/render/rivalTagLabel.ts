@@ -30,6 +30,9 @@ export function rivalTagLabel(
   // Gallery plants are named after their mutation only: repeating an id on every
   // tag buried the names in clutter.
   if (ownerId.startsWith('gallery:')) return mutationTag;
-  const name = ownerName?.trim() || ownerId.slice(0, 6);
-  return `${mutationTag} · ${name}`;
+  // The name, and nothing else. The tag used to read "Glowcap · Fern Test": a
+  // mutation in front of the person, with a dot joining them, and the mutation
+  // repeated the body the tag was standing over. A name is what a player needs
+  // from across the field; what the plant is, its body already says.
+  return ownerName?.trim() || ownerId.slice(0, 6);
 }

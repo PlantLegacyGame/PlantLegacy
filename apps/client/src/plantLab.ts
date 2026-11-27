@@ -1,9 +1,11 @@
 import {
   DEFAULT_BRANCH_ATTACH_FRACTION,
   getSeedBodyHeightRatio,
+  isRootOrgan,
   type NodeRadiusProfile,
   nodeAttachmentPoint,
   nodeRenderRadius,
+  organMorphologyFor,
   resolveAttachFraction,
 } from '@plant-legacy/shared/growth';
 import * as THREE from 'three';
@@ -380,16 +382,11 @@ const DEFAULT_NODE_COSTS: Record<string, number> = {
 };
 
 function nodeVisualType(type: string): number {
-  if (type === 'seed') return 4;
-  if (type === 'leaf' || type === 'cotyledon' || type === 'flower' || type === 'spore_sac') {
-    return 3;
-  }
-  if (type === 'vine') return 2;
-  if (type === 'root' || type === 'radicle' || type === 'lateral_root') return 0;
-  return 1;
+  // The Lab used to keep its own four-value table and told the reader it drew
+  // the same morphology as the game. It does not: this preview builds its own
+  // primitives, and its only honest shared answer is the visual type.
+  return organMorphologyFor(type).visualType;
 }
-
-const ROOT_NODE_TYPES = new Set(['seed', 'radicle', 'root', 'lateral_root']);
 
 function buildGamePlant(
   segment: (type: string) => number,
@@ -456,7 +453,7 @@ function buildGamePlant(
       isOwnPlant: true,
       growthProgress: 1,
       isSeed: type === 'seed',
-      layer: ROOT_NODE_TYPES.has(type) ? 'root' : 'canopy',
+      layer: type === 'seed' || isRootOrgan(type) ? 'root' : 'canopy',
       ...(parent
         ? {
             parentAttachX: attach.x,
@@ -564,6 +561,10 @@ async function main(): Promise<void> {
   let branchFraction = DEFAULT_BRANCH_ATTACH_FRACTION;
   try {
     const response = await fetch('/config/growth');
+    // A missing config is the catch block's job, like every other loader: a 404
+    // body is `{ error }`, so parsing it would leave every tunable undefined
+    // and draw the lab from an empty table.
+    if (!response.ok) throw new Error(`/config/growth answered ${response.status}`);
     const data = (await response.json()) as {
       node_lengths?: Record<string, number>;
       node_costs?: Record<string, number>;
@@ -591,7 +592,8 @@ async function main(): Promise<void> {
   const m = game.metrics;
 
   hud.textContent = [
-    'PLANT LAB — same numbers, two generators',
+    'PLANT LAB — dev-only preview, not the game renderer',
+    'Right uses shared sizes and visual types, not MeshPlantRenderer anatomy.',
     '',
     `LEFT  scratch   chains=${scratch.chains} leaves=${scratch.leaves}`,
     `      segments=${scratch.segments} total=${scratch.totalLength.toFixed(2)} m`,

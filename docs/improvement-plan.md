@@ -19,7 +19,7 @@ state), RULE_20 (no rarity), RULE_23 (account-bound flags), one task at a time,
    reconnect, and every pouch and purse mutation is a row-locked
    read-modify-write; the duplication audit passed on 2026-11-22.
 3. **Wire compatibility.** Resolved 2026-11-21: breaking changes are allowed
-   until the first public alpha. The wire is v4 today. Wave 1-B turned out
+   until the first public alpha. The wire is v5 today (v4 at the time of this note). Wave 1-B turned out
    additive (new config key, fewer messages, no payload change), so it needed no
    bump; the calamity director will need one.
 
@@ -138,40 +138,49 @@ fixed immediately because they were small and testable; the rest are scoped here
   Direction is now derived from target + progress, and a closing cavity stays
   enabled until it is fully closed. Test: `RootSightStateMachine.test.ts`.
 
-**Still open, in value order.** A later pass over the tree (2026-11-16) re-checked
+**The 2026-11-16 list, with its outcome.** A separate pass that day re-checked
 every entry below and added the gate and documentation defects this list does not
-carry; its execution order, with the evidence for each, is
-[`bugfix-plan.md`](./bugfix-plan.md). This list stays as the value ranking.
+carry; [`bugfix-plan.md`](./bugfix-plan.md) is the record of how each was fixed.
+Every item in this block has since landed. The wording below is the original
+brief, kept as written; the `[x]` and the italic line after it are the outcome,
+so do not read an imperative here as work still waiting.
 
-- **A2 — underground detection uses absolute world Y.** Replace the five
+- **A2 — underground detection uses absolute world Y. `[x]`** Replace the five
   `camera.position.y < 0` / `target.y < 0` tests with one helper that compares
   against `planetTerrainY(...)`, the pattern `EnvironmentRenderer.update` already
   uses. Acceptance: on a 16 m rise, a camera 1 m under the soil is classified
   underground for the camera floor, spring-arm skip, root picking and
   `setUndergroundView`; on the flat spawn the same camera still is. Add a pure
   helper test with a stubbed terrain function; `main.ts` itself is not unit
-  tested.
-- **A8 — Root Sight presentation defaults are literals.** `main.ts` passes
+  tested. *Done:* `player/underground.ts` (`groundWorldY`, `isBelowSoil`) at all
+  five sites, with `player/underground.test.ts`.
+- **A8 — Root Sight presentation defaults are literals. `[x]`** `main.ts` used to pass
   `{ radius: 50, soilOpacity: 0.3 }` while the file says 7 and 0.45. Build the
   uniforms from `config/root_sight.json` in the same place the machine is built,
   and remove the `50` / `radius * 0.7` fallbacks from
   `createRootSightUniforms`. Acceptance: changing `cutaway_radius` or
   `soil_opacity` in the file changes the first drawn frame, not only the values
-  written by `updateRootSight`.
-- **F9 — ambient smoothing is frame-rate dependent.** `stepAmbientLighting` takes
+  written by `updateRootSight`. *Done in two halves:* the uniforms on 2026-11-16
+  (`rootSightUniforms.test.ts`), the sizing literals on 2026-11-22
+  (`rootSightCutaway.test.ts`).
+- **F9 — ambient smoothing is frame-rate dependent. `[x]`** `stepAmbientLighting` takes
   `alpha`; pass `1 - exp(-dt / tau)` instead of a fixed 0.3 so the day/night fade
   takes the same wall-clock time at any frame rate. Test: stepping 1 s at 30 Hz
-  and at 144 Hz lands within a small tolerance of the same baseline.
-- **Docs drift (F5).** `docs/tasks/T02.md` quoted `cutaway_radius` 50/0.3;
+  and at 144 Hz lands within a small tolerance of the same baseline. *Done:*
+  `EnvironmentRenderer` applies `1 - exp(-dt / ambient_fade_tau_s)` (0.35 s) and
+  `celestial.test.ts` steps it at different rates.
+- **Docs drift (F5). `[x]`** `docs/tasks/T02.md` quoted `cutaway_radius` 50/0.3;
   corrected to 7/0.45. The older entries for `controls.md` and `tunables.md`
   counts were stale and were removed from the inventory.
-- **`docs:check` cannot catch a wrong statement.** It verifies links, config
+- **`docs:check` cannot catch a wrong statement. `[x]`** It verifies links, config
   counts, the protocol table and duplicated prose; it does not compare a task
   document's quoted default with the config file. Add a source-backed check for
   `## Config: config/<file>.json` tables (key exists, quoted default equals
   `values[key].value`), then fix the drift it finds. This is the cheapest way to
-  stop the T02 class of error returning.
-- **F7 — dead protocol surface.** `[x]` `validateMovement` is deleted and
+  stop the T02 class of error returning. *Done:* `docs:check` rules 2b and 3b
+  compare a quoted Default or Range with `config/`, scoped by the nearest heading,
+  and rules 2b (status), 3c–3h grew out of the same idea.
+- **F7 — dead protocol surface. `[x]`** `validateMovement` is deleted and
   `INPUT` is documented as an ack-only heartbeat in `docs/protocol.md` and
   `docs/controls.md`; nothing describes movement as server-enforced.
 
@@ -289,8 +298,9 @@ make `DEV_RESPONSE` dispatch meaningful or remove it.
   Config ownership is resolved (ADR-082); see `docs/tasks/T08A.md`.
 - **5-B Season-end burial (ADR-044)** — dead biomass becomes an organic-matter
   field and edits/voids persist.
-- **5-C Measurement baseline (AL-01)** — six poses, GPU timing, zero-alloc audit;
-  needed before judging renderer changes beyond eye checks.
+- **5-C Measurement baseline (AL-01)** — landed 2026-11-15: six poses, GPU
+  timing, zero-alloc audit, so renderer changes are judged against numbers rather
+  than eye checks. Record: [`tasks/AL-01.md`](./tasks/AL-01.md).
 
 ## Explicitly deferred
 

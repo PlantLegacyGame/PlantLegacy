@@ -35,6 +35,43 @@ describe('drawn ground', () => {
     assert.equal(ground.height(50, 50), 4.5);
   });
 
+  it('answers a point it has already measured without another ray', () => {
+    // One ray walks every triangle the terrain is drawn with: about five
+    // milliseconds on the shipped map. A plant update asks for nine of them and
+    // arrives a dozen times a second while a part grows, so the same point has
+    // to be answered from memory.
+    const ground = new DrawnGround();
+    ground.setFallback(() => 1);
+    const mesh = tiltedPlane();
+    let rays = 0;
+    const raycast = mesh.raycast.bind(mesh);
+    mesh.raycast = (raycaster, intersects) => {
+      rays += 1;
+      raycast(raycaster, intersects);
+    };
+    ground.setMesh(mesh);
+    const first = ground.height(2.25, -1.5);
+    assert.equal(rays, 1);
+    assert.equal(ground.height(2.25, -1.5), first);
+    assert.equal(rays, 1, 'the same point was measured twice');
+    // A point that moved is a new question.
+    ground.height(2.35, -1.5);
+    assert.equal(rays, 2);
+
+    // A new surface is a new answer: a dig or a rebuild must not be served the
+    // heights of the triangles it replaced.
+    const rebuilt = tiltedPlane();
+    let rebuiltRays = 0;
+    const rebuiltRaycast = rebuilt.raycast.bind(rebuilt);
+    rebuilt.raycast = (raycaster, intersects) => {
+      rebuiltRays += 1;
+      rebuiltRaycast(raycaster, intersects);
+    };
+    ground.setMesh(rebuilt);
+    ground.height(2.25, -1.5);
+    assert.equal(rebuiltRays, 1, 'a new ground was answered from the old one');
+  });
+
   it('takes the slope of the drawn surface, not of the field', () => {
     const ground = new DrawnGround();
     ground.setFallback(() => 1);

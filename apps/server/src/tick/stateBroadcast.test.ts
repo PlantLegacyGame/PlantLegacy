@@ -72,6 +72,24 @@ describe('broadcastPlantStates', () => {
     assert.deepEqual(ids, ['own']);
   });
 
+  it('keeps the own plant first and stops at the entity cap', () => {
+    const { ports, sent } = createPorts(() => true);
+    broadcastPlantStates(ports, input({ entityCap: 2 }));
+    const ids = (sent[0]?.body.payload.plants as PlantStateSnapshot[] | undefined)?.map(
+      (p) => p.id,
+    );
+    assert.deepEqual(ids, ['own', 'near']);
+  });
+
+  it('sends no plant when the entity cap is zero', () => {
+    const { ports, sent } = createPorts();
+    broadcastPlantStates(ports, input({ entityCap: 0 }));
+    const ids = (sent[0]?.body.payload.plants as PlantStateSnapshot[] | undefined)?.map(
+      (p) => p.id,
+    );
+    assert.deepEqual(ids, []);
+  });
+
   it('marks a keyframe on its interval and sends it even when the cadence is not due', () => {
     const { ports, sent } = createPorts();
     const result = broadcastPlantStates(ports, input({ tick: 60, accumulatorMs: 0 }));

@@ -1,9 +1,11 @@
 import {
   getSeedBodyHeightRatio,
   getSegmentTaperExponent,
+  isRootOrgan,
   jointStartRadius,
   nodeAttachmentPoint,
   nodeRenderRadius,
+  organMorphologyFor,
   resolveDrawnRadius,
   seedBodyCentreY,
   seedBodyHalfHeight,
@@ -96,6 +98,17 @@ export interface PlantRenderPlant {
   id: string;
   center: THREE.Vector3;
   radius: number;
+  /**
+   * The drawn body above the soil, for the impostor ellipsoid.
+   *
+   * `radius` is a sphere around every part of the plant, roots included, and it
+   * is also what the cull pass measures for the tier decision. For a seedling
+   * the roots are most of that sphere, so sizing the ellipsoid from it drew a
+   * 0.5 m pod over a 0.1 m stem and the 1<->2 swap shrank the plant (E41).
+   */
+  impostorBaseY: number;
+  impostorTopY: number;
+  impostorHalfWidth: number;
   color: [number, number, number];
   isOwn: boolean;
   nodeCount: number;
@@ -168,34 +181,11 @@ function addChainSpines(mesh: MeshAccumulator, points: readonly ChainPoint[]): v
 }
 
 function getVisualNodeType(node: PlantNodeData): number {
-  // Map string nodeType to visual types for distinct rendering per plant part
-  const nt = node.nodeType?.toLowerCase();
-
-  // Root crown: always render as seed coat (type 4) since it IS the seed coat base,
-  // both before and after germination
-  if (nt === 'seed') {
-    return 4;
-  }
-  if (nt === 'flower') return 5; // Flower - pink/red
-  if (nt === 'spore_sac') return 6; // Spore sac - brown/orange
-  if (nt === 'vine') return 2; // Vine - green
-  if (nt === 'cotyledon') return 7; // Cotyledon - yellow-green seed leaf
-  if (nt === 'leaf') return 3; // Regular leaf - vibrant green
-  if (nt === 'stem') return 1; // Stem - woody trunk
-  if (nt === 'branch') return 1; // Branch - woody trunk
-  if (nt === 'trunk') return 1; // Woody trunk
-  if (nt === 'culm') return 2; // Hollow segmented shoot - green stem
-  if (nt === 'rhizome') return 0; // Underground stem - root colour
-  if (nt === 'floating_leaf') return 3; // Buoyant pad - leaf colour
-  if (nt === 'pneumatophore') return 0; // Aerial breathing root - root colour
-  if (nt === 'thorn') return 1; // Hardened defensive shoot - woody
-  if (nt === 'stolon') return 2; // Runner - green stem
-  if (nt === 'tuber') return 0; // Storage tuber - root colour
-  if (nt === 'radicle') return 0; // Radicle - delicate root
-  if (nt === 'root') return 0; // Root - woody root
-  if (nt === 'lateral_root') return 0; // Lateral root - thinner root
-  // Fallback to numeric type
-  return typeof node.type === 'number' ? node.type : 0;
+  // Shape is owned by the shared organ registry. This code is now only the
+  // packed colour family the WebGPU shader understands; keeping the old switch
+  // here is what made a rhizome, a tuber and a root all identical.
+  const morphology = organMorphologyFor(node.nodeType);
+  return morphology.visualType ?? (typeof node.type === 'number' ? node.type : 0);
 }
 
 /** C02b: Get texture variation index for a node (0-15) */
@@ -203,11 +193,6 @@ function getVariationIndex(node: PlantNodeData, visualType: number): number {
   // Use node ID hash to get deterministic variation
   const hash = hash01(node.id, `variation_${visualType}`);
   return Math.floor(hash * 16);
-}
-
-function isRootNodeType(nodeType: string | undefined): boolean {
-  const nt = (nodeType ?? '').toLowerCase();
-  return nt === 'radicle' || nt === 'root' || nt === 'lateral_root';
 }
 
 /** Below this distance a node is treated as sitting exactly on its parent. */
@@ -226,6 +211,20 @@ export function resolveDrawnNodePosition(
   parent: PlantNodeData | undefined,
   siblings?: Iterable<PlantNodeData>,
 ): THREE.Vector3 {
+  // The seed is drawn as an ovoid standing on its stored contact point, so the
+  // body the player sees and clicks is half a seed-height above the node. Pick
+  // spheres, framing and the aim gizmo all use this function; returning the
+  // contact point for a seed put the click target at the soil line and made the
+  // top of the coat unselectable (S38).
+  if (node.isSeed === true || node.nodeType === 'seed') {
+    const radius = resolveDrawnRadius('seed', node.radius ?? 0.05, node.biomass);
+    return new THREE.Vector3(
+      node.position.x,
+      seedBodyCentreY(node.position.y, radius),
+      node.position.z,
+    );
+  }
+
   // A segment that is still growing is drawn from the point it left its parent
   // toward the target the server gave it. Without this the node stayed on top of
   // its parent for the whole animation (the sync that carries the final position
@@ -273,7 +272,7 @@ export function resolveDrawnNodePosition(
   const wobble = (hash01(node.id, 'fan') - 0.5) * (Math.PI / slotCount) * 0.5;
   const fanAngle = slotAngle + wobble;
   const fanElevation =
-    (isRootNodeType(node.nodeType) ? -0.6 : 0.55) + (hash01(node.id, 'tilt') - 0.5) * 0.2;
+    (isRootOrgan(node.nodeType) ? -0.6 : 0.55) + (hash01(node.id, 'tilt') - 0.5) * 0.2;
   const fan = new THREE.Vector3(Math.cos(fanAngle), fanElevation, Math.sin(fanAngle)).normalize();
   const stubLength = Math.max(
     0.15,
@@ -1173,7 +1172,7 @@ export function resolveSegmentFrame(
   // as an ovoid rather than a tube, so anything leaving it still starts thin.
   let startRadius = jointStartRadius(parentRadiusAtAttach, nodeRadius, softPart);
   if (parent.nodeType === 'seed') {
-    startRadius = Math.min(parentRadius, nodeRadius, isRootNodeType(node.nodeType) ? 0.03 : 0.028);
+    startRadius = Math.min(parentRadius, nodeRadius, isRootOrgan(node.nodeType) ? 0.03 : 0.028);
   }
   // A stalk only ever narrows towards its blade.
   //
@@ -1335,7 +1334,8 @@ export function measureDrawnPlant(nodes: PlantNodeData[]): PlantGeometryMetrics 
       );
       drawnCurves.set(node.id, { start: frame.start.clone(), control });
       const outgoing = control.clone().sub(frame.start);
-      const incoming = parentCurve ? parentFrame!.target.clone().sub(parentCurve.control) : null;
+      const incoming =
+        parentCurve && parentFrame ? parentFrame.target.clone().sub(parentCurve.control) : null;
       if (incoming && incoming.lengthSq() > 1e-8 && outgoing.lengthSq() > 1e-8) {
         const dot = THREE.MathUtils.clamp(incoming.normalize().dot(outgoing.normalize()), -1, 1);
         metrics.maxTangentKinkDeg = Math.max(
@@ -1424,6 +1424,17 @@ export function buildPlantMesh(
     plantLooks.push(stack);
     const color = isOwn ? OWN_PLANT_COLOR : RIVAL_PLANT_COLOR;
     const box = new THREE.Box3();
+    // Everything the eye can see: no roots. The seed crown counts, it stands on
+    // the soil, and the tubes only join it when their parent is not underground.
+    const aboveBox = new THREE.Box3();
+    // A leaf reaches out from the node it hangs on, so the body box has to be
+    // grown by the blade, not just by the node: a leafy plant whose canopy is
+    // all blades would otherwise fit inside its own stem.
+    const growBodyAround = (centre: THREE.Vector3, reach: number): void => {
+      if (!(reach > 0)) return;
+      aboveBox.expandByPoint(centre.clone().addScalar(reach));
+      aboveBox.expandByPoint(centre.clone().addScalar(-reach));
+    };
     let leafCount = 0;
     let plantSignature = 0;
 
@@ -1470,6 +1481,14 @@ export function buildPlantMesh(
       const seedHalfHeight = seedBodyHalfHeight(seedRadius);
       box.expandByPoint(seedCenter.clone().add(new THREE.Vector3(0, seedHalfHeight, 0)));
       box.expandByPoint(seedCenter.clone().add(new THREE.Vector3(0, -seedHalfHeight, 0)));
+      // A seed on its own is the whole above-ground plant: the ellipsoid has to
+      // be the seed, not the leaf-margin box the cull pass measures.
+      aboveBox.expandByPoint(
+        seedCenter.clone().add(new THREE.Vector3(seedRadius, seedHalfHeight, seedRadius)),
+      );
+      aboveBox.expandByPoint(
+        seedCenter.clone().add(new THREE.Vector3(-seedRadius, -seedHalfHeight, -seedRadius)),
+      );
     } else {
       // Normal plant with root - render seed coat base (crown at surface)
       // Render as seed coat (egg-shaped) via addSeed, NOT as tan sphere via addJoint
@@ -1499,6 +1518,12 @@ export function buildPlantMesh(
       const seedHalfHeight = seedBodyHalfHeight(seedRadius);
       box.expandByPoint(seedCenter.clone().add(new THREE.Vector3(0, seedHalfHeight, 0)));
       box.expandByPoint(seedCenter.clone().add(new THREE.Vector3(0, -seedHalfHeight, 0)));
+      aboveBox.expandByPoint(
+        seedCenter.clone().add(new THREE.Vector3(seedRadius, seedHalfHeight, seedRadius)),
+      );
+      aboveBox.expandByPoint(
+        seedCenter.clone().add(new THREE.Vector3(-seedRadius, -seedHalfHeight, -seedRadius)),
+      );
     }
 
     // Segment data per node, filled in by the walk below and consumed by the
@@ -1542,7 +1567,7 @@ export function buildPlantMesh(
       // no faces to light and no shape to read: the underground organ gets a
       // drawn floor, while the model keeps the real radius, so growth, damage
       // and physics are untouched. Above ground nothing changes.
-      const rootOrgan = isRootNodeType(node.nodeType);
+      const rootOrgan = isRootOrgan(node.nodeType);
       const rA = rootOrgan
         ? Math.max(frame.startRadius * barkScale, 0.022)
         : frame.startRadius * barkScale;
@@ -1597,6 +1622,10 @@ export function buildPlantMesh(
       // Use target position for bounding box (encompasses full curve)
       box.expandByPoint(targetPosition);
       box.expandByPoint(parent.position);
+      // The drawn position, not the target: an emerging part is still short of
+      // its node's final place, and an ellipsoid fitted to the target saw a
+      // 0.5 m seedling over a 0.05 m seed. `animated` is where the tube is.
+      if (!rootOrgan) aboveBox.expandByPoint(animatedPosition);
 
       const isLeafNode = node.type === 3;
       const isSeedNode = node.type === 4;
@@ -1645,19 +1674,23 @@ export function buildPlantMesh(
         // Seed leaves are small relative to the seedling; at 0.6 they rendered
         // bigger than the whole stem and read as green paddles.
         const leafSizeMult = isCotyledon ? 0.3 : 0.55;
+        const blade = Math.min(
+          bladeCap,
+          options.leafSize *
+            0.9 *
+            growthEase *
+            leafSizeMult *
+            look.leafScale *
+            (isFlower ? Math.min(2, look.petalCount / 6) : 1),
+        );
+        // Half the blade either side of the node covers its tilt as well as its
+        // length, which is where the old box's blanket leaf margin came from.
+        growBodyAround(animatedPosition, blade * 0.5);
         mesh.addLeaf(
           animatedPosition,
           direction,
           normal,
-          Math.min(
-            bladeCap,
-            options.leafSize *
-              0.9 *
-              growthEase *
-              leafSizeMult *
-              look.leafScale *
-              (isFlower ? Math.min(2, look.petalCount / 6) : 1),
-          ),
+          blade,
           packNode(plantIndex, leafVisualType, isOwn, leafVariationIdx, mutationMask),
           spawnTime,
           growthEase,
@@ -1681,14 +1714,16 @@ export function buildPlantMesh(
           const leafVisualType = isCotyledon ? 7 : 3;
           // Cotyledons are modestly larger than regular leaves initially
           const leafSizeMult = isCotyledon ? 0.8 : 1.0;
+          const blade = Math.min(
+            bladeCap,
+            options.leafSize * 0.75 * growthEase * leafSizeMult * look.leafScale,
+          );
+          growBodyAround(animatedPosition, blade * 0.5);
           mesh.addLeaf(
             animatedPosition,
             leafDir,
             normal,
-            Math.min(
-              bladeCap,
-              options.leafSize * 0.75 * growthEase * leafSizeMult * look.leafScale,
-            ),
+            blade,
             packNode(plantIndex, leafVisualType, isOwn, leafVariationIdx, mutationMask),
             spawnTime,
             growthEase,
@@ -1818,11 +1853,19 @@ export function buildPlantMesh(
     const center = box.getCenter(new THREE.Vector3());
     const size = box.getSize(new THREE.Vector3());
     const radius = Math.max(0.15, size.length() * 0.5);
+    // A plant whose body has collapsed (or a lone crown with no above-ground
+    // box at all) keeps the sphere rather than an empty ellipsoid.
+    const body = aboveBox.isEmpty() || aboveBox.max.y - aboveBox.min.y < 0.02 ? box : aboveBox;
+    const bodySize = body.getSize(new THREE.Vector3());
+    const impostorHalfWidth = Math.max(bodySize.x, bodySize.z) * 0.5;
 
     plantData.push({
       id: root.plantId ?? root.id,
       center,
       radius,
+      impostorBaseY: body.min.y,
+      impostorTopY: body.max.y,
+      impostorHalfWidth,
       color,
       isOwn,
       nodeCount: group.length,

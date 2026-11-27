@@ -2,7 +2,6 @@ import { mulberry32 } from '@plant-legacy/shared/math';
 import * as THREE from 'three';
 import { type MutationLookStack, NEUTRAL_STACK } from '../plant/mutations.ts';
 import type { PlantNodeData } from '../plant/plantNodeData.js';
-import { ImpostorAtlasSlots } from './impostorAtlasSlots.js';
 import { jointMatrixFor } from './jointMatrix.js';
 import { buildPlantMesh, type PlantRenderPlant } from './PlantMeshBuilder.js';
 import {
@@ -13,13 +12,7 @@ import {
   plantTextureArrayLayoutEntries,
 } from './plantTextureBindings.js';
 import { PLANT_VERTEX_BUFFER_LAYOUT, PLANT_VERTEX_STRIDE } from './plantVertexLayout.js';
-import {
-  billboardShader,
-  cullShader,
-  impostorShader,
-  meshShader,
-  rainShader,
-} from './shaders/index.js';
+import { cullShader, impostorShader, meshShader, rainShader } from './shaders/index.js';
 import type { WebGPUDevice } from './WebGPUDevice.js';
 
 /**
@@ -28,8 +21,8 @@ import type { WebGPUDevice } from './WebGPUDevice.js';
  * The WebGL2 renderer keeps ownership of the environment (sky, terrain,
  * weather). This renderer draws plants into a transparent WebGPU canvas layered
  * over it. Plants are uploaded as one merged mesh; a compute pass culls and
- * assigns each plant a LOD tier, then the mesh pass draws close plants and the
- * billboard pass draws distant ones.
+ * assigns each plant a LOD tier, then the mesh pass draws close plants and an
+ * analytic ellipsoid impostor pass draws the distant ones.
  */
 
 /** Texels across the ground height map the mesh pass occludes against. */
@@ -95,7 +88,11 @@ export const FRAME_UNIFORM_FIELDS = [
   '_groundMapPad',
 ] as const;
 const FRAME_BYTES = FRAME_FLOATS * 4;
-const PLANT_FLOATS = 13;
+// Must match the WGSL array stride of PlantData, not its member count: the
+// struct's vec4f fields align it to 16 bytes, so its 13 floats of data occupy
+// 64 bytes per plant. Writing 13 made every plant after the first read another
+// plant's fields, which put the impostors somewhere near the origin.
+const PLANT_FLOATS = 16;
 const PLANT_STRIDE = PLANT_FLOATS * 4;
 /** Bytes per PlantRenderData: tier, visible, projectedSize, blendFactor, baseY. */
 const RENDER_STRIDE = 20;
@@ -107,41 +104,6 @@ const WORKGROUP_SIZE = 64;
 const MAX_JOINTS_PER_PLANT = 64;
 const JOINT_MATRIX_STRIDE = 64; // 16 floats = 64 bytes per mat4x4
 const JOINT_BUFFER_STRIDE = MAX_JOINTS_PER_PLANT * JOINT_MATRIX_STRIDE; // 64 * 64 = 4096 bytes per plant
-
-/** Impostor baking configuration */
-const IMPOSTOR_ATLAS_SIZE = 1024;
-const IMPOSTOR_VIEWS_HORIZONTAL = 8; // 8 horizontal angles (0-360)
-const IMPOSTOR_VIEWS_VERTICAL = 2; // 2 vertical angles (top, side)
-const IMPOSTOR_VIEWS = IMPOSTOR_VIEWS_HORIZONTAL * IMPOSTOR_VIEWS_VERTICAL; // 16 views per plant
-const IMPOSTOR_TILE_SIZE = IMPOSTOR_ATLAS_SIZE / IMPOSTOR_VIEWS_HORIZONTAL; // 128x128 per view
-
-/**
- * Scratch for the impostor view matrices.
- *
- * They depend only on a plant's radius, but a bake used to rebuild them with
- * fresh vectors, matrices and a 1KB Float32Array for every plant it touched.
- */
-const IMPOSTOR_EYE = new THREE.Vector3();
-const IMPOSTOR_TARGET = new THREE.Vector3(0, 0, 0);
-const IMPOSTOR_UP = new THREE.Vector3(0, 1, 0);
-const IMPOSTOR_VIEW_MATRIX = new THREE.Matrix4();
-const IMPOSTOR_PROJECTION_MATRIX = new THREE.Matrix4();
-const IMPOSTOR_VIEW_PROJECTION = new THREE.Matrix4();
-
-/** `Matrix4.makePerspective` exists at runtime but not in three's types. */
-function makePerspectiveMatrix(
-  matrix: THREE.Matrix4,
-  fov: number,
-  aspect: number,
-  near: number,
-  far: number,
-): THREE.Matrix4 {
-  return (
-    matrix as unknown as {
-      makePerspective: (fov: number, aspect: number, near: number, far: number) => THREE.Matrix4;
-    }
-  ).makePerspective(fov, aspect, near, far);
-}
 
 /**
  * One plant look record: five organ families (foliage, woody, seed, bloom,
@@ -241,9 +203,8 @@ export interface WebGPURendererConfig {
   rainParticleCount: number;
   rainBoxWidth: number;
   rainBoxHeight: number;
-  // C02b: Impostor baking
+  /** Draw tiers 2 and below through the ellipsoid impostor pass. */
   impostorEnabled: boolean;
-  impostorUpdateIntervalMs: number;
   // C02b: VRAM budgeting
   vramBudgetBytes: number;
   vramMaxVertexBytes: number;
@@ -287,9 +248,7 @@ export const DEFAULT_WEBGPU_RENDERER_CONFIG: WebGPURendererConfig = {
   rainParticleCount: 1500,
   rainBoxWidth: 60.0,
   rainBoxHeight: 35.0,
-  // C02b: Impostor baking
   impostorEnabled: true,
-  impostorUpdateIntervalMs: 5000,
   // C02b: VRAM budgeting
   vramBudgetBytes: 256 * 1024 * 1024,
   vramMaxVertexBytes: 64 * 1024 * 1024,
@@ -369,7 +328,7 @@ export class WebGPURenderer {
   // T04 appearance: the composed look per plant, keyed by plant id ('own' and
   // 'rival' stand in for a plant the client has no id for).
   private readonly lookByPlant = new Map<string, MutationLookStack>();
-  /** Per-plant look records the mesh and billboard passes read. */
+  /** Per-plant look records the mesh and impostor passes read. */
   private plantLookBuffer: GPUBuffer | null = null;
 
   private initialized = false;
@@ -393,12 +352,13 @@ export class WebGPURenderer {
   private computePipeline: GPUComputePipeline | null = null;
   private meshPipeline: GPURenderPipeline | null = null;
   private sharedPipelineLayout: GPUPipelineLayout | null = null;
-  private billboardPipeline: GPURenderPipeline | null = null;
+  /** Analytic ellipsoid pass for the 12 px and below band. */
+  private impostorPipeline: GPURenderPipeline | null = null;
   private rainPipeline: GPURenderPipeline | null = null;
 
   private computeBindGroup: GPUBindGroup | null = null;
   private meshBindGroup: GPUBindGroup | null = null;
-  private billboardBindGroup: GPUBindGroup | null = null;
+  private impostorBindGroup: GPUBindGroup | null = null;
   private rainBindGroup: GPUBindGroup | null = null;
 
   private rainInstanceBuffer: GPUBuffer | null = null;
@@ -410,39 +370,6 @@ export class WebGPURenderer {
   private textureArrays: Map<PlantTextureType, GPUTexture> | null = null;
   private textureArraySampler: GPUSampler | null = null;
 
-  // C02b: Billboard impostor baking
-  private impostorAtlasTexture: GPUTexture | null = null;
-  private impostorAtlasSampler: GPUSampler | null = null;
-  private impostorDepthTexture: GPUTexture | null = null;
-  private impostorPipeline: GPURenderPipeline | null = null;
-  private impostorBindGroup: GPUBindGroup | null = null;
-  private impostorViewsUniformBuffer: GPUBuffer | null = null;
-  private impostorTargetBuffer: GPUBuffer | null = null;
-  private impostorSlotsBuffer: GPUBuffer | null = null;
-  private lastImpostorBakeTime = Number.NEGATIVE_INFINITY;
-  /**
-   * A bake is running from its readback to its submit.
-   *
-   * `lastImpostorBakeTime` is only stamped at the *end* of a bake, so the
-   * interval check alone let every frame during the readback start another bake
-   * of the same plants: each one allocated its own staging buffer, baked the
-   * same plant into a second atlas slot (the first slot is then permanently
-   * unreachable, because `nextImpostorSlot` already moved past it), and
-   * submitted an extra command buffer.
-   */
-  private impostorBakeInFlight = false;
-  /** Atlas tiles, keyed by plant id; see `impostorAtlasSlots.ts` for why. */
-  private readonly impostorSlots = new ImpostorAtlasSlots(
-    Math.floor(IMPOSTOR_ATLAS_SIZE / IMPOSTOR_TILE_SIZE),
-    Math.floor(IMPOSTOR_ATLAS_SIZE / IMPOSTOR_TILE_SIZE),
-  );
-  /** One 16-layer bake target, reused; a bake used to allocate and destroy one. */
-  private impostorViewTexture: GPUTexture | null = null;
-  private readonly impostorViewMatrices = new Float32Array(IMPOSTOR_VIEWS * 16);
-  /** The radius the matrices above were built for; they depend on nothing else. */
-  private impostorViewDistance = Number.NaN;
-  private impostorSlotData: Uint32Array<ArrayBuffer> | null = null;
-
   // C02b: VRAM pool for budgeting
   private vramPool: VRAMPool | null = null;
 
@@ -451,14 +378,16 @@ export class WebGPURenderer {
   private vertexCount = 0;
   private indexCount = 0;
   private plantCount = 0;
+
   private rainParticleCount = 0;
+
+  /** The last built plants, in render-buffer order: dev diagnostics only. */
+  private builtPlants: PlantRenderPlant[] = [];
 
   private pendingNodes: PlantNodeData[] = [];
   private pendingNowMs = 0;
   private lastBuildTimeMs = Number.NEGATIVE_INFINITY;
   private lastBuildNodeCount = -1;
-  // Store plant render data (center, radius, etc.) for impostor baking
-  private plantRenderData: PlantRenderPlant[] = [];
 
   private readonly frameData = new Float32Array(FRAME_FLOATS);
   private readonly frameU32 = new Uint32Array(this.frameData.buffer);
@@ -529,16 +458,16 @@ export class WebGPURenderer {
 
       const cullModule = await this.createShaderModule(device, cullShader, 'plant-cull');
       const meshModule = await this.createShaderModule(device, meshShader, 'plant-mesh');
-      const billboardModule = await this.createShaderModule(
+      const impostorModule = await this.createShaderModule(
         device,
-        billboardShader,
-        'plant-billboard',
+        impostorShader,
+        'plant-impostor',
       );
       const rainModule = await this.createShaderModule(device, rainShader, 'rain');
 
       this.createBuffers(device);
       this.createRainVertexBuffer(device);
-      await this.createPipelines(device, cullModule, meshModule, billboardModule, rainModule);
+      await this.createPipelines(device, cullModule, meshModule, impostorModule, rainModule);
       this.recreateDepthTexture();
 
       this.initialized = true;
@@ -617,7 +546,7 @@ export class WebGPURenderer {
     );
 
     // T04 appearance: one composed look per plant, read by the mesh and
-    // billboard passes. Allocated for the full plant budget so the bind group
+    // impostor passes. Allocated for the full plant budget so the bind group
     // never has to be rebuilt mid-session.
     this.plantLookBuffer = allocateOrThrow(
       'WebGPU plant looks',
@@ -655,54 +584,6 @@ export class WebGPURenderer {
     });
     this.createTextureArrays(device);
 
-    // C02b: Impostor atlas texture for billboard baking
-    // 2D texture array: 16 views per plant, max 10000 plants = 160k layers (too many)
-    // Instead use a 2D atlas: 1024x1024 with 8x2 tiles = 16 views, each plant gets a row
-    // For maxPlants=10000, we'd need 10000 rows = too large
-    // Practical approach: bake impostors only for visible plants in billboard tiers (2-4)
-    // Use a smaller atlas with LRU eviction
-    this.impostorAtlasTexture = device.createTexture({
-      label: 'Impostor atlas',
-      size: { width: IMPOSTOR_ATLAS_SIZE, height: IMPOSTOR_ATLAS_SIZE, depthOrArrayLayers: 1 },
-      format: 'rgba8unorm',
-      usage:
-        GPUTextureUsage.RENDER_ATTACHMENT |
-        GPUTextureUsage.TEXTURE_BINDING |
-        GPUTextureUsage.COPY_DST,
-    });
-
-    this.impostorAtlasSampler = device.createSampler({
-      label: 'Impostor atlas sampler',
-      magFilter: 'linear',
-      minFilter: 'linear',
-      addressModeU: 'clamp-to-edge',
-      addressModeV: 'clamp-to-edge',
-    });
-
-    // Impostor uniform buffer for per-view projection matrices (16 views * 64 bytes)
-    const IMPOSTOR_UNIFORM_BYTES = 16 * 64;
-    this.impostorViewsUniformBuffer = allocateOrThrow(
-      'Impostor view uniforms',
-      IMPOSTOR_UNIFORM_BYTES,
-      GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-    );
-
-    // Impostor target plant index uniform (16 bytes = 4 u32)
-    this.impostorTargetBuffer = allocateOrThrow(
-      'Impostor target plant index',
-      16,
-      GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-    );
-
-    // Impostor slots buffer (plant index -> atlas slot x,y)
-    // 2 u32 per plant = 8 bytes per plant
-    const IMPOSTOR_SLOTS_BYTES = this.config.maxPlants * 8;
-    this.impostorSlotsBuffer = allocateOrThrow(
-      'Impostor slots',
-      IMPOSTOR_SLOTS_BYTES,
-      GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
-    );
-
     // C02b: GPU skinning - joint buffer for bone matrices
     // Each plant has up to MAX_JOINTS_PER_PLANT joints, each joint is a mat4x4 (64 bytes)
     const JOINT_BUFFER_BYTES = this.config.maxPlants * JOINT_BUFFER_STRIDE;
@@ -712,14 +593,9 @@ export class WebGPURenderer {
       GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
     );
 
-    // Start every plant at the lowest tier with a full dwell timer so the first
-    // compute dispatch is allowed to promote it immediately.
+    // Every plant record starts zeroed: the cull owns the per-frame state it
+    // accumulates (tier history, fade progress) in its own render buffer (E42/E43).
     const initial = new Float32Array(this.config.maxPlants * PLANT_FLOATS);
-    const initialU32 = new Uint32Array(initial.buffer);
-    for (let i = 0; i < this.config.maxPlants; i += 1) {
-      initialU32[i * PLANT_FLOATS + 8] = 4;
-      initial[i * PLANT_FLOATS + 9] = 1;
-    }
     device.queue.writeBuffer(this.plantBuffer, 0, initial);
   }
 
@@ -727,7 +603,7 @@ export class WebGPURenderer {
     device: GPUDevice,
     cullModule: GPUShaderModule,
     meshModule: GPUShaderModule,
-    billboardModule: GPUShaderModule,
+    impostorModule: GPUShaderModule,
     rainModule: GPUShaderModule,
   ): Promise<void> {
     const presentationFormat = this.device.getPresentationFormat();
@@ -812,11 +688,12 @@ export class WebGPURenderer {
       },
     });
 
-    // Explicit layout for billboards: the shader declares all plant texture
-    // arrays plus the impostor atlas, and some of them are not statically used
-    // on every code path, so "auto" would omit bindings the bind group provides.
-    const billboardBindGroupLayout = device.createBindGroupLayout({
-      label: 'Plant billboard bind group layout',
+    // The impostor pass reads the frame, the compute pass's tier output, each
+    // plant's centre and radius, its composed look, and the ground height map
+    // (the same hill test the mesh pass uses). Nothing is baked and nothing is
+    // sampled: the surface is traced analytically in this pass.
+    const impostorBindGroupLayout = device.createBindGroupLayout({
+      label: 'Plant impostor bind group layout',
       entries: [
         {
           binding: 0,
@@ -833,32 +710,28 @@ export class WebGPURenderer {
           visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
           buffer: { type: 'read-only-storage' },
         },
-        ...plantTextureArrayLayoutEntries(3),
-        { binding: 8, visibility: GPUShaderStage.FRAGMENT, sampler: { type: 'filtering' } },
-        { binding: 9, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
-        { binding: 10, visibility: GPUShaderStage.FRAGMENT, sampler: { type: 'filtering' } },
         {
-          binding: 11,
-          visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
+          binding: 3,
+          visibility: GPUShaderStage.FRAGMENT,
           buffer: { type: 'read-only-storage' },
         },
         {
-          binding: 12,
+          binding: 10,
           visibility: GPUShaderStage.FRAGMENT,
-          buffer: { type: 'read-only-storage' },
+          texture: { sampleType: 'unfilterable-float' },
         },
       ],
     });
 
-    this.billboardPipeline = device.createRenderPipeline({
-      label: 'Plant billboard pipeline',
+    this.impostorPipeline = device.createRenderPipeline({
+      label: 'Plant impostor pipeline',
       layout: device.createPipelineLayout({
-        label: 'Plant billboard pipeline layout',
-        bindGroupLayouts: [billboardBindGroupLayout],
+        label: 'Plant impostor pipeline layout',
+        bindGroupLayouts: [impostorBindGroupLayout],
       }),
-      vertex: { module: billboardModule, entryPoint: 'vs_main', buffers: [] },
+      vertex: { module: impostorModule, entryPoint: 'vs_main', buffers: [] },
       fragment: {
-        module: billboardModule,
+        module: impostorModule,
         entryPoint: 'fs_main',
         targets: [
           {
@@ -883,30 +756,6 @@ export class WebGPURenderer {
         format: 'depth24plus',
         depthWriteEnabled: false,
         depthCompare: 'less-equal',
-      },
-    });
-
-    // C02b: Impostor baking pipeline - renders plants to atlas from multiple views
-    const impostorModule = await this.createShaderModule(device, impostorShader, 'plant-impostor');
-
-    this.impostorPipeline = device.createRenderPipeline({
-      label: 'Plant impostor pipeline',
-      layout: 'auto',
-      vertex: {
-        module: impostorModule,
-        entryPoint: 'vs_main',
-        buffers: [PLANT_VERTEX_BUFFER_LAYOUT],
-      },
-      fragment: {
-        module: impostorModule,
-        entryPoint: 'fs_main',
-        targets: [{ format: 'rgba8unorm' }],
-      },
-      primitive: { topology: 'triangle-list', cullMode: 'back' },
-      depthStencil: {
-        format: 'depth24plus',
-        depthWriteEnabled: true,
-        depthCompare: 'less',
       },
     });
 
@@ -1029,73 +878,22 @@ export class WebGPURenderer {
       ],
     });
 
-    // C02b: Impostor bind group for baking
-    if (!this.impostorPipeline || !this.impostorViewsUniformBuffer || !this.impostorTargetBuffer) {
-      throw new Error('Impostor pipeline or uniform buffer not created');
-    }
-    if (!this.frameUniformBuffer || !this.renderBuffer) {
-      return;
-    }
     this.impostorBindGroup = device.createBindGroup({
-      label: 'Impostor bind group',
+      label: 'Plant impostor bind group',
       layout: this.impostorPipeline.getBindGroupLayout(0),
-      entries: [
-        { binding: 0, resource: { buffer: this.frameUniformBuffer } },
-        { binding: 1, resource: { buffer: this.renderBuffer } },
-        { binding: 2, resource: { buffer: this.impostorTargetBuffer } },
-        { binding: 3, resource: { buffer: this.impostorViewsUniformBuffer } },
-        // C02b: texture arrays for plant variation (bindings 4-8).
-        ...plantTextureArrayBindGroupEntries(device, this.textureArrays, 4),
-        { binding: 9, resource: this.textureArraySampler ?? device.createSampler() },
-        {
-          binding: 10,
-          resource: {
-            buffer:
-              this.plantLookBuffer ??
-              device.createBuffer({ size: 320, usage: GPUBufferUsage.STORAGE }),
-          },
-        },
-      ],
-    });
-
-    // Billboard bind group (with impostor atlas for C02b)
-    this.billboardBindGroup = device.createBindGroup({
-      label: 'Plant billboard bind group',
-      layout: this.billboardPipeline.getBindGroupLayout(0),
       entries: [
         { binding: 0, resource: frameBinding },
         { binding: 1, resource: renderBinding },
         { binding: 2, resource: plantBinding },
-        // C02b: texture arrays for plant variation (bindings 3-7).
-        ...plantTextureArrayBindGroupEntries(device, this.textureArrays, 3),
-        { binding: 8, resource: this.textureArraySampler ?? device.createSampler() },
         {
-          binding: 9,
-          resource:
-            this.impostorAtlasTexture?.createView() ??
-            device
-              .createTexture({
-                size: [1, 1],
-                format: 'rgba8unorm',
-                usage: GPUTextureUsage.TEXTURE_BINDING,
-              })
-              .createView(),
-        },
-        { binding: 10, resource: this.impostorAtlasSampler ?? device.createSampler() },
-        {
-          binding: 11,
-          resource: this.impostorSlotsBuffer
-            ? { buffer: this.impostorSlotsBuffer }
-            : { buffer: device.createBuffer({ size: 8, usage: GPUBufferUsage.STORAGE }) },
-        },
-        {
-          binding: 12,
+          binding: 3,
           resource: {
             buffer:
               this.plantLookBuffer ??
               device.createBuffer({ size: 320, usage: GPUBufferUsage.STORAGE }),
           },
         },
+        { binding: 10, resource: this.groundMapTexture!.createView() },
       ],
     });
   }
@@ -1271,7 +1069,7 @@ export class WebGPURenderer {
     this.vertexCount = built.vertices.byteLength / PLANT_VERTEX_STRIDE;
     this.indexCount = built.indices.length;
     this.plantCount = Math.min(built.plantData.length, this.config.maxPlants);
-    this.plantRenderData = built.plantData;
+    this.builtPlants = built.plantData;
 
     this.lastBuildTimeMs = this.pendingNowMs;
     this.lastBuildNodeCount = this.pendingNodes.length;
@@ -1673,15 +1471,21 @@ export class WebGPURenderer {
       data[offset + 5] = plant.color[1];
       data[offset + 6] = plant.color[2];
       data[offset + 7] = plant.isOwn ? 1 : 0;
-      dataU32[offset + 8] = 4;
-      data[offset + 9] = 1;
+      // offsets + 8 and + 9 are the cull's old `lastTier`/`dwellTime` words and
+      // stay zero: this upload rewrites the whole plant buffer every frame, so
+      // the cull keeps that state in its own render buffer instead (E42/E43).
       data[offset + 10] = plant.nodeCount;
-      // Spare PlantData word carries the plant's mutation mask to billboards.
+      // Spare PlantData word carries the plant's mutation mask to the impostors.
       dataU32[offset + 11] = plant.mutationMask & 0x7;
       // Terrain height under the plant: sway runs from it and the soil hides
       // anything of the plant that falls below it.
       data[offset + 12] =
         this.groundHeightAt?.(plant.center.x, plant.center.z) ?? plant.center.y - plant.radius;
+      // The impostor's ellipsoid: the drawn body above the soil, not the sphere
+      // the cull pass measures (E41).
+      data[offset + 13] = plant.impostorBaseY;
+      data[offset + 14] = plant.impostorTopY;
+      data[offset + 15] = plant.impostorHalfWidth;
     }
 
     device.queue.writeBuffer(this.plantBuffer, 0, data);
@@ -1712,238 +1516,6 @@ export class WebGPURenderer {
     if (this.initialized) {
       this.recreateDepthTexture();
     }
-  }
-
-  /** C02b: Bake impostors for billboard-tier plants into atlas texture */
-  private async bakeImpostors(device: GPUDevice, encoder: GPUCommandEncoder): Promise<void> {
-    if (
-      !this.impostorAtlasTexture ||
-      !this.impostorViewsUniformBuffer ||
-      !this.impostorTargetBuffer ||
-      this.plantCount === 0
-    ) {
-      return;
-    }
-
-    const now = performance.now();
-    if (now - this.lastImpostorBakeTime < this.config.impostorUpdateIntervalMs) {
-      return;
-    }
-
-    // Stamp the attempt, not only the success: a frame with no billboard-tier
-    // plant returns below without baking, and used to run the readback again on
-    // every frame because nothing stamped the time.
-    this.lastImpostorBakeTime = now;
-
-    // Read render data to find plants in billboard tiers (2-4)
-    const renderData = await this.readRenderData(this.plantCount);
-    // Guard: renderer may have been destroyed while we awaited the GPU readback.
-    if (!this.initialized) return;
-    const billboardPlants: Array<{ index: number; projectedSize: number }> = [];
-    for (let i = 0; i < renderData.length; i++) {
-      if (renderData[i].tier >= 2 && renderData[i].visible > 0) {
-        billboardPlants.push({ index: i, projectedSize: renderData[i].projectedSize });
-      }
-    }
-
-    if (billboardPlants.length === 0) {
-      return;
-    }
-
-    // Sort by projected size (closest first) to prioritize visible plants
-    billboardPlants.sort((a, b) => b.projectedSize - a.projectedSize);
-
-    // Bake up to max plants per frame
-    const plantsToBake = Math.min(4, billboardPlants.length);
-    let baked = 0;
-
-    // Hand back the tiles of plants that are gone before taking new ones: a tile
-    // held by a dead plant was never released, so the atlas filled with ghosts
-    // and then evicted plants that were still on screen.
-    this.impostorSlots.retain(this.plantIdsInFrame());
-    const bakeNow = performance.now();
-
-    // Create/reuse depth texture for impostor rendering
-    if (!this.impostorDepthTexture) {
-      this.impostorDepthTexture = device.createTexture({
-        label: 'Impostor depth',
-        size: { width: IMPOSTOR_TILE_SIZE, height: IMPOSTOR_TILE_SIZE },
-        format: 'depth24plus',
-        usage: GPUTextureUsage.RENDER_ATTACHMENT,
-      });
-    }
-    const impostorDepthTexture = this.impostorDepthTexture;
-
-    // Frustum culling: compute view-projection matrix for main camera
-    // We'll cull plants that are outside the main camera view
-    const frustumPlanes = this.computeFrustumPlanes();
-
-    for (let i = 0; i < plantsToBake; i++) {
-      const plantInfo = billboardPlants[i];
-      const plantIdx = plantInfo.index;
-
-      // Get plant data for baking and frustum culling
-      const plantRenderInfo = this.plantRenderData[plantIdx];
-      if (!plantRenderInfo) continue;
-
-      // Frustum culling: skip plants not in view
-      if (!this.isSphereInFrustum(plantRenderInfo.center, plantRenderInfo.radius, frustumPlanes)) {
-        continue;
-      }
-      // Atlas tiles are keyed by plant id, so a plant that shifted down the list
-      // (another plant died or left interest) cannot inherit its neighbour's
-      // impostor, and a tile is never leaked to a plant that is gone.
-      const grant = this.impostorSlots.acquire(plantRenderInfo.id, bakeNow);
-      if (!grant) continue;
-
-      // The view matrices depend on the plant's radius alone (the shader applies
-      // its position), so they are rebuilt only when the radius changes.
-      this.writeImpostorViews(device, plantRenderInfo.radius);
-
-      // Write target plant index
-      const targetData = new Uint32Array([plantIdx, 0, 0, 0]);
-      device.queue.writeBuffer(this.impostorTargetBuffer, 0, targetData);
-
-      const impostorViewTexture = this.ensureImpostorViewTexture(device);
-
-      // Single render pass with 16 instances (one per view/layer)
-      const renderPass = encoder.beginRenderPass({
-        label: `Impostor bake plant ${plantIdx} all views`,
-        colorAttachments: [
-          {
-            view: impostorViewTexture.createView({ dimension: '2d-array' }),
-            clearValue: { r: 0, g: 0, b: 0, a: 0 },
-            loadOp: 'clear',
-            storeOp: 'store',
-          },
-        ],
-        depthStencilAttachment: {
-          view: impostorDepthTexture.createView(),
-          depthClearValue: 1,
-          depthLoadOp: 'clear',
-          depthStoreOp: 'store',
-        },
-      });
-
-      if (
-        this.impostorPipeline &&
-        this.impostorBindGroup &&
-        this.vertexBuffer &&
-        this.indexBuffer &&
-        this.indexCount > 0
-      ) {
-        renderPass.setPipeline(this.impostorPipeline);
-        renderPass.setBindGroup(0, this.impostorBindGroup);
-        renderPass.setVertexBuffer(0, this.vertexBuffer);
-        renderPass.setIndexBuffer(this.indexBuffer, 'uint32');
-        // Draw 16 instances, each instance uses a different view matrix and renders to a different layer
-        renderPass.drawIndexed(this.indexCount, IMPOSTOR_VIEWS, 0, 0, 0);
-      }
-      renderPass.end();
-
-      // Copy each layer from the view texture to the atlas sub-rectangle
-      for (let viewIdx = 0; viewIdx < IMPOSTOR_VIEWS; viewIdx++) {
-        const h = viewIdx % IMPOSTOR_VIEWS_HORIZONTAL;
-        const v = Math.floor(viewIdx / IMPOSTOR_VIEWS_HORIZONTAL);
-        const atlasX = grant.column * IMPOSTOR_TILE_SIZE + h * IMPOSTOR_TILE_SIZE;
-        const atlasY = grant.row * IMPOSTOR_TILE_SIZE + v * IMPOSTOR_TILE_SIZE;
-
-        encoder.copyTextureToTexture(
-          { texture: impostorViewTexture, origin: { x: 0, y: 0, z: viewIdx } },
-          { texture: this.impostorAtlasTexture, origin: { x: atlasX, y: atlasY, z: 0 } },
-          { width: IMPOSTOR_TILE_SIZE, height: IMPOSTOR_TILE_SIZE, depthOrArrayLayers: 1 },
-        );
-      }
-
-      baked += 1;
-    }
-
-    // Rewriting the whole index -> tile table once per bake is what makes a
-    // removal self-healing: an index that now belongs to another plant cannot
-    // keep pointing at a tile from a previous frame.
-    if (baked > 0) {
-      this.writeImpostorSlotBuffer(device);
-      this.lastImpostorBakeTime = performance.now();
-    }
-  }
-
-  /** One 16-layer bake target for every bake, created on first use. */
-  private ensureImpostorViewTexture(device: GPUDevice): GPUTexture {
-    if (!this.impostorViewTexture) {
-      this.impostorViewTexture = device.createTexture({
-        label: 'Impostor bake views',
-        size: {
-          width: IMPOSTOR_TILE_SIZE,
-          height: IMPOSTOR_TILE_SIZE,
-          depthOrArrayLayers: IMPOSTOR_VIEWS,
-        },
-        format: 'rgba8unorm',
-        usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
-      });
-    }
-    return this.impostorViewTexture;
-  }
-
-  /** Uploads the 16 view-projection matrices a plant of `radius` is baked from. */
-  private writeImpostorViews(device: GPUDevice, radius: number): void {
-    if (!this.impostorViewsUniformBuffer) return;
-    const distance = Math.max(5, radius * 2);
-    if (!(Math.abs(distance - this.impostorViewDistance) <= 1e-4)) {
-      for (let viewIdx = 0; viewIdx < IMPOSTOR_VIEWS; viewIdx += 1) {
-        const h = viewIdx % IMPOSTOR_VIEWS_HORIZONTAL;
-        const v = Math.floor(viewIdx / IMPOSTOR_VIEWS_HORIZONTAL);
-        const angle = (h / IMPOSTOR_VIEWS_HORIZONTAL) * Math.PI * 2;
-        const elevation = v === 0 ? Math.PI / 4 : Math.PI / 6; // 45 deg top, 30 deg side
-
-        IMPOSTOR_EYE.set(
-          Math.cos(angle) * Math.cos(elevation) * distance,
-          Math.sin(elevation) * distance,
-          Math.sin(angle) * Math.cos(elevation) * distance,
-        );
-        IMPOSTOR_VIEW_MATRIX.lookAt(IMPOSTOR_EYE, IMPOSTOR_TARGET, IMPOSTOR_UP);
-        makePerspectiveMatrix(
-          IMPOSTOR_PROJECTION_MATRIX,
-          Math.PI / 4, // 90 deg FOV
-          1, // aspect
-          0.1,
-          100,
-        );
-        IMPOSTOR_VIEW_PROJECTION.multiplyMatrices(IMPOSTOR_PROJECTION_MATRIX, IMPOSTOR_VIEW_MATRIX);
-        this.impostorViewMatrices.set(IMPOSTOR_VIEW_PROJECTION.elements, viewIdx * 16);
-      }
-      this.impostorViewDistance = distance;
-    }
-    device.queue.writeBuffer(this.impostorViewsUniformBuffer, 0, this.impostorViewMatrices);
-  }
-
-  /** Uploads the whole plant index -> atlas tile table for the billboard shader. */
-  private writeImpostorSlotBuffer(device: GPUDevice): void {
-    if (!this.impostorSlotsBuffer) return;
-    const needed = this.plantCount * 2;
-    if (!this.impostorSlotData || this.impostorSlotData.length < needed) {
-      this.impostorSlotData = new Uint32Array(this.config.maxPlants * 2);
-    }
-    const data = this.impostorSlotData;
-    // 0xffffffff means "no impostor": the billboard pass falls back to the mesh
-    // for that plant rather than sampling a tile someone else owns.
-    data.fill(0xffffffff, 0, needed);
-    for (let index = 0; index < this.plantCount; index += 1) {
-      const slot = this.impostorSlots.slotOf(this.plantRenderData[index].id);
-      if (!slot) continue;
-      data[index * 2] = slot.column;
-      data[index * 2 + 1] = slot.row;
-    }
-    device.queue.writeBuffer(this.impostorSlotsBuffer, 0, data, 0, needed);
-  }
-
-  /** Ids of the plants this frame can bake, for releasing their tiles. */
-  private plantIdsInFrame(): ReadonlySet<string> {
-    const ids = new Set<string>();
-    const count = Math.min(this.plantCount, this.plantRenderData.length);
-    for (let index = 0; index < count; index += 1) {
-      ids.add(this.plantRenderData[index].id);
-    }
-    return ids;
   }
 
   render(): void {
@@ -2040,10 +1612,16 @@ export class WebGPURenderer {
       },
     });
 
-    // 3. Plant billboards (tier 2/3/4) - transparent
-    if (this.billboardPipeline && this.billboardBindGroup && this.plantCount > 0) {
-      renderPass.setPipeline(this.billboardPipeline);
-      renderPass.setBindGroup(0, this.billboardBindGroup);
+    // 3. Ellipsoid impostors (tier 2 and below) - transparent, so a plant
+    //    crossing the mesh boundary fades in without a pop.
+    if (
+      this.config.impostorEnabled &&
+      this.impostorPipeline &&
+      this.impostorBindGroup &&
+      this.plantCount > 0
+    ) {
+      renderPass.setPipeline(this.impostorPipeline);
+      renderPass.setBindGroup(0, this.impostorBindGroup);
       renderPass.draw(6, this.plantCount);
     }
 
@@ -2093,42 +1671,6 @@ export class WebGPURenderer {
     }
 
     renderPass.end();
-    device.queue.submit([encoder.finish()]);
-
-    // Schedule impostor baking asynchronously (after frame submission)
-    if (this.config.impostorEnabled && this.impostorPipeline && this.impostorBindGroup) {
-      this.scheduleImpostorBake(device);
-    }
-  }
-
-  private scheduleImpostorBake(device: GPUDevice): void {
-    // One bake at a time: the bake awaits a GPU readback, and the frame loop
-    // still calls this every frame while it is pending.
-    if (this.impostorBakeInFlight) return;
-    this.impostorBakeInFlight = true;
-    // Use setTimeout instead of queueMicrotask to avoid potential race with device loss
-    // and to yield to the event loop for better responsiveness
-    setTimeout(() => {
-      if (!this.initialized) {
-        this.impostorBakeInFlight = false;
-        return;
-      }
-      this.bakeImpostorsAsync(device)
-        .catch((err) => {
-          console.warn('[WebGPURenderer] Impostor bake failed:', err);
-        })
-        .finally(() => {
-          this.impostorBakeInFlight = false;
-        });
-    }, 0);
-  }
-
-  private async bakeImpostorsAsync(device: GPUDevice): Promise<void> {
-    // Create a separate command encoder for impostor baking
-    const encoder = device.createCommandEncoder({ label: 'Impostor bake' });
-    await this.bakeImpostors(device, encoder);
-    // Guard: renderer may have been destroyed while awaiting the readback.
-    if (!this.initialized) return;
     device.queue.submit([encoder.finish()]);
   }
 
@@ -2389,7 +1931,7 @@ export class WebGPURenderer {
    */
   async readRenderData(
     limit = this.plantCount,
-  ): Promise<Array<{ tier: number; visible: number; projectedSize: number }>> {
+  ): Promise<Array<{ tier: number; visible: number; projectedSize: number; blendFactor: number }>> {
     const device = this.device.getDevice();
     if (!device || !this.renderBuffer || this.plantCount === 0) {
       return [];
@@ -2431,13 +1973,21 @@ export class WebGPURenderer {
     staging.unmap();
     staging.destroy();
 
-    const result: Array<{ tier: number; visible: number; projectedSize: number }> = [];
+    const result: Array<{
+      tier: number;
+      visible: number;
+      projectedSize: number;
+      blendFactor: number;
+    }> = [];
     for (let i = 0; i < count; i += 1) {
       const offset = i * (RENDER_STRIDE / 4);
       result.push({
         tier: words[offset],
         visible: words[offset + 1],
         projectedSize: floats[offset + 2],
+        // The mesh/billboard cross-fade the cull accumulates; read here so a
+        // fade can be measured the way a tier change can (E43).
+        blendFactor: floats[offset + 3],
       });
     }
     return result;
@@ -2445,6 +1995,37 @@ export class WebGPURenderer {
 
   getPlantCount(): number {
     return this.plantCount;
+  }
+
+  /**
+   * Where each plant in the render buffer actually is.
+   *
+   * `readRenderData` answers tier and projected size by index; without this an
+   * index cannot be turned into a plant to look at, which is what framing a
+   * plant at a chosen pixel size needs.
+   */
+  plantTable(): Array<{
+    id: string;
+    x: number;
+    y: number;
+    z: number;
+    radius: number;
+    impostorBaseY: number;
+    impostorTopY: number;
+    impostorHalfWidth: number;
+    isOwn: boolean;
+  }> {
+    return this.builtPlants.map((plant) => ({
+      id: plant.id,
+      x: plant.center.x,
+      y: plant.center.y,
+      z: plant.center.z,
+      radius: plant.radius,
+      impostorBaseY: plant.impostorBaseY,
+      impostorTopY: plant.impostorTopY,
+      impostorHalfWidth: plant.impostorHalfWidth,
+      isOwn: plant.isOwn,
+    }));
   }
 
   getVertexCount(): number {
@@ -2459,72 +2040,6 @@ export class WebGPURenderer {
     return this.initialized;
   }
 
-  /** Compute frustum planes from view-projection matrix for culling */
-  private computeFrustumPlanes(): THREE.Plane[] {
-    const planes: THREE.Plane[] = [];
-    const m = this.viewProjection.elements;
-
-    // Left plane: m[3] + m[0], m[7] + m[4], m[11] + m[8], m[15] + m[12]
-    planes.push(
-      new THREE.Plane().setFromNormalAndCoplanarPoint(
-        new THREE.Vector3(m[3] + m[0], m[7] + m[4], m[11] + m[8]).normalize(),
-        new THREE.Vector3(0, 0, 0),
-      ),
-    );
-
-    // Right plane: m[3] - m[0], m[7] - m[4], m[11] - m[8], m[15] - m[12]
-    planes.push(
-      new THREE.Plane().setFromNormalAndCoplanarPoint(
-        new THREE.Vector3(m[3] - m[0], m[7] - m[4], m[11] - m[8]).normalize(),
-        new THREE.Vector3(0, 0, 0),
-      ),
-    );
-
-    // Bottom plane: m[3] + m[1], m[7] + m[5], m[11] + m[9], m[15] + m[13]
-    planes.push(
-      new THREE.Plane().setFromNormalAndCoplanarPoint(
-        new THREE.Vector3(m[3] + m[1], m[7] + m[5], m[11] + m[9]).normalize(),
-        new THREE.Vector3(0, 0, 0),
-      ),
-    );
-
-    // Top plane: m[3] - m[1], m[7] - m[5], m[11] - m[9], m[15] - m[13]
-    planes.push(
-      new THREE.Plane().setFromNormalAndCoplanarPoint(
-        new THREE.Vector3(m[3] - m[1], m[7] - m[5], m[11] - m[9]).normalize(),
-        new THREE.Vector3(0, 0, 0),
-      ),
-    );
-
-    // Near plane: m[3] + m[2], m[7] + m[6], m[11] + m[10], m[15] + m[14]
-    planes.push(
-      new THREE.Plane().setFromNormalAndCoplanarPoint(
-        new THREE.Vector3(m[3] + m[2], m[7] + m[6], m[11] + m[10]).normalize(),
-        new THREE.Vector3(0, 0, 0),
-      ),
-    );
-
-    // Far plane: m[3] - m[2], m[7] - m[6], m[11] - m[10], m[15] - m[14]
-    planes.push(
-      new THREE.Plane().setFromNormalAndCoplanarPoint(
-        new THREE.Vector3(m[3] - m[2], m[7] - m[6], m[11] - m[10]).normalize(),
-        new THREE.Vector3(0, 0, 0),
-      ),
-    );
-
-    return planes;
-  }
-
-  /** Check if sphere intersects frustum */
-  private isSphereInFrustum(center: THREE.Vector3, radius: number, planes: THREE.Plane[]): boolean {
-    for (const plane of planes) {
-      if (plane.distanceToPoint(center) < -radius) {
-        return false;
-      }
-    }
-    return true;
-  }
-
   destroy(): void {
     this.frameUniformBuffer?.destroy();
     this.plantBuffer?.destroy();
@@ -2533,8 +2048,6 @@ export class WebGPURenderer {
     this.indexBuffer?.destroy();
     this.jointBuffer?.destroy();
     this.depthTexture?.destroy();
-    this.impostorDepthTexture?.destroy();
-    this.impostorViewTexture?.destroy();
 
     // C02b: Destroy texture arrays
     if (this.textureArrays) {
@@ -2544,7 +2057,6 @@ export class WebGPURenderer {
     }
     this.rainInstanceBuffer?.destroy();
     this.rainUniformBuffer?.destroy();
-    this.impostorViewsUniformBuffer?.destroy();
 
     this.frameUniformBuffer = null;
     this.plantBuffer = null;
@@ -2553,23 +2065,16 @@ export class WebGPURenderer {
     this.indexBuffer = null;
     this.jointBuffer = null;
     this.depthTexture = null;
-    this.impostorAtlasTexture = null;
-    this.impostorAtlasSampler = null;
-    this.impostorViewTexture = null;
-    this.impostorSlots.clear();
     this.textureArrays = null;
     this.textureArraySampler = null;
     this.rainInstanceBuffer = null;
     this.rainUniformBuffer = null;
-    this.impostorViewsUniformBuffer = null;
     this.computePipeline = null;
     this.meshPipeline = null;
-    this.billboardPipeline = null;
     this.rainPipeline = null;
     this.impostorPipeline = null;
     this.computeBindGroup = null;
     this.meshBindGroup = null;
-    this.billboardBindGroup = null;
     this.rainBindGroup = null;
     this.impostorBindGroup = null;
     this.sharedPipelineLayout = null;

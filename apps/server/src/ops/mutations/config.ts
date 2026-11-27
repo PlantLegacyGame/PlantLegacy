@@ -232,6 +232,10 @@ function normalizeLevelRules(raw: Record<string, unknown>): MutationLevelRules {
     baseBiomassFraction: Math.min(0.9, Math.max(0, num(raw.base_biomass_fraction, 0))),
     biomassFractionPerLevel: Math.min(0.9, Math.max(0, num(raw.biomass_fraction_per_level, 0))),
     minBiomassCost: Math.max(1, num(raw.min_biomass_cost, 1)),
+    maxEnergyShareOfCapacity: Math.min(
+      1,
+      Math.max(0.1, num(raw.max_energy_share_of_capacity, 0.8)),
+    ),
     upkeepPerLevel: Math.max(0, num(raw.upkeep_per_level, 0)),
     cardSteps,
     cardLabels,
@@ -419,11 +423,7 @@ export function loadMutationsConfig(configs: Map<string, ConfigFile>): Mutations
     readObject(configs, 'mutations', 'node_type_to_category'),
   );
   const categoryToTags = normalizeTagMap(readObject(configs, 'mutations', 'category_to_tag_map'));
-  const oversize = readObject<{ wilt_per_s?: unknown; leak_per_s?: unknown }>(
-    configs,
-    'mutations',
-    'oversize_decay',
-  );
+  const oversize = readObject<{ wilt_per_s?: unknown }>(configs, 'mutations', 'oversize_decay');
   const levelUp = normalizeLevelRules(
     readObject<Record<string, unknown>>(configs, 'mutations', 'level_up'),
   );
@@ -442,7 +442,6 @@ export function loadMutationsConfig(configs: Map<string, ConfigFile>): Mutations
     upkeepMaxMultiplier: readNumber(configs, 'mutations', 'mutation_upkeep_max_multiplier'),
     upkeepBiomassFloor: readNumber(configs, 'mutations', 'upkeep_biomass_floor'),
     oversizeWiltPerS: Math.max(0, num(oversize.wilt_per_s, 0.02)),
-    oversizeLeakPerS: Math.max(0, num(oversize.leak_per_s, 0.05)),
     levelUp,
     visualCaps: visuals.caps,
     visualTargets: visuals.targets,

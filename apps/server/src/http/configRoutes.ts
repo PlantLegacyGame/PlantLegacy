@@ -93,6 +93,12 @@ export async function handleConfigRequest(
         mutation_visual_0_param: values.mutation_visual_0_param?.value ?? 0.0,
         mutation_visual_1_param: values.mutation_visual_1_param?.value ?? 1.5,
         mutation_visual_2_param: values.mutation_visual_2_param?.value ?? 0.3,
+        // The client has always read these three from this payload; until now the
+        // file did not declare them, so the legacy uniform slot silently took its
+        // compiled default (found by clientConfigReads.test.ts).
+        mutation_bioluminescence_strength: values.mutation_bioluminescence_strength?.value ?? 0.55,
+        mutation_bark_thickness_scale: values.mutation_bark_thickness_scale?.value ?? 1.35,
+        mutation_variegation_strength: values.mutation_variegation_strength?.value ?? 0.35,
         smin_blend_radius: values.smin_blend_radius?.value ?? 0.25,
         max_raymarch_steps: values.max_raymarch_steps?.value ?? 32,
         raymarch_hit_epsilon: values.raymarch_hit_epsilon?.value ?? 0.005,
@@ -146,6 +152,9 @@ export async function handleConfigRequest(
           mutation_visual_0_param: 0.0,
           mutation_visual_1_param: 1.5,
           mutation_visual_2_param: 0.3,
+          mutation_bioluminescence_strength: 0.55,
+          mutation_bark_thickness_scale: 1.35,
+          mutation_variegation_strength: 0.35,
           smin_blend_radius: 0.25,
           max_raymarch_steps: 32,
           raymarch_hit_epsilon: 0.005,
@@ -208,6 +217,7 @@ export async function handleConfigRequest(
           segment_taper_exponent: geometryNumber('segment_taper_exponent', 2.2),
           socket_inset_ratio: geometryNumber('socket_inset_ratio', 0.15),
           node_radius_profiles: parsed.values?.node_radius_profiles?.value ?? {},
+          organ_morphology: parsed.values?.organ_morphology?.value ?? {},
         },
       };
     } catch {
@@ -225,6 +235,7 @@ export async function handleConfigRequest(
           segment_taper_exponent: 2.2,
           socket_inset_ratio: 0.15,
           node_radius_profiles: {},
+          organ_morphology: {},
         },
       };
     }
@@ -289,14 +300,6 @@ export async function handleConfigRequest(
         },
       };
     }
-  }
-
-  // Systems the client reads verbatim: day/night timing and tile ranges.
-  // Anything else with a dedicated route below keeps its own handler.
-  if (url.pathname === '/config/daynight' || url.pathname === '/config/resources') {
-    const system = url.pathname.slice('/config/'.length);
-    const flat = await readFlatConfig(configDir, system);
-    return { status: 200, body: flat ?? {} };
   }
 
   if (url.pathname === '/config/controls') {
@@ -526,40 +529,6 @@ export async function handleConfigRequest(
     }
   }
 
-  if (
-    url.pathname === '/config/chat' ||
-    url.pathname === '/config/reports' ||
-    url.pathname === '/config/network' ||
-    url.pathname === '/config/terrain' ||
-    url.pathname === '/config/physics' ||
-    url.pathname === '/config/water' ||
-    // T02: every root-sight tunable reaches the client. A hand-written
-    // whitelist served seven of seventeen, so the cutaway radius, bubble
-    // budget, burrow depth and rebuild rate silently ran on compiled-in
-    // defaults while the file said otherwise.
-    url.pathname === '/config/root_sight' ||
-    // T04: the client paints mutations from the style table the config
-    // validator owns, so appearance stays data (RULE_3).
-    url.pathname === '/config/mutation_visuals' ||
-    // C05: the shop's catalogue and its currency name. The client has fetched
-    // `/config/shop` since the panel was written and no route ever answered it,
-    // so the shop rendered "Nothing for sale yet" no matter what the file said.
-    url.pathname === '/config/shop' ||
-    // A01: the palette is the one place a colour value lives. `config/ui.json`
-    // names roles, and the client resolves them against this file at boot, so
-    // routing it here is what makes the UI's colours data instead of a second
-    // hand-maintained list of hexes.
-    url.pathname === '/config/palette' ||
-    // AL-01/ADR-027: the client reads the dev-only size class and the six
-    // benchmark poses from the same file the dev panel edits.
-    url.pathname === '/config/dev'
-  ) {
-    // T05: Serve chat/report tunables so client-side limits mirror server
-    // enforcement; the network file also carries the client ping thresholds.
-    const flat = await readFlatConfig(configDir, url.pathname.slice('/config/'.length));
-    return { status: 200, body: flat ?? {} };
-  }
-
   if (url.pathname === '/config/ui') {
     // C01: Serve UI config
     try {
@@ -625,6 +594,24 @@ export async function handleConfigRequest(
         },
       };
     }
+  }
+
+  // The generic route: any `config/<system>.json`, served as a flat
+  // `{ key: value }` map. It replaces the hand-maintained OR-list that grew
+  // here, where a file the client reads could silently be missing:
+  // `/config/root_sight` served seven of its seventeen entries, and
+  // `/config/shop` and `/config/terrain_volume` each answered 404.
+  //
+  // The shaped systems above answer first; they are the deliberate exceptions,
+  // because they derive fields (merged bindings, layered UI tokens) instead of
+  // passing the file through.
+  if (url.pathname.startsWith('/config/')) {
+    // `readFlatConfig` rejects anything that is not a plain system name, so the
+    // fragment can never be a path.
+    const flat = await readFlatConfig(configDir, url.pathname.slice('/config/'.length));
+    // No file, no route: a 404 lets the client keep its own defaults, where `{}`
+    // would look like a config whose every key had been deleted.
+    return flat ? { status: 200, body: flat } : null;
   }
 
   return null;

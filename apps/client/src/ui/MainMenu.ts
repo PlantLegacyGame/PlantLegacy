@@ -184,11 +184,14 @@ const STYLE = `
     animation-duration: calc(var(--pl-sway-ms, 5200ms) * 0.55);
   }
   /* Dev-only frame meter. Small, monospaced, out of the way: it exists to be read
-     aloud in a bug report, not to decorate the title. */
+     aloud in a bug report, not to decorate the title. It sits top-left, because
+     the H hint is written along the bottom edge and the two ran into each other
+     ("...worst 117msE MENU"). */
   .pl-frame-meter {
     position: fixed;
     left: 10px;
-    bottom: 8px;
+    top: 8px;
+    bottom: auto;
     z-index: 900;
     padding: 2px 6px;
     border-radius: 5px;
@@ -962,10 +965,10 @@ const STYLE = `
     pointer-events: none;
   }
   .pl-care {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 2px;
+    /* No caption: the can and the sack are drawings in the meadow, the way the
+       barrel and the chest are. The label said what the picture already did, and
+       two uppercase words floating over the soil art read as a toolbar. */
+    display: block;
     width: 9.5vmin;
     padding: 0;
     border: 0;
@@ -973,10 +976,6 @@ const STYLE = `
     pointer-events: auto;
     cursor: pointer;
     color: color-mix(in srgb, var(--warm-ink, #f0ead6) 74%, transparent);
-    font-size: var(--hud-font-xs, 0.62rem);
-    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
     transition: transform 160ms ease, color 160ms ease, opacity 200ms ease;
   }
   .pl-care svg {
@@ -1041,48 +1040,185 @@ const STYLE = `
     pointer-events: none;
     overflow: hidden;
   }
-  .pl-fx {
+  /* A pour is a stream, not a burst. Every droplet leaves the spout on its own
+     beat and follows its own arc - sideways at a constant speed, downward on an
+     eased curve - and the two transforms together are a parabola, which is what
+     water leaving a can actually does. Each droplet is a wrapper (the sideways
+     half) around a drop (the fall), because one element cannot animate two
+     different easings on one axis pair. */
+  .pl-fx__arc {
     position: absolute;
     left: 0;
     top: 0;
-    border-radius: 50%;
+    width: 0;
+    height: 0;
+    animation: pl-fx-arc-x var(--pl-arc-dur, 520ms) linear var(--pl-arc-delay, 0ms) forwards;
   }
-  .pl-fx--water {
-    width: 5px;
-    height: 9px;
+  @keyframes pl-fx-arc-x {
+    0% { translate: 0 0; }
+    100% { translate: var(--pl-arc-dx, 0px) 0; }
+  }
+  .pl-fx__drop {
+    position: absolute;
+    left: 0;
+    top: 0;
+    display: block;
+    animation: pl-fx-arc-y var(--pl-arc-dur, 520ms) cubic-bezier(0.42, 0.02, 0.86, 0.52)
+      var(--pl-arc-delay, 0ms) forwards;
+  }
+  @keyframes pl-fx-arc-y {
+    0% { translate: 0 0; rotate: 0deg; opacity: 0; }
+    8% { opacity: 1; }
+    /* Stay lit all the way down. The old 88% was the whole of the "drops vanish
+       before they land" bug: on a fall from a normal height the last eighth is a
+       fifth of a second in mid-air, so the water was gone before the soil was. */
+    97% { opacity: 1; }
+    100% { translate: 0 var(--pl-arc-dy, 60px); rotate: var(--pl-arc-spin, 0deg); opacity: 0; }
+  }
+  .pl-fx__drop--water {
+    width: 2px;
+    height: 4px;
     border-radius: 50% 50% 50% 50% / 62% 62% 38% 38%;
-    background: #a9dcff;
-    box-shadow: 0 0 6px rgba(154, 215, 255, 0.85);
-    animation: pl-fx-fall 760ms cubic-bezier(0.4, 0.1, 0.8, 1) forwards;
+    background: #e4f6ff;
+    box-shadow: 0 0 3px rgba(150, 214, 255, 0.45);
   }
-  .pl-fx--feed {
-    width: 5px;
-    height: 5px;
+  /* The tail: water in the air is a head with a streak behind it, not a bead. The
+     tail points back up the path, so a pour reads as falling water in the same
+     language as the rain outside. */
+  .pl-fx__drop--water::after {
+    content: '';
+    position: absolute;
+    left: 0.5px;
+    bottom: 2px;
+    width: 1px;
+    height: 7px;
+    border-radius: 1px;
+    background: linear-gradient(
+      0deg,
+      color-mix(in srgb, var(--pl-rain-colour, #d6e6ef) 85%, transparent),
+      transparent
+    );
+  }
+  .pl-fx__drop--feed {
+    width: 4px;
+    height: 4px;
     border-radius: 1px;
     background: #c9a25a;
-    box-shadow: 0 0 4px rgba(0, 0, 0, 0.25);
-    animation: pl-fx-fall 820ms cubic-bezier(0.3, 0.2, 0.9, 1) forwards;
+    box-shadow: 0 0 3px rgba(0, 0, 0, 0.22);
   }
-  @keyframes pl-fx-fall {
-    0% { transform: translate3d(0, 0, 0) scale(0.7); opacity: 0; }
-    12% { opacity: 1; }
-    100% { transform: translate3d(var(--pl-fx-dx, 0px), var(--pl-fx-dy, 120px), 0) scale(1); opacity: 0; }
-  }
-  .pl-fx--ring {
-    width: 22px;
-    height: 22px;
-    margin: -11px 0 0 -11px;
-    border: 2px solid rgba(169, 220, 255, 0.9);
-    background: none;
-    /* The ring stays invisible until its own delay is up: it used to be drawn at
-       its start scale the moment it was appended, which put five rings on the soil
-       before a single drop had landed. */
+  /* The splash. An ellipse, because this is a flat side-view world and a circle
+     on the ground line is a hoop standing on edge: it read as a ring drawn on the
+     soil face, and - being round - it reached below the surface into the dirt
+     cross-section, which is a cut through the earth, not a floor. The ellipse is
+     pinned to the surface line at its foot and grows upward from there, so no
+     part of a splash is ever drawn under the ground. */
+  .pl-fx__ripple {
+    position: absolute;
+    width: var(--pl-ripple-w, 22px);
+    height: calc(var(--pl-ripple-w, 22px) * 0.26);
+    margin-left: calc(var(--pl-ripple-w, 22px) / -2);
+    border: 1.6px solid color-mix(in srgb, var(--pl-rain-colour, #d6e6ef) 86%, transparent);
+    /* The near edge is solid and the far edge catches the light: a tight ring and
+       a thrown one in one stroke, like the rain's own landings. */
+    border-top-color: transparent;
+    border-radius: 50%;
+    box-shadow: 0 0 5px 1px color-mix(in srgb, var(--pl-rain-colour, #d6e6ef) 20%, transparent);
+    transform-origin: 50% 100%;
     opacity: 0;
-    animation: pl-fx-ring 620ms ease-out forwards;
+    animation: pl-fx-ripple 640ms ease-out var(--pl-ripple-delay, 0ms) forwards;
   }
-  @keyframes pl-fx-ring {
-    0% { transform: scale(0.3); opacity: 0.9; }
-    100% { transform: scale(2.6); opacity: 0; }
+  @keyframes pl-fx-ripple {
+    0% { transform: scale(0.25, 0.4); opacity: 0; }
+    16% { opacity: 0.95; }
+    100% { transform: scale(1.4, 1); opacity: 0; }
+  }
+  /* The splash itself: water thrown out of the landing and falling back. A single
+     vertical column read as a pin standing on the soil - a splash is a handful of
+     drops leaving the point at an angle, hopping, and dropping out of sight. */
+  .pl-fx__spit {
+    position: absolute;
+    width: 2px;
+    height: 3px;
+    margin-left: -1px;
+    border-radius: 50%;
+    background: #bfe6fb;
+    box-shadow: 0 0 4px rgba(150, 214, 255, 0.55);
+    opacity: 0;
+    animation: pl-fx-spit 470ms cubic-bezier(0.25, 0.6, 0.5, 1) var(--pl-spit-delay, 0ms) forwards;
+  }
+  .pl-fx__spit--meal {
+    background: #c9a25a;
+    box-shadow: 0 1px 0 rgba(58, 42, 21, 0.5);
+    width: 3px;
+    height: 3px;
+    border-radius: 1px;
+  }
+  @keyframes pl-fx-spit {
+    0% { transform: translate(0, 0) scale(0.5); opacity: 0; }
+    14% { opacity: 0.95; }
+    46% {
+      transform: translate(calc(var(--pl-spit-dx, 0px) * 0.55), calc(var(--pl-spit-rise, 11px) * -1)) scale(1);
+      opacity: 0.95;
+    }
+    100% { transform: translate(var(--pl-spit-dx, 0px), -1px) scale(0.8); opacity: 0; }
+  }
+  /* Wet soil: water that has just landed darkens the ground and dries off. It is
+     the only mark that stays after the splash, and it is what makes the pour feel
+     like it went into the soil rather than onto a screen. */
+  .pl-fx__wet {
+    position: absolute;
+    width: var(--pl-wet-w, 34px);
+    /* Taller than a puddle, because this is a cross-section: water that lands on
+       the surface soaks down into the soil, and an 8 px cap at the surface line
+       was a stain on the grass that never entered the earth. */
+    height: 22px;
+    margin-left: calc(var(--pl-wet-w, 34px) / -2);
+    border-radius: 50% 50% 46% 46% / 34% 34% 66% 66%;
+    /* Damp soil, with a cool sheen along its top edge: water reflects the sky
+       even at night, and a stain alone is invisible on soil this dark. The dark
+       is strongest just under the surface and fades with depth. */
+    background:
+      linear-gradient(180deg, rgba(206, 232, 255, 0.24) 0%, rgba(206, 232, 255, 0) 42%),
+      radial-gradient(
+        ellipse at 50% 16%,
+        rgba(20, 12, 6, 0.5) 0%,
+        rgba(20, 12, 6, 0.36) 46%,
+        transparent 80%
+      );
+    /* Grows downward from the surface line: the wet front moving into the soil
+       rather than a puddle spreading on top of it. */
+    transform-origin: 50% 0;
+    opacity: 0;
+    animation: pl-fx-wet 3800ms ease-out var(--pl-wet-delay, 0ms) forwards;
+  }
+  @keyframes pl-fx-wet {
+    0% { transform: scale(0.55, 0.14); opacity: 0; }
+    9% { opacity: 0.95; }
+    30% { transform: scale(1, 1); opacity: 1; }
+    62% { opacity: 0.82; }
+    100% { transform: scale(1.04, 1); opacity: 0; }
+  }
+  /* Meal: a speck that lands and lies there for a moment before the soil takes it.
+     Feeding leaves crumbs, not water - no ring, no spray. */
+  .pl-fx__meal {
+    position: absolute;
+    width: 3px;
+    height: 3px;
+    border-radius: 1px;
+    background: #c9a25a;
+    box-shadow: 0 1px 0 rgba(58, 42, 21, 0.45);
+    transform-origin: 50% 100%;
+    opacity: 0;
+    /* Meal lies on the soil until the ground takes it. 1.5 s was one beat too
+       few to see it land: a handful of crumbs that is gone before the eye has
+       followed the pour reads as the feed vanishing, not as being eaten. */
+    animation: pl-fx-meal 3200ms ease-out var(--pl-meal-delay, 0ms) forwards;
+  }
+  @keyframes pl-fx-meal {
+    0% { opacity: 0; transform: scale(0.4); }
+    5% { opacity: 1; transform: scale(1); }
+    78% { opacity: 1; }
+    100% { opacity: 0; }
   }
   /* Water: the leaves lift and brighten. Feed: the whole plant swells for a beat.
      Different curves, so the two props read as different actions. */
@@ -2124,6 +2260,15 @@ export class MainMenu {
     // watering or feeding is one growth step, so the loop is looking after the
     // plant and watching it climb, not coming back tomorrow.
     const careKey = 'pl-title-care';
+    // Dev: every reload starts the mascot as a seed. The ladder is a hundred
+    // stages, and judging a stage's art or the growth between two waterings is
+    // impossible when the saved state of an earlier session is what opens. Built
+    // out of production builds, where the garden on screen is the player's.
+    if (import.meta.env.DEV) {
+      try {
+        window.localStorage.removeItem(careKey);
+      } catch {}
+    }
     let care = emptyCare();
     try {
       const stored = JSON.parse(window.localStorage.getItem(careKey) ?? 'null') as {
@@ -2182,7 +2327,6 @@ export class MainMenu {
             <path d="M50.6 25.4 L51.6 31.4"/><path d="M55.4 26.6 L56.8 32.6"/>
           </g>
         </svg>
-        <span>Water</span>
       </button>
       <button type="button" class="pl-care" data-care="feed" aria-label="Feed the plant">
         <svg viewBox="0 0 64 64" aria-hidden="true" focusable="false">
@@ -2222,7 +2366,6 @@ export class MainMenu {
           <path d="M32 45.4 C26.6 42.8 26.6 35.4 32 32.4 C37.4 35.4 37.4 42.8 32 45.4 Z" fill="#6d9c3c"/>
           <path d="M32 44.4 V33.6" stroke="#3f6322" stroke-width="1" stroke-linecap="round"/>
         </svg>
-        <span>Feed</span>
       </button>`;
     this.world.appendChild(careBar);
 
@@ -2317,63 +2460,170 @@ export class MainMenu {
     };
 
     /**
-     * What a prop leaves where it was used: droplets and a ring of water on the
-     * soil, or a scatter of meal. This is the difference between the two actions
+     * What a prop leaves where it was used: a stream of water that arcs out of the
+     * spout, splashes on the soil and wets the ground; or a scatter of meal that
+     * tumbles down and lies there. This is the difference between the two actions
      * made visible - the growth step is the same, the gesture is not.
+     *
+     * Both halves of this were wrong. The droplets started at the top of the
+     * plant's bounding box - a hand above the leaves, in the sky - and fell
+     * straight down, so the pour never touched the can it supposedly came from.
+     * The splashes were round rings at the soil line, which is the top edge of the
+     * dirt cross-section: their lower halves were painted on the cut face, and
+     * they read as hoops sunk into the earth. The pour is an arc from the spout
+     * now, and every landing is an ellipse sitting *on* the surface line.
+     *
+     * @param from  Where the prop is: the can's spout, the sack's mouth, or the
+     *              point a carried prop was let go.
+     * @param landX Screen x of the landing. Water lands across the canopy when it
+     *              is over the plant, and in a splash the width of a hand when it
+     *              is poured on the meadow.
      */
-    const spawnResourceEffect = (action: CareAction, clientX: number, clientY: number): void => {
+    const spawnResourceEffect = (
+      action: CareAction,
+      from: { x: number; y: number },
+      landX: number,
+      onPlant: boolean,
+    ): void => {
       const box = fx.getBoundingClientRect();
       const plantBox = this.plant.element.getBoundingClientRect();
-      const x = clientX - box.left;
-      const y = clientY - box.top;
-      // Where the prop is, and where its contents are going. The droplets used to
-      // start at the button and fall straight down at the button: the can poured
-      // onto the interface and the plant never got wet, which is why watering read
-      // as nothing happening with some dots in the way. The source is the prop's
-      // spout and the target is the soil under the canopy, so the water travels.
-      const soilY = plantBox.bottom - box.top - 2;
-      const centreX = plantBox.left - box.left + plantBox.width / 2;
-      const spoutX = x;
-      const spoutY = y - 6;
-      const count = action === 'water' ? 16 : 12;
-      for (let i = 0; i < count; i += 1) {
+      // The stage the plant stands on is wider than the plant: its own drawing is
+      // the grab plate around the trunk, and that is the width water can land
+      // across. Watering a sprout with the fan of a full tree put half the drops on
+      // the meadow beside it.
+      const artBox =
+        this.plant.element.querySelector('.pl-title-plant__grab')?.getBoundingClientRect() ??
+        plantBox;
+      // The surface is one horizontal line in this scene: the plant's own feet sit
+      // on it, and so does every puddle. Measured from the plant so a drag or a
+      // zoom that lifts the soil lifts the water with it - and nothing is ever
+      // drawn below it, because under it is the cut face of the soil.
+      const groundY = plantBox.bottom - box.top;
+      const originX = from.x - box.left;
+      const originY = from.y - box.top;
+      const targetX = landX - box.left;
+      const water = action === 'water';
+      // Over the plant the water lands across its own width; anywhere else it lands
+      // where it was poured, in a splash no wider than a hand.
+      const spread = onPlant ? artBox.width * (water ? 0.32 : 0.15) : 5;
+      const landings = water ? 6 : 4;
+      const drops = water ? 18 : 14;
+      const landingX: number[] = [];
+      for (let i = 0; i < landings; i += 1) {
+        landingX.push(targetX + (i / (landings - 1)) * 2 * spread - spread);
+      }
+      const firstArrival = new Array<number>(landings).fill(Number.POSITIVE_INFINITY);
+      // What this pour put on screen. The cleanup below is scoped to it: it used
+      // to remove every effect in the layer, so pouring again within the first
+      // pour's three seconds erased the new drops while they were still falling.
+      const pieces: HTMLElement[] = [];
+      const mount = (piece: HTMLElement): void => {
+        fx.appendChild(piece);
+        pieces.push(piece);
+      };
+      for (let i = 0; i < drops; i += 1) {
+        const landing = i % landings;
+        const drop = document.createElement('span');
+        drop.className = 'pl-fx__arc';
+        // A mouth has width: the drops do not leave one mathematical point, and a
+        // prop held straight above the plant is a hand, not a spout.
+        const mouth = Math.abs(from.x - landX) < 24 ? 4 : 1.6;
+        const startX = originX + ((i % 5) - 2) * mouth;
+        const startY = originY + ((i % 3) - 1) * 2;
+        const dx = (landingX[landing] ?? targetX) - startX + (((i * 37) % 7) - 3);
+        // Land a hair above the line: the drop's own height would otherwise put
+        // its foot in the cut face.
+        const dy = groundY - 3 - startY;
+        const dur = Math.round(340 + Math.min(320, Math.hypot(dx, dy) * 1.1));
+        // Staggered per landing and per drop, so it is a pour rather than a burst:
+        // the near landings are hit first and each one takes a few drops.
+        const delay = Math.round(landing * 70 + (i / drops) * 150);
+        drop.style.left = `${startX.toFixed(1)}px`;
+        drop.style.top = `${startY.toFixed(1)}px`;
+        drop.style.setProperty('--pl-arc-dx', `${dx.toFixed(1)}px`);
+        drop.style.setProperty('--pl-arc-dy', `${dy.toFixed(1)}px`);
+        drop.style.setProperty('--pl-arc-dur', `${dur}ms`);
+        drop.style.setProperty('--pl-arc-delay', `${delay}ms`);
+        if (!water) drop.style.setProperty('--pl-arc-spin', `${((i * 53) % 180) - 90}deg`);
         const dot = document.createElement('i');
-        dot.className = `pl-fx pl-fx--${action === 'water' ? 'water' : 'feed'}`;
-        // A fan, not a column: each drop lands somewhere along the soil under the
-        // canopy, and the near ones arrive first.
-        const spread = action === 'water' ? plantBox.width * 0.34 : plantBox.width * 0.16;
-        const landX = centreX + ((i / (count - 1)) * 2 - 1) * spread;
-        const jitter = ((i * 37) % 11) - 5;
-        dot.style.left = `${spoutX + ((i % 4) - 1.5) * 4}px`;
-        dot.style.top = `${spoutY - (i % 3) * 5}px`;
-        dot.style.setProperty('--pl-fx-dx', `${(landX - spoutX + jitter).toFixed(1)}px`);
-        dot.style.setProperty('--pl-fx-dy', `${(soilY - spoutY + (i % 4) * 6).toFixed(1)}px`);
-        // Staggered over half a second, so it is a pour rather than a burst.
-        dot.style.animationDelay = `${Math.round((i / count) * 480)}ms`;
-        dot.style.width = action === 'water' ? `${4 + (i % 3)}px` : `${3 + (i % 2)}px`;
-        fx.appendChild(dot);
-        window.setTimeout(() => dot.remove(), 1700);
+        dot.className = `pl-fx__drop pl-fx__drop--${water ? 'water' : 'feed'}`;
+        drop.appendChild(dot);
+        mount(drop);
+        firstArrival[landing] = Math.min(
+          firstArrival[landing] ?? Number.POSITIVE_INFINITY,
+          delay + dur,
+        );
       }
-      // Splashes where the drops land: a line of rings across the soil, opening in
-      // the same order the drops arrive.
-      const rings = action === 'water' ? 5 : 3;
-      for (let i = 0; i < rings; i += 1) {
-        const ring = document.createElement('i');
-        ring.className = 'pl-fx pl-fx--ring';
-        const spread = plantBox.width * (action === 'water' ? 0.32 : 0.14);
-        ring.style.left = `${centreX + ((i / (rings - 1)) * 2 - 1) * spread}px`;
-        ring.style.top = `${soilY}px`;
-        ring.style.animationDelay = `${300 + Math.round((i / rings) * 420)}ms`;
-        fx.appendChild(ring);
-        window.setTimeout(() => ring.remove(), 1800);
+      // What each landing leaves: water opens a ripple, throws a spray and darkens
+      // the soil; meal drops a few specks that lie there and fade.
+      let lastAt = 0;
+      for (let i = 0; i < landings; i += 1) {
+        const arrive = firstArrival[i] ?? 0;
+        if (!Number.isFinite(arrive)) continue;
+        const x = landingX[i] ?? targetX;
+        lastAt = Math.max(lastAt, arrive);
+        if (water) {
+          const width = 16 + ((i * 7) % 6);
+          const height = width * 0.26;
+          const wet = document.createElement('i');
+          wet.className = 'pl-fx__wet';
+          wet.style.left = `${x.toFixed(1)}px`;
+          // Most of the stain is below the surface line: that is the soil the
+          // water is soaking into, and it is why the ground reads darker.
+          wet.style.top = `${(groundY - 6).toFixed(1)}px`;
+          wet.style.setProperty('--pl-wet-w', `${Math.round(width * 2.3)}px`);
+          wet.style.setProperty('--pl-wet-delay', `${Math.max(0, Math.round(arrive) - 80)}ms`);
+          mount(wet);
+          // Two rings, the second a beat later and a quarter wider: one ring reads
+          // as a line drawn on the soil, two read as a landing.
+          for (let k = 0; k < 2; k += 1) {
+            const ripple = document.createElement('i');
+            ripple.className = 'pl-fx__ripple';
+            ripple.style.left = `${x.toFixed(1)}px`;
+            ripple.style.top = `${(groundY - height * (1 + k * 0.25)).toFixed(1)}px`;
+            ripple.style.setProperty('--pl-ripple-w', `${width * (1 + k * 0.25)}px`);
+            ripple.style.setProperty('--pl-ripple-delay', `${Math.round(arrive + k * 80)}ms`);
+            mount(ripple);
+          }
+          // Three drops thrown out of the landing, one out each way and one up.
+          for (let k = 0; k < 3; k += 1) {
+            const spit = document.createElement('i');
+            spit.className = 'pl-fx__spit';
+            spit.style.left = `${(x + (k - 1) * 1.5).toFixed(1)}px`;
+            spit.style.top = `${(groundY - 2).toFixed(1)}px`;
+            spit.style.setProperty(
+              '--pl-spit-dx',
+              `${((k - 1) * 9 + ((i * 13) % 5) - 2).toFixed(0)}px`,
+            );
+            spit.style.setProperty('--pl-spit-rise', `${9 + ((i + k) % 4) * 2}px`);
+            spit.style.setProperty('--pl-spit-delay', `${Math.round(arrive + k * 30)}ms`);
+            mount(spit);
+          }
+        } else {
+          for (let k = 0; k < 3; k += 1) {
+            const meal = document.createElement('i');
+            meal.className = 'pl-fx__meal';
+            meal.style.left = `${(x + (k - 1) * 3.5).toFixed(1)}px`;
+            meal.style.top = `${(groundY - 3).toFixed(1)}px`;
+            meal.style.setProperty('--pl-meal-delay', `${Math.round(arrive + k * 45)}ms`);
+            mount(meal);
+            // A crumb that bounces off the soil before it lies down.
+            const bounce = document.createElement('i');
+            bounce.className = 'pl-fx__spit pl-fx__spit--meal';
+            bounce.style.left = `${x.toFixed(1)}px`;
+            bounce.style.top = `${(groundY - 2).toFixed(1)}px`;
+            bounce.style.setProperty('--pl-spit-dx', `${((k - 1) * 7).toFixed(0)}px`);
+            bounce.style.setProperty('--pl-spit-rise', `${6 + k * 2}px`);
+            bounce.style.setProperty('--pl-spit-delay', `${Math.round(arrive + k * 30)}ms`);
+            mount(bounce);
+          }
+        }
       }
-      // The plant answers in its own way: leaves lift for water, the whole body
-      // swells for feed.
-      const glow = action === 'water' ? 'is-watered' : 'is-fed';
-      this.plant.element.classList.remove('is-watered', 'is-fed');
-      void this.plant.element.offsetWidth;
-      this.plant.element.classList.add(glow);
-      window.setTimeout(() => this.plant.element.classList.remove(glow), 980);
+      // A pour is a gesture with an end: everything it left is gone a beat after
+      // the last splash has dried.
+      window.setTimeout(() => {
+        for (const piece of pieces) piece.remove();
+      }, Math.round(lastAt) + 4200);
     };
 
     const paintCare = (animateNew: boolean): void => {
@@ -2426,11 +2676,25 @@ export class MainMenu {
         groggyTimer = window.setTimeout(() => this.plant.setGroggy(false), 9000);
       }
       const plantBox = this.plant.element.getBoundingClientRect();
-      spawnResourceEffect(
-        action,
-        at?.x ?? plantBox.left + plantBox.width / 2,
-        at?.y ?? plantBox.top + 12,
-      );
+      // The pour leaves the prop, not the sky. The can's spout is at four fifths
+      // of its width and a little above the middle; the sack's mouth is at the
+      // top, where the meal is heaped. A carried prop pours from where it was
+      // let go, which is the point the player is looking at.
+      const home = button?.getBoundingClientRect();
+      const spout = home
+        ? {
+            x: home.left + home.width * (action === 'water' ? 0.8 : 0.5),
+            y: home.top + home.height * (action === 'water' ? 0.42 : 0.34),
+          }
+        : { x: plantBox.left + plantBox.width / 2, y: plantBox.top + 12 };
+      spawnResourceEffect(action, at ?? spout, at?.x ?? plantBox.left + plantBox.width / 2, true);
+      // The plant answers in its own way: leaves lift for water, the whole body
+      // swells for feed.
+      const glow = action === 'water' ? 'is-watered' : 'is-fed';
+      this.plant.element.classList.remove('is-watered', 'is-fed');
+      void this.plant.element.offsetWidth;
+      this.plant.element.classList.add(glow);
+      window.setTimeout(() => this.plant.element.classList.remove(glow), 980);
       this.plant?.react(action === 'water' ? 'leaf' : 'stem', action === 'water' ? 2 : 3);
       const found = reachedTreasures(care.points);
       const latest = found[found.length - 1];
@@ -2457,6 +2721,58 @@ export class MainMenu {
     const propButton = (target: EventTarget | null): HTMLElement | null =>
       (target as Element | null)?.closest?.('.pl-care') as HTMLElement | null;
 
+    /**
+     * The plant's drawn width, which is not its element's width.
+     *
+     * The element is a stage wide enough for the widest tree the title can grow,
+     * so for a sprout most of it is empty air. Every test that asked
+     * elementFromPoint for "is this over the plant" therefore answered yes for
+     * points a long way beside the drawing - the invisible box around the tree -
+     * and a prop let go there was swallowed by the box instead of falling where
+     * the player put it. The grab plate and the shoot are the drawing; their
+     * union is what a pour can land on.
+     */
+    const plantArtBox = (): DOMRect => {
+      const el = this.plant.element;
+      const parts = ['.pl-title-plant__shoot', '.pl-title-plant__grab']
+        .map((selector) => el.querySelector(selector)?.getBoundingClientRect())
+        .filter((rect): rect is DOMRect => Boolean(rect) && (rect as DOMRect).width > 0);
+      if (parts.length === 0) return el.getBoundingClientRect();
+      const left = Math.min(...parts.map((rect) => rect.left));
+      const right = Math.max(...parts.map((rect) => rect.right));
+      const top = Math.min(...parts.map((rect) => rect.top));
+      const bottom = Math.max(...parts.map((rect) => rect.bottom));
+      // One plain object behind a DOMRect cast: only the four edges are read.
+      return { left, right, top, bottom, width: right - left, height: bottom - top } as DOMRect;
+    };
+
+    /**
+     * The plant as a drop target: its drawn width, from the top of the world down
+     * to the soil.
+     *
+     * Two bugs met here. A prop held above the plant had a column only a hand and
+     * a half tall, measured from the grab plate - the plate around a seed's trunk
+     * is a few pixels tall, so a pour from any real height above a seed landed on
+     * the meadow and nothing happened. And the width came from the stage, so a
+     * prop put down beside the drawing was treated as a pour on it. The column now
+     * reaches the top of the world (a can tipped over a plant is still over the
+     * plant however high it is held) and is as wide as the drawing plus a hand.
+     */
+    const overPlantColumn = (x: number, y: number): boolean => {
+      const art = plantArtBox();
+      // A hand's width of slack, not a fraction of the drawing: the stream from a
+      // can is a few centimetres wide, so a release a dozen pixels off the leaf
+      // edge is still a pour. Anything wider started swallowing the meadow.
+      const grow = Math.max(8, art.width * 0.06);
+      const ceiling = this.world.getBoundingClientRect().top;
+      return (
+        x >= art.left - grow && x <= art.right + grow && y >= ceiling - 24 && y <= art.bottom + 8
+      );
+    };
+
+    /** Is this screen point a pour onto the plant (on it, or held above it)? */
+    const isOverPlant = (x: number, y: number): boolean => overPlantColumn(x, y);
+
     const onCarryMove = (event: PointerEvent): void => {
       if (!carrying) return;
       if (
@@ -2471,10 +2787,10 @@ export class MainMenu {
       carrying.ghost.style.left = `${event.clientX}px`;
       carrying.ghost.style.top = `${event.clientY}px`;
       // The plant lights up while a prop is held over it: that is the drop target.
-      const overPlant = document
-        .elementFromPoint(event.clientX, event.clientY)
-        ?.closest('.pl-title-plant');
-      this.plant.element.classList.toggle('is-carry-target', Boolean(overPlant));
+      this.plant.element.classList.toggle(
+        'is-carry-target',
+        isOverPlant(event.clientX, event.clientY),
+      );
     };
 
     /** Put a carried prop down without acting on it (a lost capture, a cancel). */
@@ -2493,6 +2809,10 @@ export class MainMenu {
       const current = carrying;
       if (!current) return;
       carrying = null;
+      // Where the carried prop actually is on screen, read before it is removed:
+      // what was put down has to be the drawing the player is looking at, not the
+      // pointer that holds it.
+      const carried = current.ghost.getBoundingClientRect();
       current.ghost.remove();
       this.world.classList.remove('is-carrying');
       current.button.classList.remove('is-carried');
@@ -2505,21 +2825,34 @@ export class MainMenu {
         return;
       }
       const home = current.button.getBoundingClientRect();
-      const fromHome = Math.hypot(
-        event.clientX - (home.left + home.width / 2),
-        event.clientY - (home.top + home.height / 2),
-      );
-      if (fromHome < Math.max(48, home.width * 0.9)) {
+      // Putting a prop back means putting the *prop* back: the carried drawing
+      // touching the icon it came from. The old test was a 48 px radius around the
+      // icon's centre, and the icon is smaller than that - a prop put down in the
+      // meadow a hand away from the can went quietly home instead of pouring, which
+      // read as the drag being taken back before it was let go.
+      const slop = 6;
+      const touchesHome =
+        carried.right >= home.left - slop &&
+        carried.left <= home.right + slop &&
+        carried.bottom >= home.top - slop &&
+        carried.top <= home.bottom + slop;
+      if (touchesHome) {
         say('Put it back');
         return;
       }
-      const overPlant = document
-        .elementFromPoint(event.clientX, event.clientY)
-        ?.closest('.pl-title-plant');
-      if (overPlant) {
+      if (isOverPlant(event.clientX, event.clientY)) {
         applyProp(current.action, current.button, { x: event.clientX, y: event.clientY });
         return;
       }
+      // Poured on the meadow: it grows nothing, but the pour is still a pour. It
+      // has to leave the prop and land where it was let go, or the gesture reads
+      // as a button that did nothing at all.
+      spawnResourceEffect(
+        current.action,
+        { x: event.clientX, y: event.clientY },
+        event.clientX,
+        false,
+      );
       say(current.action === 'water' ? 'Poured out on the meadow' : 'Scattered on the meadow');
     };
 
@@ -3148,6 +3481,15 @@ export class MainMenu {
     this.frameMeterTick = (now: number): void => {
       const dt = now - last;
       last = now;
+      // A hidden tab stops animation frames; the first frame after it returns
+      // carries the whole background gap and was reported as a "worst frame" of
+      // several minutes. That is a pause, not a frame: drop the window and start
+      // measuring again instead of poisoning the meter.
+      if (document.visibilityState !== 'visible' || dt > 1000) {
+        stack.length = 0;
+        this.frameMeterRaf = requestAnimationFrame(this.frameMeterTick as FrameRequestCallback);
+        return;
+      }
       stack.push(dt);
       if (stack.length > 300) stack.shift();
       if (stack.length % 10 === 0) {

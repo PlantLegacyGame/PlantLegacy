@@ -19,4 +19,6 @@ export * from './geometry.ts';
 export * from './health.ts';
 export * from './nodeId.ts';
 export * from './nodeTypes.ts';
+export * from './organMorphology.ts';
+export * from './organTraits.ts';
 export * from './types.ts';

@@ -6,6 +6,8 @@ export interface ChatConfig {
   worldRateMsgPerMin: number;
   logSize: number;
   messageMaxChars: number;
+  /** Largest per-connection block list; new ids are refused at the cap. */
+  blockListMax: number;
   emoteIds: string[];
 }
 
@@ -33,6 +35,7 @@ export function loadChatConfig(configs: Map<string, ConfigFile>): ChatConfig {
     worldRateMsgPerMin: readInteger(configs, 'chat', 'world_rate_msg_per_min'),
     logSize: readInteger(configs, 'chat', 'log_size'),
     messageMaxChars: readInteger(configs, 'chat', 'message_max_chars'),
+    blockListMax: readInteger(configs, 'chat', 'block_list_max'),
     emoteIds,
   };
 }

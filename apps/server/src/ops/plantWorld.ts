@@ -6,7 +6,9 @@ import type {
   NodeType,
   NodeTypeDefinition,
   Plant,
+  PlantArchetypeTraits,
   PlantNode,
+  PlantSpawnPoint,
 } from '@plant-legacy/shared/growth';
 import {
   applyMutationShapeBias,
@@ -268,6 +270,8 @@ export class PlantWorld {
         [1, 1],
       ],
       diffusionRate: 0.1,
+      // The default world steps its soil four times a second, as the config does.
+      soilStepIntervalS: 0.25,
       lightDirtyThreshold: 0.05,
       resourceDirtyThreshold: 0.1,
       maxAbsorptionPerTick: 10,
@@ -383,7 +387,10 @@ export class PlantWorld {
     return {
       resistance,
       energyMultiplier: resistance * Math.max(0.01, effects.growthCostMultiplier),
-      timeMultiplier: resistance / Math.max(0.1, effects.growthSpeedMultiplier),
+      timeMultiplier:
+        resistance /
+        (Math.max(0.1, effects.growthSpeedMultiplier) *
+          Math.max(0.1, plant.archetype?.growthSpeed ?? 1)),
     };
   }
 
@@ -551,6 +558,63 @@ export class PlantWorld {
   }
 
   /**
+   * True when a part can actually photosynthesise (cotyledon or leaf).
+   *
+   * The old test counted any canopy-layer node, so a stem with no leaves was
+   * treated as a carbon source it is not. Roots never appear here: they absorb
+   * water and minerals and receive sugar from the shoot, they do not make it.
+   */
+  private hasPhotosyntheticOrgan(plant: Plant): boolean {
+    for (const node of plant.nodes.values()) {
+      if ((node.statModifiers?.photosynthesis ?? 0) > 0) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Energy a leafless seed keeps for its first photosynthetic organ.
+   *
+   * A seed germinates on stored reserves; until a cotyledon or leaf opens there
+   * is no income to replace what growth spends. Reserving this much means a
+   * player can grow roots first without ever making the shoot unaffordable.
+   * The menu quotes the same cotyledon cost, and the server refuses a root that
+   * would eat this reserve (`seed_reserve`).
+   */
+  private firstPhotosynthesisReserve(plant: Plant): number {
+    if (this.hasPhotosyntheticOrgan(plant)) return 0;
+    const crown = plant.rootNodeId ? plant.nodes.get(plant.rootNodeId) : undefined;
+    if (!crown) return 0;
+    const cotyledon = computeGrowthCostQuote(this.config, this.config.cotyledonNode);
+    const reserve =
+      cotyledon.energyCost * this.growthChargeScale(plant, crown, 'canopy').energyMultiplier;
+    // A lone seed has to pay the radicle before it can reach the cotyledon. A
+    // zero-energy old save would otherwise clear the cotyledon floor and still
+    // be unable to germinate, so its reserve covers the more expensive step.
+    if (plant.nodes.size <= 1) {
+      const radicle = computeGrowthCostQuote(this.config, this.config.radicleNode);
+      const germination =
+        radicle.energyCost * this.growthChargeScale(plant, crown, 'root').energyMultiplier;
+      return Math.max(reserve, germination);
+    }
+    return reserve;
+  }
+
+  /**
+   * Restore the first-leaf reserve without ever crossing capacity.
+   *
+   * The reserve is normally far below the energy floor, but keeping the two
+   * rules in one place means a future capacity change cannot turn the
+   * anti-soft-lock floor into an over-cap write.
+   */
+  private keepFirstLeafReserve(plant: Plant): void {
+    const reserve = Math.min(
+      this.firstPhotosynthesisReserve(plant),
+      this.capacityFor(plant).energy,
+    );
+    plant.totalEnergy = Math.max(plant.totalEnergy, reserve);
+  }
+
+  /**
    * Drawn radius for a part, honouring the widest form it was built under. Every
    * path that changes biomass goes through here so a part never switches
    * between two radius rules mid-life.
@@ -620,9 +684,9 @@ export class PlantWorld {
    * does not snap down: the excess is lost at `oversize_wilt_per_s` of itself per
    * second, each part thinning as its own mass falls, so the body shrinks
    * continuously back to the size the remaining mutation set can carry. Stored
-   * water, minerals and energy above the new capacity leak at
-   * `oversize_leak_per_s` for the same reason - the loss has to be visible over
-   * time, not a number that jumps.
+   * water, minerals and energy are different: capacity is a hard ceiling, so
+   * they are clamped in the same tick the smaller body lowers it. A resource
+   * bar must never read above its maximum while tissue is still visibly wilting.
    */
   private absorbOversizeMass(plant: Plant, dt: number): void {
     const config = this.mutationConfig;
@@ -643,13 +707,9 @@ export class PlantWorld {
     }
     if (lost > 0) plant.totalBiomass = Math.max(0, plant.totalBiomass - lost);
 
-    const capacity = this.capacityFor(plant);
-    const leak = Math.min(1, Math.max(0, config.oversizeLeakPerS) * dt);
-    const leakDown = (stored: number, cap: number): number =>
-      stored > cap ? stored - (stored - cap) * leak : stored;
-    plant.totalEnergy = leakDown(plant.totalEnergy, capacity.energy);
-    plant.storedWater = leakDown(plant.storedWater, capacity.water);
-    plant.storedMinerals = leakDown(plant.storedMinerals, capacity.minerals);
+    // A smaller body holds less water, mineral and energy. Wilting tissue may
+    // take seconds, but the stored totals obey the new ceiling immediately.
+    this.clampStorage(plant);
   }
 
   /**
@@ -713,7 +773,7 @@ export class PlantWorld {
     for (const held of plant.mutations ?? []) {
       const definition = config.definitions.find((entry) => entry.id === held.id);
       if (!definition) continue;
-      const check = checkLevelUp(plant, config, definition.id);
+      const check = checkLevelUp(plant, config, definition.id, this.capacityFor(plant).energy);
       const level = mutationLevel(held);
       const levelScale = 1 + config.levelUp.upkeepPerLevel * (level - 1);
       mutations.push({
@@ -1074,7 +1134,7 @@ export class PlantWorld {
     const config = this.mutationConfig;
     if (!plant) return { ok: false, reason: 'plant_not_found' };
     if (!config) return { ok: false, reason: 'mutations_disabled' };
-    const check = checkLevelUp(plant, config, mutationId);
+    const check = checkLevelUp(plant, config, mutationId, this.capacityFor(plant).energy);
     if (!check.ok) {
       this.mutationLevelOffers.delete(plantId);
       return { ok: false, reason: check.reason };
@@ -1114,7 +1174,7 @@ export class PlantWorld {
     if (!config) return { ok: false, reason: 'mutations_disabled' };
 
     const pending = this.mutationLevelOffers.get(plantId);
-    const check = checkLevelUp(plant, config, mutationId);
+    const check = checkLevelUp(plant, config, mutationId, this.capacityFor(plant).energy);
     if (!check.ok) return { ok: false, reason: check.reason };
     let offers = pending?.mutationId === mutationId ? pending.offers : null;
     if (!offers) {
@@ -1123,7 +1183,14 @@ export class PlantWorld {
       offers = dealt.cards ?? [];
     }
 
-    const result = applyLevelUpRule(plant, config, mutationId, cardId, offers);
+    const result = applyLevelUpRule(
+      plant,
+      config,
+      mutationId,
+      cardId,
+      offers,
+      this.capacityFor(plant).energy,
+    );
     this.mutationLevelOffers.delete(plantId);
     if (!result.ok) return { ok: false, reason: result.reason };
 
@@ -1184,7 +1251,7 @@ export class PlantWorld {
     const plant = this.plants.get(plantId);
     const config = this.mutationConfig;
     if (!plant || !config) return null;
-    const check = checkLevelUp(plant, config, mutationId);
+    const check = checkLevelUp(plant, config, mutationId, this.capacityFor(plant).energy);
     return { level: check.level, maxLevel: check.maxLevel, ...check.cost };
   }
 
@@ -1262,9 +1329,18 @@ export class PlantWorld {
     // Take only what the plant holds above the floor.
     const affordance = Math.max(0, plant.totalBiomass - config.upkeepBiomassFloor);
     plant.totalBiomass = Math.max(0, plant.totalBiomass - Math.min(affordance, biomassLoss));
+    // A smaller body holds less. The bill may have just reduced the capacity
+    // under the stored energy, so clamp it in the same tick it was charged.
+    this.clampStorage(plant);
   }
 
-  createPlant(ownerId: string, worldId: string, startX: number, startZ: number): Plant {
+  createPlant(
+    ownerId: string,
+    worldId: string,
+    startX: number,
+    startZ: number,
+    options: { archetype?: PlantArchetypeTraits; spawn?: PlantSpawnPoint } = {},
+  ): Plant {
     // INV-ID-09: an empty owner is not a legal plant. `ownerId` is how reclaim
     // finds the plant again, so a row written with '' can never be claimed by
     // anyone, and every caller already has an identity to supply: an account, a
@@ -1318,6 +1394,8 @@ export class PlantWorld {
       lastGrowthTick: 0,
       growthCooldownUntil: 0,
       growthSeq: 0,
+      archetype: options.archetype,
+      spawn: options.spawn,
     };
 
     this.plants.set(plantId, plant);
@@ -1658,16 +1736,13 @@ export class PlantWorld {
     this.photosynthesisHook?.(plant, elapsedSeconds);
 
     const rootNode = plant.rootNodeId ? plant.nodes.get(plant.rootNodeId) : undefined;
-    // A plant with no canopy cannot photosynthesise, so once its seed reserve is
-    // spent respiration would shed structure every tick with no way to earn it
-    // back: growing a root before any cotyledon became a guaranteed death
-    // spiral ("I grow a node, take damage and it dies straight away"). A
-    // leafless plant still pays its water and mineral bills - it simply is not
-    // dismantled for energy it can never repay.
-    const hasCanopy = Array.from(plant.nodes.values()).some(
-      (node) => node.layer === 'canopy' && !node.isSeed,
-    );
-    const leafless = !hasCanopy;
+    // Photosynthesis lives in cotyledons and leaves, not merely in the canopy
+    // layer: a stem without a leaf cannot earn either. A leafless plant still
+    // pays its water and mineral bills, but it does not respire its seed
+    // reserve. That reserve is what grows the first photosynthetic organ;
+    // burning it to zero left a root-first seedling alive but permanently
+    // unable to grow the leaf that would feed it (the 0-energy soft-lock).
+    const leafless = !this.hasPhotosyntheticOrgan(plant);
     const isDormantSeed =
       rootNode?.type === 'seed' && rootNode.isSeed === true && plant.nodes.size <= 1;
     if (rootNode && !isDormantSeed) {
@@ -1676,24 +1751,33 @@ export class PlantWorld {
         plant.totalBiomass *
         this.config.energyUpkeepPerBiomass *
         elapsedSeconds *
-        effects.energyUpkeepMultiplier;
-      const canPayUpkeep = plant.totalEnergy >= energyUpkeepCost;
-      plant.totalEnergy = Math.max(0, plant.totalEnergy - energyUpkeepCost);
-      if (!canPayUpkeep && !leafless) {
-        this.shedTissueMass(plant, energyUpkeepCost, 'canopy');
-        if (plant.totalBiomass <= 0) {
-          this.killPlant(plant.id, 'starvation', 'no_energy');
-          return;
+        effects.energyUpkeepMultiplier *
+        Math.max(0.1, plant.archetype?.upkeep ?? 1);
+      if (!leafless) {
+        const canPayUpkeep = plant.totalEnergy >= energyUpkeepCost;
+        plant.totalEnergy = Math.max(0, plant.totalEnergy - energyUpkeepCost);
+        if (!canPayUpkeep) {
+          this.shedTissueMass(plant, energyUpkeepCost, 'canopy');
+          if (plant.totalBiomass <= 0) {
+            this.killPlant(plant.id, 'starvation', 'no_energy');
+            return;
+          }
         }
       }
       this.applyUnhealedStemDamage(plant, elapsedSeconds);
-      // An offline plant pays the same mutation bill an online one does.
-      this.chargeMutationMaintenance(plant, elapsedSeconds);
+      // An offline plant pays the same mutation bill an online one does, but a
+      // leafless one has no income to pay it from; the bill waits with the
+      // respiration that is also waived rather than eating the seed reserve.
+      if (!leafless) this.chargeMutationMaintenance(plant, elapsedSeconds);
       // Shed size now wilts gradually instead of snapping the body smaller.
       this.absorbOversizeMass(plant, elapsedSeconds);
       this.applyTissueUpkeep(plant, elapsedSeconds);
       if (!this.plants.has(plant.id)) return;
     }
+    // A lone ungerminated seed is exempt from upkeep, but it is still leafless.
+    // Applying the reserve outside the upkeep branch recovers an old save that
+    // arrived at zero instead of leaving it permanently unable to germinate.
+    if (rootNode && leafless) this.keepFirstLeafReserve(plant);
     if (this.mutationConfig) {
       decayPlantPressure(plant, this.mutationConfig, elapsedSeconds, this.activeTickRateHz);
     }
@@ -1794,16 +1878,13 @@ export class PlantWorld {
     // Only a lone, ungerminated seed is exempt from respiration. As soon as it
     // has any tissue, the seedling respires like every other living plant.
     const rootNode = plant.rootNodeId ? plant.nodes.get(plant.rootNodeId) : undefined;
-    // A plant with no canopy cannot photosynthesise, so once its seed reserve is
-    // spent respiration would shed structure every tick with no way to earn it
-    // back: growing a root before any cotyledon became a guaranteed death
-    // spiral ("I grow a node, take damage and it dies straight away"). A
-    // leafless plant still pays its water and mineral bills - it simply is not
-    // dismantled for energy it can never repay.
-    const hasCanopy = Array.from(plant.nodes.values()).some(
-      (node) => node.layer === 'canopy' && !node.isSeed,
-    );
-    const leafless = !hasCanopy;
+    // Photosynthesis lives in cotyledons and leaves, not merely in the canopy
+    // layer: a stem without a leaf cannot earn either. A leafless plant still
+    // pays its water and mineral bills, but it does not respire its seed
+    // reserve. That reserve is what grows the first photosynthetic organ;
+    // burning it to zero left a root-first seedling alive but permanently
+    // unable to grow the leaf that would feed it (the 0-energy soft-lock).
+    const leafless = !this.hasPhotosyntheticOrgan(plant);
     const isDormantSeed =
       rootNode?.type === 'seed' && rootNode.isSeed === true && plant.nodes.size <= 1;
     if (rootNode && !isDormantSeed) {
@@ -1812,25 +1893,36 @@ export class PlantWorld {
         plant.totalBiomass *
         this.config.energyUpkeepPerBiomass *
         dt *
-        effects.energyUpkeepMultiplier;
-      const canPayUpkeep = plant.totalEnergy >= energyUpkeepCost;
-      plant.totalEnergy = Math.max(0, plant.totalEnergy - energyUpkeepCost);
+        effects.energyUpkeepMultiplier *
+        Math.max(0.1, plant.archetype?.upkeep ?? 1);
+      if (!leafless) {
+        const canPayUpkeep = plant.totalEnergy >= energyUpkeepCost;
+        plant.totalEnergy = Math.max(0, plant.totalEnergy - energyUpkeepCost);
 
-      if (!canPayUpkeep && !leafless) {
-        this.shedTissueMass(plant, energyUpkeepCost, 'canopy');
-        if (plant.totalBiomass <= 0) {
-          this.killPlant(plant.id, 'starvation', 'no_energy');
-          return;
+        if (!canPayUpkeep) {
+          this.shedTissueMass(plant, energyUpkeepCost, 'canopy');
+          if (plant.totalBiomass <= 0) {
+            this.killPlant(plant.id, 'starvation', 'no_energy');
+            return;
+          }
         }
       }
       // Mutation upkeep is its own bill: DESIGN T04 makes a mutation set a
       // commitment, not a free upgrade. It stalls the plant, never sheds or kills.
-      this.chargeMutationMaintenance(plant, dt);
+      // A leafless plant has no income to pay it from, so the bill waits rather
+      // than consuming the reserve the first leaf needs.
+      if (!leafless) this.chargeMutationMaintenance(plant, dt);
       // Oversize tissue (a shed size mutation, or a bigger form that shrank)
       // wilts away gradually rather than vanishing on the tick it was shed.
       this.absorbOversizeMass(plant, dt);
       this.applyTissueUpkeep(plant, dt);
+      if (!this.plants.has(plant.id)) return;
     }
+    // Anti-soft-lock floor: while no part can photosynthesise, the seed keeps
+    // enough energy for the first cotyledon even if an older save or a
+    // non-growth drain left it at zero. This also covers a lone seed, which is
+    // exempt from the upkeep branch above.
+    if (rootNode && leafless) this.keepFirstLeafReserve(plant);
   }
 
   /**
@@ -1960,6 +2052,10 @@ export class PlantWorld {
 
     plant.totalBiomass = Math.max(0, plant.totalBiomass - shed);
     if (shed > 0) {
+      // Losing roots takes their storage with them. Without this, a plant that
+      // shed root biomass could report water above the smaller capacity until
+      // some later path happened to clamp it.
+      this.clampStorage(plant);
       const queued = this.shedDamageQueue.get(plant.id);
       this.shedDamageQueue.set(plant.id, {
         amount: (queued?.amount ?? 0) + shed,
@@ -1982,6 +2078,7 @@ export class PlantWorld {
     const delay = this.config.stemDamageWitherDelayS ?? 0;
     const rate = this.config.stemDamageWitherPerS ?? 0;
     if (delay < 0 || rate <= 0 || dt <= 0) return;
+    let lost = 0;
     for (const node of Array.from(plant.nodes.values())) {
       if (node.type !== 'stem' && node.type !== 'branch' && node.type !== 'trunk') continue;
       if (node.isSeed || (node.growthProgress ?? 1) < 1) {
@@ -2001,11 +2098,13 @@ export class PlantWorld {
       node.biomass = Math.max(0, node.biomass - loss);
       this.refreshRadius(node);
       plant.totalBiomass = Math.max(0, plant.totalBiomass - loss);
+      lost += loss;
       if (node.biomass <= 1e-6) {
         node.biomass = 0;
         this.detachNode(plant, node);
       }
     }
+    if (lost > 0) this.clampStorage(plant);
   }
 
   /** Regrow missing tissue while the plant is fed and has energy to spend. */
@@ -2363,10 +2462,27 @@ export class PlantWorld {
       return { success: false, reason: 'insufficient_energy' };
     }
 
+    // A leafless seed keeps the cost of its first photosynthetic organ. Roots
+    // may spend down to that reserve, never through it: otherwise a player can
+    // spend every point on roots and leave the shoot unaffordable. Growth that
+    // is itself photosynthetic is always allowed to use the reserve. The
+    // radicle and cotyledon are the germination steps themselves; refusing the
+    // radicle for spending its exact quote would make the seed unstartable.
+    const isEstablishment = targetType === 'radicle' || targetType === 'cotyledon';
+    const isPhotosyntheticTarget = (nodeDef.stat_modifiers?.photosynthesis ?? 0) > 0;
+    const firstLeafReserve = this.firstPhotosynthesisReserve(plant);
+    if (
+      !isEstablishment &&
+      firstLeafReserve > 0 &&
+      !isPhotosyntheticTarget &&
+      plant.totalEnergy - energyCost < firstLeafReserve
+    ) {
+      return { success: false, reason: 'seed_reserve' };
+    }
+
     // Establishment runs on seed reserves (plus the soil moisture gate inside
     // handleGermination). Everything after that must be paid for from the
     // plant's own captured water and minerals, not merely from its energy.
-    const isEstablishment = targetType === 'radicle' || targetType === 'cotyledon';
     if (!isEstablishment) {
       const storedGate = canGrow(
         plant,

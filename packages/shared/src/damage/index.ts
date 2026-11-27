@@ -13,7 +13,13 @@
 
 import type { NodeType, PlantNode, Vec3Like } from '../growth/types.ts';
 
-export type DamageSource = 'weather' | 'tool' | 'herbivore' | 'terrain';
+/**
+ * What took the biomass. `starvation` is the plant failing to pay its own upkeep
+ * and shedding tissue to stay alive (`PlantWorld.drainShedDamage` → the shed
+ * flush in `main.ts`). It is the one loss the player cannot dodge, so it has to
+ * be nameable in the damage cue instead of falling through to "damage" (E18).
+ */
+export type DamageSource = 'weather' | 'tool' | 'herbivore' | 'terrain' | 'starvation';
 
 /** Lifecycle for one plant. `rooted` is the resting state. */
 export type UprootPhase = 'rooted' | 'uprooted' | 'tumbling' | 'rerooting';

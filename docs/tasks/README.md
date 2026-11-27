@@ -41,22 +41,29 @@ design document.
 8. A partial task stays `[ ]` and its record states exactly which acceptance
    criteria are met. Do not mark a slice as the whole task.
 
-## Current priority (2026-11-22)
+## Current priority (2026-11-23)
 
 `pnpm verify` is green. Work order is fixed by ADR-023, amended by ADR-026
 through ADR-029, ADR-041/ADR-048 and the 2026-11-21 scope choices (ADR-080):
 
-1. **T08A** — finish the inventory contract. The `player_state` restart copy
+1. **T56, volumetric terrain** — in progress. Slice 2 has the shaft's rim, wall
+   and slab; ADR-041 gates shared depth between the two plant passes on this
+   task, so it is the entry that unblocks other work.
+2. **T08A** — finish the inventory contract. The `player_state` restart copy
    and row-locked write landed 2026-11-22 (buy → restart → reconnect verified);
-   every pouch mutation is now a locked read-modify-write (purchase, item use,
-   slot swap, spore award, dev grant) and the duplication audit passed.
-   Config ownership is resolved (ADR-082). Record: [T08A.md](./T08A.md).
-2. **ADR-044 burial** — dead biomass becomes organic matter.
-3. **W6 water slices 1–2** — the accepted ADR-065 rebuild.
-4. AL-01 then AL-03 — client measurement, per **ADR-050** (gameplay first).
-5. Atmosphere, audio and scatter polish (Wave 0 after measurement).
-6. Remaining C02b work. Shared depth is **not** a C02b blocker: ADR-041 gates it
-   on volumetric terrain (T56).
+   every pouch mutation is a locked read-modify-write and the duplication audit
+   passed. Trade, mail and listing remain. Config ownership is resolved
+   (ADR-082). Record: [T08A.md](./T08A.md).
+3. **ADR-044 burial** — dead biomass becomes organic matter.
+4. **W6 water slices 1–2** — the accepted ADR-065 rebuild.
+5. **AL-04** — atmosphere, sky and post finish: the shared atmosphere model is in
+   and the ground and plant materials use it; the sky, water and post passes are
+   not. Record: [AL-04.md](./AL-04.md).
+6. Remaining C02b work.
+
+Client measurement is **not** in this order because it landed: AL-01 (benchmark,
+six fixed poses, GPU timing) and AL-03 (GPU-band quality controller) were
+implemented 2026-11-15 and both are in the table above.
 
 The 90-day, zoned calamity director is designed in
 [`docs/calamities.md`](../calamities.md) and ADR-078, but it is **not** in this
@@ -66,6 +73,12 @@ downloadable build that bundles the existing server. The calendar baseline is
 **40 / 84 / 130 weeks** (DESIGN Part 16 item 4).
 
 Specs for every task in this list are in [`DESIGN.md` Part 11](../../DESIGN.md).
+
+This table is **not** the whole programme. `DESIGN.md` Part 11 carries 58 task
+headings; 28 have a row here. A task with no row has no record, so check here
+before quoting it as done. The 30 without a row on 2026-11-23 are C05, C06, C07,
+C09, H01, O02, T06A, T08, T08B, T10, T12, T13, T13A, T14, T15, T16, T17, T20,
+T23, T24, T26, T40, T41, T42, T43, T44, T45, T46, T50 and T51.
 
 ## Status
 
@@ -98,6 +111,11 @@ Specs for every task in this list are in [`DESIGN.md` Part 11](../../DESIGN.md).
 | C21-B | The twenty-one defects, Wave B | `[x]` Items 5, 6, 8, 18, 20: world-anchored precipitation with six-arm snow, terrain-hugging splash crowns with spray (hidden from below), a planetary climate field with orographic lift and rare storms replacing the global Markov chain, and protocol v5 `LEDGER_ENTRY` for every purse change. 30-day climate simulation with snow-in-winter asserted, a full live spring day (which found and fixed the seasonal curve, orographic distance and humidity centre), a driven winter night with live snow in the server log, and measured browser pass. Wave C is started as the first T56 volume slice; Waves D–E are planned, not started | [bugfix-c21b.md](./bugfix-c21b.md) |
 | — | Bugfix: death, respawn and what is left behind | `[x]` Protocol `RESPAWN` (49) starts a new seed on the same socket; the death card's primary action grows again in place, the husk that replaces the bone lies still on the soil, drop shadows lie in the ground plane, the framing target can no longer sit under the terrain, and the card reports the death record's own biomass and node count instead of the live panel's zeroes. A second pass seats every contact shadow on the *drawn* terrain mesh instead of the height field (they differed by tens of centimetres on a bank), takes a plant's patch from parts at or above the soil, and leaves one hand-long body plus smaller offcuts rather than four stacked corpses. Driven in the dev browser: card, husk, drop and plant patches on a bank, the respawn framing, gallery patches 0.22-0.35 m against a seed's 0.20, and the body's plate 1.0 cm above the drawn ground; the narrow-pane card, a rival's view and the final husk size after it was enlarged were not checked | [bugfix-death-respawn.md](./bugfix-death-respawn.md) |
 | C21-A | The twenty-one defects, Wave A | `[x]` Items 1, 2, 3, 9, 10, 11, 12, 15, 16, 19: title orb ordering and backstep hold, persistent drag, config home zoom, no public regenerate key, target-derived pan heading, free camera rig (`camera_mode`), named rival owners, distance-scaled tags, day-part clock. 25 tests and a measured browser pass. Waves B–E (weather, volume terrain, items/palette, the planet) are planned, not started | [bugfix-c21.md](./bugfix-c21.md) |
+| AL-01 | Benchmark and six fixed poses | `[x]` implemented 2026-11-15 (P0): six poses with nearest-rank p50/p95/p99, warm-up frames discarded | [AL-01.md](./AL-01.md) |
+| AL-03 | GPU-band quality controller | `[x]` implemented 2026-11-15 (P0): real GPU frame time from `EXT_disjoint_timer_query_webgl2`, closed loop over measured cost | [AL-03.md](./AL-03.md) |
+| AL-04 | Atmosphere, sky and post | `[~]` partial, started 2026-11-15 (P1): the shared atmosphere model landed and the ground and plant materials use it; sky, water and post remain | [AL-04.md](./AL-04.md) |
+| DOC-01 | Documentation truth | `[~]` the 24 quoted defaults are cleared and `docs:check` treats them as an error; D-01, D-02, D-04 and D-05 are tracked as FIX-04/FIX-05 | [DOC-01.md](./DOC-01.md) |
+| W6 | Water, rebuilt on fewer surfaces | `[ ]` proposal, not built — a design to cut the stacked water surfaces, not a task in the work order | [W6-water.md](./W6-water.md) |
 
 ## Approved V5.4 tasks (not started)
 

@@ -6,13 +6,16 @@ import {
   entryFlowBack,
   entryFlowBeginRequest,
   entryFlowBoot,
+  entryFlowCancelSpawn,
   entryFlowChoose,
+  entryFlowChooseSpawn,
   entryFlowConnectionFailed,
   entryFlowContinueAsGuest,
   entryFlowPlantLost,
   entryFlowRequestFailed,
   entryFlowReseed,
   entryFlowSignedOut,
+  entryFlowSpawnConfirmed,
   entryFlowWorldReady,
 } from './EntryFlowStateMachine.ts';
 
@@ -114,6 +117,9 @@ describe('EntryFlowStateMachine', () => {
     assert.equal(machine.step, 'plant_lost');
 
     entryFlowReseed(machine);
+    assert.equal(machine.step, 'spawn');
+
+    entryFlowSpawnConfirmed(machine);
     assert.equal(machine.step, 'connecting');
   });
 
@@ -146,6 +152,30 @@ describe('EntryFlowStateMachine', () => {
 
     entryFlowReseed(machine);
     assert.equal(machine.lostStats, null);
+  });
+
+  it('opens the seed scene from the title, and cancelling returns there', () => {
+    const machine = createEntryFlowStateMachine();
+    entryFlowBoot(machine, false);
+
+    assert.equal(entryFlowChooseSpawn(machine), true);
+    assert.equal(machine.step, 'spawn');
+    entryFlowCancelSpawn(machine);
+    assert.equal(machine.step, 'title');
+
+    entryFlowContinueAsGuest(machine);
+    assert.equal(entryFlowChooseSpawn(machine), false, 'connecting cannot reopen the scene');
+  });
+
+  it('only confirms a seed from the spawn step', () => {
+    const machine = createEntryFlowStateMachine();
+    entryFlowBoot(machine, false);
+    entryFlowSpawnConfirmed(machine);
+    assert.equal(machine.step, 'title');
+
+    entryFlowChooseSpawn(machine);
+    entryFlowSpawnConfirmed(machine);
+    assert.equal(machine.step, 'connecting');
   });
 
   it('signing out forgets the session identity', () => {

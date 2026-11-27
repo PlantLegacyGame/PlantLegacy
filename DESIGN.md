@@ -1,6 +1,8 @@
 # Plant Legacy — Master Build Plan v5.3.2
 
-**Current version:** v5.3.2 (2026-11-14). Design rules, task scope and the 80-week plan are unchanged from v5.3.1; the revision history and v5.3.1 merge audit are in [`docs/history.md`](./docs/history.md). Every ruling is in [`docs/decisions.md`](./docs/decisions.md).
+**Current version:** v5.3.2 (2026-11-14). Design rules, task scope and the task build order are unchanged from v5.3.1; the calendar baseline is now 40 / 84 / 130 weeks (Part 16 item 4), and the W-numbers in Part 13 are build order, not dates. The revision history and v5.3.1 merge audit are in [`docs/history.md`](./docs/history.md). Every ruling is in [`docs/decisions.md`](./docs/decisions.md).
+
+**v5.4 addendum (2026-11-23).** A review of an external procedural-systems guide added Part 13.10 (procedural content and the shared field bundle), a procedural-emote extension to T05, a population layer in T54, a sand layer in T55, generated wild flora in T59, synthesised audio in 19.9, and Part 16 items 20–22. The review, with what was already ours and what was refused, is [`docs/procedural-systems.md`](./docs/procedural-systems.md); the rulings are ADR-083 to ADR-087.
 
 **Core thesis.** Build systems, not outcomes. Build possibilities, not features. Build the sandbox; the players build the castles.
 
@@ -348,7 +350,7 @@ the gaps to the new gates are schedule room for the added scope.
 | 10 | **T07** Weather and day/night | W14 | T00A, T03 | Thunderstorm active phase is the first cut if late. |
 | 11 | **C03** Environment rendering | W15 | C01, T07, T00A | Sky, light grading, rain, storm, soil tint, cutaway shader. |
 | 12 | **T05** Chat, emotes, report/block | W16 | T03, T08C | Proximity + world chat both included (D-12). **Checkpoint 5 (W16).** |
-| 13 | **T04** Mutation | W17 | T00A, T01, T03 | Schema + at least 3 simple mutations. **Partially implemented 2026-11-14** with 36 mutations and 12 signatures; the reroot-speed block is consumed by T06, translocation (post-MVP) is unowned (`docs/tasks/T04.md`). |
+| 13 | **T04** Mutation | W17 | T00A, T01, T03 | Schema + at least 3 simple mutations. **Partially implemented 2026-11-14** with 36 mutations and 12 hand-written signatures (45 mutations with a style each today); the reroot-speed block is consumed by T06, translocation (post-MVP) is unowned (`docs/tasks/T04.md`). |
 | 14 | **T06** Uproot, damage, tumbling | W18–19 | T01, T02, T03, T07 | Reroot crawl, physical damage sources, kill credit, fragments and remains drops. **Checkpoint 6 (W19). Built 2026-11-15** except the in-browser checklist (`docs/tasks/T06.md`). |
 | 15 | **T08A** Inventory | W20 | T03, T08C | Item flags, bundles, `spore_balance`, duplication audit. |
 | 16 | **C04** HUD and controls v1 | W21–22 | C01, T00A, T07, T08A, T05, T06 | Desktop-first. **Checkpoint 7 (W22):** the full loop is playable. |
@@ -483,7 +485,7 @@ Fuses modular mathematical primitives (tapered capsule segments for roots/stems/
 - **Compute pass** (cull.wgsl): Frustum culling, per-plant LOD tier assignment (L0 full prims, L1 reduced prims, L2 impostor sphere, L3 culled), hysteresis/dwell timer
 - **Raymarch pass** (mesh.wgsl): Bounding volume AABB test → SDF raymarch with `smin` blending → anatomical coloring + lighting + mutation visuals
 - **Impostor sphere pass** (impostor.wgsl): L2 distant plants as **single ellipsoid SDF per plant** with procedural surface (bark noise + canopy color + mutation hints). No billboards at L2. One sphere trace per pixel, converges in 5-10 steps.
-- **L3 billboard pass** (billboard.wgsl): plants at 2–12 px use a colour-only atlas billboard. Below ~2 px they become a coloured point or minimap dot. The L3 atlas is the only atlas in the plant renderer; it carries no lighting data and is rebaked only when a plant's shape changes, under a per-frame rebake cap.
+- **L3 impostor pass** (impostor.wgsl): plants at 2–12 px use the same analytic ellipsoid as L2, where it reads as a coloured point. There is no billboard and no atlas anywhere in the plant renderer (ruling 2026-11-24: "no billboards in our game").
 - **Transparent WebGPU canvas** layered over Three.js environment (sky, terrain, weather from C03)
 - **WebGL2 fallback**: If WebGPU unavailable, use simplified mesh renderer (current PlantMeshBuilder) with improved joint blending — not SDF
 
@@ -493,13 +495,13 @@ Fuses modular mathematical primitives (tapered capsule segments for roots/stems/
 | L0 | < 50m | 192 prims (full) | Full `smin` raymarch |
 | L1 | 50–150m | 48 prims (trunk + major branches only) | Reduced `smin` raymarch, 24 steps |
 | L2 | 150–500m | 1 ellipsoid/plant | **Impostor sphere SDF** — procedural bark + canopy color, 10 steps |
-| L3 | > 500m | 0 | Colour-only atlas billboard on WebGPU (2–12 px); culled to a minimap dot on the WebGL2 fallback |
+| L3 | > 500m | 1 ellipsoid/plant (same pass) | Same ellipsoid impostor as L2; a coloured point at 2–12 px. No billboard, no atlas |
 
 **Impostor Sphere Details (L2):**
 - Ellipsoid axes derived from plant bounding box (width, height, depth)
 - Surface: `sdEllipsoid(p, radii)` + 3D noise for bark texture
 - Color: canopy hue from plant's mutation flags + health tint
-- No billboards and no atlas generation at L2. The only atlas in the plant renderer is the L3 colour-only billboard (2–12 px); see Part 14.2.0 for the canonical tiers
+- No billboards and no atlas generation at any tier. Below the mesh bands the only representation is the ellipsoid, which is a coloured point at 2–12 px; see Part 14.2.0 for the canonical tiers
 - 5-10 raymarch steps (ellipsoid SDF is analytic, no iteration needed for hit)
 - Mutation signatures: color shifts only (no geometry)
 
@@ -545,21 +547,27 @@ here (RULE_3).
 **Acceptance.** Day/night is continuous. Clear, rain and storm are visually distinct. Telegraph is readable. Phone budget met.
 **AI prompt.** "Build C03 environment rendering driven by T00A/T07 data. Cheap shaders. Phone budget respected. All values in render.json."
 
-### C03b · Ground LOD and Relief — `config/terrain.json`, `config/render.json`
-**Status:** added 2026-11-13 with T25; not in the v5.3 plan. Shipped.
-**Depends on:** C03, T25.
-**Must support.** One seeded field shared by server and client. An inner detail
-patch (`terrain_radius` at `terrain_mesh_subdivisions`) covering the walkable
-play area, and a coarser outer patch (`patch_radius_m`, 620 m default) carrying
-the same field to the horizon. Both are separate meshes so a clipmap can replace
-the pair later without changing the field, the collider plan or the camera clamp.
-Physics collides with the **exact drawn vertices** of both as Rapier trimeshes,
-with the planet ball underneath so no seam can be fallen through. Soil colour
-comes from moisture and minerals, never a texture.
-**Acceptance.** The drawn ground and the collision surface agree everywhere in
-both patches; a plant at the outer edge stands on the height the mesh draws; no
-seam or visible rim between patches; each patch's cell size matches its
-configured subdivision.
+### C03b · Ground detail and relief — `config/terrain.json`, `config/render.json`
+**Status:** current disc/ring/globe shipped; the continuous detail chain and
+editable crust are the direction, not built. Added 2026-11-13 with T25; the
+original two-patch text was superseded 2026-11-27.
+**Depends on:** C03, T25, T56.
+**Must support.** One seeded field shared by server and client. The current
+ground is one 620 m `planet-play-disk` at 2 m cells, a 20 km
+`planet-horizon-ring` that blends that cap into the global field, and a 100 km
+`planet-far-relief` globe. The disc is the only walkable collider (one Rapier
+heightfield over its cells); the ring and globe are scenery. The soil material
+is procedural everywhere and must not change at a mesh boundary. The direction
+is a view-dependent detail chain (2 m near the eye, coarsening with distance)
+and a sparse shallow crust for edits, caves and overhangs; see
+[`docs/planet-scale.md`](./docs/planet-scale.md) for the budget, the arithmetic
+and the staged path.
+**Acceptance (current).** The disc, ring and globe form one continuous surface
+at the rim; no seam, hole or shader cut is visible at ground level or in orbit;
+the globe is present in planet view; the physics heightfield agrees with the
+drawn disc. **Acceptance (next).** No visible player-area detail boundary at
+620 m; the detail chain has no T-junction or skirt line; the crust edit path
+survives reconnect and is identical on two clients.
 **Config.** `terrain_*` keys in `config/render.json`, plus `config/terrain.json`.
 
 ### C04 · HUD and Controls v1 — `config/ui.json`, `config/controls.json`
@@ -856,7 +864,7 @@ Recommended order, dependencies respected: T47, T48, T30, T34, T36, T35, T09, T1
 
 ```text
 plant-legacy/
-├─ DESIGN.md                      # this plan (v5.3.1)
+├─ DESIGN.md                      # this plan (v5.3.2 + v5.4 addendum)
 ├─ CONTEXT.md                     # engine/stack version, file tree, interfaces, locked decisions
 ├─ README.md
 ├─ ATTRIBUTION.md                 # every free asset: source, license, link
@@ -1078,6 +1086,15 @@ Each spec is a block. Feed one to the AI at a time. Every AI session returns imp
 - **Report dialog fields:** (1) What are you reporting? (pre-filled; shows the exact message/player/listing); (2) Reason (dropdown, config-defined; starting list matches RULE_6: child safety, credible threat, doxxing/personal information, other illegal activity, other; offensive/weird/political/toxic is not an actionable category); (3) Additional info (free text, config max length); (4) Block this player checkbox (default checked after submitting).
 - **Server behavior:** stores reporter ID, target ID, surface, reason, free text, timestamp, and a snapshot of the surrounding context (for chat: the last N lines of that channel, config default 20; for listings: the listing text at that moment). Rate limit per reporter to prevent report spam; duplicates merged. Plain confirmation shown. Game never tells the reporter what action was taken.
 - **Block:** hides the blocked player's chat and mail from the blocker; does not alter the world simulation.
+
+**Emotes as roles and goals (V5.4 extension, ADR-086).** The emote wheel ships as labels over six cosmetic effects; a body that waves has to be animated, and hand-authoring bones for a procedurally grown plant is impossible. Emotes therefore describe a **goal over roles**, and the solver finds the parts.
+
+- **Roles at generation time.** The generator already knows the body: it tags an apex (the head), appendage pairs (hands), the trunk, and any crown. Tags are geometry, not a skeleton rig: a node's role is derived from its position, degree and height band, so a plant grown yesterday has the same roles tonight.
+- **Emote data, not animation.** An emote is roles, a target relation, a rhythm, an amplitude and a duration — “two appendages meet at the midline, repeated softly, with a slight head tilt”. All of it is config (`config/emotes.json`), and every value that describes shape is body-relative (Part 13.10 §D).
+- **Role scoring.** Candidate pairs are scored on mirror symmetry about the body axis, similar length and thickness, reach, and height band. The best pair becomes the hands; the apex becomes the head.
+- **Solve with IK.** FABRIK with joint limits, amplitudes normalised by body size (14.1.4). Cosmetic only (RULE_27).
+- **Fallback chain.** No symmetric pair: the two best-reaching branches. No pair at all: a whole-body pulse, a sway, or leaf movement. An emote never fails to produce *something*.
+- **Coverage is a test, not a demo.** Generate thousands of bodies from random seeds, run every emote on every body, and fail on a missed target or a self-intersection. That harness is the acceptance criterion; a hand-picked gallery cannot show the shapes it never generates.
 
 **Acceptance.** Proximity range-limited; world global and rate-limited. Emotes data-driven. Chat log persists per session. Report dialog present on all listed surfaces; server stores context snapshot; rate limit works; block hides chat and mail.
 
@@ -2103,7 +2120,7 @@ The best moments will not be designed. They will be discovered. Build the possib
 
 ---
 
-## V5.4 extension tasks (approved 2026-11-09; not in the 80-week gate plan)
+## V5.4 extension tasks (approved 2026-11-09; outside the gate plan)
 
 **Status:** approved, not started. These tasks extend the existing plant-organism design rather than replacing it. Merge them into the build order and create their config files when their turn comes; the current 75-file config count is unchanged until then.
 
@@ -2123,6 +2140,9 @@ The best moments will not be designed. They will be discovered. Build the possib
 - **Population control.** Per-species caps, spawn sources, despawn rules, and no unbounded exponential growth. Local extinction is possible; T59 seed banks and migration can restore populations.
 - **Events.** `FAUNA_SPAWNED`, `FAUNA_MOVED`, `FAUNA_NEEDS_CHANGED`, `FAUNA_ATTACKED_PLANT`, `FAUNA_TRAPPED`, `FAUNA_ESCAPED`, `FAUNA_DIED`, `FAUNA_TAMED`, `FAUNA_VOCALIZED`.
 - **Taming hook.** A configured interaction may convert a fauna into a T11 companion. Taming does not grant speech, goals, or judgment.
+- **Herd motion.** Herds use boids (separation, alignment, cohesion) with the influence map as the steering field, so a fleeing group splits and regroups without per-animal paths. Reaction, not coordination with intent (RULE_2).
+- **Population layer (V5.4 extension).** Under the per-entity caps sits a coarse regional model: per-species carrying capacity, birth and death rates, hunger pressure from actual plant biomass, and migration between regions. It is what makes a herbivore *wave* a consequence of the land rather than a spawn timer — over-grazing one region pushes the herd to the next. Deterministic for a fixed seed and update order, recomputed at the same low frequency as the influence maps, and never allowed to exceed `max_fauna_per_world`. Local extinction is possible; T59 seed banks and migration restore it.
+- **Feedback roles, named once.** Pollinator, herbivore, seed carrier and pest each name the edge they feed back into: pollination range (T53), plant damage (T06 pipeline), seed dispersal (T53/T59), infection spread (T59). A role with no named edge is decoration and does not ship.
 - No client authority. No hardcoded species or numbers. No rarity field.
 
 **Acceptance.**
@@ -2150,6 +2170,7 @@ The best moments will not be designed. They will be discovered. Build the possib
 - Config-defined materials and elements. Materials: air, soil, rock, sand, water, lava, organic matter, wood, stone, metal, ash, ice (extendable). Elements: fire, water, wind, earth (extendable).
 - **State transitions by strength comparison.** Element strength versus material resistance/threshold determines ignition, wetting, drying, weathering, melting, freezing, combustion, erosion and rusting. The reaction table is config data.
 - **Dynamic environment.** Water flows downhill and settles; sand collapses; lava flows and cools to rock; fire ignites, spreads and extinguishes; rain wets and extinguishes; smoke and steam are derived effects. Vegetation spread is driven by T59/T01, not a separate system.
+- **Sand and grain, two scales (V5.4 extension, ADR-087).** A granular material has one authority — a **height layer** in the terrain field, relaxed toward its angle of repose at a low cadence, which gives dunes, piles, slumping and a dug hole that fills itself at any scale. Near players, grain particles may be simulated client-side for pouring and splashing inside a capped budget; when they settle, the settled result becomes a height edit on the server, exactly like a terrain edit. Grain particles never decide where sand *is* (RULE_4). The same split applies to any material that can be described by a surface: snow depth, ash, mud. Materials that cannot (lava, gas, fire) stay in the 3D cell grid.
 - **Damage integration.** Any material transition that damages a plant or fauna emits a damage record through the RULE_22 pipeline. No parallel damage path.
 - **Persistence.** Material deltas in the T03 event log; periodic binary snapshots; never one DB row per cell.
 - **Interest management.** Only material deltas for subscribed cells/chunks are broadcast; per-client caps apply.
@@ -2279,6 +2300,9 @@ The best moments will not be designed. They will be discovered. Build the possib
 
 **Must support.**
 - Succession stages: bare substrate → pioneer → grass → shrub → woodland → forest, driven by moisture, minerals, light, temperature, disturbance, seed bank and time. Stage definitions and thresholds are config.
+- **Wild flora is generated, not stored (V5.4 extension, ADR-085).** The ambient canopy that makes a forest is a function of the region seed, the succession stage and a species record: a parametric structure generator (stochastic L-system branching, or space colonization for a natural crown) produces a skeleton, and the skeleton drives mesh, animation and collider LOD exactly as a player plant's server node graph does. Nothing is persisted except the stage and the seed, so a forest costs one row per region. Distant wild flora bake to vertex-animation textures; they never get their own draw pass or a second tier scheme (Part 14.2.0).
+- **Rivers and lakes are generated from the ground (V5.4 extension).** A low-resolution flow-accumulation map over the terrain field decides where water runs and where a basin fills. The map is the generator for the drawn inland water (ADR-065), not a new surface; a terrain edit that opens a channel re-derives the affected flow. Water samples the terrain; the terrain never samples water.
+- **Soil depth is layered, not volumetric.** Where a root rule needs depth (competition, drainage, pH), soil is a small number of layers under the T00A 2D grid — never a 3D grid over the authored area (a planet-wide 1 m grid is ~1.3e11 cells for each metre of depth).
 - **Dead matter conversion.** Dead roots/plants/fauna → organic matter → soil minerals. Erosion and sedimentation move material and fill pits. Mining tailings/spoil flows and converts to soil, then grass.
 - **Disturbance resets.** Fire, lava, flooding, over-grazing and root tunneling reset stages locally; recovery remains possible.
 - **Failsafes.** Degraded regions below configured thresholds receive recovery pulses (seed rain, rain, mycorrhiza, herbivore migration). Recovery is **natural, measured in real-time days, and weather-dependent**: wet, mild weather accelerates it; drought, fire or repeated disturbance delays it. It is guaranteed within a configured maximum recovery time; no irreversible ecological collapse from player actions. Recovery is slow enough to matter.
@@ -2451,7 +2475,7 @@ as `ADR-nnn`, which is the current ruling where the two differ.
 ## 13.3 Honest Limits of This Stack
 
 - JavaScript garbage collection can cause hitches. Rule: **no per-frame allocations in hot paths; use object pools and typed arrays** (enforced in code review checklists).
-- No built-in physics: tumbling (T06) uses a small custom solver on the server for authority and a cosmetic solver on the client.
+- No built-in physics: three.js ships none. The client's cosmetic layer is Rapier WASM (C02c, `config/physics.json`); the server's authority is its own rules (T06 tumbling, T25 colliders). **A physics engine is never the source of determinism** — determinism comes from our rules and seeds (ADR-038, ADR-083). Do not describe Rapier as deterministic and do not let a Rapier result decide a gameplay number.
 - WebGL on mobile browsers has tight memory limits (especially iOS Safari). The mobile budget is deliberately lower.
 - Phone browsers cannot hide their own UI without PWA install; recommend "Add to Home Screen" in the first-spawn card on mobile (does not explain game depth, so RULE_13 holds).
 - Vibration API is unavailable on iPhone browsers; haptics arrive with the Capacitor app.
@@ -2465,6 +2489,8 @@ as `ADR-nnn`, which is the current ruling where the two differ.
 | Low-end fallback | 30 fps lock offered | ≤ 150 K | ≤ 80 | up to 15 | ≤ 96 MB | ≤ 20 KB/s |
 
 Battery rules: pause rendering when the tab is hidden; drop to 30 fps automatically when idle (no input for a configured time) and restore on input; dynamic resolution scaling (never below a configured floor) before reducing detail; no always-on full-screen post-processing on phones; offer a player-selectable "battery saver" (30 fps) but default stays 60 fps.
+
+**This table is the plan-time budget, not the live one.** A number that survives playtesting moves into `config/` — `world.json` `detailed_plant_budget` (256 after the P0 measurement batch, against the 100 here), `per_client_entity_cap` (1000) and `render.json` `webgpu_max_plants` (20000) — and `docs/tunables.md` owns where it lives. Quoting the shipped figure here as well would make a second owner for it.
 
 ## 13.5 Scale Model (D-13)
 
@@ -2510,6 +2536,42 @@ Rules:
 
 - **Do not store one DB row per node.** A plant has up to 200k nodes. Store each plant's node graph as a compact **binary snapshot** (a `bytea` column) plus a short **append-only event log** since the last snapshot; compact periodically. Items, genes, ledger, mail and listings are normal relational rows.
 - Snapshots are written on a schedule and on logout/death; the schedule is time-sliced so it never spikes a tick.
+
+## 13.10 Procedural Content and the Shared Field Bundle
+
+**Status:** rules only; no task. Review and refused items: [`docs/procedural-systems.md`](./docs/procedural-systems.md). Rulings: ADR-083 to ADR-087.
+
+### A. Seeds for content, state for gameplay
+
+Nothing that a gameplay rule reads is generated twice. Anything no rule reads is a function of a seed and a coordinate, and is stored nowhere.
+
+| Kind | Generated or stored | Why |
+|---|---|---|
+| Plant body, damage, inventory, economy | **Stored** — binary snapshot plus event log (ADR-039), row-locked items | A player's choices are not reproducible from a seed. |
+| Terrain height | **Generated** from `terrainField`, then **stored as sparse deltas** (T25) | One field both sides can compute; edits are the only state. |
+| Ground scatter, wild flora, ground cover, ambient placement | **Generated**, never stored, until something changes one — the change is then the state (T58) | Nothing gameplay reads, so there is nothing to persist until a player picks a stone up. |
+| Textures, patterns, palettes | **Generated** in shaders; baked to an atlas only when per-frame cost demands it | Memory and licensing (Part 19.10). |
+| Procedural items | **Records** — an id plus genes or a seed, never a mesh | Keeps the pouch small and the marketplace free of geometry (T08A/T14). |
+
+The line is testable: if removing the generator changes a damage number, a growth price or an owner, the value belongs to the server's state, not to a seed. GPU-generated content is never the authority — vendors do not produce bit-identical noise (`planet-scale.md` §3.2).
+
+### B. One field bundle, sampled by everyone
+
+Light, moisture, minerals, temperature, humidity, wind, water and terrain are fields with one owner each. A system that needs one samples it; it does not keep a copy and it does not ask another system. The table and the five rules are in [`docs/procedural-systems.md`](./docs/procedural-systems.md) §5 (ADR-084).
+
+Consequences to hold onto:
+
+- A new feature states which fields it reads and which one it writes. A feature that writes a field nobody owns is a bug in the design, not a new system.
+- Fields are sampled in metres in the play frame. The planet is a placement, not a coordinate space.
+- A client may recompute a field for a visual only where a difference cannot change a number a rule reads: rain, splashes, sway, snow drift. Damage, growth, nutrient drain and ownership stay server-sent.
+
+### C. The collider guarantee and the visual margin
+
+**Non-intersection is guaranteed for colliders, not for every drawn vertex**, and the two must be described separately. Organs get capsule chains with a clearance (`config/physics.json` `collider_inflation_m`); ground gets the collider built from the drawn triangles (C03b, T25). Rendered sway may sway *inside* that clearance; it may not cross another body outside it. The margin's size is an open decision (Part 16 item 20) — until it is decided, no UI or rule may promise that two drawn plants do not touch.
+
+### D. Size-relative numbers
+
+Every size-dependent tunable is expressed in body-relative units: amplitudes, collider thickness, LOD distances, growth reach, emote reach, sway. The body's own scale class supplies the multiplier (ADR-027), a size mutation's tissue is `quota × scale³` (ADR-057), and proportion is a rule rather than a per-mutation choice (ADR-070). A new tunable in metres that describes *shape* is a defect; one in metres that describes *the world* (terrain, weather, interest radius) is not.
 
 ---
 
@@ -2626,7 +2688,7 @@ This table is the **single owner** of tier numbering. C02, C02b, this Part, `doc
 | **T0 / L0** | > 300 px | Full `smin` raymarch, 192 prims, real shadow caster, full IK | Full near-field; server full |
 | **T1 / L1** | 80–300 px | Reduced raymarch at 48 prims (WebGL2 fallback: merged mesh with smooth joint blending), analytic sway, blob shadow | Merged colliders; server reduced |
 | **T2 / L2** | 12–80 px | **Ellipsoid SDF impostor** — `sdEllipsoid` + noise, procedural bark and canopy colour, 5–10 steps | None |
-| **T3 / L3** | 2–12 px | **Colour-only atlas billboard**, no lighting data, rebaked on shape change under a frame cap | None |
+| **T3 / L3** | 2–12 px | **Same analytic ellipsoid impostor** as T2; a coloured point at this size. No billboard, no atlas | None |
 | **T4** | < 2 px | Coloured point / minimap dot | None |
 
 Rules:
@@ -2648,7 +2710,7 @@ Rules:
 | Mid meshes (Tier 1) | ~26 MB | 1,280 slots × ~20 KB |
 | Leaf instances | ~4 MB | ~120k × 32 B |
 | Impostors — L2 (ellipsoid SDF) | ~0 MB | Analytic shader maths; per-plant shape/colour params live in the plant header buffer (~0.6 MB for 10k) |
-| Impostors — L3 (colour-only atlas) | ~37 MB | 9k single-view (32², 4 KB each); L3 only (2–12 px) |
+| Impostors — L3 | ~0 MB | Same analytic ellipsoid as L2; the colour-only atlas and its ~37 MB are gone (2026-11-24) |
 | *Superseded: full-fidelity atlas* | *~170 MB* | *Retained for reference only. One surface/view; the albedo+normal+emission spec in 14.2.6 costs ~504 MB and does not fit the 800 MB budget (ADR-042)* |
 | Texture arrays | ~40 MB | Leaf color/normal, bark color/normal |
 | Shadows (4 cascades 2048²) | ~67 MB | Depth only |
@@ -2656,7 +2718,7 @@ Rules:
 | Light volume | ~8 MB | |
 | **Total (1080p)** | **~390–470 MB** | **~1 GB at 4K** |
 
-**Impostor budget note (v5.3.2).** The plant impostor is a **single analytic ellipsoid SDF at L2** (C02) and a **colour-only atlas billboard at L3** (2–12 px). L2 costs no VRAM beyond the header buffer it already needs for culling; the colour-only L3 atlas costs ~37 MB for 9k distant plants. The old ~170 MB row described a full-fidelity multi-view atlas, and would cost ~504 MB at three surfaces per view (albedo, normal, emission, as 14.2.6 requires) — more than the whole rendering budget. That path is not used. See ADR-042.
+**Impostor budget note (v5.3.2).** The plant impostor is a **single analytic ellipsoid SDF at L2 and L3** (12–2 px). It costs no VRAM beyond the header buffer it already needs for culling; the colour-only L3 atlas that used to cost ~37 MB for 9k distant plants is gone with the billboard. The old ~170 MB row described a full-fidelity multi-view atlas, and would cost ~504 MB at three surfaces per view (albedo, normal, emission, as 14.2.6 requires) — more than the whole rendering budget. That path is not used. See ADR-042.
 
 **Pool Management:**
 - Each tier uses fixed-size slot pools inside large buffers, each pool ≤128 MB (WebGPU default binding limit). No fragmentation, no per-frame allocation.
@@ -2802,6 +2864,12 @@ still need a decision before public registration.
 17. **Luck — resolved: none.** There is no luck variable. Mutations, morphology, terrain, shelter and being outside the zone decide survival; identical plants in identical positions get identical exposure.
 18. **Single-player demo packaging — resolved.** The first demo is a downloadable build that bundles the existing server. HTML5 local simulation is a later option.
 19. **Survivor state — resolved.** A survivor keeps position, damage and mutations, with normal recovery. The next season is a continuation, not a reset.
+
+**Procedural-systems review — unanswered 2026-11-23.**
+
+20. **The visual margin.** Colliders promise non-intersection; drawn sway can still cross another body inside `collider_inflation_m`. How large is the drawn allowance, is it one number or per organ family, and is it visible in the dev overlay? Until answered, the guarantee is stated for colliders only (Part 13.10 §C).
+21. **Edit-layer compaction.** Plant event logs compact on a threshold; terrain edits, root tunnels and cave voids do not. Decide a policy — age, per-region size, or merge-into-base — before a long-lived world accumulates deltas with no ceiling.
+22. **The ambient-flora budget.** T59's generated canopy has no render budget of its own. Decide whether it must fit inside the existing per-client caps and projected-size tiers (recommended) or gets a separate, cheaper path.
 
 **V5.4 extension approvals — resolved 2026-11-09.**
 
@@ -3235,6 +3303,10 @@ Usage: loam/bark for panels; bone for text; leaf/sprout for primary actions; **r
 ## 19.9 Audio Direction
 
 Sparse and organic. Day: wind, distant insects. Night: crickets, low wind. Rain: layered by intensity. Thunder: distant to close. Growth: soft stretch and creak. Damage: dull cracks and tears. Uproot: deep, wet tearing. UI: soft wood/paper taps. Optional quiet ambient music, off by default or very low. All sounds stop when the tab is hidden. No stingers for achievements.
+
+**Synthesis before files (V5.4 extension).** The environmental bed is generated from the same simulation the picture uses, not sampled from a library: wind from the wind field (strength, gust, the plant's own density), rain from precipitation intensity, leaf rustle from wind times canopy mass, water from flow, snow as near-silence. This is why C06 can ship free (RULE_31), why a storm sounds like the storm that is happening, and why the mix does not grow with the biome count. Short one-shot sounds (cracks, tears, UI taps) may be small recorded assets; the ambient bed is synthesised.
+
+**Music is generative too, and it follows the world.** A slow harmonic bed that reads the field bundle — hour, weather, biome, season — rather than a track list, so it never cuts against a storm. Still off by default or very low, in keeping with the quiet-interface pillar (19.8), and still no stingers. If synthesis is measured as worse than a recording for a given cue, record that cue and note why in `ATTRIBUTION.md`; do not synthesise a bad sound to satisfy a principle.
 
 ## 19.10 Free Assets (D-19)
 

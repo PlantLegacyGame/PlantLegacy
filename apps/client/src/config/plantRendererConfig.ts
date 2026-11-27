@@ -5,6 +5,8 @@
 
 export interface PlantRendererConfig {
   maxNodesPerPlant: number;
+  /** Per-node-type emergence delay in ms for the staggered growth animation (E26). */
+  emergenceDelayMs: Record<string, number>;
   rootMaxDepth: number;
   canopyMaxHeight: number;
   nodeSpacingMin: number;
@@ -71,6 +73,19 @@ export interface PlantRendererConfig {
 
 let plantRendererConfig: PlantRendererConfig = {
   maxNodesPerPlant: 1000,
+  // Fallback only: the file owns these (E26).
+  emergenceDelayMs: {
+    radicle: 0,
+    root: 0,
+    lateral_root: 80,
+    seed: 0,
+    stem: 40,
+    branch: 40,
+    cotyledon: 160,
+    leaf: 200,
+    flower: 240,
+    spore_sac: 240,
+  },
   rootMaxDepth: 50.0,
   canopyMaxHeight: 50.0,
   nodeSpacingMin: 0.5,
@@ -149,6 +164,7 @@ export async function loadPlantRendererConfig(serverOrigin: string): Promise<Pla
 
       plantRendererConfig = {
         maxNodesPerPlant: readValue(payload, 'max_nodes_per_plant', current.maxNodesPerPlant),
+        emergenceDelayMs: readValue(payload, 'emergence_delay_ms', current.emergenceDelayMs),
         rootMaxDepth: readValue(payload, 'root_max_depth', current.rootMaxDepth),
         canopyMaxHeight: readValue(payload, 'canopy_max_height', current.canopyMaxHeight),
         nodeSpacingMin: readValue(payload, 'node_spacing_min', current.nodeSpacingMin),

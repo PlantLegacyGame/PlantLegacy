@@ -100,6 +100,12 @@ export interface PlantRendererConfig {
   meshMaxLeavesPerNode: number;
   meshJointScale: number;
   meshMaxLeafSize: number;
+  /**
+   * Development only. The raymarched SDF quad is not part of gameplay: it has
+   * its own canvas/depth assumptions and cannot share a scene with the mesh
+   * plant. It stays reachable here for isolated shader work, never by default.
+   */
+  sdfDevEnabled?: boolean;
 }
 
 export const DEFAULT_CONFIG: PlantRendererConfig = {
@@ -159,10 +165,8 @@ export const DEFAULT_CONFIG: PlantRendererConfig = {
   meshMaxLeavesPerNode: 6,
   meshJointScale: 0.55,
   meshMaxLeafSize: 0.45,
+  sdfDevEnabled: false,
 };
-
-/** Root aura samples the shader reads from its 64x1 texture. */
-const ROOT_AURA_CAPACITY = 64;
 
 class PlantRenderer {
   private config: PlantRendererConfig;
@@ -186,23 +190,13 @@ class PlantRenderer {
   private emergenceStartTime = 0;
   private isEmerging = false;
   private deltaTimeAccumulator = 0;
-  /** Centre of the drawn plant, for LOD distance. */
-  private readonly plantCenter = new THREE.Vector3();
-  // Root Sight SDF aura
-  private rootAuraTexture: THREE.DataTexture | null = null;
-  private rootAuraNodeCount = 0;
-  private rootAuraRadius = 3.0;
 
   // Uniforms
   private uniforms: Record<string, THREE.Uniform> = {};
 
-  // LOD
-  private currentLOD = 0;
-
-  // Mesh-based L0/L1 renderer (replaces SDF raymarch for close plants)
+  // Mesh renderer: the only gameplay plant renderer.
   private meshRenderer: MeshPlantRenderer | null = null;
   private lastLook: MutationLook = NEUTRAL_LOOK;
-  private useMeshL0L1 = true;
   /** Held until `initialize` builds the mesh pass. */
   private pendingGroundQuery: ((x: number, z: number) => number) | null = null;
   private pendingGroundMesh: THREE.Object3D | null = null;
@@ -247,8 +241,10 @@ class PlantRenderer {
   initialize(scene: THREE.Scene, camera: THREE.PerspectiveCamera): void {
     this.scene = scene;
     this.camera = camera;
+    // The uniforms and sun direction stay alive for the mesh pass; the SDF quad
+    // itself is built only when a developer asks for the isolated experiment.
     this.createSDFShader();
-    this.createFullscreenQuad();
+    if (this.config.sdfDevEnabled) this.createFullscreenQuad();
     this.setupEmergenceAnimation();
     // Mesh-based L0/L1 renderer replaces expensive SDF raymarching up close.
     this.meshRenderer = new MeshPlantRenderer(scene, {
@@ -311,8 +307,9 @@ class PlantRenderer {
       uRootSightAuraEnabled: new THREE.Uniform(false),
       uRootAuraNodeCount: new THREE.Uniform(0),
       uRootAuraTex: new THREE.Uniform(null),
-      // The aura is its own tunable (`root_aura_radius`), not a tenth of the
-      // cutaway radius. Deriving it meant editing the hole resized the glow.
+      // The aura is its own tunable (`root_sight.aura_radius`, which `main.ts`
+      // passes in beside the cutaway), not a tenth of the cutaway radius.
+      // Deriving it meant editing the hole resized the glow.
       uRootAuraRadius: new THREE.Uniform(this.config.rootAuraRadius),
       uOwnRootHighlightColor: new THREE.Uniform(new THREE.Color(this.config.ownRootHighlightColor)),
       uRivalRootHighlightColor: new THREE.Uniform(
@@ -379,12 +376,10 @@ class PlantRenderer {
    * Accepts both the legacy format (type: number) and the typed format.
    */
   updatePlantData(nodes: PlantNodeData[]): void {
-    this.updateSdfFrame(nodes);
-
-    // Feed the mesh-based L0/L1 renderer (used when SDF raymarching is disabled).
+    // Mesh only. The old path repacked SDF textures and a 64-node aura on every
+    // growth tick while the quad was hidden, which was pure per-frame waste.
+    if (this.config.sdfDevEnabled) this.updateSdfFrame(nodes);
     this.meshRenderer?.updatePlantData(nodes);
-
-    this.updateRootAura(nodes);
   }
 
   /**
@@ -397,6 +392,7 @@ class PlantRenderer {
    * of this - that path is not what draws a plant at this range.
    */
   updateSdfFrame(nodes: PlantNodeData[]): void {
+    if (!this.config.sdfDevEnabled) return;
     const geometry = buildSdfGeometry(nodes);
 
     // The mutation state owns the pigment (signature + that mutation's own
@@ -405,53 +401,11 @@ class PlantRenderer {
 
     this.uploadSegmentData(geometry.segments);
     this.uploadNodeData(geometry.nodes);
-    this.plantCenter.copy(geometry.center);
     this.segmentCount = geometry.segments.length;
     this.nodeCount = geometry.nodes.length;
 
     this.uniforms.uSegmentCount.value = this.segmentCount;
     this.uniforms.uNodeCount.value = this.nodeCount;
-  }
-
-  /**
-   * Update the Root Sight aura: a 64x1 texture of subterranean node positions,
-   * which the shader blends into one continuous glowing volume.
-   */
-  private updateRootAura(nodes: PlantNodeData[]): void {
-    // Collect subterranean nodes (y < 0 or root layer) of player or rivals
-    // Type and layer only: `position.y < -0.01` assumed the soil line is Y = 0,
-    // so on the planet it matched every buried root and no surface node (or the
-    // reverse near the pole). The flags describe the part; the height frame
-    // belongs to the terrain.
-    const rootNodes = nodes.filter((n) => n.layer === 'root' || n.type === 0);
-
-    this.rootAuraNodeCount = Math.min(rootNodes.length, ROOT_AURA_CAPACITY);
-    this.rootAuraRadius = this.config.rootAuraRadius;
-
-    const data = new Float32Array(ROOT_AURA_CAPACITY * 4);
-    for (let i = 0; i < this.rootAuraNodeCount; i++) {
-      const node = rootNodes[i];
-      data[i * 4 + 0] = node.position.x;
-      data[i * 4 + 1] = node.position.y;
-      data[i * 4 + 2] = node.position.z;
-      data[i * 4 + 3] = 1.0; // valid flag
-    }
-
-    if (!this.rootAuraTexture) {
-      this.rootAuraTexture = new THREE.DataTexture(
-        data,
-        ROOT_AURA_CAPACITY,
-        1,
-        THREE.RGBAFormat,
-        THREE.FloatType,
-      );
-      this.rootAuraTexture.minFilter = THREE.NearestFilter;
-      this.rootAuraTexture.magFilter = THREE.NearestFilter;
-      this.rootAuraTexture.needsUpdate = true;
-    } else {
-      this.rootAuraTexture.image.data = data;
-      this.rootAuraTexture.needsUpdate = true;
-    }
   }
 
   /** Set sun lighting uniforms. */
@@ -470,6 +424,17 @@ class PlantRenderer {
    */
   setLeafBacklight(dir: THREE.Vector3, color: THREE.Color, intensity: number): void {
     this.meshRenderer?.setSunLight(dir, color, intensity);
+  }
+
+  /**
+   * Where the sun stands, for the shade the body throws on its own soil.
+   *
+   * Passed apart from the light uniforms because the mesh pass projects every
+   * drawn part along it: the shadow is not a decal, it is where each part's ray
+   * meets the ground.
+   */
+  setSunDirection(dir: THREE.Vector3): void {
+    this.meshRenderer?.setSunDirection(dir);
   }
 
   /** Advance animation state. */
@@ -520,18 +485,14 @@ class PlantRenderer {
 
   /** Set Root Sight mode. */
   setRootSightState(
-    enabled: boolean,
+    _enabled: boolean,
     _progress: number,
     _center: THREE.Vector3,
     _radiusM: number,
   ): void {
-    // Only the aura is drawn by this pass: the hole itself belongs to the soil
-    // shader, and roots are exposed by the plant pass's soil test. The cutaway
-    // uniforms this used to write were declared in GLSL and never read.
-    this.uniforms.uRootSightAuraEnabled.value = enabled;
-    this.uniforms.uRootAuraNodeCount.value = this.rootAuraNodeCount;
-    this.uniforms.uRootAuraTex.value = this.rootAuraTexture;
-    this.uniforms.uRootAuraRadius.value = this.rootAuraRadius;
+    // The mesh plant has no separate aura pass. The soil cutaway and the mesh's
+    // own material response are the reveal; the old SDF aura was never drawn
+    // because the quad is disabled, so writing its uniforms was a status lie.
   }
 
   /** Map a T04 signature index onto the shader's three mutation parameters. */
@@ -710,53 +671,13 @@ class PlantRenderer {
     this.uniforms.uTime.value = time;
     this.uniforms.uWindTime.value = time * this.config.windSpeed;
 
-    this.updateLOD(this.camera.position);
-
-    // Always draw the real mesh, at every distance. The SDF path is a fullscreen
-    // quad with depth testing disabled, so its plant was composited over the
-    // terrain no matter where it stood: the player could see roots and stems
-    // through hills, and the plant always looked like it sat in a layer above
-    // the dirt. Mesh geometry is depth-tested by the scene, so terrain, the
-    // Root Sight cavity and the plant sort in one 3D buffer. The plant is a
-    // handful of instanced meshes even at distance, so the LOD saving is not
-    // worth losing correct occlusion.
-    if (this.useMeshL0L1 && this.meshRenderer) {
-      this.meshRenderer.render(deltaTime);
-      if (this.fullscreenQuad) {
-        this.fullscreenQuad.visible = false;
-      }
-    } else {
-      // SDF raymarch path for L2 or when the mesh renderer is disabled.
-      if (this.fullscreenQuad) {
-        this.fullscreenQuad.visible = true;
-        this.fullscreenQuad.renderOrder = 0;
-      }
-      this.meshRenderer?.setVisible(false);
-    }
-  }
-
-  /**
-   * Update LOD from the camera's distance to the plant.
-   *
-   * The mesh renderer draws L0/L1; the raymarcher is reserved for L2, where the
-   * plant is far enough that organic fusion matters more than detail. The
-   * step/epsilon budgets come from plant_renderer.json for each tier.
-   */
-  private updateLOD(cameraPos: THREE.Vector3): void {
-    const distance = cameraPos.distanceTo(this.plantCenter);
-    this.currentLOD =
-      distance <= this.config.l0Distance ? 0 : distance <= this.config.l1Distance ? 1 : 2;
-
-    if (this.currentLOD === 0) {
-      this.uniforms.uMaxSteps.value = this.config.l0RaymarchSteps;
-      this.uniforms.uHitEpsilon.value = this.config.l0RaymarchEpsilon;
-    } else if (this.currentLOD === 1) {
-      this.uniforms.uMaxSteps.value = this.config.l1RaymarchSteps;
-      this.uniforms.uHitEpsilon.value = this.config.l1RaymarchEpsilon;
-    } else {
-      this.uniforms.uMaxSteps.value = this.config.l2RaymarchSteps;
-      this.uniforms.uHitEpsilon.value = this.config.l2RaymarchEpsilon;
-    }
+    // Mesh only, at every distance. The SDF quad has depth testing disabled, so
+    // its plant composited over terrain and could show roots through hills. The
+    // mesh is depth-tested by the scene, so terrain, the Root Sight cavity and
+    // the plant sort in one 3D buffer. A far plant is still a handful of meshes;
+    // losing correct occlusion is not worth a LOD saving.
+    this.meshRenderer?.render(deltaTime);
+    if (this.fullscreenQuad) this.fullscreenQuad.visible = false;
   }
 
   /** Dispose GPU resources. */

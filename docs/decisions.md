@@ -1120,14 +1120,15 @@ because radius follows `cuberoot(mass / nominal)`. A 1.25× form therefore holds
 for damage, drought and repair. Gaining a size mutation fills tissue up to the new
 quota (only in parts already at their base quota, so a reload cannot heal damage);
 shedding one does not. An over-quota body loses `oversize_wilt_per_s` of its
-excess per second, each part thinning as its own mass falls, and stored water,
-minerals and energy above capacity leak at `oversize_leak_per_s`. Both live in
-`config/mutations.json` and apply to the active and dormant paths.
+excess per second, each part thinning as its own mass falls. Stored water,
+minerals and energy are hard-clamped to the smaller capacity in the same tick,
+so they never exceed it while the tissue wilts. The wilt rate lives in
+`config/mutations.json` and applies to the active and dormant paths.
 
 **Consequences.** Shedding a size mutation is a real loss that plays out over
 minutes instead of a visual snap, and a levelled size mutation is a real gain in
 mass, capacity and upkeep. `q³` is harsh (a 25% form is nearly double the mass),
-which is why the wilt and leak rates are config, not code. A part's radius ceiling
+which is why the wilt rate is config, not code. A part's radius ceiling
 widens only with the largest form it was built under, so a shed never shrinks the
 body in one step.
 
@@ -2079,3 +2080,141 @@ validator, so T08A's flag requirement is met without a second flag table.
 DESIGN's T08A heading and config line now name `items.json`. A future item
 category or flag belongs in `items.json` and in the shared item schema, not in a
 deprecated stub.
+
+## ADR-083 — Seeds generate content; state is the only authority
+
+**Status:** accepted 2026-11-23. Applied in DESIGN Part 13.10 §A.
+
+**Context.** An external procedural-systems guide proposed the strong form of a
+good idea: the server sends seeds, genomes and edit logs, every client rebuilds
+the same world, and 10,000 unique players stay affordable because nothing is
+stored. The strong form is false for this project in two places. Most of what a
+client would "rebuild" here is a player's grown body, which is a sequence of
+choices and cannot come from a seed; and the guide's own premise needs
+bit-identical generation, while GPU noise differs between vendors — the same
+caveat `planet-scale.md` §3.2 records for terrain tiles.
+
+**Decision.** Content with no gameplay reader is generated from a seed and a
+coordinate and stored nowhere: ground scatter, wild flora, ground cover, ambient
+placement, textures, patterns, palettes. Content a rule reads is server state:
+plant bodies, damage, inventory, economy, terrain edits. Procedural items are
+records (an id plus genes or a seed), never meshes. The test is mechanical — if
+removing the generator could change a damage number, a price or an owner, it is
+state and the server owns it. Determinism is a property of our rules and hashes
+(ADR-038), never of a physics engine.
+
+**Consequences.** T58/T59 can place a forest or a scatter layer with one row per
+region instead of one per object. A client may recompute a field for a visual
+where divergence cannot change play (rain, splashes, sway, snow drift) and may
+not for anything else. A future "generate it on the client" proposal must name
+the reader it does not have.
+
+## ADR-084 — One field bundle, sampled by systems
+
+**Status:** accepted 2026-11-23. Applied in DESIGN Part 13.10 §B; table and
+rules in `docs/procedural-systems.md` §5.
+
+**Context.** Every system added since T00A has carried its own version of the
+world's inputs: T00A has light, moisture and minerals per tile; `climateField`
+has humidity, cloud, temperature and an orographic lift term; the renderers have
+wind as a shader uniform; water is a field of its own; terrain is a third. The
+result works, but a new system has to choose which of four sources of "wind" to
+copy, and a feature that needs two of them couples to two systems instead of to
+one field.
+
+**Decision.** Light, moisture, minerals, temperature, humidity, wind, water and
+terrain are fields with **one owner each**, one sampling API, and readers that
+sample instead of copying. Only the owner writes a field. Fields are sampled in
+metres in the play frame (the planet is a placement, not a coordinate space). A
+new system declares which fields it reads and which one it writes. Gameplay
+fields are computed server-side or verified against the server; a client
+recomputes a field only for visuals that cannot change a rule's number. Fields
+are state that deep time transforms (T20/T39), not per-session noise.
+
+**Consequences.** Water reading the edited terrain, emote wind, sound synthesis,
+snow drift and future debris all read the same bundle, so a new feature adds a
+reader instead of a system. The cost is discipline: a second "just for now" wind
+uniform is now a defect, and a feature that needs a field to exist before it can
+be built must land the field in its owner's task.
+
+## ADR-085 — The player's body is grown; wild flora is generated
+
+**Status:** accepted 2026-11-23. Applied in DESIGN T59 and Part 13.10 §A.
+
+**Context.** The guide's plant architecture is a genome plus an L-system or
+space-colonization solver, where the same genome always produces the same plant.
+That is a correct architecture for ambient vegetation and wrong for this game:
+the player *is* the organism (RULE_1), growth is a two-step, gene-gated decision
+on a server-validated node graph, and a body generated from a parameter vector
+would delete the decision the game is made of. It would also collide with the
+inheritance honesty rules in Part 1.2, where a heirloom seed is a blank vessel
+and a traded seed must never import someone else's build.
+
+**Decision.** Two kinds of plant, one renderer. The **player's plant** is grown:
+nodes, choices, a versioned snapshot plus event log (ADR-039), never a genome
+replay. **Wild flora** — T59's canopy, T58's scatter — is generated: a species
+record plus a region seed drives a stochastic structure generator, and the
+skeleton feeds the same mesh, animation and collider LOD as a player body.
+Nothing about wild flora is persisted except the stage and the seed. The genome
+vocabulary (parameter vector, rule choice, crossover) belongs to T53 offspring
+seeds and to species records, never to a living player's body.
+
+**Consequences.** The guide's plant material lands in T59 where it is cheap and
+invisible to rules, and stays out of T01. A "procedural plant" request now has an
+answer with a boundary: ambient yes, player no, and the player's own shapes come
+from growth, mutations and proportion rules (ADR-027, ADR-057, ADR-070).
+
+## ADR-086 — Emotes are roles and goals, and coverage is a test
+
+**Status:** accepted 2026-11-23 as an extension of T05. Not built.
+
+**Context.** T05 ships an emote wheel as labels over six cosmetic effects, and
+`config/emotes.json` holds an id, a label, a type and a range. Animating a body
+that a player grew node by node cannot be done by authoring bones: the skeleton
+does not exist until the plant does, and two players' plants share no rig. The
+guide's answer — tag roles at generation time, describe an emote as a goal over
+roles, solve with IK, fall back gracefully, and prove it with generated bodies —
+is the only version of this that survives a procedurally grown plant.
+
+**Decision.** Emotes are data over **roles**, solved at play time. Roles (apex,
+appendage pair, trunk, crown) are derived from the geometry the server already
+sent, not from a rig. An emote is roles plus a target relation, rhythm, amplitude
+and duration, with every shape value body-relative. The hand pair is chosen by
+scoring mirror symmetry, similar length and thickness, reach and height band; the
+apex is the head. The solve is FABRIK with joint limits and is cosmetic (RULE_27).
+The fallback chain is symmetric pair → two best-reaching branches → whole-body
+pulse or sway or leaf movement, so an emote always produces something. Coverage
+is an automated test: thousands of generated bodies, every emote, failing on a
+missed target or a self-intersection.
+
+**Consequences.** Emote authoring is config work, not animation work, and the
+wheel can grow without a rig per mutation. Extreme body shapes are found by the
+test rather than by a player. The cost is a role-assignment pass and a solver in
+the client, both of which are already the shape of the IK work in Part 14.1.4.
+
+## ADR-087 — Sand is a height layer; grain particles are visuals
+
+**Status:** accepted 2026-11-23. Applied in DESIGN T55.
+
+**Context.** T55 specifies materials as cells in a 3D grid with cellular-automaton
+rules, and says "sand collapses" without saying what decides where the sand is.
+A cell grid can do it, but sand is a surface: at a 1 m cell the interesting
+behaviour is a slope, a pile and a hole that fills, and a 3D automaton spends its
+budget on the volume under a dune that nobody can see. The guide's split is
+better and cheaper: a global height layer relaxed toward its angle of repose, and
+local particles that are only a picture.
+
+**Decision.** A granular material's authority is a **height layer** in the terrain
+field, relaxed toward angle of repose at a low cadence, stored as a terrain edit
+when it changes. Near players, grain particles may be simulated client-side
+inside a capped budget for pouring and splashing; when they settle, the settled
+result becomes a server-side height edit. Particles never decide where sand is
+(RULE_4). The same two-scale split applies to any surface-describable material:
+snow depth, ash, mud. Materials that cannot be described by a surface — lava,
+gas, fire — stay in T55's 3D cells.
+
+**Consequences.** Sand, snow and ash become cheap and multiplayer-safe: one
+authoritative surface, one capped visual, and the same compaction policy as any
+other terrain edit (Part 16 item 21). T55 keeps the 3D grid for what genuinely
+needs volume. A new granular material must declare which of the two forms it
+takes before it is specified.

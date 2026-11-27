@@ -129,7 +129,10 @@ export function updateCavityBowl(
     state.rimFlags = new Uint8Array(position.count);
     // The rim is the profile's y = 0 ring, wherever the shell sits this frame.
     const rimY = CAVITY_PROFILE[CAVITY_RIM_RING].y;
-    for (let i = 0; i < position.count; i += 1) {
+    // The collar's top row sits on y=0 too. It is not part of the rim ring:
+    // including it triples the ring and makes the collar copy itself.
+    const limit = (geometry.userData.collarBase as number | undefined) ?? position.count;
+    for (let i = 0; i < limit; i += 1) {
       if (Math.abs(position.getY(i) - rimY) < 1e-4) {
         state.rimIndices.push(i);
         state.rimFlags[i] = 1;
@@ -177,6 +180,23 @@ export function updateCavityBowl(
     // own ground instead, exactly like the cut it backs.
     const localY = (ground[k] + placement.rimOffsetY - bowl.position.y) / placement.verticalScale;
     position.setY(rim[k], Math.max(0, localY));
+  }
+  // The collar is the last two rings of this same geometry. Its top row is the
+  // rim that was just conformed, so the wall under the lip cannot disagree with
+  // the lip about where the cut is.
+  const collarBase = geometry.userData.collarBase as number | undefined;
+  const collarDepthM = (geometry.userData.collarDepthM as number | undefined) ?? 0.4;
+  if (collarBase !== undefined) {
+    const depthLocal = collarDepthM / Math.max(0.01, Math.abs(placement.verticalScale));
+    for (let c = 0; c < rim.length; c += 1) {
+      const rimIndex = rim[c];
+      const top = collarBase + c * 2;
+      const x = position.getX(rimIndex);
+      const y = position.getY(rimIndex);
+      const z = position.getZ(rimIndex);
+      position.setXYZ(top, x, y, z);
+      position.setXYZ(top + 1, x, y - depthLocal, z);
+    }
   }
   position.needsUpdate = true;
   geometry.computeVertexNormals();

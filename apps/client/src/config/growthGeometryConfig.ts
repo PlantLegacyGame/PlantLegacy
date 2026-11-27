@@ -1,4 +1,8 @@
-import { type NodeRadiusProfile, setGrowthGeometryTunables } from '@plant-legacy/shared/growth';
+import {
+  type NodeRadiusProfile,
+  type OrganMorphologyOverride,
+  setGrowthGeometryTunables,
+} from '@plant-legacy/shared/growth';
 
 /** Organism geometry published by `/config/growth`. */
 export interface GrowthGeometryPayload {
@@ -8,6 +12,7 @@ export interface GrowthGeometryPayload {
   segment_taper_exponent?: number;
   socket_inset_ratio?: number;
   node_radius_profiles?: Record<string, NodeRadiusProfile>;
+  organ_morphology?: Record<string, OrganMorphologyOverride>;
 }
 
 /**
@@ -26,6 +31,7 @@ export function applyGrowthGeometry(payload: GrowthGeometryPayload): void {
     jointFlareRatio: payload.joint_flare_ratio,
     segmentTaperExponent: payload.segment_taper_exponent,
     socketInsetRatio: payload.socket_inset_ratio,
+    organMorphology: payload.organ_morphology,
   });
 }
 

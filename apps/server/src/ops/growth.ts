@@ -4,6 +4,7 @@ import {
   type GrowthConfig,
   type NodeRadiusProfile,
   type NodeTypeDefinition,
+  type OrganMorphologyOverride,
   setGrowthGeometryTunables,
 } from '@plant-legacy/shared/growth';
 
@@ -52,6 +53,11 @@ export function loadGrowthConfig(configs: Map<string, ConfigFile>): GrowthConfig
     jointFlareRatio: optionalNumber(configs, 'growth', 'joint_flare_ratio'),
     segmentTaperExponent: optionalNumber(configs, 'growth', 'segment_taper_exponent'),
     socketInsetRatio: optionalNumber(configs, 'growth', 'socket_inset_ratio'),
+    organMorphology: optionalObject<Record<string, OrganMorphologyOverride>>(
+      configs,
+      'growth',
+      'organ_morphology',
+    ),
   });
 
   // The four newer tissues are optional so a config that predates them (and the

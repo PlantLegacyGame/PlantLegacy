@@ -27,7 +27,6 @@ describe('real mutations config (T04)', () => {
     assert.ok(config.levelUp.maxLevel >= 2, 'mutations can be levelled');
     assert.ok(config.levelUp.cardsPerOffer >= 2, 'a level-up is a choice');
     assert.ok(config.oversizeWiltPerS > 0, 'lost size drains over time');
-    assert.ok(config.oversizeLeakPerS > 0, 'lost capacity leaks over time');
     // Snake-case config keys must reach the simulation as effect keys.
     assert.equal(typeof config.levelUp.cardSteps.sizeMultiplier, 'number');
     assert.equal(typeof config.levelUp.cardSteps.energyUpkeepMultiplier, 'number');

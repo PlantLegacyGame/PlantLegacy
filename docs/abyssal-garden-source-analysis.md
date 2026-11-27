@@ -500,7 +500,7 @@ rows are kept because they are the evidence for why this file replaced them.
 
 | Mechanism | Where | Notes |
 |---|---|---|
-| `surfaceNets` | `math.js:60` | Add border sampling and a seam key; keep the grow-by-doubling buffers and the `m===0||m===255` early-out |
+| `surfaceNets` | `math.js:60` | Add border sampling and a seam key; keep the grow-by-doubling buffers and the `m===0\|\|m===255` early-out |
 | `sampler3` | `math.js:117` | Trilinear field access, needed for gradient normals |
 | Designed SDF expressions | `shaders.js:41–88` | Mesa/arch/clear/hole/erosion/strata, as a typed feature list |
 | Connected-component cleanup | `main.js:166–174` | Flip unreachable rock to water; **never** delete authored or player-made geometry |
@@ -692,6 +692,69 @@ Steps 1 and 2 are hours to days and both show up in poses we already have. Step
 3 decides whether 10k plants is a data problem or an art problem; AG reaches the
 same conclusion from a static diorama, and our own debug-overlay figures point
 there independently.
+
+# Part III — the planet direction after 2026-11-27
+
+Part II was written when the ground was a square detail patch and a coarser
+outer patch. The shipped ground is now a 620 m play disc at 2 m cells, a 20 km
+transition ring and a 100 km global-relief globe. The missing capability is not
+a better constant: it is a continuous view-dependent detail chain and a sparse,
+editable crust. The full budget and staged plan are in
+[planet-scale.md](./planet-scale.md); this note records what AG does and does
+not contribute to that direction.
+
+## What AG proves for a planet
+
+- **Surface nets is cheap; the density field is not.** AG meshes 797 k
+  triangles from a 21 M-voxel field in 914 ms on one CPU thread, but its
+  density pass is the multi-second work. That is the right split for T56-style
+  local volumes and the wrong shape for a 100 km crust: 0.5 m cells over one
+  metre of the whole body is about 5 × 10¹¹ cells. The base must stay a field;
+  only edits and authored cave regions become volumes.
+- **Gradient normals make low-poly rock read as rock.** Surface nets plus the
+  field gradient is portable, and it is why a local cave or arch can look
+  smoother than its triangle count suggests.
+- **Multi-interval column queries are the cave primitive.** One height per
+  column cannot represent a floor, a void and a roof. AG's `floorsAt` is the
+  concrete idea to port; it changes scattering, placement and Root Sight
+  queries, not just rendering.
+- **The density-primitive language is content, not a database.** Mesa, arch,
+  erosion, strata and tunnel expressions are a way to author a local volume
+  parametrically. They do not justify storing a planet of voxels.
+- **The atmosphere is the look.** AG's closed-form fog and shared air function
+  remain the model for the surface. The orbit needs a second, raymarched model
+  blended by altitude; the weather state must feed both.
+
+## What AG does not answer
+
+AG has no streaming, no LOD chain, no persistence, no editable world and no
+server. Its 384 m box is resident forever and its camera is confined to a
+156 m cylinder. Copying its single-volume layout to the planet would produce a
+beautiful diorama with no planet around it. Its distance bands over decimated
+instance copies are also not a terrain LOD: they have no tile borders, no
+skirts and no changed collision.
+
+In particular, the earlier instruction **"do not start volumetric terrain
+first"** needs one qualification: do not start a **planet-wide** volumetric
+terrain. Start the sparse crust after the detail chain and the draw-call work,
+because a volume without streaming and collision would be the same static box
+the reference already is.
+
+## What the current direction keeps
+
+- A planet-wide surface field with a view-dependent chain from 2 m near the eye
+to roughly 1.5 km at the limb. Detail follows the camera, not player ownership.
+- A shallow editable crust: sparse 3D chunks for caves, arches and root
+tunnels, revisioned and re-meshed locally, with collision only near the player.
+- Water at four scales: global sea, coarse river/hydrology field, local
+  shallow-water solve and cave aquifer. AG's per-frame water texture is a
+  surface trick, not a planet water model.
+- One weather state shared by the surface atmosphere, the cloud layer and the
+  orbit view. AG's constant sun and bake-once skylight are explicitly not the
+  model.
+- The same instance-store discipline AG teaches: bucket once, bind once, draw
+  runs. That is already the reason the plant renderer's draw-call budget is a
+  separate problem from the ground's triangle budget.
 
 ## Attribution
 

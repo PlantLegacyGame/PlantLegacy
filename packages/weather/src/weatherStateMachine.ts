@@ -37,7 +37,6 @@ export interface WeatherConfig {
   stormWindDamageRate: number;
   lightningFrequencyPerMinute: number;
   lightningDamageRadius: number;
-  lightningDamageAmount: number;
   forecastWindowS: number;
   biomeWeatherModifier: number;
 }

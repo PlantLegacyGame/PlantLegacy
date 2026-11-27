@@ -20,6 +20,27 @@ export {
   DEFAULT_CAVITY_OPTIONS,
 } from './cavityField.ts';
 export {
+  clampLatitude,
+  directionToGeodetic,
+  formatGeodetic,
+  formatGeodeticShort,
+  type GeodeticCoordinate,
+  geodeticDistanceM,
+  geodeticToDirection,
+  geodeticToLocal,
+  isLatitudeInRange,
+  isLongitudeInRange,
+  type LocalPoint,
+  localSurfaceY,
+  localToGeodetic,
+  type ParsedCoordinate,
+  parseGeodeticPair,
+  parseLatitude,
+  parseLongitude,
+  planetCurveDrop,
+  wrapLongitude,
+} from './geodetic.ts';
+export {
   angleOfReposeRad,
   bulkDensityKgM3,
   cavityCollapseRatePerS,
@@ -33,6 +54,23 @@ export {
   type SoilPhysicsParams,
   voidRatio,
 } from './soilPhysics.ts';
+export {
+  areaCoordinateLabel,
+  areaDistanceFromOriginM,
+  areaSeparationM,
+  type NamedSpawnArea,
+  type OccupiedPoint,
+  type PaidSpawnConfig,
+  type ResolveSpawnInput,
+  resolveSpawn,
+  type SeedArchetype,
+  type SeedArchetypeStats,
+  type SpawnFailure,
+  type SpawnFailureReason,
+  type SpawnResolution,
+  type SpawnResult,
+  type SpawnSelection,
+} from './spawn.ts';
 export {
   type SphericalCell,
   type SphericalGridOptions,

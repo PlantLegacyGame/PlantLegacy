@@ -389,20 +389,28 @@ export interface MutationLevelCost {
  * Energy is a base, plus a step per level already gained, plus a part that
  * scales with the plant's stored biomass, so the same mutation is affordable to
  * a seedling and a real commitment to a mature plant. Biomass is a share of the
- * body, floored so a level always costs some tissue.
+ * body, floored so a level always costs some tissue. When the plant's energy
+ * capacity is known the energy part is capped at `maxEnergyShareOfCapacity` of it.
  */
 export function levelUpCost(
   plant: Plant,
   config: MutationsConfig,
   currentLevel: number,
+  energyCapacity?: number,
 ): MutationLevelCost {
   const steps = Math.max(0, currentLevel - 1);
   const rules = config.levelUp;
   const mass = Math.max(0, plant.totalBiomass);
-  const energy =
+  const uncapped =
     rules.baseEnergyCost +
     rules.energyCostPerLevel * steps +
     mass * (rules.energyCostPerBiomass + rules.energyCostPerBiomassPerLevel * steps);
+  // The bill is never more than a share of what the plant can store, so a full
+  // tank always pays for a level whatever the body's size (C11).
+  const energy =
+    energyCapacity === undefined
+      ? uncapped
+      : Math.min(uncapped, energyCapacity * rules.maxEnergyShareOfCapacity);
   const biomass = Math.max(
     rules.minBiomassCost,
     mass * (rules.baseBiomassFraction + rules.biomassFractionPerLevel * steps),
@@ -479,11 +487,12 @@ export function checkLevelUp(
   plant: Plant,
   config: MutationsConfig,
   mutationId: string,
+  energyCapacity?: number,
 ): LevelUpCheck {
   const rules = config.levelUp;
   const held = heldMutation(plant, mutationId);
   const level = held ? mutationLevel(held) : 1;
-  const cost = levelUpCost(plant, config, level);
+  const cost = levelUpCost(plant, config, level, energyCapacity);
   const base = { level, maxLevel: rules.maxLevel, cost };
   if (!held) return { ok: false, reason: 'mutation_not_held', ...base };
   if (level >= rules.maxLevel) return { ok: false, reason: 'max_level', ...base };
@@ -517,8 +526,9 @@ export function applyLevelUp(
   mutationId: string,
   cardId: string,
   offers: Array<{ id: string }>,
+  energyCapacity?: number,
 ): LevelUpResult {
-  const check = checkLevelUp(plant, config, mutationId);
+  const check = checkLevelUp(plant, config, mutationId, energyCapacity);
   if (!check.ok) return { ok: false, reason: check.reason };
   if (!offers.some((offer) => offer.id === cardId)) {
     return { ok: false, reason: 'card_not_offered' };

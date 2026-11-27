@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { clientAddressFromRequest } from '../clientAddress.ts';
 import type { AccountsService } from './service.ts';
 
 function sendJson(response: ServerResponse, status: number, body: unknown): void {
@@ -73,16 +74,7 @@ export function createAccountsHandlers(
   const maxBodyBytes = options.maxBodyBytes ?? 16384;
 
   function getClientIp(req: IncomingMessage): string {
-    // X-Forwarded-For is client-controlled unless a proxy rewrites it, so it may
-    // only be trusted when the deployment opts in. Otherwise every caller could
-    // mint a new identity per request and defeat rate limits and lockout.
-    if (options.trustProxy) {
-      const forwarded = req.headers['x-forwarded-for'];
-      if (forwarded) {
-        return (Array.isArray(forwarded) ? forwarded[0] : forwarded).split(',')[0].trim();
-      }
-    }
-    return req.socket.remoteAddress ?? 'unknown';
+    return clientAddressFromRequest(req, options.trustProxy ?? false);
   }
 
   function getUserAgent(req: IncomingMessage): string | null {

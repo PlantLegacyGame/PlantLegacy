@@ -240,10 +240,10 @@ describe('sun and moon grading', () => {
   it('warms the sun steadily as it drops, without a jump', () => {
     const samples = [0.4, 0.3, 0.2, 0.1, 0.04].map((elev) => sunWarmth(elev));
     for (let i = 1; i < samples.length; i += 1) {
-      assert.ok(samples[i]! >= samples[i - 1]!, 'warmth must not go backwards');
+      assert.ok((samples[i] ?? 0) >= (samples[i - 1] ?? 0), 'warmth must not go backwards');
     }
-    assert.ok(samples[0]! < 0.3, 'still fairly white a little above the horizon');
-    assert.ok(samples[samples.length - 1]! > 0.85, 'nearly full sunset on the horizon');
+    assert.ok((samples[0] ?? 1) < 0.3, 'still fairly white a little above the horizon');
+    assert.ok((samples[samples.length - 1] ?? 0) > 0.85, 'nearly full sunset on the horizon');
   });
 
   it('drops to no warmth below the horizon', () => {
@@ -328,7 +328,8 @@ describe('exposure grade', () => {
   it('moves continuously through sunset, with no step', () => {
     const samples = [0.5, 0.3, 0.1, 0.0, -0.1, -0.5].map((elev) => gradeExposure(elev, cfg));
     for (let i = 1; i < samples.length; i += 1) {
-      assert.ok(Math.abs(samples[i]! - samples[i - 1]!) < 0.12, 'no jump between hours');
+      const previous = samples[i - 1] ?? 0;
+      assert.ok(Math.abs((samples[i] ?? 0) - previous) < 0.12, 'no jump between hours');
     }
   });
 });

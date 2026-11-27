@@ -6,7 +6,11 @@
  * single table: the SDF raymarcher, the WebGPU mesh pass and Plant Lab all read
  * it, so the same plant looks the same on both paths.
  */
-import { resolveDrawnRadius, seedBodyHalfHeight } from '@plant-legacy/shared/growth';
+import {
+  organMorphologyFor,
+  resolveDrawnRadius,
+  seedBodyHalfHeight,
+} from '@plant-legacy/shared/growth';
 import * as THREE from 'three';
 import type { PlantNodeData } from './plantNodeData.js';
 
@@ -45,49 +49,47 @@ export function getNodeTypeString(node: PlantNodeData): string {
  * while every other node keeps its legacy primitive.
  */
 export function nodeTypeToSdfCode(nodeType: string): number {
-  switch (nodeType) {
-    case 'seed':
-      return 1;
-    case 'radicle':
-    case 'root':
-    case 'lateral_root':
-      return 2;
-    case 'stem':
-    case 'branch':
-    case 'vine':
-      return 3;
-    case 'leaf':
-    case 'cotyledon':
-      return 4;
-    case 'flower':
-    case 'spore_sac':
-      return 5;
-    default:
-      return 0;
+  const type = nodeType.toLowerCase();
+  if (type === 'seed') return 1;
+  if (
+    type === 'radicle' ||
+    type === 'root' ||
+    type === 'lateral_root' ||
+    type === 'rhizome' ||
+    type === 'pneumatophore' ||
+    type === 'tuber'
+  ) {
+    return 2;
   }
+  if (
+    type === 'stem' ||
+    type === 'branch' ||
+    type === 'trunk' ||
+    type === 'vine' ||
+    type === 'culm' ||
+    type === 'stolon' ||
+    type === 'thorn'
+  ) {
+    return 3;
+  }
+  if (type === 'leaf' || type === 'cotyledon' || type === 'floating_leaf') return 4;
+  if (type === 'flower' || type === 'spore_sac') return 5;
+  return 0;
 }
 
 /** Node type to SDF primitive mapping. */
 export function getSDFPrimitive(nodeType: string): SDFPrimitive {
-  switch (nodeType) {
-    case 'stem':
-    case 'branch':
-    case 'vine':
-    case 'root':
-    case 'radicle':
-    case 'lateral_root':
-      return SDFPrimitive.CAPSULE;
-    case 'seed':
-      return SDFPrimitive.ELIPSOID;
-    case 'leaf':
-    case 'cotyledon':
-      return SDFPrimitive.DISK;
-    case 'flower':
-    case 'spore_sac':
-      return SDFPrimitive.CONE;
-    default:
-      return SDFPrimitive.CAPSULE;
+  const morphology = organMorphologyFor(nodeType);
+  if (morphology.family === 'seed') return SDFPrimitive.ELIPSOID;
+  if (morphology.family === 'foliage') return SDFPrimitive.DISK;
+  if (morphology.family === 'reproductive') return SDFPrimitive.CONE;
+  if (morphology.crossSection === 'lobed' || morphology.crossSection === 'hollow') {
+    return SDFPrimitive.ELIPSOID;
   }
+  if (morphology.family === 'shoot' || morphology.family === 'runner') {
+    return SDFPrimitive.CAPSULE;
+  }
+  return SDFPrimitive.CAPSULE;
 }
 
 const BASE_NODE_COLORS: Readonly<Record<string, readonly [number, number, number]>> = {
@@ -102,6 +104,14 @@ const BASE_NODE_COLORS: Readonly<Record<string, readonly [number, number, number
   cotyledon: [0.25, 0.6, 0.2],
   flower: [0.95, 0.75, 0.85],
   spore_sac: [0.7, 0.55, 0.4],
+  trunk: [0.42, 0.29, 0.19],
+  rhizome: [0.62, 0.46, 0.32],
+  culm: [0.38, 0.55, 0.22],
+  floating_leaf: [0.25, 0.62, 0.24],
+  pneumatophore: [0.62, 0.48, 0.3],
+  thorn: [0.4, 0.3, 0.2],
+  stolon: [0.42, 0.58, 0.24],
+  tuber: [0.58, 0.42, 0.26],
 };
 
 const DEFAULT_NODE_COLOR: readonly [number, number, number] = [0.5, 0.5, 0.5];

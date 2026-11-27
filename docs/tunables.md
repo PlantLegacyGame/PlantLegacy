@@ -1,4 +1,4 @@
-33 |28 |14 |1 |14 |# Tunables
+# Tunables
 
 Every gameplay and ops value lives in `config/<system>.json` (RULE_3). This page
 is the index: which file owns which system, what is populated today, and how many
@@ -53,15 +53,15 @@ owning task fills it.
 | File | Owner | Status | Values |
 |---|---|---|---|
 | `account_progress` | T08B | stub | 0 |
-| `accounts` | T08C | active | 27 |
+| `accounts` | T08C | active | 28 |
 | `achievements` | T08B | stub | 0 |
 | `annotations` | T19 | stub | 0 |
 | `anticheat` | T41 | stub | 0 |
-| `archetypes` | T12 | stub | 0 |
+| `archetypes` | T12 | active | 1 |
 | `audio` | C06 | stub | 0 |
 | `boosters` | T13A | stub | 0 |
 | `campaign` | T32 | stub | 0 |
-| `chat` | T05 | active | 4 |
+| `chat` | T05 | active | 5 |
 | `climate` | T07 | active | 22 |
 | `climate_memory` | T39 | stub | 0 |
 | `clips` | T35 | stub | 0 |
@@ -71,7 +71,7 @@ owning task fills it.
 | `damage` | T06 | active | 23 |
 | `daynight` | T07 | active | 4 |
 | `deep_time` | T20 | stub | 0 |
-| `dev` | D01 | active | 14 |
+| `dev` | D01 | active | 7 |
 | `emotes` | T05 | active | 1 |
 | `epoch_map` | T37 | stub | 0 |
 | `extraction` | T51 | stub | 0 |
@@ -80,7 +80,7 @@ owning task fills it.
 | `gift_bundles` | T45 | stub | 0 |
 | `gift_packs` | T50 | stub | 0 |
 | `gifts` | T29 | stub | 0 |
-| `growth` | T01 | active | 66 |
+| `growth` | T01 | active | 67 |
 | `growth_scale` | T23 | stub | 0 |
 | `guilds` | T44 | stub | 0 |
 | `heirlooms` | T06A | stub | 0 |
@@ -97,26 +97,26 @@ owning task fills it.
 | `mutations` | T04 | active | 60 |
 | `mutation_visuals` | T04 | active | 3 |
 | `naming` | T17 | stub | 0 |
-| `net_proto` | T03P | draft | 14 |
+| `net_proto` | T03P | draft | 19 |
 | `network` | T03 | active | 2 |
 | `observation` | T28 | stub | 0 |
 | `onboarding` | T00A | active | 3 |
 | `ops` | O01 | active | 17 |
-| `paid_spawn` | T21 | stub | 0 |
+| `paid_spawn` | T21 | active | 5 |
 | `palette` | C03 | draft | 2 |
 | `parasitism` | T10 | stub | 0 |
 | `persistence` | T26 | stub | 0 |
 | `physics` | C02c | active | 14 |
-| `plant_renderer` | C02 | active | 33 |
+| `plant_renderer` | C02 | active | 36 |
 | `prestige` | T08B | stub | 0 |
 | `profiles` | T47 | stub | 0 |
 | `relics` | T18 | stub | 0 |
-| `render` | C01 | active | 132 |
+| `render` | C01 | active | 137 |
 | `reports` | T05 | active | 5 |
 | `reproduction` | T53 | stub | 0 |
 | `reputation` | T43 | stub | 0 |
-| `resources` | T00A | draft | 50 |
-| `root_sight` | T02 | active | 27 |
+| `resources` | T00A | draft | 51 |
+| `root_sight` | T02 | active | 28 |
 | `session` | T08 | stub | 0 |
 | `shop` | C05 | active | 4 |
 | `spectating` | T30 | stub | 0 |
@@ -132,16 +132,16 @@ owning task fills it.
 | `tutorial` | T33 | stub | 0 |
 | `ui` | C01 | active | 36 |
 | `uproot` | T06 | active | 19 |
-| `water` | T31 | active | 33 |
-| `weather` | T07 | active | 19 |
+| `water` | T31 | active | 37 |
+| `weather` | T07 | active | 18 |
 | `world` | T03 | active | 17 |
 
 
-Total: **83 files**; 34 populated and 49 stubs (4 of them `draft`, 2 `deprecated`).
+Total: **83 files**; 36 populated and 47 stubs (4 of them `draft`, 2 `deprecated`).
 
 **This line owns the count.** Other documents link here rather than quoting a
 number (ADR-049).
-Populated: `accounts`, `chat`, `climate`, `compliance`, `controls`, `damage`, `daynight`, `dev`, `emotes`, `growth`, `items`, `mutations`, `mutation_visuals`, `net_proto`, `network`, `onboarding`, `ops`, `palette`, `physics`, `plant_renderer`, `render`, `reports`, `resources`, `root_sight`, `shop`, `spores`, `terrain`, `terrain_volume`, `tumbling`, `ui`, `uproot`, `water`, `weather`, `world`.
+Populated: `accounts`, `archetypes`, `chat`, `climate`, `compliance`, `controls`, `damage`, `daynight`, `dev`, `emotes`, `growth`, `items`, `mutations`, `mutation_visuals`, `net_proto`, `network`, `onboarding`, `ops`, `paid_spawn`, `palette`, `physics`, `plant_renderer`, `render`, `reports`, `resources`, `root_sight`, `shop`, `spores`, `terrain`, `terrain_volume`, `tumbling`, `ui`, `uproot`, `water`, `weather`, `world`.
 
 ## One key name, two files
 
@@ -156,10 +156,16 @@ more agreement than exists:
 - `terrain_radius` (`render`) and `patch_radius_m` (`terrain`) are the same 620 m
   by intent: one is the collider/sky-dome radius, the other the ground patch.
   Change them together.
-- `root_aura_radius` is declared twice and **read from neither** — both plant
-  passes take a literal 3.0. E19 in [`bug-inventory.md`](./bug-inventory.md).
-- `lightning_damage_amount` is 8 in `damage` (the value the pipeline bills) and 25
-  in `weather` (parsed, never read). E20 in the same file.
+
+The other two were defects, not documented pairs, and are gone:
+
+- `root_aura_radius` was declared in `render` (6) and `plant_renderer` (3) and read
+  from neither — both plant passes took a literal 3.0. One key now,
+  `root_sight.aura_radius`, read by the SDF pass and the WebGPU pass alike (E19).
+- `lightning_damage_amount` was 8 in `damage` (the value the pipeline billed) and
+  25 in `weather` (parsed, never read). `damage` is the only copy, and the
+  `WEATHER_STRIKE` event reports what the bolt actually took `plantsHit` and
+  `totalDamage` instead of a second constant being quoted anywhere (E20).
 
 `photosynthesis_energy_per_second`, `evaporation_per_s` and the `webgpu_tier*`
 thresholds also repeat. Growth's energy per second is not resources' energy per
@@ -167,6 +173,18 @@ photosynthetic unit — two subsystems, two meanings. The `dev` copies of the
 `webgpu_*` and camera keys are **not** live overrides: the dev panel draws them
 from `/dev/config` and `applyDevConfig` refuses them, so `render`'s values are
 what runs (E21).
+
+### Renderer gates added in the 2026-11-27 pass
+
+- `render.webgpu_enabled` is still the only WebGPU gate. Its value in
+  `config/render.json` is `false`; the mesh pass is what gameplay draws. The
+  WebGPU canvas, its analytic occlusion and `PlantMeshBuilder` are not on the
+  shipping path, and moving to WebGPU later means migrating the whole scene's
+  depth and picking, not flipping this key.
+- `PlantRenderer`'s `sdfDevEnabled` is a code-level dev flag, not a config key.
+  It defaults to `false`; only then is the SDF fullscreen quad created and fed a
+  frame. Gameplay no longer packs nodes for it, updates a frame, writes LOD or
+  draws an aura. `pnpm config:keys` therefore has no new key to find.
 
 ## Approved V5.4 config files (not created yet)
 

@@ -5,9 +5,11 @@ Phase 1 foundation is in place, together with the Gate 0 networking gate and a
 first procedural-rendering prototype. Growth simulation, persistence, accounts,
 chat, weather, day/night, world drops and the first economy slice are
 implemented. Economy is not finished: the shop, spore purse and pouch are live,
-but the inventory and purse are still in memory.
+the pouch and purse survive a restart through `player_state`, and trade, mail
+and listings are not built.
 
-**Source of truth:** [`DESIGN.md`](./DESIGN.md) (Master Build Plan v5.3.1). Every
+**Source of truth:** [`DESIGN.md`](./DESIGN.md) (Master Build Plan v5.3.2, plus
+the v5.4 addendum of 2026-11-23). Every
 task, rule and tunable comes from there. This repository implements **T00, O01,
 T03P, C01, T00A** (resource model + onboarding), **T01** (growth simulation),
 **T03** (persistence, offline tiers, interest management, event bus),
@@ -18,8 +20,8 @@ emotes, block, report),
 **C02b slice** (WebGPU compute-driven plant LOD with WebGL2 fallback), **D01**
 (dev settings), **T06** (damage, uproot, tumbling, reroot crawl, kill credit and
 collectible drops; in-browser checklist pending), **T13/C05** (spore purse and
-shop, in memory), **T08A** (inventory UI and pouch, in memory; Postgres
-persistence still pending), and
+shop), **T08A** (inventory UI, pouch and purse, row-locked in Postgres; trade,
+mail and listings still open), and
 **T25** (shared terrain field, LOD ground colliders, plant colliders, sparse
 persistent soil edits; client height-texture application still pending).
 
@@ -54,13 +56,13 @@ pnpm verify
 | `pnpm dev` | One-command local stack (install if needed, server + Vite dev server) |
 | `pnpm dev:server` | Server only, watch mode |
 | `pnpm dev:client` | Vite dev server only (proxies `/health`, `/ready`, `/config`, `/ws`) |
-| `pnpm verify` | The CI chain: lint + typecheck + config validator + docs check + unit tests |
+| `pnpm verify` | The CI chain: lint + typecheck + config validator + config key check + docs check + palette check + unit tests |
 | `pnpm verify:ci` | `verify` plus the production build |
 | `pnpm lint` / `pnpm lint:fix` | Biome check / autofix |
 | `pnpm typecheck` | `tsc` across every workspace package |
 | `pnpm config:validate` | Validate all `config/*.json`; **rejects `rarity`** |
-| `pnpm docs:check` | Links, config counts, protocol table and duplicate prose across `docs/` |
-| `pnpm test` | `node --test` in every package |
+| `pnpm docs:check` | Links, config counts, protocol table, duplicate prose, and every Default cell that quotes `config/` |
+| `pnpm test` | `node --test` in every package, plus the `tools/` suites |
 | `pnpm bot` | Headless player bots against a running server (`-- --bots 2 --minutes 5`); see [`tools/sim-bots`](./tools/sim-bots/README.md) |
 | `pnpm build` | Vite production build → `apps/client/dist` |
 | `pnpm start` | Start the server (no watch) |
@@ -74,7 +76,7 @@ packages/shared/      Types, config loader/validator, protocol, events, ids
 tools/config-validator/  CLI used by CI and `pnpm config:validate`
 tools/docs-check/     Documentation guardrail (`pnpm docs:check`)
 tools/dev.mjs         One-command local stack
-config/               80 tunable files in extended-1 format + _meta (count owned by docs/tunables.md)
+config/               83 tunable files in extended-1 format + _meta (count owned by docs/tunables.md)
 docs/                 Design notes, tunables, task records, checklists
 ops/                  Docker compose, staging `.env`, deploy and backup placeholders
 .github/workflows/    CI (verify) and staging static deploy
@@ -102,9 +104,9 @@ Every tunable lives in `config/<system>.json` in the **extended-1** format:
   the build if one appears.
 - `account_bound: true` forces `tradeable`, `mailable` and `listable` to false
   (RULE_23).
-- Stubs carry `values: {}` until their owning task fills them. **Thirty-one**
-  files carry values today and 49 are stubs (3 of them `draft`); the
-  authoritative list and count are owned by
+- Stubs carry `values: {}` until their owning task fills them. **Thirty-four**
+  files carry values today and 49 are stubs (4 of them `draft`, 2 `deprecated`);
+  the authoritative list and count are owned by
   [`docs/tunables.md`](./docs/tunables.md) rather than duplicated here.
 
 ## Environment
@@ -157,10 +159,12 @@ together.
 | What happened, when | [`docs/history.md`](./docs/history.md) — append-only, not current state |
 | What comes next | [`docs/tasks/README.md`](./docs/tasks/README.md) — the ordered backlog; renderer work is ranked in [`docs/abyssal-garden-source-analysis.md`](./docs/abyssal-garden-source-analysis.md) Part II §15 |
 | What to fix in the built system, in order | [`docs/improvement-plan.md`](./docs/improvement-plan.md) |
-| The 2026-11-16 verified defect pass, fix by fix | [`docs/bugfix-plan.md`](./docs/bugfix-plan.md) |
+| The 2026-11-16 defect pass, fix by fix (resolved; kept as a record) | [`docs/bugfix-plan.md`](./docs/bugfix-plan.md) |
 | What is broken right now, with evidence and status | [`docs/bug-inventory.md`](./docs/bug-inventory.md) |
 | Every feature the game contains, one row per feature | [`docs/feature-inventory.md`](./docs/feature-inventory.md) |
+| Which part of an external procedural-systems guide we already had, took, or refused, and why | [`docs/procedural-systems.md`](./docs/procedural-systems.md) |
 | How to ship it | [`docs/deploy.md`](./docs/deploy.md) |
+| What the interface is made of, surface by surface | [`docs/ui-inventory.md`](./docs/ui-inventory.md) |
 | Per-task evidence and checklists | [`docs/tasks/`](./docs/tasks/), [`docs/checklists/`](./docs/checklists/) |
 
 Supporting references: [`docs/controls.md`](./docs/controls.md) (bindings),
@@ -190,7 +194,7 @@ where earlier descriptions of it were wrong, and the order to adopt it in are in
 Its nine review decisions are ADR-041 to ADR-049 in
 [`docs/decisions.md`](./docs/decisions.md).
 
-Nothing in that program changes the current 80-file config count (owned by
+Nothing in that program changes the current 83-file config count (owned by
 [`docs/tunables.md`](./docs/tunables.md)) or the
 single-process World until the individual task is started.
 

@@ -138,6 +138,22 @@ export function terrainValueNoise(x: number, z: number, seed: number): number {
  */
 export function terrainUnitAt(params: TerrainFieldParams, x: number, z: number): number {
   if (!Number.isFinite(x) || !Number.isFinite(z)) return 0.5;
+  // Domain warp. Value noise on a square lattice puts every feature on the
+  // lattice's own rows: a hillside built from it reads as a dune with two or
+  // three long, parallel crests. Sampling the field's coarse noise first and
+  // shifting the sample point by it lets those crests bend around each other.
+  // The displacement is authored in the field's own units (a fraction of the
+  // base wavelength), so a coarser or finer field warps by the same amount.
+  const wavelength = 1 / Math.max(0.0001, params.baseFrequency);
+  const warpFrequency = Math.max(0.0001, params.baseFrequency) * 0.6;
+  const warpSeed = (params.seed ^ 0x5f356495) | 0;
+  const warpX =
+    terrainValueNoise(x * warpFrequency + 11.3, z * warpFrequency - 7.9, warpSeed) - 0.5;
+  const warpZ =
+    terrainValueNoise(x * warpFrequency - 4.7, z * warpFrequency + 19.1, warpSeed + 7919) - 0.5;
+  const warpReachM = Math.min(140, wavelength * 0.55);
+  x += warpX * warpReachM;
+  z += warpZ * warpReachM;
   const octaves = Math.max(1, Math.min(6, Math.round(params.octaves)));
   const frequencyStep = Math.max(1.1, params.lacunarity);
   const gain = Math.max(0, Math.min(1, params.gain));

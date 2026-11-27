@@ -202,6 +202,12 @@
             "range": [0, 1],
             "notes": "Moisture or mineral change below this is not worth a RESOURCE_UPDATE."
         },
+        "soil_step_interval_s": {
+            "type": "number",
+            "value": 0.25,
+            "range": [0.05, 2],
+            "notes": "Wall-clock seconds between whole-grid soil passes (moisture, minerals, diffusion). Was a literal 0.25 in resourceWorld.ts (E26): at 20 Hz it runs the grid four times a second, which is fast enough that a walking root never reads a stale tile and slow enough that the passes are not a measurable share of the tick."
+        },
         "diffusion_rate": {
             "type": "number",
             "value": 0.03,

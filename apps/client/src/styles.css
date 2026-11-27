@@ -41,6 +41,13 @@
    No website chrome — just game HUD that feels like part of the soil. */
 
 :root {
+  /* The pane's width in the overlay's own layout pixels. Everything inside the
+     zoom below measures lengths after zoom is applied, but 100vw does not scale
+     with it: a max-width of 100vw inside the overlay came out a whole scale too
+     small, and the action bar answered by keeping its natural width - its
+     buttons hung out of the rounded frame and over the world (U06). Any rule
+     inside the zoom that has to name the pane's width uses this, not 100vw. */
+  --pl-hud-vw: calc(100vw / var(--pl-ui-scale, 1));
   /* A01: the HUD has no colours of its own. Every step below is a palette step
      (`--palette-<ramp>-<step>`, published at boot from config/palette.json);
      where the sheet needs a value between two ladder stops it mixes them in
@@ -652,6 +659,11 @@ html[data-pl-entry-step]:not([data-pl-entry-step="world"]) #cinematic-overlay {
   max-width: var(--grow-card-max, 196px);
   min-width: 0;
   display: flex;
+  /* A real button, reset to the card's own type and colours. */
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  appearance: none;
   flex-direction: column;
   box-sizing: border-box;
   margin: 0;
@@ -686,6 +698,12 @@ html[data-pl-entry-step]:not([data-pl-entry-step="world"]) #cinematic-overlay {
   box-shadow:
     0 16px 32px rgba(0, 0, 0, 0.5),
     0 0 0 2px var(--leaf-glow);
+}
+
+.hud-grow-option:focus-visible {
+  outline: 2px solid var(--leaf-300);
+  outline-offset: 3px;
+  border-color: var(--leaf-400);
 }
 
 .hud-grow-option.is-unavailable {
@@ -757,55 +775,100 @@ html[data-pl-entry-step]:not([data-pl-entry-step="world"]) #cinematic-overlay {
   }
 }
 
-/* Detail drawer: absolutely positioned above the card, so opening it never
-   reflows the row or moves the other cards. */
-#growth-options .hud-grow-option__details {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: calc(100% + 8px);
-  z-index: 1;
-  margin: 0;
-  /* On a short window the drawer would climb past the top of the screen; the
-     panel clips it instead of letting it run off. */
+/* Field note: an option's requirements and meaning, docked at the bottom left
+   of the hud instead of floating over the plant.
+
+   The drawer used to open above the card it belonged to - straight over the aim
+   gizmo, which is the one thing the player is trying to drag while reading it.
+   A note does not hover over the world: it is a fixed slip of paper at the edge
+   of the screen, it paints below the cards, and it never takes the pointer, so
+   the aim can be dragged underneath it. It is deliberately nothing like the
+   other panels: one leaf-coloured rule down its left edge, a stencilled caption
+   and soil-dark glass, no header row and no close button. */
+#growth-note {
+  position: fixed;
+  /* Clear of the tool rail (55 px at x = 14): the note used to sit on top of the
+     bottom two keys, which made the rail look broken exactly while the player
+     was reaching for the Grow flow. */
+  left: 86px;
+  bottom: clamp(132px, 20vh, 178px);
+  z-index: 260;
+  width: 248px;
+  max-width: 44vw;
   max-height: 46vh;
   overflow: hidden;
-  padding: 10px 12px;
-  border: 1px solid var(--hud-border);
-  border-radius: 12px;
-  background: linear-gradient(
-    160deg,
-    color-mix(in oklab, var(--palette-foliage-900) 80%, black),
-    color-mix(in oklab, var(--palette-foliage-900) 50%, black)
-  );
-  box-shadow: 0 14px 30px rgba(0, 0, 0, 0.55);
+  box-sizing: border-box;
+  padding: 10px 12px 11px 13px;
+  border: 1px solid rgba(140, 170, 100, 0.24);
+  border-left: 3px solid var(--leaf-500);
+  border-radius: 3px 12px 12px 3px;
+  background: linear-gradient(158deg, rgba(25, 32, 20, 0.94), rgba(10, 13, 8, 0.96));
+  box-shadow:
+    0 12px 26px rgba(0, 0, 0, 0.46),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04);
   font-size: 0.7rem;
-  line-height: 1.5;
+  line-height: 1.45;
   color: var(--warm-ink);
   white-space: normal;
   pointer-events: none;
   opacity: 0;
   visibility: hidden;
-  transform: translateY(10px);
-  transform-origin: bottom center;
+  transform: translateY(6px);
   transition:
     opacity 0.16s ease,
-    transform 0.22s cubic-bezier(0.2, 0.8, 0.3, 1),
-    visibility 0s linear 0.22s;
+    transform 0.18s ease,
+    border-left-color 0.18s ease,
+    visibility 0s linear 0.18s;
+  animation: none;
 }
 
-/* Small notch so the drawer reads as attached to its card. */
-#growth-options .hud-grow-option__details::after {
+#growth-note.is-open {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
+  transition:
+    opacity 0.16s ease,
+    transform 0.18s ease,
+    border-left-color 0.18s ease,
+    visibility 0s;
+}
+
+/* Pinned: the option is chosen, so the note stays while the player aims. */
+#growth-note.is-pinned {
+  /* The amber of a gene-held aim: the note is pinned to an aim in progress. */
+  border-left-color: var(--gold-400);
+  background: linear-gradient(158deg, rgba(30, 35, 22, 0.95), rgba(12, 15, 9, 0.97));
+}
+
+#growth-note__title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 6px;
+  font-size: 0.54rem;
+  font-weight: 800;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--leaf-300);
+}
+
+#growth-note__title::before {
   content: "";
-  position: absolute;
-  left: 50%;
-  bottom: -5px;
-  width: 10px;
-  height: 10px;
-  background: color-mix(in oklab, var(--palette-foliage-900) 50%, black);
-  border-right: 1px solid var(--hud-border);
-  border-bottom: 1px solid var(--hud-border);
-  transform: translateX(-50%) rotate(45deg);
+  flex: 0 0 auto;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--leaf-400);
+  box-shadow: 0 0 6px var(--leaf-glow);
+}
+
+#growth-note.is-pinned #growth-note__title {
+  color: var(--bone-200);
+}
+
+#growth-note.is-pinned #growth-note__title::before {
+  background: var(--gold-400);
+  box-shadow: 0 0 6px rgba(242, 227, 160, 0.5);
 }
 
 .hud-grow-option__requires-label {
@@ -817,18 +880,28 @@ html[data-pl-entry-step]:not([data-pl-entry-step="world"]) #cinematic-overlay {
   text-transform: uppercase;
 }
 
+/* Requirements read as little cost tags in the note, not a bullet list: the
+   costs are the numbers the player checks most, and three lines of "• 2.0
+   minerals" is more height than the note can spare. */
 .hud-grow-option__requires {
-  display: grid;
-  gap: 2px;
-  margin: 0 0 7px 14px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 0 0 6px;
   padding: 0;
+  list-style: none;
   color: var(--bone-200);
-  font-size: 0.65rem;
-  line-height: 1.35;
+  font-size: 0.63rem;
+  line-height: 1.3;
 }
 
-.hud-grow-option__requires li::marker {
-  color: var(--leaf-400);
+.hud-grow-option__requires li {
+  padding: 1px 6px;
+  border: 1px solid rgba(140, 170, 100, 0.22);
+  border-radius: 999px;
+  background: rgba(60, 82, 40, 0.22);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .hud-grow-option__info {
@@ -844,15 +917,11 @@ html[data-pl-entry-step]:not([data-pl-entry-step="world"]) #cinematic-overlay {
   line-height: 1.35;
 }
 
-#growth-options .hud-grow-option:hover .hud-grow-option__details,
-#growth-options .hud-grow-option.selected .hud-grow-option__details {
-  opacity: 1;
-  visibility: visible;
-  transform: translateY(0);
-  transition:
-    opacity 0.18s ease,
-    transform 0.24s cubic-bezier(0.2, 0.8, 0.3, 1),
-    visibility 0s;
+/* A card under the pointer lifts a little, so the note it fills is answered by
+   the card it belongs to even when the pointer is between them. */
+#growth-options .hud-grow-option:hover,
+#growth-options .hud-grow-option.is-noted {
+  border-color: var(--leaf-500);
 }
 
 .hud-grow-option__chip {
@@ -872,11 +941,27 @@ html[data-pl-entry-step]:not([data-pl-entry-step="world"]) #cinematic-overlay {
 
 #growth-aim-controls {
   display: flex;
-  justify-content: center;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
   width: fit-content;
   max-width: 100%;
   pointer-events: auto;
   animation: cozyFadeIn 0.18s ease;
+}
+
+/* The heading, in words: the arrow is a line in three dimensions and an orbit
+   can hide which way it points, so the aim says it out loud. */
+#growth-aim-compass {
+  font-size: 0.66rem;
+  letter-spacing: 0.06em;
+  color: var(--ink-muted);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+#growth-aim-compass:empty {
+  display: none;
 }
 
 #growth-aim-controls .hud-button {
@@ -932,6 +1017,18 @@ html[data-pl-entry-step]:not([data-pl-entry-step="world"]) #cinematic-overlay {
   background: rgba(191, 232, 118, 0.2);
   color: var(--leaf-300);
   border-color: rgba(191, 232, 118, 0.4);
+}
+
+.hud-grow-option__chip-flower {
+  background: rgba(219, 160, 191, 0.2);
+  color: var(--leaf-300);
+  border-color: rgba(219, 160, 191, 0.42);
+}
+
+.hud-grow-option__chip-seed {
+  background: rgba(196, 166, 112, 0.2);
+  color: var(--warm-ink);
+  border-color: rgba(196, 166, 112, 0.4);
 }
 
 .hud-cue {

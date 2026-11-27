@@ -40,6 +40,8 @@ export interface ResourcesConfig {
   /** A moisture or mineral change at or below this is not worth a broadcast. */
   resourceDirtyThreshold: number;
   diffusionRate: number;
+  /** Seconds between whole-grid soil passes, so the grid is not stepped every tick. */
+  soilStepIntervalS: number;
   maxAbsorptionPerTick: number;
   groundwaterBase: number;
   groundwaterCapacity: number;
@@ -197,6 +199,7 @@ export function loadResourcesConfig(configs: Map<string, ConfigFile>): Resources
     lightDirtyThreshold: readNumber(configs, 'resources', 'light_dirty_threshold'),
     resourceDirtyThreshold: readNumber(configs, 'resources', 'resource_dirty_threshold'),
     diffusionRate: readNumber(configs, 'resources', 'diffusion_rate'),
+    soilStepIntervalS: readNumber(configs, 'resources', 'soil_step_interval_s'),
     maxAbsorptionPerTick: readNumber(configs, 'resources', 'max_absorption_per_tick'),
     groundwaterBase: readInteger(configs, 'resources', 'groundwater_base'),
     groundwaterCapacity: readInteger(configs, 'resources', 'groundwater_capacity'),
@@ -271,8 +274,6 @@ export interface PlantForResource {
 // Broadcast a tile to clients only when a resource component has changed by
 // more than this amount since it was last sent. Prevents full-grid rebroadcasts
 // every tick from slow drift (day/night light, diffusion).
-/** How often the whole-grid soil passes run (moisture, minerals, diffusion). */
-const SOIL_STEP_INTERVAL_S = 0.25;
 
 export class ResourceWorld {
   // Resources live on addressed cells, not on array slots. The flat addressing
@@ -818,7 +819,7 @@ export class ResourceWorld {
     this.updateLight(plants, weatherLightMult);
 
     this.soilAccumulatorS += dt;
-    if (this.soilAccumulatorS < SOIL_STEP_INTERVAL_S) return;
+    if (this.soilAccumulatorS < this.config.soilStepIntervalS) return;
     const soilDt = this.soilAccumulatorS;
     this.soilAccumulatorS = 0;
     this.updateMoisture(soilDt, plants, weatherMoistureRate, weatherLightMult);

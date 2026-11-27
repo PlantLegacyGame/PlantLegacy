@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { plantFootprints } from './PlantContactShadows.ts';
+import { footprintKey, plantFootprints } from './PlantContactShadows.ts';
 
 /** A node a few centimetres above a flat soil at y = 10. */
 function node(x: number, y: number, z: number, plantId = 'p1') {
@@ -60,5 +60,33 @@ describe('plant footprints', () => {
   it('keeps a seed-sized floor for a one-node plant', () => {
     const feet = plantFootprints([node(0, 0, 0)], flat);
     assert.equal(feet[0]?.radius, 0.16);
+  });
+});
+
+describe('the footprint key', () => {
+  const foot = (over: Partial<{ x: number; z: number; radius: number; groundY: number }> = {}) => ({
+    plantId: 'p1',
+    x: 0,
+    z: 0,
+    radius: 0.5,
+    groundY: 10,
+    ...over,
+  });
+
+  it('is the same for a foot that has not moved on screen', () => {
+    // The renderer only re-lays the contact patches when this string changes,
+    // and a plant update arrives a dozen times a second while a part grows.
+    assert.equal(footprintKey([foot()]), footprintKey([foot()]));
+    // Sub-centimetre drift is under a patch's pixel: still the same shade.
+    assert.equal(footprintKey([foot()]), footprintKey([foot({ x: 0.004, z: -0.004 })]));
+  });
+
+  it('changes when the plant it belongs to, its foot or its spread changes', () => {
+    const base = footprintKey([foot()]);
+    assert.notEqual(base, footprintKey([foot({ x: 0.5 })]), 'the foot moved');
+    assert.notEqual(base, footprintKey([foot({ radius: 0.9 })]), 'the plant spread');
+    assert.notEqual(base, footprintKey([{ ...foot(), plantId: 'p2' }]), 'another plant');
+    assert.notEqual(base, footprintKey([foot(), { ...foot(), plantId: 'p2' }]), 'a second patch');
+    assert.equal(footprintKey([]), '', 'a plant with no body casts nothing');
   });
 });

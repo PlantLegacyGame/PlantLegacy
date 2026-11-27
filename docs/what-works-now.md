@@ -4,6 +4,100 @@ Honest list. No feature promises (T42, RULE_13). Updated at every gate.
 
 ## Working
 
+- **Seed archetypes, a spawn scene and paid ground (2026-11-27):** Play no longer
+  connects straight into the old plant. It opens a full-screen `SpawnScene` with
+  four archetypes, their multipliers, a free wild spawn, four named areas, an
+  exact-coordinate form and the current spore balance. `GET /spawn/options`
+  serves the cards, prices, bounds and starting balance; `HELLO` and `RESPAWN`
+  carry the selection, and the server rechecks the archetype, bounds, plant
+  spacing, terrain and price before it creates anything. It creates the plant
+  first and charges through the existing spore path, so a failed creation never
+  costs the player, and a reconnect or reclaim charges nothing. Old clients that
+  send no selection still get the free random spawn. Archetypes are config
+  multipliers applied through `Plant` traits (`growthSpeed`, water and mineral
+  capacity, photosynthesis, upkeep and mutation bias), persisted in a
+  backward-compatible plant snapshot and shown in Inspect. Tests:
+  `apps/server/src/ops/spawnConfig.test.ts`, the spawn block in
+  `apps/server/src/main.socket.test.ts`, shared geodetic and spawn-resolver
+  suites, and the client spawn-scene model tests. Live: the four cards, map and
+  free confirm at 120 spores; a free spawn entered the world at
+  `89.6678° N, 179.0349° W · 2 m` (`docs/verify/2026-11-27-spawn-scene.png`,
+  `docs/verify/2026-11-27-free-spawn-world.png`; the full pass is
+  [`docs/verify/2026-11-27-seed-spawn-terrain.md`](./verify/2026-11-27-seed-spawn-terrain.md)).
+- **Earth-style coordinates on the 100 km planet (2026-11-27):** the shared
+  `packages/shared/src/world/geodetic.ts` converts spherical latitude, longitude
+  and altitude to and from the pole-local metres the simulation already uses.
+  Latitude is [-90, 90], longitude [-180, 180], the planet's own radius and
+  curvature are the only scale, and a formatter writes
+  `12.3456° N, 45.6789° E · 14 m`. The parser accepts decimal degrees and DMS;
+  the play area is validated in the same local frame the server and client both
+  use, and the HUD shows the live readout (the free spawn above read
+  `89.6678° N, 179.0349° W · 2 m`). Named areas carry the same labels, and an
+  exact spawn outside the 620 m survey is refused with a readable message
+  instead of clamping. Tests: the shared geodetic suite (north pole,
+  antimeridian, sub-millimetre round trip inside the play area, malformed input)
+  and the spawn resolver's altitude/bounds cases.
+- **One detailed ground and one static globe (2026-11-27):** the camera-selected
+  `ReliefChunkSet`, the 64/128/256 altitude levels and the inner/outer/horizon
+  pair are out of the render and physics paths. The play area is a single
+  620 m-radius disc at a fixed 2 m cell size, built once from the shared height
+  field with analytic gradient normals, one `BufferGeometry` and one material;
+  there is no chunk swap, skirt, per-camera rebuild or LOD boundary inside it.
+  The rest of the planet is one static globe mesh built once for the horizon and
+  orbit. Physics uses a single Rapier heightfield over the same cells instead of
+  a 1.2M-triangle trimesh. Older terrain/LOD tests were deleted with the code.
+  At the 1152-wide dev panel it measured **60 fps, p50 16.7 ms, p95 16.8 ms** in
+  rain over 180 frames, the same as dry. At a true 1919 x 1080 drawing buffer
+  with the camera active it measured **39.6 fps, p50 25.1 ms, p95 43.4 ms**
+  (CPU 4.6 ms, GPU 22.1 ms); the 1080p 60 fps target is **not met** on this
+  Intel Iris Xe machine, and hiding every non-light scene object still capped
+  at 55.2 fps, so the terrain is not the only cause. The rain frame and the
+  top-down ground are `docs/verify/2026-11-27-rain-performance.png` and
+  `docs/verify/2026-11-27-playdisk-ground.png`. The disc uses the fixed 2 m
+  fallback cell size; no LOD was introduced. A 20 km transition ring now joins
+  the disc rim to the global field, and the coarse globe's shader cuts out the
+  polar cap under it, so the ground stays one continuous surface at ground
+  level, at 1,200 m and at 43 km. The globe is visible in planet view too, so
+  the whole planet appears without hiding the horizon first; the oblique and
+  orbit evidence is `docs/verify/2026-11-27-disc-edge-1200m-oblique-after.png`,
+  `docs/verify/2026-11-27-zoom-43km-after.png` and
+  `docs/verify/2026-11-27-planet-view-globe-after.png`. The visible 620 m
+  detail boundary is a known limitation: the plan for a continuous
+  view-dependent chain, sparse editable crust and planet-scale water/weather is
+  [`docs/planet-scale.md`](./planet-scale.md), not built yet.
+- **Root Sight is attached to the ground (2026-11-27):** the collar is appended
+  into the cavity bowl's own lathe geometry and conformed to the terrain at the
+  cut ring, so the wall and the surrounding soil are one assembly. The separate
+  aperture-soil body and the skirt mesh are gone; the soil cut stays strictly
+  inside the collar. The top-down seed pit at
+  `docs/verify/2026-11-27-root-sight-attached-topdown.png` shows one rim and no
+  sky ring; the same frame with Root Sight closed is
+  `docs/verify/2026-11-27-playdisk-ground.png`. The aperture still updates at
+  10 Hz, and no per-frame geometry is allocated.
+
+- **Aim from behind (2026-11-25):** the gizmo carries the ground half of the
+  aim, not only the shoot: a trail of footprints on the soil under the path, a
+  marker ring on the surface over the bud, and a post between them that works
+  both up (a bud in the air) and down (a bud under the soil). The trail never
+  paints over the part it leaves, and the post is the depth the numeric line
+  already states. `devAimGhost` reports all three.
+- **Water in layers (2026-11-25):** water is two bodies, one above the other, and
+  both are solved. The **surface** is a virtual-pipe shallow-water grid: every
+  edge carries a flux with momentum, so the level does not freeze the moment it
+  looks flat, and each edge is applied once to both cells, so a storm neither
+  gains nor loses a drop. Hollows fill to 24 cm (a pool with a dark middle), the
+  shoreline is the depth ramp, and the whole thing is one depth-tested mesh.
+  Below it a second grid is a **confined cave aquifer** with its own bed and
+  roof: rain percolates down into it, it runs its own hollows, and springs push
+  water back up where the rock lets it, so a storm feeds a river under the ground
+  and a pool on top of it at the same time. `environmentRenderer.waterLayers()`
+  reports both volumes; a 42 s storm held 1 027 m³ on top and 297 m³ below.
+- **Rain makes water (2026-11-25):** the surface field soaks slower than the rain
+  falls (0.35 mm/s against 1.8 mm/s), so a shower actually builds standing water:
+  it flows downhill, gathers in hollows and drains over the next minute or two.
+  Pools can be 24 cm deep, the shoreline is the depth ramp itself (no hard
+  discard), and rain streaks are half as long, thinner and dimmer.
+
 - Monorepo, CI, config validator with the rarity ban, Docker image and compose
   stack, `/health` and `/ready`.
 - **Title tree and frame time (2026-11-20):** the mature mascot is a tree now,
@@ -69,6 +163,15 @@ Honest list. No feature promises (T42, RULE_13). Updated at every gate.
   frame), with the Root Sight cutaway's floor as the one exception. Measured in
   game: a right-drag pan moved the target 20.877 -> 21.950 and it held at 21.964
   a second and a half later; the seed's framing puts it at 0.51 of the pane.
+- **The pan reaches up and down (2026-11-25):** `OrbitControls` was built with
+  `screenSpacePanning = false`, so a right-drag slid the rig along the ground
+  plane and only ever moved it sideways or backwards; the eye's height never
+  changed. That was right for the old ground-rigged camera, where a screen-plane
+  pan tilted with the view, drove the eye into the terrain and the clamp stopped
+  the drag. The free camera has no clamp, so the pan is screen-plane in free mode
+  and ground-plane in the ground rig, re-asserted wherever `config/render.json` is
+  applied. Measured by driving the controls' own pan 60 px vertically: the eye
+  rises 0.310 m, against 0.000 m with ground-plane panning.
 - **The camera stops on a slope instead of collapsing into the plant
   (2026-11-22):** a hard upward drag on a downslope used to shorten the spring
   arm under the orbit floor and then use the shorter arm to justify a lower
@@ -174,6 +277,18 @@ Honest list. No feature promises (T42, RULE_13). Updated at every gate.
   other three stop at or above the seed on the uphill side; clearance to the
   ground under the eye never went below 0.14 m, and the eye held still to within
   0.002 m with no direction reversals while the drag was held.
+- **The eye keeps its own place (2026-11-25):** the ground clamp has a reach
+  again. Its spring arm shortens the orbit to the first ground crossing, which is
+  right among the plants but at a wide framing the crossing is the world's curve
+  hundreds of metres away, and the whole orbit collapsed onto the soil in one
+  frame - the "looking up teleports me to ground level" report. An eye below
+  its own ground is left exactly where it is, however wide the orbit: looking up
+  from a burrow stays a burrow instead of being corrected to the surface. Past
+  `GROUND_CLAMP_MAX_REACH_M` (800 m) the clamp does not run at all, and planet
+  view and a Root Sight eye under the soil are exempt. The underground target
+  floor is a burrow depth (12 m) below the target's own ground, and
+  `cavity_escape_lift_mps` is 0, so looking up under the soil no longer floats
+  the eye out.
 - **Night and hidden tabs (2026-11-19):** the world no longer reads as a black
   screen in two situations. Night was the first: at `ambient_intensity_night`
   0.15, `sun_intensity_night` 0.15 and `exposure_night` 0.92 the young-plant
@@ -280,7 +395,7 @@ Honest list. No feature promises (T42, RULE_13). Updated at every gate.
   buried finds were a second root system. They were stroked paths in the ground
   layer while the roots under the plant are filled tapered shapes, so eight thin
   pale wires crossed the plate's fan and the soil read as two drawings stacked.
-  `rootReach` in `title/roots.ts` builds each reach as the plate's own drawing - a
+  `buildRoots` and `spineOutline` in `title/roots.ts` draw each reach as the plate's own shape - a
   closed ribbon that leaves heavy and arrives fine, with an ink copy one edge wider
   under it, feeders included - and it now starts where the plate is thickest
   instead of at the stem's foot in the middle of the fan, so it continues that fan
@@ -457,7 +572,7 @@ Honest list. No feature promises (T42, RULE_13). Updated at every gate.
   the calendar and turned the loop into a timer - so every watering or feeding is
   one step, stored as a single number in `localStorage['pl-title-care']`. A sprout
   reaches nothing; from the young-plant stage on, each step sends one root run out
-  to the next buried find (`rootRunPath` in `title/treasures.ts`), drawn as a pale
+  to the next buried find (`rootRunFor` in `title/rootGrowth.ts`), drawn as a pale
   root from the stem's foot and animated with its own dash offset, and the find is
   marked and announced. There are eight finds now, in two columns of four: an
   overlap bug came from placing pieces by width alone, because the ground is about
@@ -591,17 +706,20 @@ Honest list. No feature promises (T42, RULE_13). Updated at every gate.
 - **T00A onboarding:** dismissible three-line hint card and tooltips on the
   light / water / minerals readout, loaded from `/config/onboarding`.
 - **Growth economy (2026-11-12):** roots capture water and minerals from the tile they occupy (`absorbResourcesFromTiles` + `ResourceWorld.takeFromTile`, so ambient supply is finite and actually debited); photosynthesis converts *light level* plus the plant's own stored water and minerals into energy, and is now the only income channel — it no longer creates structural biomass, so sprouting a radicle can never inflate the seed. Cotyledons count as photosynthetic organs. Respiration burns energy day and night (a lone ungerminated seed is the only exemption), water loss drops to `night_transpiration_multiplier` at night, and a plant only loses structural mass when it has no energy left. Growth after establishment additionally requires stored water/minerals. Storage capacity is derived from the plant's own biomass, never a global cap. Covered by `apps/server/src/ops/growthEconomy.test.ts` (establishment → capture → stem, no biomass from light, night drawdown).
-- **T04 mutation (2026-11-14, partial):** data-driven mutations in `config/mutations.json` (45 definitions across colour, diet/metabolism, size, growth rate, unlocked node types and movement; three kinds of trigger), acquired on a completed growth event with configurable chance, weighted by adaptive pressure over eight growth categories, gated by tile light/moisture/minerals, weather and day/night. Maintenance drains energy, then biomass, and biomass stops at `upkeep_biomass_floor`: an unpaid bill stalls the plant but never sheds a mutation and never kills it, so the only way one leaves is the owner shedding it (biomass penalty, cooldown); pressure decays with a configured half-life A size mutation is **real tissue**, not a shader scale: it holds `m³` the mass and is drawn `m×` as wide from that mass, so shedding one leaves the plant over-built and it wilts back to its regular size over minutes (`oversize_decay` wilt/leak rates), never in a single frame. Mutations also have levels: the player spends stored energy and biomass and picks one card per level from that mutation's own effect pool (`MUTATION_LEVEL`), upkeep climbing with each level, with levels and chosen cards persisted in PLNT v4. `mutation_acquired`/`mutation_shed` fire on the event bus; PLNT snapshots are v2 (v1 still loads); protocol v2 adds `MUTATION_STATE`/`MUTATION_SHED`. The client shows the set, its upkeep and the pressure readout with a shed control. Appearance is data: `config/mutation_visuals.json` carries one style per mutation (organ family, pattern, tint and strength, variegation, glow, bark thickness and darkening, thorns) and the client paints from it. Every held mutation is composed into one look per organ family — foliage, woody, seed, bloom — plus a whole-plant look for the billboard tiers, so a plant shows a bark mutation on its trunk and a lamina mutation on its leaves at the same time instead of a single strongest signature. Tints multiply and clamp, variegation and darkening stack as `1 - product(1 - v)`, glow adds, and bark thickness and thorns have ceilings; levels amplify a style so a levelled mutation looks stronger. Geometry follows the name: `thickened_bark`-family styles thicken tubes, `spined_epidermis` draws real thorns, `columnar_habit` and `drooping_fronds` bend growth direction before the gene clamp. The WebGL SDF fallback still paints one organism and maps the composed foliage look onto its three mutation uniforms. Record: `docs/tasks/T04.md`. A dev-only **mutation gallery** (`dev_mutation_gallery`, Plant → Mutation Gallery in the Dev Panel) builds one plant per mutation on an eight-column grid in front of the asking player, ten metres apart. Each showcase plant is granted its mutation *first* and then grown to a mature 20–34 node body — roots, a five-internode column, leaves, branches, and the organs that mutation talks about (a `trunk` or `culm` column for those unlocks, thorns for `spined_epidermis`, a rhizome with tuber and stolon, pneumatophores, blooms) — and its tissue is filled to the mutated quota, so a size mutation stands in the row at full size instead of being outgrown. Any organ the growth rules refuse is reported back in `rejected` rather than silently thinning the plant. Rival plants carry a name tag above the canopy with the mutation they express.
+- **T04 mutation (2026-11-14, partial):** data-driven mutations in `config/mutations.json` (45 definitions across colour, diet/metabolism, size, growth rate, unlocked node types and movement; three kinds of trigger), acquired on a completed growth event with configurable chance, weighted by adaptive pressure over eight growth categories, gated by tile light/moisture/minerals, weather and day/night. Maintenance drains energy, then biomass, and biomass stops at `upkeep_biomass_floor`: an unpaid bill stalls the plant but never sheds a mutation and never kills it, so the only way one leaves is the owner shedding it (biomass penalty, cooldown); pressure decays with a configured half-life A size mutation is **real tissue**, not a shader scale: it holds `m³` the mass and is drawn `m×` as wide from that mass, so shedding one leaves the plant over-built and it wilts back to its regular size over minutes (`oversize_decay` wilt rate), never in a single frame, while stored water, minerals and energy are hard-clamped to the smaller capacity. Mutations also have levels: the player spends stored energy and biomass and picks one card per level from that mutation's own effect pool (`MUTATION_LEVEL`), upkeep climbing with each level, with levels and chosen cards persisted in PLNT v4. `mutation_acquired`/`mutation_shed` fire on the event bus; PLNT snapshots are v2 (v1 still loads); protocol v2 adds `MUTATION_STATE`/`MUTATION_SHED`. The client shows the set, its upkeep and the pressure readout with a shed control. Appearance is data: `config/mutation_visuals.json` carries one style per mutation (organ family, pattern, tint and strength, variegation, glow, bark thickness and darkening, thorns) and the client paints from it. Every held mutation is composed into one look per organ family — foliage, woody, seed, bloom — plus a whole-plant look for the billboard tiers, so a plant shows a bark mutation on its trunk and a lamina mutation on its leaves at the same time instead of a single strongest signature. Tints multiply and clamp, variegation and darkening stack as `1 - product(1 - v)`, glow adds, and bark thickness and thorns have ceilings; levels amplify a style so a levelled mutation looks stronger. Geometry follows the name: `thickened_bark`-family styles thicken tubes, `mutation_spined_epidermis` draws real thorns, `mutation_columnar_habit` and `mutation_drooping_fronds` bend growth direction before the gene clamp. The WebGL SDF fallback still paints one organism and maps the composed foliage look onto its three mutation uniforms. Record: `docs/tasks/T04.md`. A dev-only **mutation gallery** (`dev_mutation_gallery`, Plant → Mutation Gallery in the Dev Panel) builds one plant per mutation on an eight-column grid in front of the asking player, ten metres apart. Each showcase plant is granted its mutation *first* and then grown to a mature 20–34 node body — roots, a five-internode column, leaves, branches, and the organs that mutation talks about (a `trunk` or `culm` column for those unlocks, thorns for `mutation_spined_epidermis`, a rhizome with tuber and stolon, pneumatophores, blooms) — and its tissue is filled to the mutated quota, so a size mutation stands in the row at full size instead of being outgrown. Any organ the growth rules refuse is reported back in `rejected` rather than silently thinning the plant. Rival plants carry a name tag above the canopy with the mutation they express.
 - **Water as a medium (2026-11-16):** water is no longer only a surface you look *at*. `renderers/environment/underwater.ts` answers "how much water is over the eye?" from the water field's own surfaces (`waterSurfacesAt`), and the renderer applies the consequences: a fog that pulls in to metres and takes the water's colour, a dimmed sun (Beer–Lambert `exp(-depth · k)` on the beam), and a water shader that shades its **underside** as Snell's window — a bright, rippling opening straight overhead, dim self-reflection beyond ~48.6°. A damp ankle is still air: immersion starts at 6 cm over the eye. The sheets themselves end radially (`sheet_edge_fade`), because a square grid seen from a high camera drew the water as a square.
-- **A planet-wide sea (2026-11-17):** the world has an ocean, not just local water. `renderers/environment/ocean.ts` builds one dome over the whole play area whose height is the planet's own curvature (`y = sea_level_m − r² / (2·planet_radius_m)`), so a single mesh covers every direction: no sheet edge, no LOD seam, and no reachable place without water. Its coastline is not authored — the terrain is drawn at the same radius, so a shore is wherever the ground rises through it — and it draws with the same water material in **ocean mode** (`uOceanMode`), where the shader measures the column down to the ground grid (pale shelves, dark basins) instead of a per-cell depth, skips the "water above the ground" discard that would delete it, and softens its last 25 cm at the shore instead of cutting a polygon edge. `sea_level_m` (6 m above the play area's tangent plane, so the 5.6–20.8 m plateau stays dry and the basins flood) and `ocean_enabled` live in `config/water.json`; the sea is appended to `waterSurfacesAt`, so a step into it is water over the eye rather than clear air. The first attempt was a sphere of `planet_radius + sea_level` with 80 rings — its polar cap is a chord, so 900 m out the water lay ~17 m *below* the terrain that should have been under it and the ground covered the sea everywhere; the analytic dome has no such sag. The horizon is the camera's far plane, so the water fades out at 2.2–2.48 km rather than ending in cut geometry.
+- **A planet-wide sea (2026-11-17):** the world has an ocean, not just local water. `renderers/environment/ocean.ts` builds one dome over the whole play area whose height is the planet's own curvature (`y = sea_level_m − r² / (2·planet_radius_m)`), so a single mesh covers every direction: no sheet edge, no LOD seam, and no reachable place without water. Its coastline is not authored — the terrain is drawn at the same radius, so a shore is wherever the ground rises through it — and it draws with the same water material in **ocean mode** (`uOceanMode`), where the shader measures the column down to the ground grid (pale shelves, dark basins) instead of a per-cell depth, skips the "water above the ground" discard that would delete it, and softens its last 25 cm at the shore instead of cutting a polygon edge. `sea_level_m` (6 m above the play area's tangent plane, so the 5.6–20.8 m plateau stays dry and the basins flood) and `ocean_enabled` live in `config/water.json`; the sea is appended to `waterSurfacesAt`, so a step into it is water over the eye rather than clear air. The first attempt was a sphere of `planet_radius + sea_level` with 80 rings — its polar cap is a chord, so 900 m out the water lay ~17 m *below* the terrain that should have been under it and the ground covered the sea everywhere; the analytic dome has no such sag. The dome reaches 150 km, past the geometric horizon at every altitude the eye reaches; the only fade left is its last 4 km (146–149.7 km), below the skyline, so the sea meets the sky instead of ending in cut geometry.
 
-  The sea also carries its **own bed height field** (`buildBedTexture`, 640² samples over ±900 m). The water field's grids stop at 180 m and 560 m, which left the shore players actually look at — the plateau rim 600 m out — with no depth sample at all, so every fragment there fell back to one constant column and the whole ocean shaded as a single flat grey band. With the bed, the shader has a shallow-to-deep gradient all the way out. Its **wave field** is three octaves in ocean mode (`seaNormal`: a long swell, a wind chop, a fine ripple) whose slope is carried into the sky reflection, so the surface bands like moving water and the sun writes a broad glitter path (`sea_wave_strength` 1.2, `sea_wave_scale_m` 5.5); a **foam line** sits wherever the water is shallower than `sea_foam_width_m` (0.9 m), which is what ties the sea's edge to the ground rather than to the dome's outline. The sea's material is transparent and **`depthWrite` is false** (`TRANSPARENT` single layer, side chosen from where the eye is), so the ocean can never occlude the rain, the plant or the bed under it; the shallow shelf shows the ground through the water, and rain streaks draw over the sea.
+  The sea also carries its **own bed height field** (`buildHeightTexture`, 1 024² samples over ±6 km, so it holds the whole basin, the coast beyond the 600 m rim and the far field's islands). The water field's grids stop at 180 m and 560 m, which left the shore players actually look at with no depth sample at all, so every fragment there fell back to one constant column and the whole ocean shaded as a single flat grey band. With the bed, the shader has a shallow-to-deep gradient all the way out — and above 25 km the **orbital shell** paints the sea from **one 384² relief field** over the whole face (0.1–100 km, inverse-square texel warp so the play area gets ~64 m texels), not from the fine bed: a second, finer mask meeting the coarse one in the middle drew its square edge as a straight coast at 25–60 km, so the near mask was deleted and the shell compares the single field to the sea level with one `smoothstep`. The far field is the only relief in that field, so the archipelago's outer shore fades radially at 4.2–5.6 km and stays round; orbit is an ocean world with one island cluster. Its **sun glint** is a tight lobe (220th power), because a 28th-power lobe on a smooth orbital disc lit the whole sea and read as a pale wash rather than a sun path. Its **wave field** is three octaves in ocean mode (`seaNormal`: a long swell, a wind chop, a fine ripple) whose slope is carried into the sky reflection, so the surface bands like moving water and the sun writes a path, not a disc (`sea_wave_strength` 1.5, `sea_wave_scale_m` 5.5, a 96-power highlight); a **foam line** sits wherever the water is shallower than `sea_foam_width_m` (0.9 m), which is what ties the sea's edge to the ground rather than to the dome's outline. The sea's material is transparent and **`depthWrite` is false** (`TRANSPARENT` single layer, side chosen from where the eye is), so the ocean can never occlude the rain, the plant or the bed under it; rain streaks draw over it. The open sea's alpha is 1.0, not the puddle sheet's 0.34: at any partial alpha the bare brown body showed through the water as a 6.4 km square of mud whose coast was the bed grid's edge, and the sea's own deep colour never reached the screen. Its body colour is the `water_deep` role darkened 0.62 (the ramp is tuned for a film over soil; open water absorbs its light) and the same darkened role feeds the shell, so the dome and the shell meet as one body. The bed carries a **mip chain** (`LinearMipmapLinear`, 4× anisotropy): at a kilometre one 11.7 m texel is under a pixel, and without mips the far waterline drew the bed's texels as brush-like streaks instead of the coast. The one-metre `streaks` and `riffle` bands are faded by their own `fwidth` footprint, because unfiltered they aliased into the evenly spaced dashes that read as a broken surface out to the horizon, and the shoreline band grows from one pixel to six metres between 1.2 and 4 km, which softens the stair-step without eating the shallows. The orbital face reads the same mask through a **sqrt warp** (the texels are spent on the island cluster at the pole) whose slope is finite: the infinite slope at x = 0 made the derivative pick the coarsest mip on the meridian through the pole, and that drew a hairline down the planet. Inside 250 m of the pole a linear ramp continues the same slope, and the ramp is a fraction of a pixel from orbit. The face also carries a **slow basin noise** on the sea's depth before the shallow/deep mix, because at 300 km one flat deep colour read as a painted sphere rather than as water. Every frame the ocean's `uTime`, `uSunDir`, `uSunColor` and `uSkyColor` are copied from the live sky, so the sea moves and its distance haze takes the horizon's colour instead of a static noon (it used to turn olive at 1–4 km while the sky was pale); the wave field's normal fades out over 2–10 km, because its metre-scale grid aliased into concentric rings at altitude.
 - **Water as environment (2026-11-15):** water is no longer a Root Sight ornament and it is not fitted to anything. Two fields, both from the simulation:
   - **Rain puddles.** Rain adds depth to a shallow-water sheet; the mass-conserving solver in `packages/shared/src/world/surfaceWater.ts` runs it downhill into hollows, where it soaks in and evaporates. Puddles therefore appear on the ground whether or not Root Sight is open.
   - **The water table.** `ResourceWorld.getWaterTableHeightAt` reads the per-tile groundwater the server already simulates (saturation puts the table at the *regional* ground level — the undug terrain averaged over `groundwater_table_smoothing_m` — and an empty cell sits `groundwater_table_depth_m` below it), so the level rises with rain, falls as roots drink, refills from wet neighbours, and low ground pools instead of every tile tracking its own bumps. Measuring against the regional level is what keeps a dug tunnel from acting as a drain: the table stays put and the hole fills. Its height field is streamed in `RESOURCE_UPDATE.waterTable` (48 × 2 m cells, twice a second) and drawn as one continuous mesh: nearby water connects, and terrain—not a fitted disc—hides it where it is underground. The Root Sight pit is the hole through which that same surface is seen from below. That hole is cut in both faces of the double-sided soil skin: a front-face-only cut left the earth a closed ceiling from underneath, so the cavity could be seen from outside and from above but not from inside the ground. The earthen lip stays a surface effect and fades out with the eye under the soil, which is what the old front-face gate was really there for.
   - **Depth and wet ground.** Both surfaces carry their water column in an `aWater` attribute and shade it with Beer–Lambert absorption (`water_absorption_per_m`), so a deep body is dark and a shallow film is clear, while Fresnel reflection still makes a pool a sheet of sky at a glancing angle — deep water brightens where it reflects. The soil under and around standing water is stained darker by a damp layer that follows the puddle field, spreads `wet_ground_halo_cells` past the edge and fades at `wet_ground_dry_per_s` after the water soaks away, using the soil shader's own wet colour; that layer skips its spread and per-vertex writes entirely while the ground is dry. Underground, the soil shader samples the same table as a small height ramp and darkens everything below the waterline (plus a metre-scale capillary band above it), so the walls and floor of a pit or tunnel that holds water look soaked — the surface stain layer never reaches down there.
-  - **The river.** The route is surveyed from the terrain, not authored: `packages/shared/src/world/terrainField.ts` rasterises the relief over the river corridor, fills closed hollows with priority-flood, points every cell at its downstream neighbour and accumulates the flow each one receives (D8). The longest-fed chain through the play area becomes the channel, so the river runs down the valleys and the fall line the hills define. The channel itself is carved into the shared ground field — a bed bowl under a monotone water line plus sloping shoulders (`river_bank_slope`, `river_bank_apron_m`), clamped by the natural ground so the river only ever cuts — and both client and server call that same function, so the drawn bank is the server's soil. The stream is one ribbon strung along the surveyed line, level across the channel, narrower than the bed so the banks cut its shoreline, with channel-local coordinates (`aFlowUV`) driving downstream ripples and streaks (`river_flow_speed_mps`). Puddles and the water table are clipped out of the channel per fragment by a baked route mask (`river_clip_margin_m`), because three translucent surfaces in one place stack their opacity. The water table mesh is clamped under the ground it stands in: it is a subsurface surface, and where it rises above the soil the rain sheet is what draws standing water. The client also clamps the streamed table to just under the drawn terrain (`EnvironmentRenderer.clampTableToTerrain`): the server's heights can stand metres above the local ground, which painted whole valleys as water and buried a sheet under the soil that flickered through from a bird's-eye view.
-  - The surface tint is lifted towards a pale sky so overcast puddles do not read as dark stains, and the two surfaces never overlap: the rain sheet only draws where the table is still below the ground. The sheet also floats `surface_lift_m` above the ground it sampled (its grid is coarser than the drawn terrain, which is what caused shoreline z-fighting), water within `water_near_discard_m` of the camera is skipped so the near plane cannot smear it across the view, and the damp band above the table is `wet_band_above_table_m`. Every water surface also carries a clip-space depth bias (`water_depth_bias`): a film five centimetres above the soil is finer than the depth buffer can resolve a few hundred metres away, and a relative bias holds at any distance, which is what stopped the z-fighting from above. The puddle sheet stays a level film instead of pushing wet vertices up and dry ones down - that made every triangle between them a slope that poked through the soil as blue shards - and fragments with no water in them are discarded, while visibility uses hysteresis on the deepest cell rather than a volume hovering at a threshold. Tunables are in `config/water.json`, rendering in `renderers/environment/waterField.ts` and `waterMaterial.ts`, and the solver in `surfaceWater.test.ts`. Rival plant name tags are drawn at 1024 px with mipmaps and anisotropic filtering so they stay sharp; long names are truncated instead of shrinking. The three water colours (`water_deep_color`, `water_shallow_color`, `water_sky_color`) are `palette_role` entries naming `water_deep`, `water_body` and `water_shallow`, applied to every water material in one pass, so the rain sheet, the river, the water table and the underwater tint cannot drift apart from each other (W3).
+  - **The river.** *(History: the ribbon below was deleted with the sheet pipeline
+    on 2026-11-25; the surveyed channel and its carved banks are still the
+    server's soil, and standing water now fills that bed from the solve.)* The
+    route is surveyed from the terrain, not authored: `packages/shared/src/world/terrainField.ts` rasterises the relief over the river corridor, fills closed hollows with priority-flood, points every cell at its downstream neighbour and accumulates the flow each one receives (D8). The longest-fed chain through the play area becomes the channel, so the river runs down the valleys and the fall line the hills define. The channel itself is carved into the shared ground field — a bed bowl under a monotone water line plus sloping shoulders (`river_bank_slope`, `river_bank_apron_m`), clamped by the natural ground so the river only ever cuts — and both client and server call that same function, so the drawn bank is the server's soil. The stream is one ribbon strung along the surveyed line, level across the channel, narrower than the bed so the banks cut its shoreline, with channel-local coordinates (`aFlowUV`) driving downstream ripples and streaks (`river_flow_speed_mps`). Puddles and the water table are clipped out of the channel per fragment by a baked route mask (`river_clip_margin_m`), because three translucent surfaces in one place stack their opacity. The water table mesh is clamped under the ground it stands in: it is a subsurface surface, and where it rises above the soil the rain sheet is what draws standing water. The client also clamps the streamed table to just under the drawn terrain (`EnvironmentRenderer.clampTableToTerrain`): the server's heights can stand metres above the local ground, which painted whole valleys as water and buried a sheet under the soil that flickered through from a bird's-eye view.
+  - The surface tint is lifted towards a pale sky so overcast puddles do not read as dark stains, and the two surfaces never overlap: the rain sheet only draws where the table is still below the ground. The sheet also floats `surface_lift_m` above the ground it sampled (its grid is coarser than the drawn terrain, which is what caused shoreline z-fighting), water within `water_near_discard_m` of the camera is skipped so the near plane cannot smear it across the view, and the damp band above the table is `wet_band_above_table_m`. Every water surface also carries a clip-space depth bias (`water_depth_bias`): a film five centimetres above the soil is finer than the depth buffer can resolve a few hundred metres away, and a relative bias holds at any distance, which is what stopped the z-fighting from above. The puddle sheet stays a level film instead of pushing wet vertices up and dry ones down - that made every triangle between them a slope that poked through the soil as blue shards - and fragments with no water in them are discarded, while visibility uses hysteresis on the deepest cell rather than a volume hovering at a threshold. Tunables are in `config/water.json`; the retired sheet's renderer is gone, and what drew it is now `renderers/environment/surfaceWaterMesh.ts` and `waterMaterial.ts`, with the solver in `surfaceWaterField.ts` and `surfaceWater.test.ts`. Rival plant name tags are drawn at 1024 px with mipmaps and anisotropic filtering so they stay sharp; long names are truncated instead of shrinking. The three water colours (`water_deep_color`, `water_shallow_color`, `water_sky_color`) are `palette_role` entries naming `water_deep`, `water_body` and `water_shallow`, applied to every water material in one pass, so the rain sheet, the river, the water table and the underwater tint cannot drift apart from each other (W3).
 - **P0 measurement and budget (2026-11-15):** `docs/tasks/AL-01.md` and
   `docs/tasks/AL-03.md`. A six-pose benchmark (`config/dev.json`
   `benchmark_poses`, Dev Panel → Debug, `window.__plantLegacy.benchmark`)
@@ -611,9 +729,14 @@ Honest list. No feature promises (T42, RULE_13). Updated at every gate.
   comparing vsync-clamped fps with a target. Node positions streamed between
   ticks (uproot/tumble) interpolate over one tick and are pruned when a plant
   dies mid-tumble. The detail budget is raised
-  and size-class aware: `per_client_entity_cap` 1000, `detailed_plant_budget`
-  256, `camera_max_distance` 2000 m with ×2/×4 classes (a giant sees further),
-  and `webgpu_max_plants` 20000. Live browser verification is still pending.
+  and size-class aware: `camera_max_distance` 2000 m with ×2/×4 classes (a giant
+  sees further), which every client reads, and `webgpu_max_plants` 20000, which
+  only the WebGPU pass reads and that pass ships disabled. `per_client_entity_cap`
+  1000 now caps `PLANT_SYNC_REQUEST`, range announcements and the STATE/KEYFRAME
+  plant list, keeping the owner's own plant first; the separate entity-list path
+  (`InterestManager.getEntitiesForClient`) still has no caller (DEF-11).
+  `detailed_plant_budget` 256 remains **declared, not applied**: it is read into
+  `WorldConfig` and used nowhere. Live browser verification is still pending.
 - **T01 growth & C02 plant renderer:** server-authoritative typed-node growth with canopy shading and resource competition through shared tiles (root-overlap damage and root attack were deleted by INV-TM-06; roots must be able to touch for symbiosis and grafting, see ADR-051). **C02 procedural plant renderer** renders plants as unified organic living bodies via Raymarched Signed Distance Fields (SDF) with polynomial smooth minimum (`smin`) primitive fusion, continuous 3D triplanar noise, vertex wind sway, Inigo Quilez ambient occlusion (AO), and local bounding volumes. Features botanical Murray's law allometric tapering (sturdy base trunk tapering into delicate twigs aloft), paper-thin elliptic lancet foliage (eliminating hockey-puck disc thickness), smooth branch collar fillets without joint lumpiness, and real-time 0.9s growth emergence animations for seed split, shoot elongation, and leaf unfurling. Full geometric bounding box frustum culling guarantees branches extending from bases behind the camera remain fully visible.
 
 
@@ -639,6 +762,7 @@ Honest list. No feature promises (T42, RULE_13). Updated at every gate.
   rotation; IP rate limits and account lockout after failed attempts; WebSocket
   auth via HELLO accessToken; plant ownerId = accountId for persistence.
   **Auth hardening (2026-11-09):** refresh token rotation inserts new session before revoking old; rate limiting uses atomic upsert with unique constraint (migration `004`); JWT secret required in production; lockout extends on failed attempts during lockout; pool errors logged not swallowed.
+- **Abuse limits (2026-11-27):** connection admission now has a per-address socket cap (32; the excess socket gets `SERVER_FULL`, then close `1013`) and a hard `world.max_players_per_world` concurrent-player cap; a full world answers `SERVER_FULL`. Expensive replies have per-player cooldowns (full grid 5 s, plant sync 2 s, terrain region 2 s), state-changing messages share a 4/s burst-8 action bucket, and a connection's block list is capped at 512. `JWT_SECRET` must now be 32+ characters in `staging` and `production` (the fixed fallback is local/test only), and display-name changes are limited to 5 per account per minute. Tests cover the pure rules; `main.socket.test.ts` now drives real sockets for the 32/33 address boundary, all three reply cooldowns, the ninth action refusal and a temporary 10-player world cap. No browser pass was made.
 - **Seeded deterministic RNG (2026-11-09):** `hash32`, `hash01`, `mulberry32` in `@plant-legacy/shared/math`. PlantMeshBuilder uses `hash01(nodeId, salt)` for leaf normals and branch curvature — deterministic appearance per node, no `Math.random()`.
 - **T07 Weather & Day/Night (2026-11-23):** 5-state weather state machine (`clear`, `rain`, `thunderstorm_telegraph`, `thunderstorm_active`, `thunderstorm_aftermath`) now driven by a climate field rather than rolled probabilistically: `config/climate.json` feeds `packages/weather/src/climateField.ts`, which derives humidity and cloud from advected noise, adds orographic lift from the real height field, temperature from season, hour and altitude (2.6 °C per 400 m), and rare storms from a coarser noise; the state machine keeps the durations and the storm's three phases, with hysteresis (start 0.28, stop 0.14) and a 900 s storm cooldown. Over 30 simulated days with the corrected field: 23.8% wet, 2 storms, 7.1 min per state, snow 1.92% of the time — asserted to fall in the winter quarter and nowhere else, so the figure cannot silently vanish; a full live day reproduced its replay transition for transition (see the bugfix record §4b and §4c). Snow is live too: the world was driven to winter on 2026-11-23 and the server logged a 90 s snow spell at 0.1 °C, humidity 0.822, precipitation 0.400 (§4d). Day/night diurnal orbital cycle (1800s day, 0.66 day fraction, dynamic solar elevation and intensity), server tick integration modifying `ResourceWorld` moisture deposition and canopy light reception in real time, client `WEATHER_UPDATE` broadcast handling adjusting directional sun and ambient lighting dynamically. Fully driven by `config/weather.json` and `config/daynight.json`.
 - **C03 precipitation in the world (2026-11-23):** the rain field is anchored to the world, not the camera. Each drop owns a position in a torus of `rain_box_width` and draws the copy nearest the eye (`renderers/environment/precipitationAnchor.ts`), so walking moves nothing and a drop that leaves the volume re-enters exactly one box away; measured on 4000 drops, a 3 m walk changed 310 of 8000 anchors, every change exactly one 60 m box. Snow is a six-armed crystal cut in the fragment shader. A landing throws an open-cone crown standing on the ground's own tangents and normal, double-sided, with twelve tongues of spray and a per-instance facing cull, and the whole splash pass hides while the eye is under the soil.
@@ -663,13 +787,16 @@ Honest list. No feature promises (T42, RULE_13). Updated at every gate.
   dims with distance from the eye. `renderers/environment/skyDome.ts`,
   `rainSystem.ts`, `lightningBolt.ts`, `EnvironmentRenderer.ts`,
   `ops/damage/damagePipeline.ts`.
-- **Patch geometry is patch-local (2026-11-21).** A terrain patch and the soil slab
-  store heights above the pole's tangent plane (curvature drop plus relief, under
-  30 m over the 620 m ring) and carry the body radius in their placement; each Rapier
-  trimesh takes the same placement instead of having it baked into its vertices. Before
-  this, every vertex stored the planet radius, so float32 spent its whole 7.8 mm
-  spacing on heights that vary by 26 m. The three terrain LOD keys that no renderer
-  read are deleted. Tests: `planetSurface` and `planetSoilSlab`, 17/17.
+- **Patch geometry is patch-local (2026-11-21; one disc since 2026-11-27).** The
+  play disc and soil slab store heights above the pole's tangent plane (curvature
+  drop plus relief, under 30 m over the 620 m radius) and carry the body radius
+  in their placement. Physics now uses one Rapier heightfield over the same
+  shared field for the disc; the slab is not collided, because colliding the
+  earth's own walls and underside would turn the underground into a closed box.
+  Before the patch-local change every vertex stored the planet radius, so float32
+  spent its whole 7.8 mm spacing on heights that vary by 26 m. The three terrain
+  LOD keys that no renderer read are deleted. Tests: `planetSurface` and
+  `planetSoilSlab`, 17/17.
 - **Root Sight opens the hole its roots need (2026-11-21).** The mouth is sized from
   the roots' lateral spread (depth deepens the cavity but no longer widens the
   opening), and it is guaranteed to contain the padded bubbles it cuts, so the soil
@@ -727,10 +854,12 @@ Honest list. No feature promises (T42, RULE_13). Updated at every gate.
 - **T05 communication:** chat panel (`T`) with proximity and world tabs,
   data-driven emote wheel (`E`), and block/report on every chat message with a
   server-side context snapshot and rate limits. Record: `docs/tasks/T05.md`.
-- **T25 terrain:** one seeded field shared by client and server, an inner detail
-  patch plus a 620 m outer patch colliding against the exact drawn vertices,
-  per-plant capsule colliders, and sparse 32×32 soil chunks (height delta,
-  moisture, compaction, voids) persisted in Postgres with protocol 32–34.
+- **T25 terrain:** one seeded field shared by client and server. The play area is
+  one fixed 620 m-radius disc at 2 m cells, built once and collided by a single
+  Rapier heightfield; the rest of the planet is one static globe backdrop, with
+  no camera-selected LOD. Per-plant capsule colliders and sparse 32×32 soil
+  chunks (height delta, moisture, compaction, voids) persist in Postgres with
+  protocol 32–34.
   Height deltas are not yet written into a client chunk texture, so the lit
   ground does not sink; debris bodies and the dev collider overlay are pending.
   Full detail in `history.md`.
@@ -836,8 +965,8 @@ Honest list. No feature promises (T42, RULE_13). Updated at every gate.
   chip that turns amber for an approaching storm and pulses under a minute. The
   status card keeps the body only and says nothing when the plant is healthy; the
   old tick card is an operator readout switched from the dev panel, off by
-  default and refused without server-granted dev tools. Grow mode gets an edge tint, a crosshair, a badge and
-  a held-down Grow button instead of a line of text. A bottom action bar names
+  default and refused without server-granted dev tools. Grow mode gets an edge tint, a badge and a
+  held-down Grow button instead of a line of text. A bottom action bar names
   Grow / Inventory / Chat / Emotes / Hints / Menu with key badges, Escape opens a
   pause menu (Resume, Settings, Controls, Leave to title), hints are contextual
   and once-per-session, and HUD type has a config floor (`ui.hud_font_small_px`,
@@ -935,16 +1064,18 @@ Honest list. No feature promises (T42, RULE_13). Updated at every gate.
   wrapping inside 167px, settings 670×198. Pause rows were the one real finding
   and went from 39px to 44px.
 
-Covered by `pnpm verify` (1,178 tests). The sun/moon change is CSS and was not
-captured as an image: the preview tab cannot screenshot a page that runs a render
-loop, so the removal is verified by reading the computed styles, not by a picture.
+Covered by `pnpm verify` (1,178 tests on the day; the suite is larger now, and the
+count that matters is the one `pnpm test` prints). The sun/moon change is CSS and
+was not captured as an image: the preview tab cannot screenshot a page that runs a
+render loop, so the removal is verified by reading the computed styles, not by a
+picture.
 
 ### 2026-11-16 — Root Sight, gizmo, inventory, ledger
 
 All of the below is covered by `pnpm verify` (lint, typecheck, config validator,
-docs check, 287 server tests, 307 client tests). The **visual** half is not: no
-browser pass was run in this change, so the rows in `bug-inventory.md` that need
-eyes stay `[~]`.
+docs check, 287 server tests and 307 client tests on the day, not today). The
+**visual** half is not: no browser pass was run in this change, so the rows in
+`bug-inventory.md` that need eyes stay `[~]`.
 
 - **Root Sight.** One `apertureVolume` (mouth, radius, top Y, floor Y) replaces
 the unbounded XZ cylinder, the soil cut, the water clip and the plant occlusion
@@ -962,7 +1093,8 @@ keys and the absolute-Y ground test is `isBelowSoil`.
 - **Ledger.** Protocol version has one source (boot check against
   `PROTOCOL_VERSION`); `pnpm verify` includes `docs:check` and `verify:ci` adds
   the build; the ambient fade uses `1 − exp(−dt/τ)` with a config τ; the
-  mutation panel has a close; upkeep/thirst loss is broadcast as one batched
+  held mutations can be shed from the Inspect list (their only control);
+  upkeep/thirst loss is broadcast as one batched
   `PLANT_DAMAGE` per plant per tick; `validateMovement` is deleted and `INPUT` is
   documented as an ack-only heartbeat; the planet-body draw range and shell
   visibility live in one helper.
@@ -1214,10 +1346,11 @@ simulation, volumetric terrain, parametric terrain features, streamed world
 objects, ecological succession, and cloud-native orchestration. See
 `DESIGN.md` Parts 11 and 16. Two pieces of it are in code: T56 draws an authored
 arch as real 3D volume - a signed-distance field meshed by surface nets, with an
-underside, an overhang and bed colours - and the ground under the Root Sight
-aperture as a second volume with the shaft cut through it, so a buried eye sees
-earth instead of the back of the soil sheet. The rest of the ground is still a
-heightfield skin. See [`tasks/T56.md`](./tasks/T56.md).
+underside, an overhang and bed colours. Root Sight now has one cavity assembly: a
+bowl whose collar is conformed to the terrain at the cut ring, replacing the old
+separate aperture-soil body and skirt. The rest of the ground is still a
+heightfield skin, so T56's chunked volumes are not built. See
+[`tasks/T56.md`](./tasks/T56.md).
 
 The C02b WebGPU renderer is a v1 slice with impostor baking, VRAM pooling, GPU
 skinning, texture arrays, tier cross-fade, mutation signatures and a planet-body
@@ -1236,15 +1369,15 @@ and per-device key rebinding are in and passed the UI checklist; the death card
 now also gets the whole screen to itself. **T08A** is partial: the `player_state` restart copy
 persists an account's pouch and purse across a server restart and every pouch
 mutation is row-locked; the duplication audit passed on 2026-11-22. Trade, mail
-and listing are next, then the ADR-044 burial fix. AL-01 (benchmark, six fixed poses, GPU
-timing, zero-alloc audit) and AL-03 (GPU-band quality controller, replacing the
-CPU-fps-based `QualityController`) follow, per ADR-050. Shared depth between the
-WebGPU
-plant pass and the WebGL environment pass is **deferred, not a C02b blocker**:
-ADR-041 gates it on volumetric terrain (T56), the first geometry tall enough to
-occlude a plant. Plant appearance follows ADR-042 (ellipsoid L2, colour-only
-atlas L3). Broadcast cadence now honours `client_send_rate_hz` and
-`weather_send_rate_hz`; the per-plant event log is written and read back.
+and listing are next, then the ADR-044 burial fix. AL-01 (benchmark, six fixed
+poses, GPU timing, zero-alloc audit) and AL-03 (GPU-band quality controller,
+replacing the CPU-fps-based `QualityController`) landed 2026-11-15 and are not
+queued work. Shared depth between the WebGPU plant pass and the WebGL
+environment pass is **deferred, not a C02b blocker**: ADR-041 gates it on
+volumetric terrain (T56), the first geometry tall enough to occlude a plant.
+Plant appearance follows ADR-042 (ellipsoid L2, colour-only atlas L3).
+Broadcast cadence now honours `client_send_rate_hz` and `weather_send_rate_hz`;
+the per-plant event log is written and read back.
 Interest filtering now covers growth events, plant creation,
 `PLANT_SYNC`, `STATE` and `KEYFRAME` (INV-TM-10). Known gaps: a dormant plant's
 in-flight growth completes without a `GROWTH_EVENT`, so observers see the old
@@ -2131,18 +2264,27 @@ outcome the players have not built themselves.
   pass on the same frame and phase, and the backstep hold is 0.0015 day instead of
   0.02. Measured unpinned over 3.2 s: 193 frames, 2.087 px of travel, a largest
   frame step of 0.014 px, no backwards step and none over 1 px.
-- **One free camera.** `camera_mode: free` (the default) is a flying eye: W/S/A/D
-  head from `target - eye`, with no terrain follow, no target floor and no ground
-  or cavity clamp. Measured: a 6.671 m pan over a 0.829 slope while the ground rose
-  3.005 m changed the eye's height by 0.0000 m; looking down and holding W dropped
-  3.493 m in 0.7 s; aimed under a hill the eye held 0.593 m below the ground at its
-  own position. `camera_mode: ground` restores the old rig.
+- **The camera stays on the ground.** `camera_mode: ground` is the default: the
+  rig follows the terrain, floors the orbit target and rescues an eye that a drag
+  has already carried under the soil. A 400 px upward orbit drag at a fresh spawn
+  stopped the eye **0.02 m above the drawn surface** instead of leaving it under
+  the world. `camera_mode: free` remains available for fly-through inspection: it
+  has no terrain follow, no target floor and no ground or cavity clamp.
 - **Name tags are things in the world.** Their screen size follows
   `render/tagScale.ts` (22 px cap, 16 px at 20 m, 7 px floor) and the texture is
   drawn at `min(2, devicePixelRatio)`. Measured in the mutation gallery at exactly
   5 / 20 / 50 m: 21.99 / 15.94 / 11.57 px, with the sprite 0.278 / 0.806 / 1.462 m
   and the canvas 159 px at dpr 1.42. Inspect prints the owner's display name or
   "Unnamed plant", never an id.
+- **Inspect says whether the other player is awake.** Clicking another plant
+  shows a state row above its parts: a green dot and "Awake - here, tending
+  their plant" while the owner has a live connection, a dim dot and "Asleep - the
+  plant grows on its own" when they do not. The server tags each plant with
+  `ownerOnline` - presence it already had to know in order to name the owner - so
+  the row is right for a plant whose owner logged out mid-session, and a server
+  that omits the field leaves the row out rather than claiming a state. The dev
+  rival is never connected, so "Spawn Rival + Noon" reads Asleep: live, one node
+  seen, 1.0 biomass. See [`docs/verify/s25-rival-asleep.png`](./verify/s25-rival-asleep.png).
 - **The clock says what time it is.** The vitals chip reads
   `◐ Dawn · Season 1 · Day 3 · 07:59` and turns over to `☀ Day` at 08:00, from the
   server's own day fraction (boundaries 05:00/08:00/17:00/20:00).
@@ -2189,3 +2331,365 @@ outcome the players have not built themselves.
   its job inside the soil skin just outside the mouth. It is a 0.45 m bubble, so
   0.65 m outside the mouth in the earth the view is still soil: it was built to
   see the pit from the skin, not from anywhere underground.
+
+## Standing water is solved, and the ground draws it (2026-11-25)
+
+> Rewritten 2026-11-25. The sheet pipeline (rain film, water-table plane, side
+> sheet, river ribbon) is **deleted**, not hidden: the sheet file is gone and
+> nothing can switch it back on. Standing water is the solver in
+> `surfaceWaterField.ts` and the one `surfaceWaterMesh.ts` that draws its own
+> level; the soil shader still draws damp ground and snow from the same field.
+> `config/water.json` `enabled` now gates that single mesh and is **true**, and
+> the sea is a separate mesh in ocean mode. The flood is a continuous level
+> surface with an interpolated waterline, not a 67 cm staircase of quads. What
+> is still owed is depth: the solver clamps a cell to `maxDepthM` (8 cm), so it
+> is a film over every hollow and not a lake; a basin solver is the next step.
+
+- **A puddle is where the solver holds water.** The rain sheet used to be a
+  texture of discs laid on the terrain: it floated over a slope, ended at its
+  own rim and showed through the cutaway in the title. Standing water is now a
+  field - `renderers/environment/surfaceWaterField.ts` solves a shallow-water
+  grid (rain in, flow downhill into hollows, infiltration, evaporation, snow
+  melt at a twentieth of infiltration) and packs surface height, dampness and
+  depth into one float texture. The soil shader draws water where that depth is
+  positive, so a pool ends where the terrain rises through it and a shoreline
+  moves when the terrain does. The cells are 1.6 m (`surface_extent_m` over
+  `surface_cells`), which is what decides how round a pool can be. The grid is
+  80 x 80 and solves at most one tick per frame: at 192 x 192 the solver walked
+  36,000 cells several times a frame and camera movement fell to 11 fps in rain.
+- **The edge bends inside the cells.** The field is sampled from a noise-warped
+  position (up to 0.6 of a cell), so the shoreline meanders within the grid
+  instead of stepping along it. The warp cannot invent water on dry ground:
+  every value it reads is a cell the solver filled. A millimetre of depth noise
+  on top breaks what is left of the contour into a waterline.
+- **The rim is wet before it is water.** A dark damp band (`wet_ground_opacity`,
+  drying at `wet_ground_dry_per_s`) surrounds every pool and follows it as it
+  shrinks, so a puddle that has just drained leaves darkened soil rather than a
+  clean edge and then nothing.
+- **The reflection is the sky's own gradient.** A pool reflects `sky_horizon` at
+  a grazing ray and `sky_zenith` underfoot, mixed under a Fresnel curve with a
+  small broad sheen so water is still water when looked at from above. The body
+  colour comes from `water_body` and `water_deep`; the deep end takes over as
+  the light path through the water lengthens, and `water_absorption_per_m` is
+  the ocean's number, not the pool's - a pool is centimetres deep and its murk
+  is the shader's own.
+- **Snow lies where water would.** The same depth channel draws white drifts in
+  snow mode, with the damp band as their soft edge, so a drift fills a hollow
+  and thins on a rise for the same reason a puddle does.
+- **The ground has strata.** The soil shader adds horizontal strata seams and
+  gullies driven by world height and noise, so a cut bank reads as layered
+  earth rather than one colour.
+- **The title pour arrives.** Watering runs an arc of droplets from the can to
+  the plant's ground line, ending in a wet patch, two rings and three thrown
+  droplets; feeding drops three morsels and one bouncing crumb. The layer is
+  emptied on leaving the title and never draws below the ground line, so nothing
+  falls through the picture into the soil cutaway. See
+  [`docs/verify/s16-puddle-shore.png`](./verify/s16-puddle-shore.png).
+
+## The level of detail is a joint, not a line (2026-11-25)
+
+The ground the player walks on is two meshes: a 180 m patch at 0.7 m vertices,
+and a coarse ring around it celled in metres. They used to *overlap*. The ring's
+hole was cut per triangle, so a triangle with one vertex outside still reached
+most of an eight-metre cell into the fine patch; the ring was built two
+centimetres lower so those coplanar slivers would not z-fight. On flat ground
+that worked, and on a hillside it drew a thin jagged line across the ground
+wherever the coarse interpolation stood above the fine surface - the seam read
+as a slice through the hill, visible from both sides.
+
+- **The ring begins where the patch ends.** Every ring vertex that falls inside
+  the hole is snapped onto the hole's square, so the coarse mesh starts exactly
+  on the fine patch's boundary and no sheet lies over another. Both are built on
+  the same skin, so there is no step and no drop to hide.
+- **The joint is closed by an apron.** The two meshes meet along one line but not
+  at the same vertices: the coarse chord cuts across the fine edge's small rises
+  and can leave a crack a millimetre wide. `planet-terrain-apron` hangs a metre
+  from the fine patch's rim, built on the fine patch's own edge vertices, and
+  fills it. It is the same seam the far skirt already closed from outside.
+- **It is the same ground on a sphere.** Both patches sample one height function
+  (curvature drop + relief + skin) at whatever tessellation they have, and both
+  store patch-local metres under the same radius placement, so the joint is a
+  centimetre of vertex spacing, not two planes that happen to meet.
+
+See [`docs/verify/s18-lod-seam-before.png`](./verify/s18-lod-seam-before.png) and
+[`docs/verify/s18-lod-seam-after.png`](./verify/s18-lod-seam-after.png): the same
+eye-level view across the seam, taken from the far side of it.
+
+## The horizon has hills and the water has one surface (2026-11-25)
+
+Two flat things were left in the world: a horizon that was the bare sphere, and
+water that was drawn as a separate sheet beside the ground. Both are gone.
+
+- **The far field is ground, not a backdrop.** `planetSurface.ts` gained a second
+  relief, `farFieldRelief`: three octaves at 900, 420 and 210 m, 1.5 to 23.5 m
+  high, faded in from the play patch's radius over 0.9x that radius. At the
+  patch's own rim it is exactly zero, so the ring and the far field share the
+  bare sphere there and the 620 m seam is one surface by construction - no skirt,
+  no blend strip. From the rim it rises instead of sagging, so the silhouette is
+  a line of hills rather than an arc, and nothing in it can be inside the planet
+  body that is still drawn underneath: the relief is always at or above the
+  sphere, by design.
+- **The ring is cheap because it is only a silhouette.** `createTerrainFarField`
+  reuses `createTerrainPatch` with a 6 km extent, 64 segments (94 m cells) and the
+  same hole the 1 240 m ring already cuts, and the ground shader cuts it with the
+  same outer cut. At 2 km it is ten-odd cells per hill, which is what the eye
+  needs; the detail lives in the 180 m patch.
+- **Water is one mesh whose height is the solve's own level.** `surfaceWaterMesh.ts`
+  builds a `cells x cells` grid at the field's cell centres, puts the field's
+  level (bed plus column, the R channel) in the vertex height and its column (B)
+  into `aWater`, and shades it with the same `waterMaterial.ts` the sea uses:
+  absorption, Fresnel sky, ripples, sun glitter, aerial perspective. The sheet's
+  own square edge is faded at 0.8/0.99 of the extent and the grid moves with the
+  field origin, so there is no visible edge to the water.
+- **The shoreline is a contour, not a quad edge.** The material's edge fade cuts
+  where the interpolated column crosses the minimum visible depth, so the
+  waterline runs through a cell - the 67 cm staircase the old field drew is gone -
+  and a pool ends where the terrain rises through it, because the level came from
+  the terrain under it in the first place.
+- **The old pipeline is deleted.** The sheet renderer (rain film, water-table
+  plane, side sheet, river ribbon) and its test are removed; `riverMask.ts` keeps the surveyed river mask and the water table
+  for the underwater questions, and `config/water.json` `enabled` now gates the
+  one surface mesh and is true. `describeWaterSurfaces()` reports one surface,
+  `getWaterDebug()` reports its volume, depth and cell count.
+
+What is still owed is depth: a cell clamps to `surface_max_depth_m` (8 cm), so
+the flood is a film that follows every hollow rather than a lake in the low
+ground. That is S31's remaining half, and it is a solver change, not a drawing
+one.
+
+## Weather stands on the ground it falls on (2026-11-25)
+
+A drop is anchored in the world and stands on the terrain under it, baked once
+per wrap from the same height function the ground is drawn from. What it was
+compared against was in a different space: its column is local to the rain
+volume, which sits at the ground under the eye, while the baked ground height is
+a world height. At a 20 m ground every drop below 20 m was culled - the shower
+existed only in the top of its column, in the sky above the player's head, which
+is what "rain not showing" looked like. The offset is now added before the
+comparison, so the field fills the air from the soil line up, and the landing
+fade happens at the soil line rather than at the eye's ground height. Snow is
+culled by the same test and was fixed with it.
+## The sky is a layer you can leave (2026-11-25)
+
+The world is a planet: 100 km of rock with a shell of gas on it, and space
+outside that. The renderer now knows the difference. Everything below reads one
+number, the eye's altitude above the terrain under it.
+
+- **Air has a thickness.** `airDensityAt` is the share of the column still
+  overhead - full at the soil, one e-fold thinner every 8.5 km, nothing at
+  60 km. It is the same gas the fog is made of, counted twice: overhead as sky,
+  along the ground as haze.
+- **The sky fades to space.** The dome's gradient is the lit air, so it dims to
+  black as the column runs out, while a lit rim remains where the line of sight
+  grazes the shell. That rim sits at the planet's own dip
+  (`arccos(R / (R + altitude))`) - the planet's edge, not the astronomical
+  horizon - so the world from orbit is a dark disc with an atmosphere on its
+  edge rather than a flat backdrop with a blue ceiling.
+- **Stars hold above the air.** They used to exist only at night because night
+  was the only time the sky was unlit; above most of the shell they are there
+  in daylight too, which is what space looks like.
+- **Clouds are a deck.** The bands are drawn on the dome, but they are pinned to
+  1.4-2.6 km and leave the view once the eye is over them: climbing goes through
+  the deck instead of into a painted sky.
+- **The view reaches as far as the eye can see.** Fog reach scales with altitude
+  (320 m at the soil, tens of kilometres at 20 km) and the camera's near/far
+  planes scale with it, so the planet is visible from orbit instead of being
+  clipped by a 2.5 km far plane. At the soil nothing changed: the same 320 m
+  view, the same sky, the same horizon.
+
+See [`docs/verify/s20-limb-from-20km.png`](./verify/s20-limb-from-20km.png) and
+[`docs/verify/s20-ground-still-below.png`](./verify/s20-ground-still-below.png).
+
+Weather is server-authoritative, and that was checked against a second client:
+forcing rain through the server (`dev_set_weather`) turned both clients to rain
+and drew the field in the second window, so a client that shows no rain is a
+client that has not received (or has not reloaded into) the current weather -
+see [`docs/verify/s20-second-client-rain.png`](./verify/s20-second-client-rain.png).
+
+- **The dev panel, the camera and the orbital face (2026-11-25).** The panel is a
+  column again, so every tab's controls are on screen and every command reaches
+  the server (`dev_fill_energy`, `dev_pause_simulation`, `dev_end_season` all
+  answered and took effect). Camera presets move the eye - `Top Down` is 150 m at
+  78 degrees, `Side View` 80 m at 6, `Far View` 300 m at 12, `Orbit Planet` and
+  `From Local` a planet-scale pose - and the camera tab shows the live smoothing
+  and distance bounds rather than guessed ones.
+
+  **The wheel reaches the whole planet.** The maximum orbit distance is a
+  constant 250 km (it was `camera.far * 0.9`, about 2 km), so 130 notches of the
+  wheel take the local camera from 3 m to 250,000 m with the far plane at
+  400 km. That is the developer's way out: the same wheel, no command.
+
+  **Growth options stay true.** The panel asks again every 1.2 s while it is
+  open, keyed on energy, biomass, water and minerals, so a card that read
+  "Needs more energy" at click time reprices as soon as the plant has it
+  instead of keeping the price from the frame it was opened on.
+
+  **The planet has a face from orbit.** The soil shader is a plot shader: from
+  50 km it averages into one brown disc. A shell 50 m above the body
+  (`ORBITAL_SHELL_OFFSET_M`, wide enough to clear the depth buffer at 250 km)
+  fades in
+  between 25 km and 60 km, where the play patch is smaller than a pixel, and
+  paints soil provinces, vegetation, drifting cloud with its shadow, the sun's
+  terminator and the band of air at the limb. At the soil it does not exist:
+  the ground, the plant and the play area are unchanged.
+
+  See [`docs/verify/s21-orbit-from-local-view.png`](./verify/s21-orbit-from-local-view.png)
+  and [`docs/verify/s21-orbital-face-40km.png`](./verify/s21-orbital-face-40km.png).
+
+### The camera in orbit, the sky at altitude and the tags over rivals (2026-11-25)
+
+**Planet view is its own rig.** Entering it clears the ground camera's focus tween, its look-up pitch and any drag pitch in flight, and it keeps its own near/far and its own distance limits; `applyCameraRange`, `applyCameraPan`, `updateCameraFocus` and the pitch all return while it is active. The polar range is a full turn, so orbiting under the planet is how the player looks up at it, and right-drag pan is off because it would walk the target off the centre. ESC, Reset View and Local View leave it. `window.__plantLegacy.setPlanetView(true|false)` and `planetView()` drive it from the console. **The buried-eye test knows about the orbit**: it compares the eye's y to the terrain height, which is the right question for a camera standing on the pole's tangent plane and the wrong one for an orbit (the whole lower hemisphere is below y = 0). `setPlanetViewActive` exempts the orbit, so the body, its shells and the orbital face all stay drawn when the player orbits under the planet - they were switched off as "buried" and the frame emptied to stars.
+
+**Height is measured from the planet's centre.** `eyeAltitudeM` is `|camera - centre| - radius` whenever the eye is more than 2 km above the surface, and the ground-relative reading (with relief) inside that. The old flat reading put a camera 223 km up at 300 km from the centre at 123 km, and the air, the far plane, the fog reach and the sky were all sized for it. The far plane and the near plane follow the real altitude: 400 km of far at 200 km up, a near plane that scales with height.
+
+**The sky is one colour field, not two halves.** A single `airShare` (the air density, with no floor) decides how much of the horizon's colour is in the eye's sky, above and below the horizon alike, so the two cannot meet in a line. Below the horizon the ground's own haze gives way to space as the air thins - a climb to 10 km no longer paints three quarters of the planet's place black. The limb glow scales with the air, so a planet seen from orbit sits in black space with stars rather than inside a pink circle; the orbital shell paints the body's own bright edge.
+
+**Name tags are names.** `PlantLabels.ts` draws the name with a soft shadow and nothing else: no plate, no border, no status dot. The size follows `tagScale.ts` (12 m, 14 px, falloff 0.85, 6-18 px), so a rival across the field is small and quiet instead of the same size as one at arm's length.
+
+**A title pour reaches the ground.** Droplets hold their opacity to 97% of the fall and fade as they land; each pour owns its pieces and cleans up only those, so pouring again does not erase the first pour's drops in mid-air; meal lies on the soil for 3.2 s; and the wet patch is a 22 px stain anchored at the surface line that grows downward and darkens the soil it soaks into.
+
+Checks: `pnpm verify` exit 0 (client 1024 tests, server 527), `tagScale.test.ts`, `rivalTagLabel.test.ts`, and the captures [`s22-planet-from-orbit.png`](./verify/s22-planet-from-orbit.png) and [`s22-horizon-at-40km.png`](./verify/s22-horizon-at-40km.png).
+
+### The aim, the note and the air along the ray (2026-11-25)
+
+**The aim has a second reading.** A curved tube in the air cannot say which way it leans toward the camera: three dimensions are drawn on two, and a foreshortened arrow is ambiguous exactly where aiming matters. The gizmo now also draws the horizontal half of the aim *on the soil*, from under the node out to the ground it would reach (`groundPath` and `groundHead` in `growthAimGizmo.ts`, geometry rebuilt each frame in `updateGrowthDirectionLine`). It is a tapered tube at a third of the arrow's own gauge, 1.6-5 cm across against brown ground, with a matching head and the same green or amber ink; it is hidden when the aim has less than 6 cm of horizontal reach, where there is no heading to tell.
+
+`rotateGrowthAim(dx, dy, snapToStep)` snaps yaw and pitch to 15 degrees while Shift is held, and the compass in the option card reads in metres: `away and right - 15 degrees down - 0.82 m out - -0.21 m up`, or `straight up - 0.72 m` for a vertical aim. `growthAimCompassWords` is the one place those words are made, so the card and any future readout cannot disagree.
+
+**The extra information has a home that does not block the screen.** The old per-card drawer expanded over the play area whenever a pointer crossed the row. It is now `#growth-note`: a fixed field note at the lower left, 248 px wide with a 46 vh ceiling, `pointer-events: none`, marked with a leaf dot and a left rule. It carries the same content the drawer did - label, the four cost pills, the description, the warning when there is one - and it opens on hover or focus. Clicking a card pins the note to that card (`is-pinned`, amber rule) and a hover over a sibling no longer takes it away, because the numbers being read are the ones being aimed.
+
+**Air is measured along the ray, not at its end.** `transmittance()` asked the height of the surface point and nothing else, which is right only for a view from inside the same air. At 40 km the eye stands above almost all of it, so a hill 20 km away was still mixed with sea-level in-scatter and read as the horizon's white - the arch and the props washed out for the same reason, since `standardAtmosphere` clamped every fragment to `max(0, y)`. `atmosphere.ts` now has `transmittanceRay`/`applyAtmosphereRay` and a four-midpoint GLSL mirror (`atmoApplyRay`): density is integrated between the eye's height and the target's, the ground shader passes `atmoHeightAboveGround(cameraPosition)` and the target, the SDF plants and every patched standard material pass `cameraPosition.y`, and the water shader - which had no atmosphere at all - shares the same model through `setWaterAtmosphere`. From the ground the two models agree to 1e-6, so nothing in the play area changed; from altitude the planet keeps its colour and the distant ground gains the graded haze instead of a flat white wash.
+
+**The orbit gives the eye back where it took it.** Leaving planet view restored a hard-coded seat, `camera.position.set(0, 18, 26)`, whose 18 m was the play area's soil when it was written. The relief has since risen to about 21 m there, so the returning eye stood three metres inside the hill and the screen filled with brown. `setPlanetView` now copies the eye's position and the orbit target on the way in and puts them back on the way out; verified live as `before [0.55, 21.51, -1.19] -> orbit -> after [0.55, 21.51, -1.19]` with the seed projected at (640, 268) in front of the eye.
+
+**The ground has land cover, and it reaches the horizon.** Every structure the soil shader had - clods at half a metre, damp patches at metres, strata, gullies - faded out by about 90 m, so beyond that the plain was one flat brown all the way to where it met the sky, and the planet seen from orbit was two browns in even blotches. The shader now also reads *provinces*: a noise at about 360 m and a second at about 1.8 km mix lichen (the foliage ramp's shade step, pulled 45% back toward bare earth) onto the gentle ground and a paler dry earth onto the crowns of the broad rises, at 0.22 and 0.14 weight. Steep faces keep their cover thin, because cover sheds off a slope and the eroded brown should show. These scales survive to the horizon and to orbit, which is what turns the distant plain from a cut-out into land - see [`s24-ground-land-cover.png`](./verify/s24-ground-land-cover.png) and [`s24-planet-land-cover.png`](./verify/s24-planet-land-cover.png), where the planet now resolves into continents rather than patches.
+
+**Relief stops running along the lattice.** Value noise on a square lattice puts its features on that lattice's rows, which is what made a hillside read as one dune with two or three parallel crests. `terrainUnitAt` now samples its own coarse noise first and displaces the sample point by up to 0.55 of a base wavelength (capped at 140 m) before the octaves are read, so crests bend around each other. The displacement is authored in the field's own units, so a coarser or finer field warps by the same fraction of its wavelength; the field stays deterministic, inside its amplitude, and smooth across a one-metre step.
+
+Checks: `atmosphere.test.ts` 15 pass (including the level-ground agreement, the altitude ordering and the "more of its own colour" case), `terrainField.test.ts` 15 pass (including the warp's one-metre smoothness), `npx tsc -p apps/client --noEmit` clean, and the live run: the note opens at (18, 547, 248, 99) with its pills, pins on the aimed card, `devAimShadow()` reports an 85-vertex ribbon 0.46-0.53 m long with its head at the tip, the compass reads `away and right - 15 degrees down - 0.82 m out - -0.21 m up`, the world renders with no shader errors after the change, and from planet view the disc keeps its brown and green at 273 km instead of washing to the horizon's white - see [`s23-planet-with-ray-air.png`](./verify/s23-planet-with-ray-air.png).
+
+### The whole planet, its sea, its spin and its moon (2026-11-25)
+
+**The orbit floor was the zoom defect.** `setPlanetView` set `controls.minDistance` to `radius * planet_view_min_distance_multiplier`, whose 1.004 default is 400 m of altitude - so the only ground the camera could be brought down to was the detailed patch it happened to start over. The working floor is now `planet_view_clearance_m` above the *drawn relief under the eye* (`reliefAtDirection`), with the multiplier left as a hard lower bound at 1.0002. Verified in the live page: a wheel zoom from 200 km settles at 400 m from the centre on the old limit; the new limit is the relief plus 60 m anywhere on the body. `planet_view_zoom_speed` and `planet_view_rotate_speed` tune the hand controls for a globe, and a dev time change re-frames the orbit on the lit face (`planetViewUserAdjusted = false` plus `framePlanetViewTowardSun`).
+
+**The bare ball is gone.** `renderers/environment/planetRelief.ts` evaluates one seamless relief field by direction on the sphere and builds three displaced-sphere tessellations (64/128/256 facets, chosen by eye altitude with a 1.6x coarsening hysteresis). A level is a tessellation, not a second terrain: every level samples the same function, and `planetRelief.test.ts` asserts that at a shared direction every level stores the same height (to the vertex attribute's float32 spacing), so a switch changes sampling density and drops no relief. The field is exactly zero inside `FAR_FIELD_EXTENT_M + 200`, where the far patch is also zero, so the globe and the play area meet on one line. `planetSurfaceReliefAt` is the authored field plus the global one; the orbital shell's mask is baked from it equirectangularly (512x256) so the coast the shell paints is the coast the ground draws.
+
+**Water everywhere, and a moon that exists.** `createPlanetSea` is a sphere at sea level over the same field with its polar cap removed (the local dome owns that piece, and the two surfaces agree to under half a metre along the join), carrying its own water column per vertex so shelves are pale and basins dark. The body turns about its pole by the hour angle - relief, sea and orbital face together - and the moon is a lit body on a six-radii orbit as well as the dome's disc. The clear colour goes to black with the air density, which is what the purple frame above the planet was: the background was lerped to the horizon colour at every altitude.
+
+Checks: `pnpm verify` exit 0 (client 1036 tests, server 527), `planetRelief.test.ts` 5 pass, `orbitalShell.test.ts` and `celestial` suites pass, and a live render at 120 m over the far side (level 2, 446k triangles, no shader errors) with the orbit frame's corner pixels reading `[0,0,0]` with the sky dome and `[5,6,7]` without it. The rendered look was not reviewed on screen after the change: the preview window was not being drawn while the work was done.
+
+### Verified on screen: the globe, its coast, its moon (2026-11-25)
+
+**The polar crater was the sea's own hole.** Cutting an eleven-kilometre cap out of the planet sea to let the local dome own it left a hole that the dome cannot fill from orbit - at a hundred kilometres out the tangent-plane dome is fifty kilometres under the surface - so what showed through was the relief sphere's polar triangle fan: a grey disc with a starburst of its own edges. The sea sphere has no hole now (it is water at the same level as the dome over the play area, so the overlap cannot be seen) and the orbital shell stops smearing the mask's one-texel polar row into radial streaks by fading to the play area's own sample over the last few degrees.
+
+**The world is a landmass, not a shoal.** The far field's hills were biased a metre and a half under sea level, which made the play area an island a few hundred metres across in an infinite teal sheet: from three kilometres the whole screen was water with one thin strip of sand, and the horizon was a drawn line. They are eighty metres high now, so the world sits on a real island with valleys and a coast at four to six kilometres, and the ground under the plant is part of the same landform the globe shows. Sea level is still 6 m, so the basins and inlets fill and the far field's own noise decides the shoreline.
+
+**One sheet of water, not two.** The local ocean dome reached 150 km when it was the only sea; with the planet sea under it, at a hundred kilometres from the pole the two surfaces crossed and drew a single straight line across the whole view - the "vertical line on the LOD square" that was not a terrain seam at all. The dome is 14 km now, past the authored shelf and still within a metre of the sphere, and the planet sea carries everything beyond it.
+
+**No pop at the switch, measured.** At the two altitudes where the drawn relief level actually changes - 9 km for 64 to 128 facets, 1.7 km for 128 to 256 - the frames rendered from the two levels are pixel-identical (0 differing pixels over the whole 1161x934 buffer): the local ground patches cover the switch there, and where they do not (12 km) the change is a mean of 2 of 255. The levels are the same surface sampled more finely, so there is nothing to pop.
+
+**The moon has a face.** Its body was a plain sphere; it now carries a drawn surface of maria and craters, so a body in space is recognisably the same moon the sky dome draws. Its orbit (six planet radii) and radius (0.27 of the planet's) are the original values: from planet view it trails well off the disc's limb, which is where a moon that far out belongs. Craters are the only change.
+
+**Zoom, from the far side.** A wheel zoom from 200 km over a point 105 km from the pole now reaches 63 m above the relief there - level 2, no crater, water under it - which is the case the old 400 m floor made impossible.
+
+Checks: `pnpm verify` exit 0 (client 1036, server 527) after every change. Known limits: the planet sea is sampled every 2.4 km, so close-up open ocean away from the play area shows depth banding and foam speckle (the dome covers the world's own coast exactly); and a random spot on the globe is more often water than land, so zooming in anywhere usually lands on sea.
+
+### The globe at arm's length (2026-11-26)
+
+**The eye was clearing the wrong surface.** `reliefAtDirection` sampled the relief field with the *world* direction while the relief meshes are rotated by the body's hour angle, so from noon onwards the camera's floor came from the opposite side of the planet and the eye could sit under the ground it was meant to be above. The unspin now lives in that one function.
+
+**The water was banded, not the land.** The planet sea took its column per vertex and the sphere has 128 latitude rings, so every vertex on a ring carried the same depth and the shader interpolated *along* it. From 60 km the ocean came out as concentric arcs of shelf and basin that had nothing to do with a coast - the "pattern of terrain and water at certain zoom levels". The sea now uses one column for the whole body (`uOceanDepthM = 14`), and the coastline is the orbital face's job, where the mask has a kilometre to a texel.
+
+**A bullseye at the pole.** The polar cap of the sea had been cut away for the local dome, and from orbit the cut showed the bare shell as a grey ring. Cutting it smaller only made a smaller ring: the sphere is whole again, sits six centimetres proud of the dome it overlaps, and the shell's shelf gradient is two metres of depth instead of six, so the play area's island no longer wears a pale halo.
+
+**An eye-following ground disc was tried and removed.** It drew the height function finely wherever the eye went, which was the right idea, but its radial grid showed as a diamond lattice of ground and water, its water plane z-fought the terrain from below, and it hid the globe's own surface. The reasons it existed are real - the levels sample the relief every 390 m, so sixty metres above the far side is a smooth shell - but a second surface is not the way to get them: it has to be the levels' own detail, not a patch that follows the camera.
+
+**A camera tilt to the horizon was tried and removed.** Below 2 km the planet-view rig looked towards the horizon rather than at the centre, which is right for arriving at a ground, but it wrote the body's up into `camera.up` and that vector outlived the orbit: back on the ground the sky was rolled and the mouse no longer matched the rig. An orbit camera aims at the centre until a rig owns the local look direction.
+
+Checks: client 1036 tests, typecheck and biome clean. Known limits: terrain away from the play area is still the globe's 390 m sampling, so a zoomin to the ground elsewhere gives a smooth surface with the right sea, not hills; the sea's coast at 30-100 km is the mask's 1.2 km texels, which reads as a ragged edge rather than a shore.
+
+### The relief level that followed the eye (2026-11-26, removed 2026-11-27)
+
+**Removed on 2026-11-27 with the single-disc terrain.** `planetReliefChunks.ts` was the same surface as the levels - the same `planetReliefAt`, the same ground material - built as a quadtree over the six faces of a cube-sphere. A patch was split while its arc was longer than 0.6 of the distance to it, down to twelve metres: at sixty metres up the ground under the eye was sampled every metre or two, and the limb was still a handful of degrees per patch. 160 patches, 121 vertices each, geometry cached by face/depth/cell and rebuilt at most every 220 ms or 40 m of travel, so a moving eye cost a partial rebuild rather than a new mesh. It replaced the sphere level under 30 km instead of sitting on top of it - one surface, nothing hidden, nothing overlapping.
+
+Cube faces avoid the pole pinch of a latitude/longitude sphere, and two patches at the same depth share their edge vertices exactly (a test asserts both, face seams included). Where different depths meet, each patch's boundary ring is pushed into the body as a skirt, emitted with both windings, so a T-junction fills with ground rather than sky.
+
+**"Buried" was being decided on the pole's flat plane.** The soil test compared the eye's height with the *authored* terrain at its (x, z) - correct over the play area, and thirty kilometres wrong over the far side, where that plane is far below the body's own surface. An eye sixty metres above the far side was classified as underground: the planet's skin was hidden, the sky was told the eye was buried, `eyeAltitudeM` read zero, and the LOD believed the eye was on the ground. Classification is now radial past the far field, with the relief under the eye subtracted so the number is the height above the ground rather than above the bare sphere.
+
+**The blur when the world gets heavier was the band spending resolution.** `QualityController` treats resolution as its first lever, so a heavier scene - more plants, a finer terrain level - was drawn at 0.75 of the screen and upscaled; the raymarched plant, the finest thing on screen, took the worst of it. `resolution_floor` is 0.9: the lever still exists (the config's own test asserts it must), the worst case is a tenth of the frame rather than a quarter, and the band reaches draw distance and the tier before it upscales anything.
+
+Checks: client 1042 tests (six of them the chunk level: bounded leaf count, deep patches near the eye, every vertex on the field, no seam within a face, none between faces), typecheck, biome, `config:validate`, `config:keys`, `docs:check`. Known limits: close to the ground the chunk level is the global relief only - the authored play-area patches still own the pole - and a camera that moves faster than 40 m per 220 ms gets a coarser ring until it slows.
+
+### The detail reached the eye, and the sea stopped covering it (2026-11-26)
+
+**The tree was building the wrong end of the planet.** `selectReliefPatches` walked the cube depth-first from face 0, and every node checked its own split rule against a leaf budget that was already nearly spent by the time the walk reached the face the eye was on: all 160 leaves went to the first faces visited, and the ground under a camera sixty metres up was a depth-4 patch nine kilometres across with ten cells - a smooth plane at any zoom. The selection is now a global priority refinement: the patch with the largest "arc over distance" need is split next, wherever it is, so the finest patches land under the eye (the deepest is depth 13, twelve metres of arc) and the rest of the globe stays coarse. 220 patches, and the set is cut around the eye rather than around a face.
+
+**The frame of ocean was the ocean.** The relief there is an archipelago a few hundred metres wide, and a low camera aimed near the horizon sees water: hiding `planetSea` exposed the rolling chunk ground under the identical camera. The low-altitude tilt now looks about thirty degrees below the horizon, through a scratch matrix so `camera.up` is never written.
+
+**The sea painted over the land it lay behind.** The body's sea was transparent with `depthWrite` off, so it was drawn after the terrain, and at every pixel where the ground under it was further than the water's own fragment - every pixel of a coast seen from above - the depth test passed and the water covered the land. The far-side camera therefore saw open ocean where the terrain was, which reads as "the chunk level does not reach the screen" when the level is drawn and the water is in front of it. The planet sea is opaque and writes depth; the only thing lost is the four per cent of sky that showed through it.
+
+**The ground's grain was a projection, not a surface.** The soil's detail, clods and bump sampled `vSoilWorldPos.xz`, a flat plane through the pole: on a sphere that field folds into concentric rings centred on the play area - which is where they were reported - and the same lookup paved the water with squares. The ground's detail is sampled on `soilSurface`, the arc and azimuth the shader already had. The same change was tried on the sea and reverted: the arc runs to 157 km there, and a ripple field multiplied by it aliases into a lattice far finer than the flat one, so the honest fix for water is a 3D field on the unit direction, which is not written yet.
+
+**The far side is a continent now.** `SEA_BIAS_FRACTION` is 0.15 instead of 0.40, so the land the globe shows is land and a camera can be put over inland relief rather than over a shoal. Sea level and the play area are untouched: the relief is exactly zero inside its holdoff, so this only changes the body beyond six kilometres.
+
+Checks: `pnpm verify` exit 0 (client 1042, server 527), `docs:check`, typecheck, biome on every touched file. Measured live at 161-224 m above an inland high spot with the sun at 0.5: 219 patches before a 300 m hop, 219 after, with 182 of them replaced, 50 at depth 11 or finer and the deepest at 13. Known limits: those frames read soft because the field's finest octave is 21 m of height over 160 m of ground and the far-side sun is high - the relief is there, the light on it is gentle; and the sea's own ripple still uses the flat field, so open water away from the play area keeps a faint square grid.
+
+### Water on the surface, and a zoom that arrives (2026-11-26)
+
+**The sea's waves are a gradient, not a projection.** World xz is a flat plane through the pole: a wave field sampled there folds into concentric rings around the play area and a lattice of squares everywhere else, and both turn as the camera moves - the tiled water a low eye saw. A wave needs no coordinates: a train along direction k has height `sin(dot(p,k) - wt)` at a surface point p, so its slope is k times the cosine projected into the tangent plane. `seaSurfaceNormal` sums five such trains, none a multiple of another and all tilted off the axes, on the body's own surface point; three orthogonal trains of related frequency had summed to a standing lattice of bright points, which is why the first version looked like rows of white dashes. The trains also retire by their own wavelength with distance from the eye, scaled by the eye's altitude - a ripple is a highlight within a hundred metres and an aliasing dotted line at a kilometre - so the sea keeps water in the near field and a surface colour at the horizon instead of banded stripes all the way out. `uEyeAltitudeM` had no writer at all and is now fed from the renderer.
+
+**The far side's speckle was one texel of coast.** The orbital face decided sea with a hard step at sea level, and the mask is a kilometre to a texel: every texel was entirely sea or entirely land, so coasts staircased and every borderline texel inside a continent showed as a bright square. The shoreline is now antialiased over the height the ground falls across one texel of the mask's own slope, and the gradient that shades the relief is clamped, so a single texel that disagrees with its neighbours cannot become a bright facet.
+
+**Zoom traversed the ground instead of descending onto it.** Two faults. OrbitControls dollies by a fraction of the distance to its target, and on a planet that target is the body's centre a hundred kilometres away, so one notch near the ground moved the eye ten kilometres and the only ground an eye could reach was the seat it started on. And a wheel did not count as taking the camera (`pointerdown` was the only thing that stopped the orbit following the sun), so zooming kept the eye being lerped across the lit hemisphere - it slid over the ground and arrived somewhere else. The orbit's own zoom is off while it is active, the wheel moves the altitude by a fraction of the altitude itself (with a floor of the configured clearance above the ground under the eye), and a wheel now marks the camera as taken. A wheel also re-aims at the cursor by at most half a radian: the screen ray is degenerate when the orbit looks straight down its own up vector, which is exactly over the play area's pole, and one bad ray used to throw the eye to the far side of the planet.
+
+**A relative height, signed.** The dolly and the floor both clamped the relief at zero, so a basin below the base sphere held the eye that depth above the ground and a descent stalled short of its floor.
+
+**The level under the player was the bare sphere.** `planetReliefAt` is the *global* relief and is exactly zero inside the authored play area's holdoff, because the authored patches own that cap - so a chunk level built from it alone was a smooth sphere under the one place a player can stand: sixty metres up, a flat orange plane crossed by the patches' own straight edges. The patches are now meshed from `planetSurfaceReliefAt`, the same combination the orbital mask and the eye's own height already use.
+
+Restored at the owner's request: `SEA_BIAS_FRACTION` is 0.40 again and the planet sea is transparent with `depthWrite` off, with the wave work and the shoreline band carrying the look instead of an opaque surface.
+
+Checks: `pnpm verify` exit 0 (client 1042, server 527), `docs:check`, typecheck and biome clean. Measured live from a 200 km orbit: twelve wheel notches at the screen centre descend 145 km to 4.2 km with 0.8 degrees of aim drift, and a full descent stops at the 60 m floor and holds there with no drift. Known limits: with the land-to-sea ratio back at 0.40 the far side is mostly water, so a 60 m frame over it usually lands on sea and I did not get a frame that shows the relief reading - that is still open.
+
+### The sea's own polygons, and the frames that were never where I put them (2026-11-26)
+
+**The geometric water-and-land patchwork was the sea's sag.** A sphere of polygons lies inside the sphere it stands for, and on a body a hundred kilometres across a 2.4 km quad dips seven metres below it. The sea therefore fell *under* the planet body at every quad centre, and the body's own facets poked through its ocean in a lattice - the bright geometric squares at planetary zoom, and the water-and-dirt patchwork at sixty metres. The sea is 512 rings now (1.2 km facets, two metres of sag) and is lifted by that sag, so no facet can fall below sea level. Measured at the same time: the chunk level was never being covered - a raycast through the centre pixel hits `planet-relief-patch-...` first, with the relief spheres, the orbital shell and the body all below and hidden.
+
+**Ground under water is water's.** The chunk level drew every quad of the field, including the ones wholly below sea level, and a transparent sea over submerged soil shows the dirt through the water as bands of differently shaded ground. A quad whose four corners are all under the sea is dropped from the patch now; the coast is the sea's line against the ground's own last above-water triangle, and the ground stops where the water starts.
+
+**Every placement drifted because the orbit follows the sun.** `stepPlanetViewCamera` lerps the eye towards the lit side until the player takes the camera, and only `pointerdown` used to take it. Every automated 60 m placement was therefore quietly slid elsewhere between the frame that chose a spot and the frame that drew it - which is why so many "inland" frames came back as open sea. The frames below were taken with the camera taken.
+
+Checks: `pnpm verify` exit 0 (client 1042, server 527), `docs:check`, typecheck, biome, the six chunk-level tests. Frames: a 60 m eye over land (a slope and a ridge line, no water in frame), and the sea at 60 m, 2 km and 30 km - smooth at all three, with only a faint ripple banding near the horizon at 60 m and thin sharp-edged islets at 30 km. Known limits: the far side's relief is gentle (about 26 m over two kilometres at the spot shown) and the far-side ground carries no soil texture, so a 60 m frame reads as a smooth slope rather than as hills; the coast of a low island at 30 km is still the mask's kilometre-wide texel edge.
+
+### Waves that survive the distance, and the orbit you can leave (2026-11-26)
+
+**The far sea was featureless because its waves were measured in the wrong unit.** A wave train is a wave vector, and a train long enough to be seen from two kilometres - a few hundred metres - has a wave vector of about 0.02. Its slope is that vector times the amplitude, so at the weight a two-metre ripple uses it tilted the surface by a quarter of a degree: invisible. The two long trains carry weights that match their amplitude now, and they retire on `fwidth` of their own phase (a train is dropped when its phase changes more than about a radian per pixel) instead of on a distance - the screen decides what survives, so the same field is ripples at arm's length and a swell from orbit without any cut-off banding. From two kilometres the surface's *slope* is still invisible (high sun, looking down, a five-degree tilt moves neither the fresnel nor the glint), so the body's sea also carries two half-kilometre trades in its colour, a few per cent either side of the mean; two directions that never repeat do not band.
+
+**A test for the waterline.** The old patch suite's waterline test built a flooded patch with a sea above its whole field and asserted it kept only its skirts, built a partly flooded one and asserted every surviving grid triangle had a corner above the water, and asserted a dry patch kept every one of its hundred quads. That suite was removed with the chunked terrain on 2026-11-27; the finding still explains why the sea cut is per triangle, not per quad - a quad with one corner above the sea used to contribute a triangle entirely under it.
+
+**Mid-scale hills.** The relief octaves were weighted towards the nine- and four-kilometre continents (0.42 and 0.24) with a thin top (0.05 at 160 m), which is a smooth slope at sixty metres. The weights are 0.30, 0.20, 0.16, 0.18, 0.16, 0.12: the same amplitude, spent where an eye on the ground can see it.
+
+**The orbit had no way out.** The planet view is a mode with no close button, and while it is up `stepPlanetViewCamera` re-places the eye on the orbit every frame - so the ground camera's drag and its -/+ dolly did nothing visible and the player's plant was nowhere on screen. Escape now leaves the orbit and puts the camera back on the exact seat it left (measured: 0 m from where it started). The -/+ keys also move the altitude while in orbit, the same measure the wheel uses, because a metres-per-second dolly along a hundred-kilometre radius was invisible; and if anything ever leaves the rig's zoom switched off, the ground camera turns it back on.
+
+Checks: `pnpm verify` exit 0 (client 1043, server 527), `docs:check`, typecheck, biome. Frames: a 60 m eye over inland hills (a dune ridge and a falling slope, no water in frame) and the sea at two kilometres. Known limits: the far sea's swell is a colour trade rather than a shaded surface at that height - the honest fix is a finer normal from a longer wave, which would need the wave amplitude in metres rather than a slope gain; and the rain that arrived during the checks turned the water's palette grey in the frames taken after it.
+
+### The sea was being painted with the sky (2026-11-26)
+
+**Every wave the sea drew was thrown away by its own haze.** The water's aerial perspective asked the atmosphere for the density along the ray using `max(0, cameraPosition.y)` and `max(0, vWaterWorld.y)` - world height above the pole's plane. That plane is the ground only around the play area: two kilometres over the ocean at 88 km from the pole the eye's y is -49000 and the fragment's is -49001, both clamped to zero, so the air was told the eye stood at sea level and the surface lay at sea level for the entire chord. Two to four kilometres of that thick air came out at ninety-nine per cent haze, `color` became `uSkyColor`, and every swell, ripple and glint the shader had computed was multiplied into nothing - which is why a twenty per cent swell still measured a flat 162 down a column. The heights are radial against the sea's own sphere when the surface is the body's sea (`uPlanetSeaCentre.w > 0.5`); the dome near the pole keeps the world-y path. From two kilometres the same column now runs 168 to 150 with a trough and a crest in it.
+
+**One long swell is a corduroy.** With the haze gone the first frames showed what the colour term really was: a single train of parallel bands across the whole disc at thirty kilometres - not the concentric rings the term was written to replace, but banding by another name. Two long trains (2.4 km and 1.8 km) that cross, plus a 700 m and a 460 m pair for the sea's own texture from two kilometres, each retired by `fwidth` of its own phase, read as a lumpy cross sea at thirty and as fine swell at two.
+
+**Root Sight: the sky floor.** A pit eye has `uEyeUnderGround` at zero (by design - it is the mode that stops the soil being drawn over the eye), so the dome was handing it the below-horizon *air* rather than earth for any direction under the horizon. `uEyeInPit` paints earth below `dir.y < 0` while leaving the real sky above the mouth, and `skyDome.test.ts` asserts the branch and its uniform.
+
+Checks: `pnpm verify` exit 0 (client 1049, server 527), `docs:check`, typecheck, biome. Frames: the sea at 2 km and at 30 km in clear weather, and the opened cavity from the ground at 2.4 m and at 6 m.
+
+Known limits, stated plainly: I could not reproduce a visible sky-flip in this build. The pale plate below a pit eye that looked like the dome's air is the **ocean** seen through a hole in the ground - hiding the sky dome leaves it unchanged, and hiding the dev cavity mesh is what opens the hole; with the cavity mesh drawn, the region the `uEyeInPit` branch affects is solid ground and the before/after frames of the opened cavity are pixel-identical. The branch is right to have and is tested, but it is not what produced that frame.
+
+### Banding is a projection problem, not a wavelength problem (2026-11-26)
+
+**The ground's rings were a polar unwrap.** A noise field needs a coordinate, and every coordinate the soil had was a 2D map of a sphere: world xz is the plane through the play area, and arc-by-azimuth is a polar map. Both fold a field into concentric circles centred on the pole - which is the patch the player stands in, so the rings were not a far-field artefact but the ground at the plant. The grain, the clods, the damp patches, the cover provinces and the gullies are all sampled in 3D on the surface point now (`soilField` = the fragment's own position on the body's sphere, in metres; `soilNoise3`/`soilFbm3`), so there is no pole to fold around and no seam to close. The frame that showed a topographical swirl across the soil now shows irregular earth.
+
+**The sea's swell is noise on the same principle, and it was the last of the bands.** Four cosine trains in the sea's colour were still a pattern: two long ones are a corduroy of parallel stripes across the disc, a crossing pair is a woven checkerboard, and from thirty kilometres the eye finds whichever frequency the screen kept. The colour swell is a value-noise field on the surface point (2.6 km, 1.1 km, 470 m and 200 m octaves, each retired by its own `fwidth` footprint), drifting four metres a second along one direction. There is no wavelength and no heading to lock on to, so 2 km reads as swell and 30 km as broad irregular patches - measured 167 to 151 down a column at 2 km, no stripe or lattice at 30.
+
+Checks: `pnpm verify` exit 0 (client 1050, server 527), `docs:check`, typecheck, biome. Frames: the sea at 2 km and 30 km in clear weather; the play-area ground before and after the 3D field.
+
+Known limits: Root Sight's sky floor (`uEyeInPit`, earth below `dir.y < 0` for an eye standing in the opening) is still in place and still correct, but in every pose I could put an eye in - a forced 3 m aperture, the eye 1 m under the sheet inside the column, looking level and looking down - the cavity geometry covers the region below the horizon, so the dome is never visible there and the before/after frames are pixel-identical. I have not reproduced a visible sky-flip in this build; the pale plate that looks like one under a pit eye is the ocean showing through a hole in the ground.

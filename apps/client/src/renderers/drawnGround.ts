@@ -17,6 +17,17 @@ const DOWN = new THREE.Vector3(0, -1, 0);
 
 /** How far either side of a point the drawn surface is sampled, metres. */
 const NORMAL_STEP_M = 0.3;
+/**
+ * Drawn heights are remembered per sampled point.
+ *
+ * Every raycast walks the whole terrain triangle list, which on the shipped
+ * terrain is a few hundred thousand triangles: one height costs five
+ * milliseconds, and a plant update asks for nine of them. The same points come
+ * back every frame - a foot does not move while the part above it grows - so a
+ * table of answers turns a per-message fifty milliseconds into a hash lookup.
+ * The table is dropped whenever the ground it describes changes.
+ */
+const HEIGHT_CACHE_LIMIT = 512;
 /** The ray starts this far above the fallback height and may not fall further. */
 const RAY_UP_M = 3;
 const RAY_DOWN_M = 10;
@@ -30,6 +41,8 @@ export interface GroundSample {
 
 export class DrawnGround {
   private readonly ray = new THREE.Raycaster();
+  /** Answers already measured, keyed to the millimetre. */
+  private readonly heights = new Map<string, number>();
   private mesh: THREE.Object3D | null = null;
   private fallback: ((x: number, z: number) => number) | null = null;
   private readonly sampleNormal = new THREE.Vector3();
@@ -37,11 +50,15 @@ export class DrawnGround {
   /** Height field, used where the mesh has no triangle (or is not built yet). */
   setFallback(fallback: ((x: number, z: number) => number) | null): void {
     this.fallback = fallback;
+    this.heights.clear();
   }
 
   /** The mesh the ground is actually drawn as; null until the world is built. */
   setMesh(mesh: THREE.Object3D | null): void {
     this.mesh = mesh;
+    // A new mesh is a new drawn surface: every remembered height is now a
+    // statement about triangles that are no longer on screen (a dig, a rebuild).
+    this.heights.clear();
   }
 
   /** Drawn height at a point, falling back to the field when there is no hit. */
@@ -50,11 +67,21 @@ export class DrawnGround {
     const base = Number.isFinite(field) ? field : 0;
     const mesh = this.mesh;
     if (!mesh) return base;
+    // A millimetre is finer than any surface this seats on, and coarse enough
+    // that a foot which did not move this frame is the same key.
+    const key = `${Math.round(x * 1000)},${Math.round(z * 1000)}`;
+    const remembered = this.heights.get(key);
+    if (remembered !== undefined) return remembered;
     this.ray.near = 0;
     this.ray.far = RAY_DOWN_M;
     this.ray.set(new THREE.Vector3(x, base + RAY_UP_M, z), DOWN);
     const hit = this.ray.intersectObject(mesh, false)[0];
-    return hit && Number.isFinite(hit.point.y) ? hit.point.y : base;
+    const y = hit && Number.isFinite(hit.point.y) ? hit.point.y : base;
+    // A bound, not a policy: the table only has to cover the plants on screen,
+    // and a clear costs one round of raycasts rather than unbounded memory.
+    if (this.heights.size >= HEIGHT_CACHE_LIMIT) this.heights.clear();
+    this.heights.set(key, y);
+    return y;
   }
 
   /** Height and the slope of the drawn surface around it. */

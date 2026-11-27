@@ -197,6 +197,8 @@ export interface MutationLevelRules {
   biomassFractionPerLevel: number;
   /** At least one unit of tissue is always spent, however small the plant. */
   minBiomassCost: number;
+  /** Largest share of the plant's energy capacity one level may bill. */
+  maxEnergyShareOfCapacity: number;
   /** Extra maintenance fraction per level above 1 (0.15 = +15% each). */
   upkeepPerLevel: number;
   /** Effect key -> step one card applies, in that effect's own units. */
@@ -273,13 +275,9 @@ export interface MutationsConfig {
   /**
    * Share of the over-quota excess lost per second after the body outgrows its
    * form (a size mutation was shed or lost). Tissue drains; it never snaps.
+   * Stored resources are hard-clamped to the smaller capacity in the same tick.
    */
   oversizeWiltPerS: number;
-  /**
-   * Share of stored water, minerals and energy above capacity lost per second
-   * while the plant is over its form's capacity. A leak, not a clamp.
-   */
-  oversizeLeakPerS: number;
   /** Level-up rules shared by every mutation. */
   levelUp: MutationLevelRules;
   /** Look ceilings (C4/C7): no stack can exceed these. */

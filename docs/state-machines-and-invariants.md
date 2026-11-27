@@ -50,18 +50,25 @@ awaiting_hello -> authenticating -> joining -> connected
                                             -> disconnected_pending -> reclaimed | removed
 ```
 
-**Encoded as:** `helloReceived` boolean, `players: Map`, `pendingRemovals: Map`,
-`setTimeout`, and `ConnectionRegistry` for socket lifecycle.
+**Was encoded as:** `helloReceived` boolean, `players: Map`, `pendingRemovals: Map`,
+`setTimeout`, and `ConnectionRegistry` for socket lifecycle. The joining half is
+still that; the removal half moved out, below.
 
-**Why implicit:** The original `apps/server/src/ops/reconnectStateMachine.ts` implemented
-`disconnect -> pending -> reclaim | expire` with explicit pending entries and expiry.
-It was never imported and has been deleted. The `World` class implements it with
-closures in `pendingRemovals` Map. A `ConnectionRegistry` class was added to manage
-socket lifecycle (one message handler, HELLO timeout, clean post-HELLO routing).
+**Encoded as, since 2026-11-23:** the reconnect half is **explicit again** —
+`apps/server/src/ops/reconnectStateMachine.ts` owns `pendingRemovals`, a
+`generation` counter, the window and the persistence flag, and `main.ts` drives it
+through `reconnectStateMachineOnDisconnect`, `…CancelPending`,
+`…ReclaimByAccount` and `…ReclaimByPlantId`. This paragraph used to say the module
+had been deleted because nothing imported it; the reclaim paths now do. What stays
+implicit is the *joining* half: `helloReceived`, the `players` map and the auth
+branch are still closures in `World`, and a death cancels a pending removal by id
+rather than by a transition.
 
 **Missing guards (still open):**
-- Reclaim timers hold only `plantId`/`accountId`; no generation token protects a newer
-  pending entry from an old timer.
+- ~~Reclaim timers hold only `plantId`/`accountId`~~ — closed: each pending entry
+  carries a `generation` and its timer fires only when the entry still has that
+  generation, so an old timer cannot remove a plant that reconnected into a newer
+  entry (`reconnectStateMachine.ts`).
 - Reclaim never re-broadcasts `PLANT_CREATED`/`PLANT_SYNC`. Since removal is delayed
   until the reconnect window expires, a reclaim inside the window leaves other
   clients' view intact; only an expired plant is removed.
@@ -170,8 +177,8 @@ transition was "write bytes" and "trust bytes on read".
 
 ## SM-05 — Weather and day/night clock
 
-**Location:** `apps/server/src/ops/weatherStateMachine.ts`,
-`main.ts:538`, `resourceWorld.step`.
+**Location:** `packages/weather/src/weatherStateMachine.ts`,
+`apps/server/src/main.ts` (`ResourceWorld.step`).
 
 **States:** `clear ↔ rain → thunderstorm_telegraph → thunderstorm_active →
 thunderstorm_aftermath → clear`, crossed with day/night (`timeOfDay`).
@@ -208,7 +215,9 @@ plant_dead | no_plant -> reconnecting`.
 `cameraFramed`, `welcome`, `accessToken`, and retry timers.
 
 **Fixed 2026-11-09:**
-- HELLO now sends `{ clientVersion: 1, accessToken?, plantId? }` — accessToken
+- HELLO now sends `{ clientVersion: PROTOCOL_VERSION, accessToken?, plantId?, reconnectToken?, displayName? }`
+  (the constant, not a literal: the days of a hardcoded `1` here are why this
+  sentence was wrong) — accessToken
   for authenticated reclaim, plantId for anonymous reclaim.
 - Reconnect data (accessToken, plantId) is persisted locally (dev switch per ADR-029).
 - On WELCOME, plantId is stored for anonymous reconnect.
@@ -278,16 +287,22 @@ and only extrapolated locally between broadcasts.
 `renderers/webgpu/WebGPURenderer.ts`, `renderers/PlantRenderer.ts`,
 `apps/server/src/ops/interestManager.ts`.
 
-- `QualityController`: implicit `tier` state (`activeTierIndex`,
-  `currentPixelRatio`), adjusted once per second with no hysteresis → oscillation.
+- `QualityController`: a **closed loop over measured GPU cost** since AL-03
+  (`nextQualityState` is a pure function, `gpuBandMinMs`/`gpuBandMaxMs` with
+  `qualityHoldMs` between steps), so the once-a-second no-hysteresis oscillation
+  described here originally is gone. Still implicit: the band's state is a
+  mutable object the loop mutates in place.
 - `WebGPURenderer`: per-plant `tier`/dwell lives in the compute shader; CPU
   `uploadPlantData` rewrites plant data every frame and does not reconcile GPU
   state.
-- `PlantRenderer`: per-node emergence is `nowMs - spawnTime < 1200` — an implicit
-  `spawning -> grown` state with a hardcoded duration.
-- `InterestManager`: `addEntityToCell` / `getEntitiesForClient` exist but are
-  never called from `World`; only `updateClientPosition` runs. Interest filtering
-  is therefore not implemented.
+- `PlantRenderer`: per-node emergence uses a configured duration rather than a
+  literal, so it is still an implicit `spawning -> grown` state but no longer a
+  hardcoded 1200 ms.
+- `InterestManager`: **implemented.** `addEntityToCell` is called where a plant or
+  a node enters the world (`main.ts`, five call sites) and the STATE/KEYFRAME
+  fanout filters per client by interest cell in `tick/stateBroadcast.ts` — which
+  is why the payload is small and the filter is tested (INV-TM-10). What has no
+  explicit state is still the cell bookkeeping `World.step` maintains.
 
 **Formalize as:** explicit hysteresis thresholds in config, a single owner for
 per-plant LOD, and either wire interest filtering or delete the entity-cell API.
@@ -296,7 +311,7 @@ per-plant LOD, and either wire interest filtering or delete the entity-cell API.
 
 ## SM-10 — Input context (hybrid)
 
-**Location:** `client/src/input/InputBus.ts`, `inputActionStateMachine.ts`.
+**Location:** `packages/input/src/InputBus.ts`, `packages/input/src/InputActionStateMachine.ts`.
 
 The per-action machine is explicit, but `activeContext`, `modalOpen`,
 `textInputActive`, and `cameraPanState` are separate booleans. A keyup swallowed
@@ -310,13 +325,19 @@ actions.
 
 **Location:** `client/src/ui/DevPanel.ts` and dev commands in `main.ts`.
 
-`visible | activeTab | search | minimized | drag` are implicit. Many controls send
-`type: 99` (`DEV_RESPONSE`) commands for which the server has no `case 99`; the
-panel shows state that has no effect. Treat as `BROKEN` until D01 lands.
+`visible | activeTab | search | minimized | drag` are implicit. **Fixed by D01
+(2026-11-14):** the panel loads its switches from `GET /dev/config` and writes
+them through `POST /dev/config`, which the server pushes into the live simulation
+(`world.applyDevConfig`) instead of leaving the picture out of step with the
+config map, and every `DEV_ACTION` is resolved through `resolveDevAccess`
+(environment, admin account or allowlist) before the server acts. The bare
+`type: 99` commands with no server case are gone with the wired switches. What
+remains implicit is the panel's own layout (`activeTab`, `search`, `minimized`,
+`drag`), which is cosmetic and does not decide gameplay.
 
 ## SM-12 — Growth selection UI (hybrid)
 
-**Location:** `client/src/main.ts` + `growthSelectionStateMachine.ts`.
+**Location:** `apps/client/src/main.ts` + `apps/client/src/ui/GrowthSelectionStateMachine.ts`.
 
 Explicit states `hidden | loading | options_visible`, but `conditions.light` and
 `conditions.moisture` are mutated in place, stale responses are filtered only by
@@ -352,9 +373,13 @@ expiry is checked every tick; kill credit is the largest total inside
 list, v3 the uproot state (restored as settled), v4 each mutation's level and its
 chosen level cards — and v1/v2 snapshots still load.
 
-**Open:** the crawl substrate multiplier is fixed at 1.0 until T02 exposes one;
-the client has no reroot control (C04) and only the Dev Panel steers it; drops
-are world objects that no one can pick up until T51/T08A (ADR-056).
+**Open:** the server's reroot crawl still multiplies by 1.0 — `config/root_sight.json`
+`substrate_multiplier` is 0.5 and the client reads it, but the terrain service has
+no substrate signal for the server to use, so the gameplay number is pinned
+(F34). The client now has a reroot control (C04's countdown and camera-relative
+D-pad), so the Dev Panel is no longer the only door. Drops are collectible:
+`DROP_COLLECT` pays through `ops/dropPickup.ts` (ADR-056's restriction is lifted
+for dung, remains and fragments).
 
 **Related:** INV-DM-01..05, INV-GR-01, INV-PR-01.
 
@@ -364,6 +389,91 @@ are world objects that no one can pick up until T51/T08A (ADR-056).
 
 Status legend: `ENFORCED`, `PARTIAL`, `UNENFORCED`, `BROKEN`.
 
+## SM-14 — Plant tier (Active / Near / Dormant)
+
+**Location:** `apps/server/src/ops/plantTierStateMachine.ts` (the tier table and
+its rates), driven by `apps/server/src/ops/plantWorld.ts`.
+
+**States:**
+
+```
+active <-> near <-> dormant
+```
+
+**Encoded as:** an explicit machine — `createPlantTierConfigs` builds the
+Active/Near/Dormant table from the server tick rate (`net_proto.tick_rate_hz`),
+`world.near_tick_rate_hz` and the reciprocal of `world.dormant_step_interval_sec`,
+and the world steps each plant at its tier's interval. The transition *decisions*
+are implicit: whether a plant is near enough to another player to leave Dormant
+lives in the step loop rather than in the machine.
+
+**Note:** three different keys describe what looks like one rate. `near_tick_rate_hz`
+is a rate (5 Hz); Dormant is an interval (`dormant_step_interval_sec` 30, so
+1/30 Hz) because a dormant plant wants a catch-up step, not a stutter of small
+ones. `docs/tick-budget.md` is where the two bed together.
+
+**Formalize as:** nothing yet — the table is already explicit and tested. If the
+near/far rule grows a second condition, move the decision into the machine so the
+tier a plant reports and the tier it is stepped at cannot disagree.
+
+**Related:** INV-TM-03, INV-TM-04, INV-TM-06.
+
+---
+
+## SM-15 — Client entry flow
+
+**Location:** `apps/client/src/ui/EntryFlowStateMachine.ts` (pure), driven by
+`apps/client/src/main.ts` and `ui/MainMenu.ts`.
+
+**States:**
+
+```
+booting -> title -> sign_in | sign_up | connecting -> world
+                                   |_________________| -> plant_lost
+```
+
+**Encoded as:** an explicit machine over a `step` discriminant, with `busy`
+(a request is in flight, so forms stay disabled), `error` (already
+human-readable) and `lostReason`/`lostStats` (why the previous plant died). Kept
+pure so the transitions are tested without a DOM: this is the client half of
+accounts, which until it existed could never obtain an `accessToken`, so
+"signed-in accounts resume their plant" was unreachable.
+
+**Open:** `plant_lost` has no path back to `title` other than a fresh session —
+respawning is a separate `RESPAWN` round trip, not an entry-flow transition.
+
+**Related:** INV-AU-01..06, INV-NET-01.
+
+---
+
+## SM-16 — Root Sight camera
+
+**Location:** `apps/client/src/renderers/RootSightStateMachine.ts` (pure state and
+progress), applied by the camera and the cutaway uniforms.
+
+**States:**
+
+```
+surface <-> transitioning_to_underground <-> underground
+       <-> transitioning_to_surface
+```
+
+**Encoded as:** an explicit machine with a `progress` (0–1), a `target`, and the
+resolved `context` (own plant position, camera position, camera target). The
+state it reports is derived from **target and progress together**, not from the
+two endpoints: relabelling only at the ends made re-opening during a close report
+`transitioning_to_surface` the whole way up, which is a direction the player can
+see. `root_sight.transition_ms` sets the duration; `camera_target` chooses
+between the plant and the camera.
+
+**Open:** nothing state-machine shaped. The cutaway geometry is the risky half
+(see the R-series rows in `bug-inventory.md`), and it is driven from this
+machine's `progress`.
+
+**Related:** INV-RS-01..12, INV-RND-03.
+
+---
+
 ## A. Identity, ownership, and connection (`INV-ID`)
 
 | ID | Invariant | Status | Evidence / failure | Fix |
@@ -371,13 +481,13 @@ Status legend: `ENFORCED`, `PARTIAL`, `UNENFORCED`, `BROKEN`.
 | INV-ID-01 | One active plant per owner/account. | ENFORCED (2026-11-10) | `World.addPlayer` checks `getPlantsByOwner(ownerId)` and reuses existing active plant instead of spawning duplicates (`main.ts:244`). | Keep reclaim/reuse check in `addPlayer`. |
 | INV-ID-02 | A player's `plantId` belongs to that player. | ENFORCED (2026-11-10) | Verified in `GROWTH_OPTIONS_REQUEST` (`main.ts:709`) and `handleGrowthIntent` (`main.ts:573`); immediate `plant_mismatch` rejection. | Keep ownership guards on all player plant intent handlers. |
 | INV-ID-03 | `accountId` means an authenticated account. | FIXED (2026-11-10) | `addPlayer` now passes `accountId` through unchanged (undefined for anonymous); plant `ownerId` is separate (`main.ts:229`). | Keep `accountId` undefined for anonymous; use `ownerId` for plant ownership. |
-| INV-ID-04 | One live connection per account/plant. | PARTIAL | Account reclaim removes old player entry but old socket close path unclear; by-id reclaim does not explicitly close old socket. | Close old socket and remove old player on both reclaim paths. |
-| INV-ID-05 | Reclaim is cancelled atomically by reconnect. | PARTIAL | `clearTimeout` used but timers capture `plantId` with no generation token (`main.ts:400-401`). | Store a generation/epoch; expire only if it still matches. |
+| INV-ID-04 | One live connection per account/plant. | ENFORCED (2026-11-23) | Two paths, two mechanisms. **By account** the newer HELLO wins: the old socket is sent `ERROR SESSION_REPLACED`, closed with 4002, its player entry, interest registration and growth-intent state are removed, its pouch is carried to the new session, and `connectionRegistryTransferPlant` moves the HELLO deadline (`main.ts` account-reclaim path). **By plant id** the second connection is refused instead — `reclaimPlantById` returns null when `findPlayerByPlantId(plantId)` is already attached — and it also requires the plant's reconnect token, because a plant id is public (it is in every broadcast). | Keep the asymmetry deliberate: an account may displace its own session, a plant id may not. |
+| INV-ID-05 | Reclaim is cancelled atomically by reconnect. | FIXED (2026-11-16) | `ops/reconnectStateMachine.ts` stamps every pending removal with a `generation` from the machine, and the timeout re-reads the entry and removes the plant only when `pending.generation === generation`. A reclaim bumps the generation (`reconnectStateMachineReclaimBy*`), so a stale timer for the previous connection finds a mismatched entry and does nothing. | Never schedule a removal that decides from a captured id alone; carry the generation into the callback. |
 | INV-ID-06 | Reconnect restores visibility to other clients. | FIXED (2026-11-10) | When persistence enabled, plant stays for reconnect window; `PLANT_REMOVED` broadcasts only on window expiry or actual death. When disabled, immediate removal is correct per ADR-029. | Keep this behavior; ensure docs match. |
 | INV-ID-07 | Anonymous reclaim is keyed consistently. | FIXED (2026-11-10) | `removePlayer` and `reclaimPlantById` both use `anon_<plantId>`; `accountId` stays undefined for anonymous (`main.ts:388`, `533`). | Keep one key builder. |
 | INV-ID-08 | Plants spawn at distinct, valid positions. | FIXED (2026-11-10) | `findSpawnPosition` uses golden-angle spiral with 5-unit clearance and fallback scan (`main.ts:145-196`). | Test spawn collision under concurrent joins. |
 | INV-ID-09 | `plantWorld.createPlant` receives non-empty `ownerId`/`worldId`. | FIXED (2026-11-16) | `createPlant` throws on an empty owner or world. Every caller already has one (`accountId ?? playerId`, a gallery id), and an empty owner is a row nobody can reclaim. | Keep the guard; a new caller must name an owner, not invent one. |
-| INV-ID-10 | Pending inputs and intents are bounded. | FIXED (2026-11-16) | `pendingInputs` is cleared then set, so it holds the one input being applied; growth intents are capped by `maxIntentsPerPlayer` and refuse with `intent_queue_full`. | New queues need an explicit cap and a refusal reason. |imit. |
+| INV-ID-10 | Pending inputs and intents are bounded. | FIXED (2026-11-16) | `pendingInputs` is cleared then set, so it holds the one input being applied; growth intents are capped by `maxIntentsPerPlayer` and refuse with `intent_queue_full`. | New queues need an explicit cap and a refusal reason. \|imit. |
 | INV-ID-11 | A HELLO arrives once, before any other message. | FIXED (2026-11-08) | Second HELLO ignored; pre-HELLO non-HELLO messages silently dropped. | Close with a protocol error; reject duplicates. |
 | INV-ID-12 | One message handler per socket. | FIXED (2026-11-08) | Two handlers remain attached after HELLO (`main.ts:1330`, `1456`). | Register once; dispatch on connection state. |
 
@@ -385,23 +495,23 @@ Status legend: `ENFORCED`, `PARTIAL`, `UNENFORCED`, `BROKEN`.
 
 | ID | Invariant | Status | Evidence / failure | Fix |
 |---|---|---|---|---|
-| INV-GR-01 | `rootNodeId` points to a real node. | PARTIAL | `?? ''`, `!`, and `?? seedNode.id` fallbacks; loaded plants are not validated. | Validate on load and before every use; fail closed. |
-| INV-GR-02 | Every node's `parentId`/`children` are reciprocal. | ENFORCED (2026-11-16) | `validatePlantGraph` checks reciprocity and reachability at load; `repairPlantGraph` rebuilds `children` from `parentId` first, so a drifted list is corrected rather than costing the plant. `growNode`/`removePlant` maintain both sides at runtime. | `parentId` stays the structural authority; never trust a child list. |nkNode` pair. |
-| INV-GR-03 | A node sits at parent + direction × speed. | FIXED (2026-11-16) | The direction is the player's aim, validated by `validateIntentDirection` (finite, non-zero) and then fitted to the node type's sector - it is never taken from the parent. `normalizeDirection` no longer silently converts a zero vector into "grow down"; growth returns `invalid_direction` instead. | Reject degenerate vectors; never substitute a direction the player did not choose. |. |
+| INV-GR-01 | `rootNodeId` points to a real node. | ENFORCED (2026-11-16) | `validatePlantGraph` checks that exactly one node has `parentId === null` and that `rootNodeId` names it, and `PlantWorld.loadPlant` throws on any error-severity issue, so a plant whose root pointer is wrong never enters the world. `repairPlantGraph` runs first and settles structure from `parentId`, which is why the pointer cannot be repaired from the children list instead. | The load boundary and the grow paths both read `rootNodeId`; a missing one is a refused plant, not a fallback. |
+| INV-GR-02 | Every node's `parentId`/`children` are reciprocal. | ENFORCED (2026-11-16) | `validatePlantGraph` checks reciprocity and reachability at load; `repairPlantGraph` rebuilds `children` from `parentId` first, so a drifted list is corrected rather than costing the plant. `growNode`/`removePlant` maintain both sides at runtime. | `parentId` stays the structural authority; never trust a child list. |nkNode` pair. \|
+| INV-GR-03 | A node sits at parent + direction × speed. | FIXED (2026-11-16) | The direction is the player's aim, validated by `validateIntentDirection` (finite, non-zero) and then fitted to the node type's sector - it is never taken from the parent. `normalizeDirection` no longer silently converts a zero vector into "grow down"; growth returns `invalid_direction` instead. | Reject degenerate vectors; never substitute a direction the player did not choose. \|. |
 | INV-GR-04 | `node.plantId === plant.id`. | FIXED (2026-11-16) | Checked at load by `validatePlantGraph`; `repairPlantGraph` rewrites a node carrying another plant's id before validation runs. | Keep repair-before-validate on every load path. |
 | INV-GR-05 | Node ids are globally unique. | FIXED (2026-11-16) | `nodeName` now takes 16 characters of the plant id instead of 8: with 8, two plants sharing a prefix produced identical node ids and `findPlantByNodeId` grew the wrong plant. 16 makes that collision unobservable. | Keep the tag long enough that a collision is not reachable; do not shorten it for payload size. |
 | INV-GR-06 | `totalUpkeep` equals the sum of node upkeeps. | ENFORCED | Fixed 2026-11-08: `processPlantUpkeep`/`processDormantPlant` recompute the sum and subtract it once. | Test: `spends upkeep once per tick, equal to the node sum`. |
 | INV-GR-07 | `totalBiomass > 0` iff the plant is alive. | FIXED (2026-11-23) | Both death transitions now set a flag: `killPlant` (which `removePlant` calls) marks `plant.dead = true` before it drops the plant from `PlantWorld.plants`, its ownership entry and its spatial index, so "alive" is no longer only map membership. `tryGrow` refuses a flagged body with `plant_dead`, and the multi-step tick paths keep their `if (!this.plants.has(plant.id)) return;` re-checks. The flag is deliberately never persisted: a restored plant adopts its saved body and is alive by definition. | Keep the flag on any new mutator that can hold a reference across an await; never save it. |
 | INV-GR-08 | `0 <= totalEnergy <= computePlantCapacity(plant).energy`, and the same for stored water/minerals against their plant-derived capacities. | ENFORCED | Fixed 2026-11-12: `ops/plantCapacity.ts` derives capacity from the plant's own biomass and `clampPlantStorage` is applied after every mutation (growth spend, absorption, photosynthesis, item use, dev fill, save load). | Test: `plantCapacity` bounds + PlantWorld suites. |
-| INV-GR-09 | Growth is legal for the parent/child type pair. | PARTIAL | Same-layer parents accept any target type; unknown types default to root/canopy. | Explicit transition table validated server-side. |
+| INV-GR-09 | Growth is legal for the parent/child type pair. | PARTIAL (2026-11-23) | The rule is two-layered. `canCrossLayer(parentType, targetType)` decides root↔canopy (`packages/shared/src/growth/nodeTypes.ts`), and `getLayerForNodeType` classifies by exclusion — every type not in the root list is *canopy* — so an unrecognised type is treated as a canopy node rather than refused. Within a layer the answer is unconditional: `if (parentLayer === targetLayer) return true`, then `getAvailableGrowthTypes(parentType)` narrows the menu, and the server accepts any target in that list plus any mutation-unlocked type. | A same-layer parent therefore accepts a legal-menu target but there is no parent/child transition *table*: `stem → flower` and `stem → stem` are both simply "canopy from canopy". A typo in the menu is the only thing that stops a bad pair. \| An explicit transition table (or a hard refusal for an unknown type at the `getLayerForNodeType` boundary) validated server-side. |
 | INV-GR-10 | Germination is the only way out of `seed`. | FIXED (2026-11-08) | Seed is offered `lateral_root`/`stem` (`plantWorld.ts:223-250`); `canCrossLayer` allows `seed -> stem` (`:992-999`). | Require `isSeed === false` for non-radicle growth; gate options. |
-| INV-GR-11 | Germinating a seed happens at most once. | FIXED (2026-11-23) | `tryGrow` clears `isSeed` on the crown the moment its first cotyledon lands (E27), so `getAvailableGrowthTypes('seed')` stops offering `radicle`, the prologue's `radicle_only_from_seed` refuses the crown, and the dispatch cannot re-enter `handleGermination` — no second radicle, no second energy charge and no second mutation roll. The crown keeps `type: 'seed'` and stays the structural root, and a second cotyledon is still offered until `max_cotyledons`. Pinned in `plantWorld.test.ts`. | Clear the flag at the same moment in any future germination path. |
+| INV-GR-11 | Germinating a seed happens at most once. | OPEN (2026-11-23) — E27 | Nothing counts germinations. After the radicle, `handleGermination` leaves the crown as `type: 'seed'` with `isSeed: true` and its own comment claims the flag is cleared when cotyledons are placed; no code does that. So `getAvailableGrowthTypes('seed')` keeps offering `radicle`, the prologue's `radicle_only_from_seed` check passes for the crown, and the dispatch re-enters `handleGermination` — a second radicle, a second energy charge and a second mutation roll. | Clear `isSeed` on the crown when the first cotyledon lands, and offer `radicle` only while the seed has none. |
 | INV-GR-12 | `maxNodesPerPlant` is never exceeded. | FIXED (2026-11-08) | Checked before germination, which adds ~3 nodes (`:780`). | Check after the planned node batch. |
 | INV-GR-13 | A quoted growth cost equals the charged cost. | ENFORCED (2026-11-16) | `computeGrowthCostQuote` is the base for all three sites, and `growthChargeScale(plant, node, layer)` is the only place the extras are combined: soil resistance × mutation growth cost for energy, resistance ÷ growth speed for time. `buildGrowthOptions` quotes through `scaleGrowthQuote` (energy rounded **up**, so a card can only be pessimistic) and `tryGrow` charges through the same scale. Before this the menu quoted the bare cost while the charge multiplied it, so a root card said 6 and the server wanted 11. Test: "quotes the soil and mutation charge, so a card never offers growth that is refused". | Keep the scale in `PlantWorld`; the menu must never recompute a multiplier. |
 | INV-GR-14 | Death deposits minerals exactly once. | FIXED (2026-11-10) | `killPlant` calls `eventBus.publishSync(PLANT_DEATH)` and queues death; `processPlantDeaths` drains queue and calls `resourceWorld.onPlantDeath` exactly once per death (`main.ts:125-147`, `plantWorld.ts:1262-1299`). | Keep single deposit path in `processPlantDeaths`. |
-| INV-GR-15 | The spatial index matches the plant's node set. | PARTIAL | Add/remove paths paired; no reconciliation. | Dev assertion comparing index vs node sets. |
+| INV-GR-15 | The spatial index matches the plant's node set. | PARTIAL (2026-11-23) | Every add has a paired remove: `nodeSpatialIndex` is written at seed creation, growth, germination and load, and cleared at node removal and plant removal (`plantWorld.ts`, eight call sites). Nothing compares the index to the graph, so a missed pair would show up as a phantom or a missing neighbour in the overlap checks rather than as an error. | A dev-mode count comparison per plant (index size vs `nodes.size`) on load and after a shed. |
 | INV-GR-16 | Broadcast node metadata equals server node metadata. | FIXED (2026-11-10) | Germination broadcasts inserted nodes verbatim with full stats (`plantWorld.ts:1239-1244`). | — |
-| INV-GR-17 | `totalBiomass` tracks the biomass actually owned by the plant. | PARTIAL | Growth, germination, photosynthesis, damage, and shedding mutate it independently; no reconciliation. | Dev-mode assert against a derived value where node biomass is authoritative. |
+| INV-GR-17 | `totalBiomass` tracks the biomass actually owned by the plant. | PARTIAL (2026-11-23) | Growth, germination, photosynthesis, damage and shedding all move the accumulator directly, and that is deliberate: it is an independently maintained total, so equality with the node sum is not an invariant (see the note on `validatePlantGraph`, which refuses to compare them). What exists is a repair, not a proof: `reconcileStructuralMass` runs on the dormant path, recomputes `totalUpkeep` from the nodes every time, and recovers `totalBiomass` from the node sum **only when it has been zeroed or made negative** — a saved plant used to resume with 0 while its parts were alive. A drift between two positive numbers is not detected. | A dev-mode assert comparing the two where nodes are authoritative. |
 | INV-GR-18 | A node's `y` is a height above the soil line under that node. | ENFORCED (2026-11-16) | `createPlant` puts a seed at `y = 0` wherever it is planted, growth places every node relative to its parent, and the client adds each node's own terrain relief (`planetTerrainY`) when it draws. Nothing may re-base a body onto `terrain.heightAt()`: `completeReroot` did, and rerooting onto a 16 m rise lifted the crown to `y = 16`. Test: `keeps the body on the ground when it reroots onto a rise`. | A move changes x and z only; a body keeps its shape relative to the ground. |
 | INV-GR-19 | An organ in the growth menu can actually continue the body it belongs to. | ENFORCED (2026-11-16) | A `stem` offers `stem`, so a shoot stacks internodes; before this a plant with no `trunk`/`culm` unlock could not grow above one 35 cm segment and every body was a fan off a stump. Mutation-only tissues stay out of the base menu (`trunk`, `culm`, `rhizome`, `floating_leaf`). Test: `packages/shared/src/growth/nodeTypes.test.ts`. | Any new continuing organ needs a parent that offers it (E8, E11). |
 
@@ -410,7 +520,7 @@ Status legend: `ENFORCED`, `PARTIAL`, `UNENFORCED`, `BROKEN`.
 | ID | Invariant | Status | Evidence / failure | Fix |
 |---|---|---|---|---|
 | INV-TM-01 | One authoritative tick clock. | FIXED (2026-11-15) | One `TickClock` calls `World.onTick(tick, dt)` and every subsystem is stepped from that call. Near/dormant ticks are deliberate config sub-cadences banked inside `PlantWorld`, not independent clocks. Tests: `PlantWorld tier rates`. | Keep all new subsystems on the injected `dt`/`tick`; no wall-clock timers in simulation. |
-| INV-TM-02 | Cooldowns and intent ticks use that clock. | PARTIAL | `growthCooldownUntil` uses `PlantWorld.tick`; intents are processed before the step. | Process intents after the tick increment, or use explicit ordering docs. |
+| INV-TM-02 | Cooldowns and intent ticks use that clock. | FIXED (2026-11-23) | `TickClock.advance` increments `clock.tick` and *then* calls `onTick(tick, dt)`, so the intents drained at the head of that call already carry the new tick. `PlantWorld.tryGrow(intent, currentTick)` has no clock of its own: it refuses with `growth_on_cooldown` when `currentTick < plant.growthCooldownUntil` and stamps a successful growth with `currentTick + ceil(growthCooldown × tickRate)`, and `lastGrowthTick` takes the same argument. The old `PlantWorld.tick` field this row described is gone. | Any new cooldown takes `currentTick` as an argument; a second clock inside `PlantWorld` would put two tick counters in one world. |
 | INV-TM-03 | `dt` matches the configured tick rate. | FIXED (2026-11-15) | `net_proto.tick_rate_hz` is the one rate: the clock, the wire and `PlantWorld`'s active tier all use it, and `World.setTickRate` updates the tier machine in the same call. `world.tick_rate_hz` and `world.active_tick_rate_hz` were deleted. | Keep one rate; a dev tick change must go through `setTickRate`. |
 | INV-TM-04 | Tier rates come from config. | FIXED (2026-11-13) | Rates are stored and near/dormant tiers are scheduled by banking elapsed time, so each rate is exactly what config says. The old `dt * (active/near)` scale ran near plants at 4x upkeep and growth. | — |
 | INV-TM-05 | Dormant catch-up uses elapsed wall time. | FIXED (2026-11-13) | The active/near path now writes `plant.lastTick` every step and a never-simulated plant records the mark instead of settling a phantom backlog. Catch-up also charges upkeep, advances growth already in flight, and credits photosynthesis for the skipped span, so an offline plant behaves like a live one except that it starts no new growth. The credit is bounded twice: `photosynthesisOverSpan` caps fixation at what the plant's stored water and minerals can pay for (so a multi-day span cannot multiply a per-second rate into an absurd number), and energy lands through `addPhotosynthesisEnergy`, which clamps to `computePlantCapacity`. Active plants are excluded from the tier hook because the online loop already credits them (no double-count), and a `lastTick` restored ahead of a fresh tick counter is re-anchored instead of exempting the plant. Tests: `finishes in-flight growth while dormant, and starts nothing new`, `feeds dormant plants with photosynthesis over the span they skipped`, `never photosynthesises an active plant through the hook`, `re-anchors a stale future lastTick instead of exempting the plant`, `bounds a very long catch-up by what the plant actually holds`, `fixes nothing for a zero, negative or non-finite span`. | Catch-up itself is still uncapped across a long server downtime. |
@@ -418,14 +528,16 @@ Status legend: `ENFORCED`, `PARTIAL`, `UNENFORCED`, `BROKEN`.
 | INV-TM-07 | Photosynthesis fills energy. | FIXED (2026-11-09) | Only biomass is added (`main.ts:555`); `addPhotosynthesisEnergy` is never called. | Call it with the configured energy rate. |
 | INV-TM-08 | Simulation time tracks wall time. | FIXED (2026-11-12) | The clock capped each callback's elapsed time at `max_frame_time_ms` and discarded the rest; with a ~114 ms tick against a fixed 50 ms step the server ran ~8.7 ticks/s and the day cycle stretched to 7 877–8 264 s against 3 600 configured. | Accumulator now adds real elapsed time (only a backlog beyond `max_frame_time_ms` is dropped), whole-grid soil passes run at 4 Hz, and the dirty-tile array is only built when a broadcast is actually due. Measured after: 20.0 ticks/s, day cycle 3 597 s. |
 | INV-MU-01 | A held mutation is charged and visible. | ENFORCED (2026-11-16) | `PlantWorld.chargeMutationMaintenance` bills every held mutation in the active and dormant paths; `MUTATION_STATE` carries the same set to the owner. Upkeep never removes a mutation and never kills: the bill is paid out of energy, then biomass, and biomass stops at `upkeep_biomass_floor`, so an unpaid bill stalls the plant until it earns again. `mutation_upkeep` survives only as a legacy death cause in old saves. | Test: `holds an unpaid mutation bill at the floor instead of shedding or killing`. |
-| INV-MU-03 | A size mutation is real tissue, and losing it is gradual. | ENFORCED (2026-11-16) | `syncMutationMass` fills parts to `quota × scale³` when the set grows; `absorbOversizeMass` drains the excess at `oversize_wilt_per_s` in both the active and dormant paths. Radii are derived from biomass only. | Tests: `keeps a shed size mutation's tissue and wilts it back gradually`, `levels a size mutation on the card the player picks, and grows the body`. |
+| INV-MU-03 | A size mutation is real tissue, and losing it is gradual. | ENFORCED (2026-11-16) | `syncMutationMass` fills parts to `quota × scale³` when the set grows; `absorbOversizeMass` drains the excess at `oversize_wilt_per_s` in both the active and dormant paths, and hard-clamps stored water, minerals and energy to the smaller capacity in the same tick. Radii are derived from biomass only. | Tests: `keeps a shed size mutation's tissue and wilts it back gradually`, `levels a size mutation on the card the player picks, and grows the body`. |
 | INV-MU-04 | Levels are server-dealt and player-chosen. | ENFORCED (2026-11-16) | `MUTATION_LEVEL` may only take a card from the deal the server laid out; cost, level cap and resources are checked in `checkLevelUp`. | `T04 mutation levels` tests. |
-| INV-MU-05 | Every mutation has exactly one style record in `config/mutation_visuals.json`, keyed by its id, with a unique ordinal; a style that names no mutation is a startup error. | `loadVisuals` in `ops/mutations/config.ts`; tests "gives every mutation exactly one style", "ships a distinct style per mutation" |
-| INV-MU-06 | A composed look never leaves its caps: tint inside `min_tint..max_tint`, variegation, glow, bark thickness, darkening and thorns at or below their ceilings, whatever the stack or the levels. | `composeFamily` in `client/renderers/plant/mutations.ts`; tests "stacked tints are clamped", "bark thickness ... stop at their ceilings", "a levelled mutation is visibly stronger, up to the caps" |
-| INV-MU-07 | Appearance never changes simulation. A style paints; behaviour comes from `effects` (`vertical_bias`/`drooping_bias` are effects, not styles), so two mutations can never differ only by a shader. | `mutationEffects` in `ops/mutations/service.ts`; `applyMutationShapeBias` |
+| INV-MU-05 | Every mutation has exactly one style record in `config/mutation_visuals.json`, keyed by its id, with a unique ordinal; a style that names no mutation is a startup error. | ENFORCED (2026-11-19) | `loadVisuals` in `ops/mutations/config.ts`; tests "gives every mutation exactly one style", "ships a distinct style per mutation" | Keep one record per mutation id in `mutation_visuals.json`. |
+| INV-MU-06 | A composed look never leaves its caps: tint inside `min_tint..max_tint`, variegation, glow, bark thickness, darkening and thorns at or below their ceilings, whatever the stack or the levels. | ENFORCED (2026-11-19) | `composeFamily` in `apps/client/src/renderers/plant/mutations.ts`; tests "stacked tints are clamped", "bark thickness ... stop at their ceilings", "a levelled mutation is visibly stronger, up to the caps" | Keep every new style inside `caps`. |
+| INV-MU-07 | Appearance never changes simulation. A style paints; behaviour comes from `effects` (`vertical_bias`/`drooping_bias` are effects, not styles), so two mutations can never differ only by a shader. | ENFORCED (2026-11-19) | `mutationEffects` in `ops/mutations/service.ts`; `applyMutationShapeBias` | Keep behaviour in `effects`, never in a style. |
 | INV-MU-02 | Mutation acquisition is server-only. | ENFORCED (2026-11-14) | `rollMutation` runs inside `tryGrow`; `MUTATION_SHED` can only remove, never add. | Keep the client free of acquisition paths. |
 | INV-TM-09 | Broadcast rates honour config. | ENFORCED | `broadcastCadence.ts` banks elapsed ms against `net_proto.client_send_rate_hz` for STATE/KEYFRAME and the root readout; `net_proto.weather_send_rate_hz` (2 Hz) gates weather/day-night; keyframes ignore the state gate. `dev_log_network` reports sent/skipped counters. | `broadcastCadence.test.ts`; live check pending. |
-| INV-TM-10 | `InterestManager` filters what each client receives. | PARTIAL (2026-11-13) | Growth events and new-plant payloads are now cell-filtered (`broadcastNear`); STATE/KEYFRAME totals and the whole-grid terrain update are still sent to everyone because they are world-wide data. | Filter remaining per-plant payloads if they grow. |
+| INV-TM-10 | `InterestManager` filters what each client receives. | ENFORCED (2026-11-27) for per-plant payloads; world data is broadcast by design | `tick/stateBroadcast.ts` builds each player's STATE/KEYFRAME from `ports.isInRange(playerId, x, z)` (the player's own plant always included), and growth events go through `broadcastNear`. `per_client_entity_cap` now caps those plant lists, `PLANT_SYNC_REQUEST` and range announcements, always keeping the owner's own plant first. What still goes to every socket is data that has no position — `WEATHER_UPDATE`, `SEASON_UPDATE`, `WEATHER_STRIKE`, the whole-grid `RESOURCE_UPDATE` and the drop/fauna events — so this is a property of the payload, not a hole. | Keep the split explicit: a new per-plant message must be filtered, a new world message must not pretend to be. |
+| INV-TM-11 | A season is a span of simulation ticks, not a span of wall clock. | HOLDS (2026-11-23) | `ops/seasonClock.ts`: `lengthTicks = season_length_days × 86400 × tick_rate_hz` (`config/world.json` 90 days), so a save advanced by the same number of ticks is in the same season whether it ran online or in the dormant loop, and the calendar cannot drift with the server's uptime. `seasonClockAdvance` returns `seasonsPassed` ≥ 1 for the boundaries a long dormant step crossed, so a world nobody watched does not lose seasons. | Never derive a season from `Date.now()`; only from the tick. |
+| INV-TM-12 | The season survives a restart as remaining ticks. | HOLDS (2026-11-23) | `seasonSnapshot` stores `season`, `remainingTicks` and `lastCalamityAt`, never an absolute tick start, because the tick counter restarts at zero on every boot — an absolute start would let a restart skip a season or stretch one. | Keep the snapshot relative; an absolute field would need the boot tick to match, and it does not. |
 | INV-TER-01 | Client and server derive the same base surface. | HOLDS (2026-11-13) | Both call `terrainHeightAt` from `packages/shared/src/world/terrainField.ts` with the same seed/amplitude/octaves; only edits are streamed. | Keep the field free of THREE and platform randomness. |
 | INV-TER-02 | Only edited chunks are stored. | HOLDS (2026-11-13) | `TerrainService` creates a chunk on the first edit; `terrain_chunks` has one row per active chunk and the base field is never serialised. | — |
 | INV-TER-03 | A root tunnel removes its own volume, capped. | HOLDS (2026-11-13) | `recordRootTunnel` caps at `max_edit_volume_m3`, lowers the surface only within `surface_break_depth_m` + radius, and appends an edit. | — |
@@ -440,12 +552,12 @@ Status legend: `ENFORCED`, `PARTIAL`, `UNENFORCED`, `BROKEN`.
 | ID | Invariant | Status | Evidence / failure | Fix |
 |---|---|---|---|---|
 | INV-RS-01 | Tile values stay within `[0, max*]`. | ENFORCED | Fixed 2026-11-08: constructors and `setTileResources` clamp to per-resource maxima. | Keep maxima in the clamp helper. |
-| INV-RS-02 | Tile indices are always valid. | PARTIAL | `updateLight/Moisture/Minerals` use raw `worldToTileX/Z` with no clamp. | Clamp or skip out-of-bounds nodes once at the boundary. |
+| INV-RS-02 | Tile indices are always valid. | ENFORCED (2026-11-23) | `worldToTileX/Z` are private and only ever called through `clampTileX/Z`, which `getTileCoordinates` is the single public door to (`RESOURCE_QUERY` and the resource ports both go through it). The soil passes no longer convert node positions to tile indices at all: they iterate cells and take the distance from each node to the cell centre, so a node outside the lattice contributes to the nearest cells instead of indexing past the array. | Never expose `worldToTile*`; a new consumer takes `getTileCoordinates`. |
 | INV-RS-03 | Diffusion averages neighbours and conserves mass. | ENFORCED | Fixed 2026-11-08: `diffuseResources` accumulates all neighbours and lerps toward their mean. | Test: `diffuses toward the mean of all neighbours`. |
 | INV-RS-04 | Weather durations come from config. | ENFORCED | Fixed 2026-11-08: graph owns transitions, `WeatherConfig` owns durations. | Keep it this way; no duration literals. |
 | INV-RS-05 | Forecast equals the sampled next state. | ENFORCED | Fixed 2026-11-08: `machine.nextState` is preselected and reused by `advance`. | Preserve the single-sample rule. |
-| INV-RS-06 | Every weather state maps to a client condition. | PARTIAL | `conditionMapping[state] ?? 'sun'` silently falls back. | Validate all five states at config load. |
-| INV-RS-07 | Client and server agree on day/night. | FIXED (2026-11-16) | One clock policy (`client/renderers/environment/worldClock.ts`): the server's `timeOfDay` is adopted on every broadcast, the client only interpolates between them with the same configured cycle length, and the freeze and speed are server state carried in the payload. Both sides derive"is it day" from the same sun arc. | Never reintroduce a client-only clock, freeze or speed; send the dev change to the server. |only between broadcasts. |
+| INV-RS-06 | Every weather state maps to a client condition. | PARTIAL (2026-11-23) | The five states map in `config/daynight.json` `condition_mapping` (`clear`/`rain`/`thunderstorm_telegraph`/`thunderstorm_active`/`thunderstorm_aftermath`), and `weatherStateMachine` resolves it as `conditionMapping[state] ?? 'sun'`. Nothing asserts at load that the map covers every state, so a state added without a mapping renders as clear sky rather than failing. | Validate coverage in `loadDayNightConfig` against the state list. |
+| INV-RS-07 | Client and server agree on day/night. | FIXED (2026-11-16) | One clock policy (`apps/client/src/renderers/environment/worldClock.ts`): the server's `timeOfDay` is adopted on every broadcast, the client only interpolates between them with the same configured cycle length, and the freeze and speed are server state carried in the payload. Both sides derive"is it day" from the same sun arc. | Never reintroduce a client-only clock, freeze or speed; send the dev change to the server. \|only between broadcasts. |
 | INV-RS-08 | Rain is authoritative from weather. | FIXED (2026-11-23) | The soil pass reads one input, the weather moisture rate `step()` is given (`weatherMoistureRate > 0`, `resourceWorld.ts`), and `ResourceWorld.setRaining`/`isRaining` are deleted, so no second switch can disagree with the sky. Its test used to enable the flag and pass a rate of 0; it now drives the rate itself, which is the path production takes. | Keep rain a parameter of `step`; do not add a setter back. |
 | INV-RS-09 | Reads do not mutate. | FIXED (2026-11-16) | `getState` reads through `peekDirtyTiles`; `getDirtyTiles` is only reached where something is already dirty, so a read no longer flips `hasBroadcast`. | Keep state reads non-consuming; add a `consume` verb for the mutating one. |
 | INV-RS-10 | Dirty thresholds come from config. | FIXED (2026-11-16) | `light_dirty_threshold` (0.05) and `resource_dirty_threshold` (0.1) are `config/resources.json` values read into the world config; the module constants are gone. | New thresholds are config values, not constants. |
@@ -471,16 +583,16 @@ Status legend: `ENFORCED`, `PARTIAL`, `UNENFORCED`, `BROKEN`.
 | INV-NET-04 | `WELCOME` contains the full plant. | FIXED (2026-11-09) | `addPlayer` and both reclaim paths populate `nodes`. | Keep nodes in every welcome path. |
 | INV-NET-05 | `GROWTH_EVENT` fully describes growth. | FIXED (2026-11-09) | Emits `newNode` or `newNodes` + `updatedParentNode`, `totalBiomass` and `totalEnergy`; germination is included. | — |
 | INV-NET-06 | Every accepted intent is processed. | FIXED (2026-11-10) | `growthIntentStateMachine` queues intents in FIFO order per player; same-tick intents no longer overwrite (`ops/growthIntentStateMachine.ts`). | Queue by intent id. |
-| INV-NET-07 | `PLANT_SYNC` covers every plant the client should see. | PARTIAL | Only connected players' plants; offline plants vanish. | Include interested/reclaimed plants. |
-| INV-NET-08 | Client validates payloads. | HOLDS (2026-11-16) | `validateMessage` is imported from `@plant-legacy/shared/protocol/messageSchemas` and runs before the dispatch switch (`main.ts`), so a handler never sees an unvalidated payload; `net/dispatch.ts` takes `unknown` and documents that ordering. | `messageSchemas` tests; keep the guard before the switch, never inside handlers. |
+| INV-NET-07 | `PLANT_SYNC` covers every plant the client should see. | FIXED (2026-11-23) | The reply is built from `selectVisiblePlants` (`ops/plantVisibility.ts`) over `getAllPlants()`, so it is filtered by **interest range**, not by who is connected: a saved or offline plant standing next to the joining player is included, and the player's own plant is always included. Filtering by connected players was the earlier behaviour and it left every offline plant out of the world for anyone who joined after its owner left. | Keep the selector the only place that decides visibility; a second filter at a call site is how the connected-only version came back. |
+| INV-NET-08 | Client validates payloads. | HOLDS (2026-11-16) | `validateMessage` is imported from `@plant-legacy/shared/protocol/messageSchemas` and runs before the dispatch switch (`main.ts`), so a handler never sees an unvalidated payload; `net/dispatch.ts` takes `unknown` and documents that ordering. | `messageSchemas` tests; keep the guard before the switch, never inside handlers. Three client-to-server types have no field schema in `MESSAGE_SCHEMAS` — `MUTATION_SHED`, `REROOT_INTENT` and `MUTATION_LEVEL` — so for them `validateMessage` only proves the payload is an object and the handler's own `typeof` checks do the rest. The invariant holds in that weaker form; adding the three schemas is what would make it uniform. |
 | INV-NET-09 | Client updates the full graph, not just the new node. | FIXED (2026-11-10) | `GROWTH_EVENT` links new nodes into parent's `children` array for own and other plants (`apps/client/src/main.ts:2861-2949`). | Apply links or request sync. |
-| INV-NET-10 | `plantReady`/`plantId`/`welcome` are consistent. | PARTIAL | `welcome` not cleared on close; `cameraFramed` not reset. | Own them in one session object. |
+| INV-NET-10 | `plantReady`/`plantId`/`welcome` are consistent. | PARTIAL (2026-11-23) | `ws.onclose` clears `plantId`, `plantReady`, the growth selection, the rooted sight set, the other-player sets and the growth-options timeout. It deliberately keeps `cameraFramed` (a dropped socket should not throw away the player's framing; the close handler says so). It does **not** clear `welcome`, which is only ever assigned by a `WELCOME`, so between a close and the next welcome the object still describes the previous session's plant and the `welcome?.rootNode` fallback in the resource-query path can read it. | Clear `welcome` in the close handler, or prove no read can run while `plantReady` is false and say so there. |
 | INV-NET-11 | Own-plant sync works when `plantId` is null. | FIXED (2026-11-10) | `PLANT_SYNC` matches by `ownerId === playerId` or `welcome.plantId` and sets `plantId` / `plantReady` (`apps/client/src/main.ts:3128-3135`). | Rebuild by owner/player id, not `plantId` alone. |
-| INV-NET-12 | Client `timeOfDay` matches the server. | PARTIAL | Hardcoded 1800s local advance. | Use broadcast interval + config. |
+| INV-NET-12 | Client `timeOfDay` matches the server. | ENFORCED (2026-11-16) | The clock is the server's: `WEATHER_UPDATE` carries `timeOfDay`/`dayNumber` at `weather_send_rate_hz` and the client stores them (`main.ts` weather handler), the title screen asks `GET /world/time` before it has a socket (`net/worldTime.ts`), and the local advance between packets uses `config/daynight.json` `cycle_length_s` (3600) rather than a literal. The 1800 s literal this row described was a client cycle half the server's and is gone. | No client may derive the day from its own start time; between broadcasts it may only interpolate toward the last one. |
 | INV-NET-13 | Message type constants are shared. | FIXED (2026-11-16) | The client imports `MESSAGE_TYPE` from `@plant-legacy/shared/protocol` (no local copy), and `DEV_RESPONSE` is both sent by the server (dev path, `main.ts`) and dispatched by the client. | Keep one enum; add message types to shared, never to a client switch. |
-| INV-NET-14 | Server broadcasts respect interest cells. | PARTIAL (2026-11-09) | Same as INV-TM-10. | Wire interest filtering. |
+| INV-NET-14 | Server broadcasts respect interest cells. | ENFORCED (2026-11-23) | See INV-TM-10: per-plant STATE/KEYFRAME and growth events are filtered per player through `isInRange`; world-wide payloads are deliberately unfiltered. | A broadcast helper that takes a position must filter; one that does not must say so in its comment. |
 | INV-NET-15 | Client renders server text safely. | FIXED (2026-11-16) | The two paths that put server strings in `innerHTML` — the growth-option label from `GROWTH_OPTIONS_RESULT` and the resource row label from `/config/resources` — now go through `escapeHtml` (as chat and reports already did). Other interpolations are numeric or client-owned strings. | Escape every server string at the DOM sink; prefer `textContent`. |
-| INV-NET-16 | `PROTOCOL_VERSION` has one source. | PARTIAL | Shared constant vs config vs hardcoded client `1`. | Import the shared constant everywhere. |
+| INV-NET-16 | `PROTOCOL_VERSION` has one source. | FIXED (2026-11-16) | The constant lives in `packages/shared/src/protocol/index.ts` and both sides import it (the client sends `clientVersion: PROTOCOL_VERSION` in HELLO); the server also asserts at boot that `config/net_proto.json` `protocol_version` equals it, so the file cannot disagree with the code. | A version bump changes the constant and the config together, and boot fails if only one moved. |
 
 ## F. Persistence (`INV-PR`)
 
@@ -517,9 +629,9 @@ Status legend: `ENFORCED`, `PARTIAL`, `UNENFORCED`, `BROKEN`.
 
 | ID | Invariant | Status | Evidence / failure | Fix |
 |---|---|---|---|---|
-| INV-CFG-01 | Every tunable comes from `config/*.json` (RULE_3). | PARTIAL | `cellSize = 10`, cotyledon count/threshold, tier rates, LOD radii, 1800s client cycle, growth `expectedSeconds`, dirty thresholds, shade radius, dev ranges, inline `/config/*` defaults. (Weather durations fixed 2026-11-08.) | Move to config; delete inline defaults or mark them dev-only. |
+| INV-CFG-01 | Every tunable comes from `config/*.json` (RULE_3). | PARTIAL (2026-11-23) | Closed since this row was written: the client day cycle (now `daynight.cycle_length_s` 3600), weather durations, and the cotyledon count/threshold (`growth.max_cotyledons`, `cotyledon_shed_leaf_count`). Still in code: the per-node-type growth *animation* stagger (`EMERGENCE_DELAY_MS`, eight entries in `main.ts`), the soil pass cadence (`SOIL_STEP_INTERVAL_S` 0.25 in `resourceWorld.ts`), the water-table builder defaults (48 cells, 2 m, 576 per call, 0.5 m tolerance in `tick/waterTableGrid.ts`), the socket heartbeat interval (`SOCKET_HEARTBEAT_MS` 25 s in `main.ts`, E25), the growth-menu `expectedSeconds` labels, client LOD radii and the dirty-rebroadcast thresholds. | Each of these is a number a player would notice; move the ones that change behaviour, and leave the rest with a comment saying why it is a constant. |
 | INV-CFG-02 | Config fallbacks cannot drift from files. | FIXED (2026-11-23) | `/config/onboarding` no longer answers 200 with a third inline copy of its own text: an unreadable file returns `500 {error:'config_unreadable', config:'onboarding'}` (`http/configRoutes.ts`), so the client's single default set is the only fallback left and it is used when the fetch fails at all. Pinned in `configRoutes.test.ts`. The other shape named here, `World`'s `maxFrameTimeMs` constructor default of 100 against `config/world.json`'s 200, is unchanged and still reachable only by a caller that omits the argument. | Apply the same rule to any route that keeps a copy: return an error instead. |
-| INV-CFG-03 | `PROTOCOL_VERSION` is shared. | PARTIAL | See INV-NET-16. | Import shared constant. |
+| INV-CFG-03 | `PROTOCOL_VERSION` is shared. | FIXED (2026-11-16) | See INV-NET-16: one constant in the shared package, imported by client and server, with a boot assert tying it to `config/net_proto.json`. | — |
 
 ---
 
@@ -553,7 +665,7 @@ features.
 | DEF-08 | Germination succeeds with no `GROWTH_EVENT`; the client stays on the seed. | FIXED (2026-11-09) | `plantWorld.ts`; `main.ts` | INV-NET-05 |
 | DEF-09 | `savePlant` writes tier `'dormant'` and `last_tick = lastGrowthTick`. | FIXED (2026-11-08) | `plantPersistence.ts` | INV-PR-03/04 |
 | DEF-10 | Diffusion only lerps toward the last neighbour. | FIXED (2026-11-08) | `resourceWorld.ts` | INV-RS-03 |
-| DEF-11 | `InterestManager` entity filtering is never wired. | PARTIAL (2026-11-09) | `main.ts`; `interestManager.ts` | INV-TM-10 |
+| DEF-11 | `InterestManager` entity filtering is never wired. | PARTIAL (2026-11-27) | Positional filtering **is** wired: `isPositionInRange` drives the STATE/KEYFRAME fanout in `tick/stateBroadcast.ts` and the per-plant broadcasts, and it is tested (INV-TM-10). The live plant-list paths now apply `per_client_entity_cap` (`selectVisiblePlants` limit and `broadcastPlantStates` entity cap). What still has no production caller is the separate entity-list/detail-level path — `getEntitiesForClient` / `getEntityIdsInRange` — which still returns placeholder positions (`{0,0,0}`) because no caller ever fetches entity data. | INV-TM-10 |
 | DEF-12 | `enforceSessionLimit` revokes one session too many. | FIXED (2026-11-08) | `accounts/service.ts` | INV-AU-02 |
 | DEF-13 | HELLO timeout is never cleared; second message handler persists. | FIXED (2026-11-08) | `main.ts` | INV-ID-11/12 |
 | DEF-14 | `maxNodesPerPlant` is checked before germination adds nodes. | FIXED (2026-11-08) | `plantWorld.ts` | INV-GR-12 |

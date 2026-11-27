@@ -45,6 +45,8 @@ export function buildWelcomePayload(source: WelcomeSource): WelcomePayload {
       : { id: rootNodeId ?? '', x: 0, y: 0, z: 0, type: 'root', biomass: 0 },
     totalBiomass: plant.totalBiomass,
     totalEnergy: plant.totalEnergy,
+    archetype: plant.archetype,
+    spawn: plant.spawn,
     nodes: Array.from(plant.nodes.values()).map((node) =>
       nodeWireFields(node, source.nodeHealth(node.id)),
     ),

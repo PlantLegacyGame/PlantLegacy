@@ -98,4 +98,30 @@ describe('selectVisiblePlants', () => {
     };
     assert.deepEqual(plantRootPosition(p), { x: 5, z: -7 });
   });
+
+  it('keeps the own plant first and stops at the entity cap', () => {
+    const own = plant('p1_plant', 5000, 0);
+    const visible = selectVisiblePlants({
+      plants: [plant('near_1', 10, 0), own, plant('near_2', 20, 0), plant('far', 900, 0)],
+      playerId: 'p1',
+      ownPlantId: 'p1_plant',
+      isInRange: inRange,
+      limit: 2,
+    });
+    assert.deepEqual(
+      visible.map((p) => p.id),
+      ['p1_plant', 'near_1'],
+    );
+  });
+
+  it('returns nothing when the entity cap is zero', () => {
+    const visible = selectVisiblePlants({
+      plants: [plant('p1_plant', 0, 0), plant('near', 10, 0)],
+      playerId: 'p1',
+      ownPlantId: 'p1_plant',
+      isInRange: inRange,
+      limit: 0,
+    });
+    assert.deepEqual(visible, []);
+  });
 });

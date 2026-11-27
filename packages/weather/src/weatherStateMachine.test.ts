@@ -33,7 +33,6 @@ describe('T07 WeatherStateMachine', () => {
     stormWindDamageRate: 1.5,
     lightningFrequencyPerMinute: 4.0,
     lightningDamageRadius: 6.0,
-    lightningDamageAmount: 25.0,
     forecastWindowS: 180,
     biomeWeatherModifier: 1.0,
   };

@@ -109,7 +109,16 @@ const SCALE = [0.62, 0.7, 0.78, 0.88, 1.0, 1.16, 1.32];
 const TRUNK_WIDTH = [0, 0, 0.06, 0.34, 0.62, 0.86, 1];
 const TRUNK_OPACITY = [0, 0, 1, 1, 1, 1, 1];
 const TREE_OPACITY = [0, 0, 0, 0.5, 1, 1, 1];
-const LEAF_REVEAL = [0.16, 0.32, 0.48, 0.64, 0.82, 0.93, 1];
+/*
+ * A seed already carries its first pair of leaves. The stem draws six leaves and
+ * opens them at `(i + 1) / 6`, so a seed's 0.16 - the old first pin - was just
+ * under the first threshold (0.1667): the bottom of the ladder rendered as a bare
+ * green stick with every leaf switched off, and a plant that had just been reset
+ * to zero looked like nothing had been drawn at all. 0.4 opens exactly two of the
+ * six (0.167 and 0.333), and the pins above it climb so the stem is fully out
+ * (0.55, three leaves) by the time the crown starts taking leaves away from it.
+ */
+const LEAF_REVEAL = [0.4, 0.55, 0.7, 0.8, 0.88, 0.95, 1];
 const LIMB_REVEAL = [0, 0, 0, 0.34, 0.68, 0.9, 1];
 const LEAF_SCALE = [1.15, 1.08, 1.02, 0.96, 0.92, 0.88, 0.84];
 const LIMB_LENGTH = [0.5, 0.56, 0.64, 0.74, 0.85, 1.02, 1.18];

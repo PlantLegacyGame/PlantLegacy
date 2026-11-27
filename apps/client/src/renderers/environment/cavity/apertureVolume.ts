@@ -30,6 +30,25 @@ export const APERTURE_RIM_MARGIN_M = 0.06;
 /** Cut this far below the cavity floor so no skin is left standing there. */
 export const APERTURE_FLOOR_MARGIN_M = 0.5;
 
+/** Footprint of the old soil body the buried-eye clamp keeps the eye inside. */
+export const APERTURE_SOIL_EXTENT_M = 3.6;
+/** Margin between the eye and that footprint's edge, metres. */
+export const APERTURE_SOIL_EYE_HOLD_M = 0.3;
+
+/**
+ * Radius a buried eye is held within around the opening.
+ *
+ * The separate aperture body is gone - the bowl and its collar are the one
+ * surface now - but the camera clamp still needs a footprint. It is the same
+ * 3.6 m minimum plus 1.2 m of mouth clearance the body used, so an eye inside
+ * the pit can circle the wall without being let out under intact soil.
+ */
+export function apertureSoilHoldRadiusM(apertureRadiusM: number): number {
+  const aperture = Number.isFinite(apertureRadiusM) ? Math.max(0, apertureRadiusM) : 0;
+  const extent = Math.max(APERTURE_SOIL_EXTENT_M, aperture * 1.02 + 1.2);
+  return Math.max(0.1, extent - APERTURE_SOIL_EYE_HOLD_M);
+}
+
 export interface ApertureVolume {
   centerX: number;
   centerZ: number;

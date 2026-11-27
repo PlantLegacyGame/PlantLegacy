@@ -28,12 +28,12 @@
     },
     "resolution_floor": {
       "type": "number",
-      "value": 0.75,
+      "value": 0.9,
       "range": [
         0.1,
         1
       ],
-      "notes": "Minimum renderer pixel ratio relative to devicePixelRatio. Was 0.5: on a machine that cannot reach target_fps the band sat on the floor for the whole session, so the picture - and every name tag in the 3D scene - was drawn at half resolution and upscaled."
+      "notes": "Minimum renderer pixel ratio relative to devicePixelRatio. Was 0.75, and 0.5 before that: whenever the scene got heavier - more plants, a finer terrain level - the band spends resolution first, and the whole frame, the raymarched plant most of all, was drawn at three quarters of the screen and upscaled, which is the blur a player notices as soon as the world grows. At 0.9 the same lever still exists (the band must be able to spend something, and renderConfig.test.ts asserts it can), but the worst case is a tenth of the frame rather than a quarter."
     },
     "max_pixel_ratio": {
       "type": "number",
@@ -59,8 +59,8 @@
         "free",
         "ground"
       ],
-      "value": "free",
-      "notes": "The camera rig. free: a flying eye - W/A/S/D follow the whole view vector, the eye neither follows the terrain nor is clamped out of it, and Root Sight's cavity clamps are off (the near-side cut that keeps the pit readable from inside it lands with the volume terrain). ground: the old ground-following rig, where the rig rises with the terrain and the eye is kept out of the dirt."
+      "value": "ground",
+      "notes": "The camera rig. free: a flying eye - W/A/S/D follow the whole view vector, and the eye is not clamped out of the terrain. ground: the ground-following rig, where the rig rises with the terrain and the eye is kept out of the dirt. Ground is the default so an orbit drag cannot leave the player looking at the underside of the world."
     },
     "camera_min_distance": {
       "type": "number",
@@ -204,12 +204,48 @@
     },
     "planet_view_min_distance_multiplier": {
       "type": "number",
-      "value": 1.4,
+      "value": 1.0002,
       "range": [
-        1.05,
+        1.0002,
         4
       ],
-      "notes": "Orbit-view minimum distance from the planet centre, as a multiple of planet_radius_m; keeps the camera outside the body."
+      "notes": "Hard lower bound on the orbit's distance from the planet centre, as a multiple of planet_radius_m. It is the absolute floor; the working floor is planet_view_clearance_m above the relief under the eye, so the orbit can reach the ground anywhere on the planet instead of only the detailed patch. At 1.004 it sat 400 m up and that was the whole of the 'cannot zoom into the planet' defect."
+    },
+    "planet_view_clearance_m": {
+      "type": "number",
+      "value": 60,
+      "range": [
+        5,
+        2000
+      ],
+      "notes": "How close the orbit view may come to the soil, in metres. It is measured above the drawn relief under the eye, not above the mean sphere, so it is what keeps the camera outside a mountain as well as outside the planet; the near and far planes follow the altitude."
+    },
+    "planet_view_zoom_speed": {
+      "type": "number",
+      "value": 0.9,
+      "range": [
+        0.1,
+        5
+      ],
+      "notes": "OrbitControls dolly rate in planet view. The orbit crosses a whole planet, so the wheel notch that feels right at arm's length overshoots a continent here."
+    },
+    "planet_view_rotate_speed": {
+      "type": "number",
+      "value": 0.55,
+      "range": [
+        0.05,
+        2
+      ],
+      "notes": "OrbitControls rotate rate in planet view, a fraction of the local rig's: a 100 km globe is many screens of drag per quarter turn."
+    },
+    "planet_relief_amplitude_m": {
+      "type": "number",
+      "value": 650,
+      "range": [
+        0,
+        5000
+      ],
+      "notes": "Peak relief of the whole planet outside the authored play patches, in metres. Zero leaves the bare sphere and no global sea. Was 160: a hundred-metre island world whose highest ground stood thirty metres over the sea, so every frame below a hundred metres was a coastline - there was nowhere on the body to stand and see a hill. At 650 the dry continents read as hills from orbit instead of a pale sheet, and there is no sea to reserve headroom for now. The field is faded to exactly zero at the patch radius, so this never changes the ground a plant stands on."
     },
     "planet_view_near_multiplier": {
       "type": "number",
@@ -502,21 +538,21 @@
     },
     "rain_streak_length": {
       "type": "number",
-      "value": 1.1,
+      "value": 0.55,
       "range": [
         0.2,
         4
       ],
-      "notes": "Length of rain streaks in world units."
+      "notes": "Length of rain streaks in world units. 1.1 m at 28 m/s is the distance a drop covers in a twenty-fifth of a second - true, and far too long to read as water: the shower looked like white dashes drawn on the sky. A little over half a metre still shows the fall at arm's length and reads as a drop rather than a line."
     },
     "rain_streak_width": {
       "type": "number",
-      "value": 0.012,
+      "value": 0.007,
       "range": [
         0.002,
         0.05
       ],
-      "notes": "Width of rain streaks in world units."
+      "notes": "Width of rain streaks in world units. Thinner than the old 12 mm so the head stays a bead and the tail a hair, which is what makes it read as water instead of a white tick."
     },
     "rain_max_velocity": {
       "type": "number",
@@ -689,15 +725,6 @@
       ],
       "notes": "Height the observer rig is dropped from when it spawns."
     },
-    "root_aura_radius": {
-      "type": "number",
-      "value": 6,
-      "range": [
-        0.5,
-        20
-      ],
-      "notes": "3D proximity aura radius around root nodes for subterranean sight cutaway."
-    },
     "webgpu_enabled": {
       "type": "boolean",
       "value": false,
@@ -732,12 +759,12 @@
     },
     "webgpu_tier2_threshold": {
       "type": "integer",
-      "value": 50,
+      "value": 12,
       "range": [
         6,
         100
       ],
-      "notes": "Projected pixel size threshold for Tier 2 (multi-view impostor)."
+      "notes": "Projected pixel size threshold for Tier 2, the ellipsoid SDF impostor band (ADR-042: 12–80 px). Below it the same impostor covers the 2–12 px band; there is no billboard."
     },
     "webgpu_tier3_threshold": {
       "type": "integer",
@@ -778,16 +805,7 @@
     "webgpu_impostor_enabled": {
       "type": "boolean",
       "value": true,
-      "notes": "Bake impostor atlases for far plants instead of drawing their geometry every frame."
-    },
-    "webgpu_impostor_update_interval_ms": {
-      "type": "integer",
-      "value": 5000,
-      "range": [
-        250,
-        60000
-      ],
-      "notes": "Minimum gap between impostor re-bakes of the same plant, in milliseconds."
+      "notes": "Draw the 12 px and below band as analytic ellipsoid impostors instead of merged mesh geometry. Nothing is baked and no atlas is sampled."
     },
     "webgpu_vram_budget_bytes": {
       "type": "integer",
@@ -834,14 +852,32 @@
       ],
       "notes": "Variation layers in the plant texture array; getVariationIndex must stay below this."
     },
-    "node_pick_radius": {
+    "node_pick_radius_scale": {
+      "type": "number",
+      "value": 1.15,
+      "range": [
+        1,
+        2
+      ],
+      "notes": "A click's pick sphere is this multiple of the part's own radius, so the part is grabbable rather than a point. The two floors beside it apply underneath this."
+    },
+    "own_node_pick_radius": {
+      "type": "number",
+      "value": 0.1,
+      "range": [
+        0.02,
+        0.5
+      ],
+      "notes": "Minimum world-space pick radius for your own plant's parts. Small enough to sit inside the part: a parent's sphere that swallowed its child's made a small child root unpickable, and the growth joint has to be chosen exactly."
+    },
+    "rival_node_pick_radius": {
       "type": "number",
       "value": 0.35,
       "range": [
         0.1,
         2
       ],
-      "notes": "Minimum world-space pick radius for node selection during growth."
+      "notes": "Minimum world-space pick radius for another player's parts. Yours use a sphere that hugs the part, because the growth joint has to be chosen exactly; a rival is only looked at, and their seedling at play distance is a few pixels wide, so a press plainly on it must not fall through to the soil."
     },
     "underground_view_color": {
       "type": "color",
@@ -856,6 +892,15 @@
         4
       ],
       "notes": "Aim ring radius as a multiple of the emerging segment's own thickness, capped at the node's radius."
+    },
+    "growth_at_surface_tolerance_m": {
+      "type": "number",
+      "value": 0.18,
+      "range": [
+        0,
+        1
+      ],
+      "notes": "How far a part may stand above the ground under it and still be aimed off the soil rather than along its parent. Measured from that part's own ground, not from world Y."
     },
     "growth_aim_ring_min": {
       "type": "number",

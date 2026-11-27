@@ -1356,10 +1356,9 @@
     "oversize_decay": {
       "type": "object",
       "value": {
-        "wilt_per_s": 0.02,
-        "leak_per_s": 0.05
+        "wilt_per_s": 0.02
       },
-      "notes": "Over-form decay. A size mutation is real tissue, so shedding one leaves the plant heavier than its remaining form can carry. excess tissue is lost at wilt_per_s of itself per second (0.02 halves it in ~35 s), each part thinning as its own mass falls, so the body shrinks back gradually instead of snapping to its old size. Stored water, minerals and energy above the new capacity leak at leak_per_s of the excess per second for the same reason."
+      "notes": "Over-form decay. A size mutation is real tissue, so shedding one leaves the plant heavier than its remaining form can carry. Excess tissue is lost at wilt_per_s of itself per second (0.02 halves it in ~35 s), each part thinning as its own mass falls, so the body shrinks back gradually instead of snapping to its old size. Stored water, minerals and energy are hard-clamped to the smaller capacity immediately, so a resource bar never reads above its maximum while the tissue wilts."
     },
     "level_up": {
       "type": "object",
@@ -1399,9 +1398,10 @@
         "energy_cost_per_biomass_per_level": 2,
         "base_biomass_fraction": 0.08,
         "biomass_fraction_per_level": 0.06,
-        "min_biomass_cost": 1
+        "min_biomass_cost": 1,
+        "max_energy_share_of_capacity": 0.8
       },
-      "notes": "Mutation levels. A held mutation starts at level 1; the player spends stored resources to raise it and picks one card per level from that mutation's own effect pool. Energy cost = base_energy_cost + energy_cost_per_level per level already gained, plus energy_cost_per_biomass per unit of the plant's biomass (and energy_cost_per_biomass_per_level more per level), so a seedling can afford its first level and a mature plant pays in proportion to what it holds. Biomass cost is base_biomass_fraction of total biomass (+ biomass_fraction_per_level per level), never less than min_biomass_cost. Cards are the effect keys above: a card multiplies its effect by its step, so levelling a size mutation offers size cards and a cosmetic one offers the metabolism cards it can actually use. upkeep_per_level raises the running bill with every level. Only which cards are dealt is random; the level itself is the player's choice."
+      "notes": "Mutation levels. A held mutation starts at level 1; the player spends stored resources to raise it and picks one card per level from that mutation's own effect pool. Energy cost = base_energy_cost + energy_cost_per_level per level already gained, plus energy_cost_per_biomass per unit of the plant's biomass (and energy_cost_per_biomass_per_level more per level), so a seedling can afford its first level and a mature plant pays in proportion to what it holds. The energy bill is capped at max_energy_share_of_capacity of the plant's energy capacity, so a full tank always pays for a level. Biomass cost is base_biomass_fraction of total biomass (+ biomass_fraction_per_level per level), never less than min_biomass_cost. Cards are the effect keys above: a card multiplies its effect by its step, so levelling a size mutation offers size cards and a cosmetic one offers the metabolism cards it can actually use. upkeep_per_level raises the running bill with every level. Only which cards are dealt is random; the level itself is the player's choice."
     },
     "mutation_hollow_culm": {
       "type": "object",

@@ -172,7 +172,7 @@ export function createPlantStatusHud(options: PlantStatusHudOptions = {}): Plant
     // track measured against an auto-width panel could overflow the card's own
     // rounded edge and paint a green bar straight out of the panel.
     width: 'clamp(220px, 24vw, 360px)',
-    maxWidth: 'calc(100vw - 2 * var(--hud-corner, 12px))',
+    maxWidth: 'calc(var(--pl-hud-vw, 100vw) - 2 * var(--hud-corner, 12px))',
     boxSizing: 'border-box',
     overflow: 'hidden',
     padding: '6px 10px',
@@ -237,7 +237,11 @@ export function createPlantStatusHud(options: PlantStatusHudOptions = {}): Plant
     inset: '0',
     width: '100%',
     transformOrigin: 'left center',
-    background: 'linear-gradient(90deg, var(--leaf-700), var(--leaf-300))',
+    // The same green ramp as the vitals store bars (see main.ts): pale at the
+    // empty end, saturated green where the plant is whole. The old light end was
+    // --leaf-300, the near-white foliage step, which looked bleached.
+    background:
+      'linear-gradient(90deg, var(--leaf-400) 0%, var(--leaf-500) 45%, var(--leaf-600) 75%, var(--leaf-700) 100%)',
     transition: 'transform 160ms ease-out',
   });
   structureTrack.appendChild(structureFill);

@@ -38,6 +38,16 @@ describe('tokenBucketAllow', () => {
     assert.equal(tokenBucketAllow(bucket, 1_000, 1, 2), false);
   });
 
+  it('matches the state-change budget: 8 at once, then 4 per second', () => {
+    const bucket = createTokenBucket(8, 0);
+    for (let i = 0; i < 8; i++) {
+      assert.equal(tokenBucketAllow(bucket, 0, 4, 8), true, `burst action ${i + 1}`);
+    }
+    assert.equal(tokenBucketAllow(bucket, 0, 4, 8), false, 'the burst is spent');
+    assert.equal(tokenBucketAllow(bucket, 250, 4, 8), true, 'a quarter second pays for one action');
+    assert.equal(tokenBucketAllow(bucket, 250, 4, 8), false, 'and only one');
+  });
+
   it('always allows the first message, even with a zero rate or capacity', () => {
     const zeroRate = createTokenBucket(1, 0);
     assert.equal(tokenBucketAllow(zeroRate, 0, 0, 1), true);

@@ -54,11 +54,10 @@ test('the rim is a coverage edge a pixel wide, with no fixed-width band', () => 
   assert.doesNotMatch(shader, /rimNoise/);
 });
 
-test('every soil patch is cut, so the pit does not vanish past the detail edge', () => {
-  // The outer LOD ring used to be `aSurfaceCut = false`; after a reroot past the
-  // 180 m detail patch it covered the opening with a solid sheet.
+test('every soil mesh is cut, so the pit never vanishes into solid ground', () => {
+  // There is no outer LOD ring any more: one play disk and one static globe.
   assert.doesNotMatch(shader, /setSurfaceCut\([^)]*,\s*false\)/);
-  assert.match(shader, /setSurfaceCut\(patches\.outer, true\)/);
+  assert.match(shader, /setSurfaceCut\(disk, true\)/);
 });
 
 test('a buried eye in the pit does not see the underside of the ground beyond the rim', () => {

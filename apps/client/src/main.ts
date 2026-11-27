@@ -11,15 +11,14 @@
 
 import RAPIER from '@dimforge/rapier3d-compat';
 import { type Binding, createInputBus, type InputBus } from '@plant-legacy/input';
-import type { DamageSource } from '@plant-legacy/shared/damage';
 import { appendLedger, type LedgerEntry } from '@plant-legacy/shared/economy';
 import {
-  clampGrowthDirectionByGene,
-  getSeedBodyHeightRatio,
+  MID_SEGMENT_BRANCH_TYPES,
   NODE_GROWTH_CONSTRAINTS,
   type NodeType,
   nodeBelongsToPlant,
   nodeRenderRadius,
+  organTraitFor,
   resolveAttachFraction,
   resolveDrawnRadius,
 } from '@plant-legacy/shared/growth';
@@ -29,6 +28,8 @@ import {
   buildCavityField,
   type CavityField,
   type CavityNodeInput,
+  formatGeodetic,
+  type SpawnSelection,
 } from '@plant-legacy/shared/world';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
@@ -70,6 +71,11 @@ import {
   rebindAction,
   saveControlOverrides,
 } from './config/controlOverrides.js';
+import {
+  DEFAULT_EMOTE_DEFINITIONS,
+  type EmoteDefinitionConfig,
+  loadEmotesConfig,
+} from './config/emotesConfig.js';
 import { httpOrigin, isDevMode, probeDevTools, wsOrigin } from './config/endpoints.js';
 import { loadGrowthGeometryConfig } from './config/growthGeometryConfig.js';
 import { loadMutationVisualsConfig } from './config/mutationVisuals.js';
@@ -90,22 +96,30 @@ import { cavityEscapeLiftY, clampToCavity, raiseEyeWithAim } from './player/burr
 import { aimLiftY } from './player/cameraAim.js';
 import { solveGroundCeiling, stepLookUpPitch } from './player/cameraOrbit.js';
 import { panMove } from './player/cameraPan.ts';
+import { cameraPolarLimit } from './player/cameraRig.js';
 import { ownBodyNodes, resolveOwnAnchor } from './player/ownPlantAnchor.js';
 import { recenterOffset } from './player/recenterView.js';
 import { decideAutoOpenRootSight } from './player/rootSightAutoOpen.js';
 import { isBelowSoil } from './player/underground.js';
 import { createGpuTimer, type GpuTimer } from './render/GpuTimer.js';
-import { createGrowthAimGizmo, type GrowthAimGizmo } from './render/growthAimGizmo.ts';
+import {
+  AIM_RING_BEHIND_INK,
+  AIM_RING_INK,
+  aimGauge,
+  createGrowthAimGizmo,
+  type GrowthAimGizmo,
+} from './render/growthAimGizmo.ts';
+import { planNodeClick } from './render/growthNodeClick.ts';
 import { interpolationDurationMs, NodeInterpolator } from './render/PlantInterpolation.js';
 import { clientNodeHealth, resolveDrawnProgress } from './render/plantProgress.js';
 import { createQualityController, type QualityController } from './render/QualityController.js';
 import { rivalTagLabel } from './render/rivalTagLabel.js';
 import { DrawnGround } from './renderers/drawnGround.js';
 import { cavityPaletteFromWorld, EnvironmentRenderer } from './renderers/EnvironmentRenderer.js';
-import { apertureSoilHoldRadiusM } from './renderers/environment/apertureSoilMesh.ts';
 import {
   APERTURE_FLOOR_MARGIN_M,
   APERTURE_RIM_MARGIN_M,
+  apertureSoilHoldRadiusM,
   apertureVolumeFor,
 } from './renderers/environment/cavity/apertureVolume.ts';
 import { cavityDepthM } from './renderers/environment/cavity/profile.ts';
@@ -116,7 +130,7 @@ import {
   rimModeFor,
   rootCavityShape,
 } from './renderers/environment/cavity/shape.ts';
-import { planetTerrainY, planetUp } from './renderers/environment/planetSurface.js';
+import { planetTerrainY, surfaceUpAt } from './renderers/environment/planetSurface.js';
 import {
   apertureRadiusFor,
   applyRootSightConfig,
@@ -127,11 +141,19 @@ import { applyOrganPalette } from './renderers/MeshPlantRenderer.ts';
 import { createPlantLabelLayer } from './renderers/PlantLabels.js';
 import { DEFAULT_CONFIG, PlantRenderer } from './renderers/PlantRenderer.js';
 import { toClientSpace } from './renderers/plant/clientSpace.js';
+import { clampAimToGenes } from './renderers/plant/growthAimClamp.js';
 import {
+  attachFractionRequest,
   buildTaperedTubeGeometry,
   clampAnchorToNode,
   groundMarkerHeight,
+  growthAimMouthRadius,
+  growthStartNormal,
+  jointAnchorAllowanceM,
+  ringFanGeometry,
   ringFrameFor,
+  ringLoopGeometry,
+  wrapRingOnHost,
 } from './renderers/plant/growthGizmoGeometry.js';
 import {
   captureHalfExtent,
@@ -196,6 +218,7 @@ import {
 } from './ui/DeathScreen.js';
 import { createDebugOverlay, type DebugOverlay } from './ui/DebugOverlay.js';
 import { createDevPanel, type DevPanelAPI } from './ui/DevPanel.js';
+import { damageSourceLabel } from './ui/damageSourceLabels.js';
 import {
   createEntryFlowStateMachine,
   entryFlowAuthenticated,
@@ -203,15 +226,18 @@ import {
   entryFlowBeginRequest,
   entryFlowBoot,
   entryFlowCancelConnect,
+  entryFlowCancelSpawn,
   entryFlowChoose,
+  entryFlowChooseSpawn,
   entryFlowConnectionFailed,
   entryFlowContinueAsGuest,
   entryFlowPlantLost,
   entryFlowRequestFailed,
-  entryFlowReseed,
   entryFlowSignedOut,
+  entryFlowSpawnConfirmed,
   entryFlowWorldReady,
 } from './ui/EntryFlowStateMachine.js';
+import { createEmoteWheel, type EmoteWheelAPI } from './ui/emoteWheel.js';
 import {
   createGrowthSelectionStateMachine,
   type GrowthSelectionViewData,
@@ -226,15 +252,14 @@ import {
   growthSelectionStateMachineSelectOption,
   growthSelectionStateMachineStartDrawing,
 } from './ui/GrowthSelectionStateMachine.js';
+import { GROWTH_PART_INFO, growthTypeOrder } from './ui/growthPartInfo.js';
 import { createHotbar, type HotbarAPI } from './ui/Hotbar.js';
+import { createLoadingScreen, type LoadingScreenAPI } from './ui/LoadingScreen.js';
 import { MainMenu, type MainMenuAccount, type MainMenuCallbacks } from './ui/MainMenu.js';
-import {
-  createMutationPanel,
-  type MutationPanelAPI,
-  type MutationStateView,
-} from './ui/MutationPanel.js';
+import { cooldownRemainingS, type MutationStateView } from './ui/mutationState.js';
 import { createNotificationLog, type NotificationLogAPI } from './ui/NotificationLog.js';
 import { pickNodeHit } from './ui/nodePick.js';
+import { nodePickRadius } from './ui/nodePickRadius.js';
 import { createPauseMenu, type PauseMenuAPI } from './ui/PauseMenu.js';
 import {
   createPlantHoverTip,
@@ -274,13 +299,16 @@ import {
   type SettingsPanelAPI,
 } from './ui/SettingsPanel.js';
 import { createShopPanel, type ShopPanel } from './ui/ShopPanel.js';
+import { SpawnScene } from './ui/SpawnScene.js';
 import { createSporeChip, type SporeChipAPI } from './ui/SporeChip.js';
 import { formatSeasonRemaining } from './ui/seasonLabel.js';
+import type { SpawnSceneOptions } from './ui/spawnSceneModel.js';
 import { applyPaletteCssVars } from './ui/theme.ts';
 import { isPlantSoundEnabled, setPlantSoundEnabled } from './ui/title/plantSound.js';
 import { touchHintLines } from './ui/touchCopy.js';
 import { createUIShell, type UIShell } from './ui/UIShell.js';
 import { setUiScale, uiScaleForPane } from './ui/uiScale.js';
+import { keepCapacity } from './ui/vitalsCapacity.js';
 import { FrameBudget, frameStatsOf } from './util/frameBudget.js';
 import { shouldIdleRender } from './util/idleThrottle.js';
 import './styles.css';
@@ -393,6 +421,24 @@ interface WelcomePayload {
   };
   /** Set when the previous plant died while the player was away. */
   previousPlantDied?: { cause: string; source?: string; secondsAgo: number };
+  /** T12 seed identity and geographic origin. */
+  archetype?: {
+    id: string;
+    name: string;
+    growthSpeed: number;
+    waterCapacity: number;
+    mineralCapacity: number;
+    photosynthesis: number;
+    upkeep: number;
+    mutationBias: string;
+  };
+  spawn?: {
+    latitudeDeg: number;
+    longitudeDeg: number;
+    altitudeM: number;
+    label: string;
+    areaId: string | null;
+  };
   // Full node set for immediate client render (ADR-021)
   nodes?: Array<{
     id: string;
@@ -482,6 +528,8 @@ interface GrowthIntent {
   direction: { x: number; y: number; z: number };
   nodeType: string;
   tick: number;
+  /** Where the new part leaves its parent (0.05–1); sent only when the ring moved. */
+  attachFraction?: number;
 }
 
 interface GrowthEventNode {
@@ -587,21 +635,6 @@ let lastResourceUpdateAt = 0;
 // costs one packet per 36 days rather than one per tick.
 let seasonNumber = 0;
 let seasonEndsAtMs = 0;
-
-// Per-node-type emergence delay (ms) for staggered growth animation.
-// Roots/radicles emerge first, then stems, then leaves/cotyledons.
-const EMERGENCE_DELAY_MS: Record<string, number> = {
-  radicle: 0,
-  root: 0,
-  lateral_root: 80,
-  seed: 0,
-  stem: 40,
-  branch: 40,
-  cotyledon: 160,
-  leaf: 200,
-  flower: 240,
-  spore_sac: 240,
-};
 
 // Temp reusable objects to avoid per-frame GC pressure in render/update loops
 const tempTarget = new THREE.Vector3();
@@ -774,6 +807,8 @@ const rerootKeys = new Set<RerootDirection>();
 let playerPanels: PlayerPanelsAPI | null = null;
 let settingsPanel: SettingsPanelAPI | null = null;
 let mutationState: MutationStateView | null = null;
+/** When that snapshot arrived: `shedCooldownRemainingS` counts down from here. */
+let mutationStateAtMs = 0;
 let inventorySlots: Array<{ itemId: string; count: number } | null> = [];
 let inventoryMaxSlots = 10;
 // Definitions arrive with INVENTORY_SYNC. The dev panel grants items by id, so
@@ -855,6 +890,10 @@ function syncActionBarKeys(): void {
 const rootSightActivePlants = new Set<string>();
 let storedWater = 0;
 let storedMinerals = 0;
+// The last capacity the vitals were told about. A repaint that does not carry
+// one (a growth event, a death tick) must not drop the water or mineral bar.
+let shownWaterCapacity: number | null = null;
+let shownMineralCapacity: number | null = null;
 const plantNodes = new Map<string, PlantNodeData>();
 /** T06: plants whose uproot we have already announced, so the toast is once. */
 const uprootNotified = new Set<string>();
@@ -937,13 +976,36 @@ function aimGizmo(): GrowthAimGizmo {
   growthAimGizmoInstance ??= createGrowthAimGizmo(appContext, {
     getDrawingData: () => growthSelectionStateMachineGetDrawingData(growthSelectionMachine) ?? null,
     isAnchorOnNodeSurface: () => growthAimAnchorOnNodeSurface,
+    isAimHeldByGene: () => isGrowthAngleClamped,
+    activeHandle: () => growthAimActiveHandle,
     ringAnchor: growthAimRingAnchor,
-    isDropVisible: () => growthAimDropVisible,
-    renderConfig: () => renderConfig,
-    visualRadiusOf: (node) => resolveDrawnRadius(node.nodeType, node.radius ?? 0.05, node.biomass),
-    drawCentreOf: (node) => growthAimNodeDrawCentre(node),
+    isTipClearOfGround: () => growthAimTipClearOfGround,
+    crossesSoil: () => growthAimCrossesSoil,
+    occluders: growthRingOccluders,
   });
   return growthAimGizmoInstance;
+}
+
+/**
+ * The player's own tubes, where they are drawn this frame.
+ *
+ * The ring's hidden arc is the part of the hoop the plant stands in front of, and
+ * a plant stands in front of things with its body: the capsules here are the same
+ * start-to-tip spans the mesh renderer draws, each with its drawn radius.
+ */
+function growthRingOccluders(): { from: THREE.Vector3; to: THREE.Vector3; radius: number }[] {
+  const occluders: { from: THREE.Vector3; to: THREE.Vector3; radius: number }[] = [];
+  for (const node of plantNodes.values()) {
+    if (!node.isOwnPlant) continue;
+    const tip = growthAimNodeDrawCentre(node);
+    const start = growthAimSegmentStart(node) ?? tip;
+    occluders.push({
+      from: start,
+      to: tip,
+      radius: resolveDrawnRadius(node.nodeType, node.radius ?? 0.05, node.biomass),
+    });
+  }
+  return occluders;
 }
 
 function removeGrowthDirectionLine(): void {
@@ -964,15 +1026,62 @@ let isGrowthAngleClamped = false;
 // It is an offset from the drawn node centre, so it follows the node as it grows.
 const growthAimSurfaceOffset = new THREE.Vector3();
 let growthAimAnchorOnNodeSurface = false;
+/**
+ * Where along the selected part the bud leaves, as the ring shows it (G01).
+ *
+ * `null` until the player presses the part, so an unmoved ring sends no fraction
+ * and the configured branch fraction stays the one source. Only a press on a
+ * mid-segment type sets it (`placeGrowthAimRingFromScreen`) and every new aim
+ * clears it (`beginGrowthAiming`), so a value can never belong to an option that
+ * continues from its parent's end.
+ */
+let growthAimAttachFraction: number | null = null;
 
-/** Rebuild the ring and curved arrow for the current aim. */
+/**
+ * Fade the ghost where it passes under the soil.
+ *
+ * The gizmo is drawn on its own canvas above the scene, so nothing on it is
+ * depth-tested against the ground: a radicle aimed into the dirt would otherwise
+ * be drawn as if it were in the air, and a socket the player is about to grow
+ * would read as a loop of green thread floating over the soil. Vertex alpha
+ * restores the reading. Above the soil the shoot is nearly solid ink; under it a
+ * quarter, so it is visibly *in* the earth without disappearing - the player
+ * still needs to see where a root is going.
+ */
+function paintGhostUnderSoil(
+  geometry: THREE.BufferGeometry,
+  groundY: (x: number, z: number) => number,
+): void {
+  const position = geometry.getAttribute('position');
+  const colours = new THREE.BufferAttribute(new Float32Array(position.count * 4), 4);
+  for (let i = 0; i < position.count; i += 1) {
+    const clearance = position.getY(i) - groundY(position.getX(i), position.getZ(i));
+    const above = THREE.MathUtils.smoothstep(clearance, -0.04, 0.05);
+    colours.setXYZW(i, 1, 1, 1, 0.26 + 0.62 * above);
+  }
+  geometry.setAttribute('color', colours);
+}
+
+/** Rebuild the ghost shoot and its hoops for the current aim. */
 function updateGrowthDirectionLine(
   start: { x: number; y: number; z: number },
   _end: { x: number; y: number; z: number },
   _isValid: boolean,
 ): void {
-  const { group, ring, tube, head, tip, mouthDisc, tipRing, dropPost, dropDisc } =
-    aimGizmo().ensure();
+  const {
+    group,
+    ring,
+    mouthDisc,
+    ghost,
+    bud,
+    originPuck,
+    directionCone,
+    tipRing,
+    pierce,
+    trail,
+    landing,
+    drop,
+  } = aimGizmo().ensure();
   const drawingData = growthSelectionStateMachineGetDrawingData(growthSelectionMachine);
   if (!drawingData) {
     group.visible = false;
@@ -998,62 +1107,112 @@ function updateGrowthDirectionLine(
   const visualRadius = node
     ? resolveDrawnRadius(node.nodeType, node.radius ?? 0.05, node.biomass)
     : 0.05;
-  const isSeedNode = node ? node.isSeed === true || node.nodeType === 'seed' : false;
   const origin = new THREE.Vector3(start.x, start.y, start.z);
-  if (isSeedNode) origin.y += visualRadius * getSeedBodyHeightRatio();
+  // `start` is the drawn anchor from `branchAttachAnchor`, which already puts a
+  // seed at its body centre. The old half-height lift here was a second one.
   if (growthAimAnchorOnNodeSurface && node) {
-    // The player clicked a spot on the node. Use that exact surface point so the
-    // ring can sit on the side, underside or back of the seed instead of always
-    // riding the default attachment cap.
-    origin.copy(growthAimNodeDrawCentre(node));
+    // The press chooses the side of the part the ring sits on (back, underside,
+    // flank). Only that perpendicular offset is applied: the along-segment part is
+    // the attach fraction, and adding both would pull the ring off the joint.
     origin.add(growthAimSurfaceOffset);
   }
 
-  // The ring is the cross-section the new segment starts from: the emerging
-  // part's own thickness (never fatter than the node it leaves).
-  const emergingRadius = resolveDrawnRadius(drawingData.selectedOptionType, node?.radius ?? 0.05);
-  const ringRadius = Math.max(
-    renderConfig?.growthAimRingMin ?? 0.02,
-    Math.min(visualRadius, emergingRadius * (renderConfig?.growthAimRingScale ?? 1.6)),
-  );
+  // The ring is the mouth the new segment leaves from, so its size is the
+  // emerging part's own start: the organ's profile radius carried through the
+  // same joint rule the part will be drawn with, not the radius of the part it
+  // happens to be leaving. Fed the host's radius the ring answered "how thick is
+  // the stem I am on?", which is a different question.
+  const ringRadius = growthAimMouthRadius({
+    emergingType: drawingData.selectedOptionType,
+    parentRadiusM: visualRadius,
+    scale: renderConfig?.growthAimRingScale ?? 1.6,
+    minM: renderConfig?.growthAimRingMin ?? 0.02,
+  });
   growthAimRingRadius = ringRadius;
 
-  // Where the ring sits and which way its plane faces, in one rule. It is the
-  // cross-section the new segment leaves from, so its plane is perpendicular to
-  // the parent's own drawn axis at the attachment - not to the aim. Orienting by
-  // the aim tilted the ring across the arrow on a lateral bud or a clamped aim,
-  // which is what read as "not facing the right way in 3D".
-  const parentNode = node?.parentId ? plantNodes.get(node.parentId) : undefined;
-  const parentTangent =
-    node && parentNode ? drawnNodePosition(node).sub(drawnNodePosition(parentNode)) : null;
-  const planetRadiusForUp = renderConfig?.planetRadiusM ?? 0;
-  const ringFrame = ringFrameFor({
-    attach: origin,
-    parentTangent,
-    aim: smoothedGrowthDir,
-    surfaceUp:
-      planetRadiusForUp > 0
-        ? planetUp(planetRadiusForUp, origin.x, origin.z)
-        : new THREE.Vector3(0, 1, 0),
-    partRadiusM: visualRadius,
-  });
-  const surfaceNormal = ringFrame.normal;
-  const ringCentre = growthAimAnchorOnNodeSurface
-    ? origin.clone().addScaledVector(surfaceNormal, 0.003)
-    : ringFrame.center;
+  // The part the ring is stuck to: a seed is a ball, everything else is a tube
+  // drawn from where it leaves its parent to where it is drawn now.
+  const partStart = node ? growthAimSegmentStart(node) : null;
+  const partEnd = node ? growthAimNodeDrawCentre(node) : origin.clone();
+  const partAxis = partStart ? partEnd.clone().sub(partStart) : null;
+  const outward =
+    growthAimAnchorOnNodeSurface && growthAimSurfaceOffset.lengthSq() > 1e-8
+      ? growthAimSurfaceOffset.clone().normalize()
+      : smoothedGrowthDir.clone();
+  const axisDir = partAxis && partAxis.lengthSq() > 1e-8 ? partAxis.clone().normalize() : null;
+  // Aiming along the part's own axis continues it, and a sticker has no flank to
+  // sit on there: the mouth is the part's cross-section at its tip instead.
+  const continuesPart = axisDir !== null && Math.abs(outward.dot(axisDir)) > 0.86;
+
+  let ringCentre: THREE.Vector3;
+  let surfaceNormal: THREE.Vector3;
+  let ringPoints: THREE.Vector3[] | null = null;
+  if (node && !continuesPart) {
+    // A ring that lies on the part like a sticker: unrolled onto the tube (or the
+    // coat), so it bends over the surface instead of standing off it in one plane.
+    const wrapped = wrapRingOnHost({
+      host: { start: partStart, end: partEnd, radius: visualRadius },
+      point: origin,
+      outward,
+      ringRadius,
+    });
+    ringCentre = wrapped.centre;
+    surfaceNormal = wrapped.normal;
+    ringPoints = wrapped.points;
+  } else {
+    // The cross-section at the tip: a part continuing its own axis, or a node the
+    // client has not mirrored yet and so has no drawn segment to stick to.
+    const parentNode = node?.parentId ? plantNodes.get(node.parentId) : undefined;
+    const parentTangent =
+      node && parentNode ? drawnNodePosition(node).sub(drawnNodePosition(parentNode)) : null;
+    const ringFrame = ringFrameFor({
+      attach: origin,
+      parentTangent,
+      aim: smoothedGrowthDir,
+      surfaceUp: surfaceUpAt(renderConfig?.planetRadiusM ?? 0, origin.x, origin.z),
+      partRadiusM: visualRadius,
+    });
+    surfaceNormal = ringFrame.normal;
+    ringCentre = growthAimAnchorOnNodeSurface
+      ? origin.clone().addScaledVector(surfaceNormal, 0.003)
+      : ringFrame.center;
+  }
   growthAimRingAnchor.copy(ringCentre);
   growthAimRingNormal.copy(surfaceNormal);
 
   // Visibility against the plant is decided every frame in
   // `updateGrowthAimOcclusion`, where the live camera position is available.
 
-  // Keep the tube a real world thickness: scaling a fat torus down to a small
-  // radius would make the ring vanish into a sub-pixel hairline.
-  const ringThickness = renderConfig?.growthAimRingThickness ?? 0.004;
-  if (Math.abs(growthAimRingBuiltRadius - ringRadius) > 1e-5) {
-    ring.geometry.dispose();
+  // One gauge for every stroke, read from the eye's distance to the ring: the
+  // aim is used at arm's length over a seed and from a few metres back over a
+  // young plant, and a fixed metre is a hairline at one and a fence at the other.
+  // The ring keeps a floor from `render.json` so a config value can still make
+  // it heavier than the gauge would.
+  const eyeDistance = camera.position.distanceTo(ringCentre);
+  const gauge = aimGauge(eyeDistance);
+  const ringThickness = Math.max(renderConfig?.growthAimRingThickness ?? 0.004, gauge * 0.55);
+  ring.geometry.dispose();
+  mouthDisc.geometry.dispose();
+  if (ringPoints) {
+    ring.geometry = ringLoopGeometry(ringPoints, ringThickness, 6);
+    ring.position.set(0, 0, 0);
+    ring.quaternion.identity();
+    ring.scale.setScalar(1);
+    // The mouth's fill follows the same loop, so the patch it paints is the patch
+    // the ring encloses - no flat disc cutting through the part's surface.
+    mouthDisc.geometry = ringFanGeometry(ringPoints, ringCentre);
+    mouthDisc.position.set(0, 0, 0);
+    mouthDisc.quaternion.identity();
+    mouthDisc.scale.setScalar(1);
+  } else {
     ring.geometry = new THREE.TorusGeometry(1, ringThickness / ringRadius, 8, 64);
-    growthAimRingBuiltRadius = ringRadius;
+    ring.position.copy(ringCentre);
+    ring.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), surfaceNormal);
+    ring.scale.setScalar(ringRadius);
+    mouthDisc.geometry = new THREE.CircleGeometry(1, 40);
+    mouthDisc.position.copy(ringCentre);
+    mouthDisc.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), surfaceNormal);
+    mouthDisc.scale.setScalar(ringRadius * 0.94);
   }
 
   const normal = growthAimNormal.clone();
@@ -1061,11 +1220,6 @@ function updateGrowthDirectionLine(
   normal.normalize();
 
   aimGizmo().show();
-
-  // The torus lies in its local XY plane, so map +Z onto the surface normal.
-  ring.position.copy(ringCentre);
-  ring.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), surfaceNormal);
-  ring.scale.setScalar(ringRadius);
 
   // The arrow bends along the plant's own habit: the player steers a general
   // direction and the exact shape stays a surprise.
@@ -1085,73 +1239,126 @@ function updateGrowthDirectionLine(
     );
   }
   growthAimPath = points;
-  tube.geometry.dispose();
-  // A tapering tube: fat where it leaves the part, narrow at the point. The
-  // silhouette then has a direction even when the arrow is seen end-on, which a
-  // constant-width tube never had.
-  tube.geometry = buildTaperedTubeGeometry(
-    points,
-    renderConfig?.growthAimTubeRadius ?? 0.009,
-    0.45,
-    7,
-  );
+  ghost.geometry.dispose();
+  // The shoot, fat where it leaves the part and narrow at the bud: the
+  // silhouette then has a direction even when it is seen end-on.
+  ghost.geometry = buildTaperedTubeGeometry(points, gauge, 0.55, 7);
+  paintGhostUnderSoil(ghost.geometry, (x, z) => clientSurfaceY(x, z, 0));
 
   const tipPoint = points[points.length - 1];
   const heading = tipPoint
     .clone()
     .sub(points[points.length - 2])
     .normalize();
-  // The head scales with the arrow so a one-metre root and a two-metre trunk
-  // both get a head you can see, and its size still reads as "this much".
-  const headRadius = THREE.MathUtils.clamp(reach * 0.055, 0.022, 0.07);
-  const headLength = THREE.MathUtils.clamp(reach * 0.16, 0.05, 0.2);
-  if (
-    Math.abs(growthAimHeadBuilt.radius - headRadius) > 1e-3 ||
-    Math.abs(growthAimHeadBuilt.length - headLength) > 1e-3
-  ) {
-    head.geometry.dispose();
-    head.geometry = new THREE.ConeGeometry(headRadius, headLength, 12);
-    growthAimHeadBuilt = { radius: headRadius, length: headLength };
-  }
-  // Cone apex on the arrow's end: the base sits back along the tube, so the head
-  // continues the taper instead of floating in front of it.
-  head.position.copy(tipPoint).addScaledVector(heading, -headLength * 0.5);
-  head.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), heading);
-  // Sit the bud dot on the arrow's point, not at the cone's centre.
-  tip.position.copy(tipPoint);
-  tip.scale.setScalar(Math.max(0.6, headRadius / 0.032));
-  mouthDisc.position.copy(ringCentre);
-  mouthDisc.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), surfaceNormal);
-  mouthDisc.scale.setScalar(ringRadius * 0.94);
+  // A cone on the final stretch, not only a round bud. The bud says "the shoot
+  // ends here"; the cone says which way it is pointing, which is the question a
+  // foreshortened tube cannot answer from most orbits.
+  const arrowAt = points[Math.max(1, Math.floor(points.length * 0.78))];
+  directionCone.position.copy(arrowAt);
+  directionCone.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), heading);
+  directionCone.scale.set(gauge * 2.3, gauge * 4.8, gauge * 2.3);
+  originPuck.position.copy(ringCentre);
+  originPuck.userData.handleScale = Math.max(0.018, ringRadius * 0.48);
+  originPuck.scale.setScalar(originPuck.userData.handleScale);
+  const drawnGround = (x: number, z: number): number =>
+    groundMarkerHeight((sx, sz) => clientSurfaceY(sx, sz, 0), x, z);
+  const tipClearance = tipPoint.y - drawnGround(tipPoint.x, tipPoint.z);
+  growthAimTipClearOfGround = tipClearance > 0.03;
+
+  // The bud is the end of the shoot and the landing hoop is the ring round it.
+  bud.position.copy(tipPoint);
+  bud.scale.setScalar(gauge * 2.1);
   tipRing.position.copy(tipPoint);
   tipRing.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), heading);
-  tipRing.scale.setScalar(ringRadius * 1.15);
+  tipRing.scale.setScalar(Math.max(ringRadius * 1.15, gauge * 1.15));
+  (tipRing.material as THREE.MeshBasicMaterial).opacity = THREE.MathUtils.clamp(
+    tipClearance * 4,
+    0.3,
+    0.9,
+  );
 
-  // Ground marker: a post from the tip down (or up) to the soil, and a disc on
-  // the soil under it. This is the cue that ties the floating arrow to a place
-  // in the world, which is exactly what "it points somewhere else" was about.
-  {
-    // The drawn ground, not a second terrain query: this used the raw terrain
-    // field, so after a tunnel edit or on the water skin the post and disc sat
-    // above or below the soil the player can actually see.
-    const groundY = groundMarkerHeight((x, z) => clientSurfaceY(x, z, 0), tipPoint.x, tipPoint.z);
-    const drop = tipPoint.y - groundY;
-    growthAimDropVisible = Math.abs(drop) > 0.05;
-    if (growthAimDropVisible) {
-      const postRadius = Math.max(0.0015, ringRadius * 0.06);
-      dropPost.visible = true;
-      dropPost.position.set(tipPoint.x, (tipPoint.y + groundY) * 0.5, tipPoint.z);
-      dropPost.scale.set(postRadius, Math.abs(drop), postRadius);
-      dropPost.quaternion.identity();
-      dropDisc.visible = true;
-      dropDisc.position.set(tipPoint.x, groundY + 0.004, tipPoint.z);
-      dropDisc.rotation.set(-Math.PI / 2, 0, 0);
-      dropDisc.scale.setScalar(ringRadius * 1.35);
-    } else {
-      dropPost.visible = false;
-      dropDisc.visible = false;
+  // Where the shoot enters the soil. Walked from the mouth out, so a radicle's
+  // entry is the seed's base; a branch that dips behind a rise marks the ground
+  // it disappears into. This is the one cue that says "this goes into the
+  // earth" from an eye that is above the earth.
+  growthAimCrossesSoil = false;
+  for (let i = 1; i < points.length; i += 1) {
+    const from = points[i - 1];
+    const to = points[i];
+    const above = from.y - drawnGround(from.x, from.z);
+    const below = to.y - drawnGround(to.x, to.z);
+    if (above <= 0 || below > 0) continue;
+    const crossing = from.clone().lerp(to, above / (above - below));
+    // A radicle enters the soil at the seed it leaves, which the mouth hoop
+    // already marks: a second hoop there is one ring drawn twice. Only a
+    // crossing away from the mouth is a second place on the ground.
+    if (crossing.distanceTo(ringCentre) > ringRadius * 1.2) {
+      pierce.position.set(crossing.x, drawnGround(crossing.x, crossing.z) + 0.012, crossing.z);
+      pierce.rotation.set(-Math.PI / 2, 0, 0);
+      pierce.scale.setScalar(Math.max(ringRadius * 1.1, gauge * 1.15));
+      growthAimCrossesSoil = true;
+    }
+    break;
+  }
+
+  // The ground half of the aim. However the shoot leaves the plant, the eye can
+  // always read a line on the soil: which way it goes and how far. A radicle seen
+  // from behind the seed is four pixels of foreshortened tube, and this is the
+  // cue that turns it back into a direction.
+  const trailPositions: number[] = [];
+  const tangent = new THREE.Vector3();
+  const across = new THREE.Vector3();
+  const dashLong = gauge * 0.9;
+  const dashWide = gauge * 0.45;
+  const trailStep = Math.max(1, Math.round((points.length - 1) / 14));
+  // Nothing is drawn where the aim is still inside the part it leaves: a footprint
+  // painted over the seed reads as paint on the seed, not as ground behind it.
+  const clearOfMouth = Math.max(ringRadius * 2.2, gauge * 4);
+  for (let i = 0; i < points.length; i += trailStep) {
+    const at = points[i];
+    if (Math.hypot(at.x - ringCentre.x, at.z - ringCentre.z) < clearOfMouth) continue;
+    const ahead = points[Math.min(i + 1, points.length - 1)];
+    tangent.set(ahead.x - at.x, 0, ahead.z - at.z);
+    if (tangent.lengthSq() < 1e-10) tangent.set(0, 0, 1);
+    tangent.normalize();
+    across.set(-tangent.z, 0, tangent.x);
+    // Four corners, each on its own ground sample: a footprint lies on a slope
+    // instead of cutting through it.
+    const corners: readonly (readonly [number, number])[] = [
+      [-dashLong, -dashWide],
+      [dashLong, -dashWide],
+      [dashLong, dashWide],
+      [-dashLong, dashWide],
+    ];
+    const quad = corners.map(([long, wide]) => {
+      const cx = at.x + tangent.x * long + across.x * wide;
+      const cz = at.z + tangent.z * long + across.z * wide;
+      return [cx, drawnGround(cx, cz) + 0.02, cz] as const;
+    });
+    for (const index of [0, 1, 2, 0, 2, 3]) {
+      const corner = quad[index];
+      trailPositions.push(corner[0], corner[1], corner[2]);
     }
   }
+  trail.geometry.dispose();
+  trail.geometry = new THREE.BufferGeometry();
+  trail.geometry.setAttribute('position', new THREE.Float32BufferAttribute(trailPositions, 3));
+
+  // Where the shoot would come down: a ring on the soil under the bud, and the
+  // post between them, so "half a metre ahead and a metre down" is two lengths
+  // the eye can compare instead of one diagonal it has to imagine.
+  const landingGround = drawnGround(tipPoint.x, tipPoint.z);
+  landing.position.set(tipPoint.x, landingGround + 0.015, tipPoint.z);
+  landing.rotation.set(-Math.PI / 2, 0, 0);
+  landing.scale.setScalar(Math.max(ringRadius * 1.7, gauge * 1.7));
+  // Signed: a bud under the soil hangs from the surface, and the post still says
+  // how deep. The mouth ring is the surface end of the same measurement.
+  const dropHeight = tipPoint.y - landingGround;
+  drop.position.set(tipPoint.x, landingGround + dropHeight * 0.5, tipPoint.z);
+  // The gauge is a stroke width for lines the eye already knows the place of; a
+  // post seen end-on has to hold a couple of pixels or it is a hair that vanishes.
+  const dropGirth = Math.max(gauge * 0.4, 0.002);
+  drop.scale.set(dropGirth, Math.max(Math.abs(dropHeight), 1e-4), dropGirth);
 }
 
 // Growth aiming state. The player never drags a line: picking an option starts
@@ -1159,11 +1366,10 @@ function updateGrowthDirectionLine(
 // simply turns that arrow. Commit with the Grow button or Enter.
 const growthAimNormal = new THREE.Vector3(0, 1, 0);
 let growthAimRingRadius = 0.28;
-let growthAimRingBuiltRadius = -1;
-// Cached arrow-head size, so a drag rebuilds the cone only when it changes.
-let growthAimHeadBuilt = { radius: 0, length: 0 };
-// The ground marker is only meaningful when the tip is off the soil.
-let growthAimDropVisible = false;
+// The two hoops on the soil have their own reasons to be drawn, and the aim
+// code is the only place that knows them.
+let growthAimTipClearOfGround = false;
+let growthAimCrossesSoil = false;
 const growthAimRingAnchor = new THREE.Vector3();
 const growthAimRingNormal = new THREE.Vector3(0, 1, 0);
 let growthAimPath: THREE.Vector3[] = [];
@@ -1191,6 +1397,29 @@ const ROOT_OPTION_TYPES = new Set(['radicle', 'root', 'lateral_root']);
 let growthAimYaw = 0;
 let growthAimPitch = 0;
 let growthAimDragging = false;
+/** The primary pointer that owns the current growth gesture. */
+let growthAimPointerId: number | null = null;
+/** The element that captured it, so release happens on the same element. */
+let growthAimCaptureTarget: HTMLElement | null = null;
+/**
+ * How far the pointer must travel before a press on the aimed part counts as the
+ * player moving the joint.
+ *
+ * It used to count at once, on the press itself: an orbit that brushed the part
+ * on its way past put the golden ring wherever the finger happened to land, and a
+ * click that was meant to select a node edited where that node leaves its parent
+ * instead. A press that does not become a drag is a click, and a click belongs to
+ * selection.
+ */
+const GROWTH_AIM_JOINT_DRAG_PX = 8;
+/** The press a joint drag is measured from; null when the press was not the part. */
+let growthAimJointPress: {
+  x: number;
+  y: number;
+  kind: 'origin' | 'direction';
+} | null = null;
+/** Which explicit handle this gesture owns; null when no aim gesture is active. */
+let growthAimActiveHandle: 'origin' | 'direction' | null = null;
 let growthAimLastX = 0;
 let growthAimLastY = 0;
 // A press that starts a growth drag must not also be read as a click on the
@@ -1207,7 +1436,9 @@ function branchAttachAnchor(position: THREE.Vector3, nodeId: string): THREE.Vect
   if (!node) return anchor;
   const emergingType =
     growthSelectionStateMachineGetDrawingData(growthSelectionMachine)?.selectedOptionType ?? '';
-  const fraction = resolveAttachFraction(emergingType, undefined);
+  // One answer for the ring and the intent: resolved separately, the preview could
+  // sit at a joint the server would not grow from (G01).
+  const fraction = resolveAttachFraction(emergingType, growthAimAttachFraction ?? undefined);
   if (fraction < 1 && node.parentAttachX !== undefined && node.parentAttachY !== undefined) {
     const segmentStart = new THREE.Vector3(
       node.parentAttachX,
@@ -1220,6 +1451,20 @@ function branchAttachAnchor(position: THREE.Vector3, nodeId: string): THREE.Vect
     // visible tip, which looked like the gizmo had jumped onto another stem.
     anchor.copy(segmentStart.lerp(drawnNodePosition(node), fraction));
   }
+  // A joint chosen along the part may sit anywhere on its segment, so the allowance
+  // has to cover the segment; clamping to the part's thickness around its end pinned
+  // the ring at the tip while the intent carried the real fraction, and the bud grew
+  // somewhere the gizmo never showed (G01).
+  const segmentLength =
+    fraction < 1 && node.parentAttachX !== undefined && node.parentAttachY !== undefined
+      ? drawnNodePosition(node).distanceTo(
+          new THREE.Vector3(
+            node.parentAttachX,
+            node.parentAttachY,
+            node.parentAttachZ ?? node.position.z,
+          ),
+        )
+      : 0;
   // Keep the ring on the part the player selected, and on its own surface. The
   // old clamp allowed a metre and a half of drift, which is several segments of a
   // seedling: a child root whose attach point was stale, or whose attach fraction
@@ -1229,7 +1474,10 @@ function branchAttachAnchor(position: THREE.Vector3, nodeId: string): THREE.Vect
   return clampAnchorToNode(
     anchor,
     drawnNodePosition(node),
-    Math.max(0.1, resolveDrawnRadius(node.nodeType, node.radius ?? 0.05, node.biomass) * 1.25),
+    jointAnchorAllowanceM(
+      segmentLength,
+      resolveDrawnRadius(node.nodeType, node.radius ?? 0.05, node.biomass),
+    ),
   );
 }
 
@@ -1247,14 +1495,68 @@ function drawnNodePosition(node: PlantNodeData): THREE.Vector3 {
 
 /** Centre of the drawn node mesh, including the seed's raised body. */
 function growthAimNodeDrawCentre(node: PlantNodeData): THREE.Vector3 {
-  const centre = drawnNodePosition(node);
-  const isSeed = node.isSeed === true || node.nodeType === 'seed';
-  if (isSeed) {
-    const radius = resolveDrawnRadius(node.nodeType, node.radius ?? 0.05, node.biomass);
-    centre.y += radius * getSeedBodyHeightRatio();
-  }
-  return centre;
+  // `resolveDrawnNodePosition` already raises a seed to its body centre. This
+  // added the seed's half-height a second time, so the aim ring and the pick
+  // sphere sat above the coat they were supposed to touch.
+  return drawnNodePosition(node);
 }
+
+/** Where a node leaves its own parent: the start of the segment it is drawn on. */
+function growthAimSegmentStart(node: PlantNodeData): THREE.Vector3 | null {
+  if (node.parentAttachX === undefined || node.parentAttachY === undefined) return null;
+  return new THREE.Vector3(
+    node.parentAttachX,
+    node.parentAttachY,
+    node.parentAttachZ ?? node.position.z,
+  );
+}
+
+/** A world point in client pixels. */
+function screenPointOf(point: THREE.Vector3): { x: number; y: number } {
+  const rect = renderer.domElement.getBoundingClientRect();
+  const projected = point.clone().project(camera);
+  return {
+    x: rect.left + (projected.x * 0.5 + 0.5) * rect.width,
+    y: rect.top + (-projected.y * 0.5 + 0.5) * rect.height,
+  };
+}
+
+/** Pixels from a screen point to a screen segment. */
+function screenSegmentDistance(
+  x: number,
+  y: number,
+  a: { x: number; y: number },
+  b: { x: number; y: number },
+): number {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const lengthSq = dx * dx + dy * dy;
+  const t =
+    lengthSq > 1e-6 ? Math.max(0, Math.min(1, ((x - a.x) * dx + (y - a.y) * dy) / lengthSq)) : 0;
+  return Math.hypot(x - (a.x + dx * t), y - (a.y + dy * t));
+}
+
+/** Pixels from the pointer to the aimed part's drawn segment. */
+function aimPartScreenDistance(clientX: number, clientY: number): number {
+  const data = growthSelectionStateMachineGetDrawingData(growthSelectionMachine);
+  const node = data ? plantNodes.get(data.nodeId) : undefined;
+  const segmentStart = node ? growthAimSegmentStart(node) : null;
+  if (!node || !segmentStart) return Number.POSITIVE_INFINITY;
+  return screenSegmentDistance(
+    clientX,
+    clientY,
+    screenPointOf(segmentStart),
+    screenPointOf(growthAimNodeDrawCentre(node)),
+  );
+}
+
+// Scratch for the aim's pick. This runs on every press and every joint drag, so
+// allocating a Raycaster, a Vector2, a Sphere and the hit vector per call was a
+// steady stream of garbage in the middle of a gesture.
+const aimPickRaycaster = new THREE.Raycaster();
+const aimPickNdc = new THREE.Vector2();
+const aimPickSphere = new THREE.Sphere();
+const aimPickHit = new THREE.Vector3();
 
 /**
  * Pick the point under the pointer on the selected node, or null on a miss.
@@ -1274,26 +1576,22 @@ function pickGrowthAimNodePoint(clientX: number, clientY: number): THREE.Vector3
     // reaches the coat's top and buried base too.
     resolveDrawnRadius(node.nodeType, node.radius ?? 0.05, node.biomass) * 1.6,
   );
-  const raycaster = new THREE.Raycaster();
-  raycaster.setFromCamera(
-    new THREE.Vector2(
-      ((clientX - rect.left) / rect.width) * 2 - 1,
-      -((clientY - rect.top) / rect.height) * 2 + 1,
-    ),
-    camera,
+  aimPickNdc.set(
+    ((clientX - rect.left) / rect.width) * 2 - 1,
+    -((clientY - rect.top) / rect.height) * 2 + 1,
   );
-  const hit = new THREE.Vector3();
-  if (
-    !raycaster.ray.intersectSphere(new THREE.Sphere(growthAimNodeDrawCentre(node), radius), hit)
-  ) {
+  aimPickRaycaster.setFromCamera(aimPickNdc, camera);
+  aimPickSphere.set(growthAimNodeDrawCentre(node), radius);
+  if (!aimPickRaycaster.ray.intersectSphere(aimPickSphere, aimPickHit)) {
     return null;
   }
+  const hit = aimPickHit;
   // A pick is 3D, not a projection: a ray through the front of the plant must not
   // reach a node on its far side. If the drawn plant is hit before the node's own
   // sphere, the pointer is on some other part and this node is behind it.
   const surfaces = plantRenderer?.pickSurfaces() ?? [];
   if (surfaces.length > 0) {
-    const surfaceHit = raycaster.intersectObjects(
+    const surfaceHit = aimPickRaycaster.intersectObjects(
       surfaces.map((surface) => surface.object),
       false,
     )[0];
@@ -1302,15 +1600,98 @@ function pickGrowthAimNodePoint(clientX: number, clientY: number): THREE.Vector3
   return hit;
 }
 
-/** Put the aim ring at the point under the pointer on the selected node. */
-function placeGrowthAimRingFromScreen(clientX: number, clientY: number): boolean {
+/**
+ * Put the aim ring, and the joint it stands for, at the point under the pointer.
+ *
+ * `nodeHit` is the caller's pick of the aimed part's sphere: the press already
+ * tested it to decide whether the press was the aim's, and picking a second time
+ * for the same press said nothing new.
+ */
+function placeGrowthAimRingFromScreen(
+  clientX: number,
+  clientY: number,
+  nodeHit: THREE.Vector3 | null,
+): void {
   const data = growthSelectionStateMachineGetDrawingData(growthSelectionMachine);
   const node = data ? plantNodes.get(data.nodeId) : undefined;
-  const hit = pickGrowthAimNodePoint(clientX, clientY);
-  if (!node || !hit) return false;
-  growthAimSurfaceOffset.copy(hit).sub(growthAimNodeDrawCentre(node));
-  growthAimAnchorOnNodeSurface = true;
-  return true;
+  if (!node) return;
+  const centre = growthAimNodeDrawCentre(node);
+  const segmentStart = growthAimSegmentStart(node);
+  if (nodeHit) {
+    growthAimSurfaceOffset.copy(nodeHit).sub(centre);
+    if (segmentStart) {
+      // Keep only the side of the part: the along-segment component is the
+      // fraction below, and applying both would place the ring off the joint.
+      const axis = centre.clone().sub(segmentStart).normalize();
+      growthAimSurfaceOffset.addScaledVector(axis, -growthAimSurfaceOffset.dot(axis));
+    }
+    growthAimAnchorOnNodeSurface = true;
+  } else {
+    // A miss must not keep the offset from the last hit: the ring would stay
+    // stuck on the old side of the part while the press is somewhere else.
+    growthAimSurfaceOffset.set(0, 0, 0);
+    growthAimAnchorOnNodeSurface = false;
+  }
+  // G01: the press also chooses where along the part the bud leaves, measured on
+  // the part's drawn segment so the whole range is reachable by pointing.
+  // A part with no parent segment is the seed/crown, and its menu is radicle,
+  // cotyledon or stem - none of them mid-segment - so `segmentStart` is only ever
+  // missing for an option that has no joint to choose.
+  const emergingType = data?.selectedOptionType ?? '';
+  const takesFraction = (MID_SEGMENT_BRANCH_TYPES as readonly string[]).includes(emergingType);
+  if (takesFraction && segmentStart) {
+    const request = attachFractionRequest({
+      startScreen: screenPointOf(segmentStart),
+      endScreen: screenPointOf(centre),
+      pressScreen: { x: clientX, y: clientY },
+      base: resolveAttachFraction(emergingType, undefined),
+    });
+    growthAimAttachFraction = request.fraction;
+    // The ring is drawn at the joint the part allows, so a press beyond it moved
+    // the ring to the limit. Say so, or it reads as a click that did nothing.
+    if (request.held) reportGrowthAimJointHeld(request.requested, request.fraction);
+  }
+}
+
+/** Label of the option being aimed, for the aim's own copy. */
+function growthAimOptionLabel(): string {
+  return (
+    growthSelectionMachine.selectedOptionLabel ??
+    growthSelectionMachine.selectedOptionType ??
+    'Grow'
+  );
+}
+
+/**
+ * Say that a press missed the part, with the aim left armed.
+ *
+ * A press that missed the part fell through to the canvas click handler, which
+ * closed the growth panel: the aim vanished without a word and the next Grow
+ * press hit a button that was no longer in the document, so it did nothing
+ * (play-test 2026-11-24). The aim belongs to the player; a miss is information,
+ * not an instruction to stop aiming.
+ */
+function reportGrowthAimMiss(): void {
+  contextHint?.show({
+    id: 'grow-aim-miss',
+    text: `${growthAimOptionLabel()}: that press missed the part, so the joint did not move. The aim is still armed.`,
+    // The point of the message is that this press did not take: a hint shown once
+    // per session would be silent the second time it mattered.
+    repeat: true,
+    durationMs: 4200,
+  });
+}
+
+/** Say the press asked for a joint the part's gene does not allow. */
+function reportGrowthAimJointHeld(requested: number, fraction: number): void {
+  const label = growthAimOptionLabel();
+  const where = requested > fraction ? 'that far along' : 'that close to its base';
+  contextHint?.show({
+    id: 'grow-aim-joint-held',
+    text: `${label}: the gene cannot bud ${where} - the joint is held at ${Math.round(fraction * 100)}% of the part.`,
+    repeat: true,
+    durationMs: 4200,
+  });
 }
 
 function growthAimDirectionFromAngles(): THREE.Vector3 {
@@ -1322,14 +1703,95 @@ function growthAimDirectionFromAngles(): THREE.Vector3 {
   );
 }
 
+/**
+ * The aim in words: where the arrow goes, from where the eye is standing.
+ *
+ * The arrow is a line in three dimensions drawn over a plant, and from most
+ * orbits a short arrow pointing away and an arrow pointing down look the same:
+ * the triad of coloured legs says which way is which, but not which way *this*
+ * aim goes (play-test 2026-11-26: "still hard to decipher which direction the
+ * gizmo is facing"). Saying it in the panel costs one line and cannot be
+ * misread, so the words go beside the Grow button the player is about to press.
+ */
+function growthAimCompassWords(): string {
+  const reach = Math.max(0.01, growthAimPreviewReach);
+  const dir = smoothedGrowthDir;
+  const horizontal = Math.hypot(dir.x, dir.z);
+  if (horizontal < 1e-4) {
+    const rise = Math.abs(dir.y * reach);
+    return `${dir.y >= 0 ? 'straight up' : 'straight down'} · ${rise.toFixed(2)} m`;
+  }
+  // The camera's own terms, so "away" means the far side of the screen whatever
+  // the orbit. The camera looks down its own -Z, so forward is the negated third
+  // column of its world matrix.
+  const m = camera.matrixWorld.elements;
+  const forwardX = -(m[8] ?? 0);
+  const forwardZ = -(m[10] ?? 0);
+  const forwardLength = Math.hypot(forwardX, forwardZ) || 1;
+  const rightX = m[0] ?? 1;
+  const rightZ = m[2] ?? 0;
+  const rightLength = Math.hypot(rightX, rightZ) || 1;
+  const nx = dir.x / horizontal;
+  const nz = dir.z / horizontal;
+  const away = (nx * forwardX + nz * forwardZ) / forwardLength;
+  const side = (nx * rightX + nz * rightZ) / rightLength;
+  const parts: string[] = [];
+  if (away >= 0.35) parts.push('away');
+  else if (away <= -0.35) parts.push('toward you');
+  if (side >= 0.35) parts.push('right');
+  else if (side <= -0.35) parts.push('left');
+  const heading = parts.join(' and ') || 'along the view';
+  const degrees = Math.round((Math.asin(THREE.MathUtils.clamp(dir.y, -1, 1)) * 180) / Math.PI);
+  const level =
+    degrees >= 55
+      ? 'steeply up'
+      : degrees <= -55
+        ? 'steeply down'
+        : degrees > 4
+          ? `${degrees}° up`
+          : degrees < -4
+            ? `${-degrees}° down`
+            : 'level';
+  // The words say which way; the metres say how far. A preview is one growth
+  // step long, and "0.72 m out, +0.31 m up" is the same step the server will
+  // take, in the numbers the plant's own costs are written in.
+  const outM = horizontal * reach;
+  const upM = dir.y * reach;
+  const distance = `${outM.toFixed(2)} m out · ${upM >= 0 ? '+' : ''}${upM.toFixed(2)} m up`;
+  return `${heading} · ${level} · ${distance}`;
+}
+
+/** Paint the aim's words into the panel footer, under the option cards. */
+function updateGrowthAimCompass(): void {
+  const element = growthAimCompass;
+  if (!element) return;
+  const handle =
+    growthAimActiveHandle === 'origin'
+      ? 'MOVE JOINT · '
+      : growthAimActiveHandle === 'direction'
+        ? 'AIM DIRECTION · '
+        : '';
+  element.textContent = `${handle}${growthAimCompassWords()} · orange ring moves the joint · green arrow turns the aim`;
+}
+
 /** Rebuild the shared growth direction from the current aim angles (gene clamped). */
 function applyGrowthAimAngles(): void {
   const data = growthSelectionStateMachineGetDrawingData(growthSelectionMachine);
   const optionType = data?.selectedOptionType ?? 'stem';
-  const raw = growthAimDirectionFromAngles();
-  const clamped = clampGrowthDirectionByGene(optionType, { x: raw.x, y: raw.y, z: raw.z });
-  isGrowthAngleClamped = Math.abs(clamped.y - raw.y) > 0.08;
-  smoothedGrowthDir.set(clamped.x, clamped.y, clamped.z).normalize();
+  const gene = clampAimToGenes(optionType, growthAimDirectionFromAngles());
+  const wasHeld = isGrowthAngleClamped;
+  isGrowthAngleClamped = gene.held;
+  smoothedGrowthDir.set(gene.direction.x, gene.direction.y, gene.direction.z).normalize();
+  // Write the clamped direction back into the drag state. Without this the raw
+  // yaw/pitch kept running past the gene sector, so the player had to drag all
+  // the way back through the dead zone before the arrow moved again.
+  growthAimYaw = Math.atan2(gene.direction.x, gene.direction.z);
+  growthAimPitch = Math.asin(THREE.MathUtils.clamp(gene.direction.y, -1, 1));
+  // Say it the moment the sector takes the aim over, and take it back when the
+  // sector lets go: a drag that silently stops turning reads as a stuck control
+  // and as a fixed direction (G02).
+  if (data && gene.held !== wasHeld) showGrowthAimHint();
+  updateGrowthAimCompass();
   if (data) {
     // Start the gizmo on the attachment point, not the part's tip: a lateral
     // root or branch leaves its parent part-way down that parent's segment.
@@ -1354,14 +1816,47 @@ function applyGrowthAimAngles(): void {
   }
 }
 
+/**
+ * The aim's own line, which has two things to say.
+ *
+ * Inside the option's gene sector it is an instruction. Once the sector holds the
+ * aim, dragging further turns nothing, so the player is owed an explanation
+ * instead of a control that looks broken (G02).
+ */
+function showGrowthAimHint(): void {
+  const label = growthAimOptionLabel();
+  // One id per state. `ContextHint.show` treats a repeated id as the same hint:
+  // it will not reshow one it has already shown and will not rewrite one that is
+  // still on screen, so two texts behind one id left the amber arrow as the only
+  // sign the gene had taken the aim. Aiming is live state, so both may repeat.
+  const held = isGrowthAngleClamped;
+  contextHint?.show({
+    id: held ? 'grow-aim-held' : 'grow-aim',
+    text: held
+      ? `${label}: the gene holds it here. A ${label.toLowerCase()} cannot point that way.`
+      : `${label}: drag the orange ring to move the joint, or the green arrow to turn (hold Shift to snap), then Grow.`,
+    touchText: held
+      ? `${label}: the gene holds it here - drag the green arrow back to turn again.`
+      : `${label}: drag the orange ring to move the joint, or the green arrow to turn, then press Grow.`,
+    key: 'Enter',
+    repeat: true,
+  });
+}
+
 /** Start aiming a new segment from a node: surface ring + curved arrow preview. */
 function beginGrowthAiming(nodeId: string, optionType: string, optionLabel: string): boolean {
-  // Choosing a root option is already a request to see roots.
-  noteUndergroundGrowth(optionType);
+  // Arming a root option does not open the ground. It used to - "choosing a root
+  // option is already a request to see roots" - which meant that entering grow
+  // mode and clicking your own seed switched Root Sight on before anything had
+  // grown, and the view the player had chosen was taken from them by a click
+  // (play-test 2026-11-24). The automatic opening belongs to the part that starts
+  // (the `noteUndergroundGrowth` call on the server's growth event), which is what
+  // the rule in `player/rootSightAutoOpen.ts` says it is for.
   const node = plantNodes.get(nodeId);
   if (!node) return false;
   growthAimSurfaceOffset.set(0, 0, 0);
   growthAimAnchorOnNodeSurface = false;
+  growthAimAttachFraction = null;
   const constraints =
     NODE_GROWTH_CONSTRAINTS[optionType as NodeType] ?? NODE_GROWTH_CONSTRAINTS.stem;
   const parent = node.parentId ? plantNodes.get(node.parentId) : undefined;
@@ -1374,14 +1869,20 @@ function beginGrowthAiming(nodeId: string, optionType: string, optionLabel: stri
   // called every hillside node off-surface and based its frame on the link
   // instead of the ground.
   const nodeGroundY = clientSurfaceY(node.position.x, node.position.z, 0);
-  const atSurface = node.isSeed === true || node.position.y <= nodeGroundY + 0.18;
-  if (atSurface || !parent) {
-    growthAimNormal.set(0, 1, 0);
-  } else {
-    growthAimNormal.copy(node.position).sub(parent.position);
-    if (growthAimNormal.lengthSq() < 1e-5) growthAimNormal.set(0, 1, 0);
-    else growthAimNormal.normalize();
-  }
+  // Up at the part, not world Y: on a planet a node on a hillside is aimed away
+  // from that hillside, and world up would tip it into the slope. One rule, in
+  // `growthGizmoGeometry.ts`, with the ring frame it has to agree with - both
+  // take their surface up from `surfaceUpAt`, so they cannot disagree.
+  growthAimNormal.copy(
+    growthStartNormal({
+      node: node.position,
+      parent: parent?.position ?? null,
+      isSeed: node.isSeed === true,
+      groundY: nodeGroundY,
+      surfaceUp: surfaceUpAt(renderConfig?.planetRadiusM ?? 0, node.position.x, node.position.z),
+      toleranceM: renderConfig?.growthAtSurfaceToleranceM ?? 0.18,
+    }),
+  );
 
   // "Direction according to its own self": start where the part already points.
   const outward = new THREE.Vector3();
@@ -1414,12 +1915,7 @@ function beginGrowthAiming(nodeId: string, optionType: string, optionLabel: stri
   // Only a drag that starts on the part itself turns the arrow.
   applyGrowthAimAngles();
   showGrowthAimControls();
-  contextHint?.show({
-    id: 'grow-aim',
-    text: `${optionLabel}: drag to turn the direction, then Grow.`,
-    touchText: `${optionLabel}: drag the arrow to turn it, then press Grow.`,
-    key: 'Enter',
-  });
+  showGrowthAimHint();
   return true;
 }
 
@@ -1436,7 +1932,7 @@ const growthAimCameraUp = new THREE.Vector3();
  * Mapping the drag through the camera's own right/up vectors makes the arrow
  * follow the cursor from every angle.
  */
-function rotateGrowthAim(dx: number, dy: number): void {
+function rotateGrowthAim(dx: number, dy: number, snapToStep = false): void {
   growthAimCameraRight.setFromMatrixColumn(camera.matrixWorld, 0).normalize();
   growthAimCameraUp.setFromMatrixColumn(camera.matrixWorld, 1).normalize();
   const next = aimDirectionFromScreenDrag(
@@ -1446,12 +1942,19 @@ function rotateGrowthAim(dx: number, dy: number): void {
     dx,
     dy,
   );
-  growthAimYaw = Math.atan2(next.x, next.z);
-  growthAimPitch = THREE.MathUtils.clamp(
-    Math.asin(THREE.MathUtils.clamp(next.y, -1, 1)),
-    -1.45,
-    1.45,
-  );
+  let yaw = Math.atan2(next.x, next.z);
+  let pitch = THREE.MathUtils.clamp(Math.asin(THREE.MathUtils.clamp(next.y, -1, 1)), -1.45, 1.45);
+  // Shift quantises the free drag: 15-degree spokes and steps of rise, so a
+  // direction the player already knows ("up and away", "half past level") can be
+  // landed exactly once instead of chased with a mouse. Snapping is optional
+  // because a plant wants general directions, not a compass.
+  if (snapToStep) {
+    const step = Math.PI / 12;
+    yaw = Math.round(yaw / step) * step;
+    pitch = THREE.MathUtils.clamp(Math.round(pitch / step) * step, -1.45, 1.45);
+  }
+  growthAimYaw = yaw;
+  growthAimPitch = pitch;
   applyGrowthAimAngles();
 }
 
@@ -1468,6 +1971,8 @@ function commitGrowthAim(): void {
 }
 
 let growthGrowButton: HTMLButtonElement | null = null;
+/** The one-line heading readout above the Grow button. */
+let growthAimCompass: HTMLElement | null = null;
 
 /**
  * One Grow control for the whole panel. It exists before an option is chosen
@@ -1481,6 +1986,11 @@ function ensureGrowthFooter(): HTMLButtonElement | null {
   if (!footer) {
     footer = document.createElement('div');
     footer.id = 'growth-aim-controls';
+    // The heading first: the player reads where the arrow goes, then presses.
+    const compass = document.createElement('span');
+    compass.id = 'growth-aim-compass';
+    compass.setAttribute('aria-live', 'polite');
+    footer.appendChild(compass);
     const growBtn = document.createElement('button');
     growBtn.type = 'button';
     growBtn.textContent = 'Grow';
@@ -1494,6 +2004,7 @@ function ensureGrowthFooter(): HTMLButtonElement | null {
     panel.appendChild(footer);
   }
   growthGrowButton = footer.querySelector<HTMLButtonElement>('button');
+  growthAimCompass = footer.querySelector<HTMLElement>('#growth-aim-compass');
   return growthGrowButton;
 }
 
@@ -1511,6 +2022,9 @@ function setGrowthGrowEnabled(enabled: boolean, reason = ''): void {
 /** Footer under the option cards while aiming: one plain commit button. */
 function showGrowthAimControls(): void {
   setGrowthGrowEnabled(true);
+  // The footer is built here, after the aim was applied, so the words are
+  // written once it exists.
+  updateGrowthAimCompass();
 }
 
 // Growth debug readout (dev panel, Debug tab). Covers every growth-side value that decides how a
@@ -1779,11 +2293,6 @@ function focusCameraOnNode(
   // nodes (cotyledons, crown stem) are drawn offset from their parent.
   const parentNode = nodeData.parentId ? lookup.get(nodeData.parentId) : undefined;
   const nodePos = resolveDrawnNodePosition(nodeData, parentNode, lookup.values()).clone();
-  // If it's a seed, offset to visual seed center
-  if (nodeData.isSeed || nodeData.nodeType === 'seed') {
-    nodePos.y += (nodeData.radius || 0.08) * 0.25;
-  }
-
   // Frame distance follows the node's own size, floored by the orbit minimum
   // that applies to it. Root nodes are framed much tighter than canopy nodes:
   // a root tip is the thing being inspected, not a whole stem.
@@ -1821,7 +2330,11 @@ function focusCameraOnNode(
   // A refit while Root Sight is open must not restore the surface limit: this is
   // the pass that ran when the plant's first nodes arrived or a part finished
   // growing, and it threw the eye back above the ground mid-cavity.
-  controls.maxPolarAngle = underground ? Math.PI - 0.05 : rootSightPolarLimit();
+  controls.maxPolarAngle = cameraFliesFree()
+    ? (renderConfig?.cameraMaxPolarAngle ?? Math.PI - 0.05)
+    : underground
+      ? Math.PI - 0.05
+      : rootSightPolarLimit();
 
   // Ease into the framing instead of teleporting. A jump straight to the new
   // position leaves no cue about which way the view turned, especially between
@@ -1868,6 +2381,13 @@ function startCameraFocus(toTarget: THREE.Vector3, toPosition: THREE.Vector3): v
 function updateCameraFocus(deltaTime: number): void {
   const tween = cameraFocusTween;
   if (!tween) return;
+  // A tween interpolates the ground rig's target and eye. In planet view that is
+  // a trip back to the play area: the eye was carried out of the orbit while the
+  // player was still turning the globe.
+  if (planetViewActive) {
+    cameraFocusTween = null;
+    return;
+  }
   tween.elapsedMs += deltaTime * 1000;
   const t = Math.min(1, tween.elapsedMs / tween.durationMs);
   // Ease-in-out: the view accelerates away, then settles onto the node.
@@ -1950,7 +2470,6 @@ function updatePlantLabelPositions(): void {
 // C01: Input abstraction - replaces hardcoded keydown/keyup
 let inputBus: InputBus | null = null;
 let uiShell: UIShell | null = null;
-let mutationPanel: MutationPanelAPI | null = null;
 let debugOverlay: DebugOverlay | null = null;
 let qualityController: QualityController | null = null;
 // One frame after the tab becomes visible is spent without a quality sample.
@@ -1982,6 +2501,19 @@ let useWebGPU = false;
 let webgpuRetired = false;
 let renderConfig: RenderConfig | null = null;
 let shopConfig: ShopConfig = { enabled: true, title: 'Shop', currencyName: '', sections: [] };
+
+// The emote catalog is shared by the wheel and the chat bubble. It starts as
+// the shipped fallback and is replaced from /config/emotes before the world
+// chrome is built, so both surfaces read one config-owned label set.
+let emoteDefinitions: readonly EmoteDefinitionConfig[] = DEFAULT_EMOTE_DEFINITIONS;
+let emoteLabels: ReadonlyMap<string, string> = new Map(
+  emoteDefinitions.map(({ id, label }) => [id, label]),
+);
+
+function setEmoteDefinitions(definitions: readonly EmoteDefinitionConfig[]): void {
+  emoteDefinitions = definitions;
+  emoteLabels = new Map(definitions.map(({ id, label }) => [id, label]));
+}
 
 /**
  * Server nodes are laid out on the flat simulation grid. On a planet that grid
@@ -2471,14 +3003,16 @@ function cameraFliesFree(): boolean {
 // view vector. Nothing on the plant moves, and the orbit pivot is wherever the
 // player has looked it (ADR-022).
 function applyCameraPan(deltaTime: number): void {
+  if (planetViewActive) return;
   const baseSpeed = renderConfig?.cameraPanSpeed ?? 0;
   if (baseSpeed <= 0) return;
 
-  // Pan speed follows the current zoom: at arm's length the camera crawls, far
-  // out it covers ground quickly. A fixed metres-per-second made close-up work
-  // unusable and long shots sluggish.
-  const distance = camera.position.distanceTo(controls.target);
-  const speed = baseSpeed * Math.max(0.15, distance / 12);
+  // Pan speed is the configured metres per second, at every zoom. It used to be
+  // scaled by the orbit distance (15% at arm's length, 100% past twelve metres),
+  // so the same held key crawled while placing a part and sprinted a second
+  // later after one dolly, and no drag of the wheel left the movement rate where
+  // the player had it. The zoom is a lens; it does not get to re-time the walk.
+  const speed = baseSpeed;
 
   let forwardAxis = 0; // W / S: along the direction the camera looks
   let strafe = 0; // A / D: strafe perpendicular to it
@@ -2549,8 +3083,27 @@ function respawnPlayer(): void {
  * often right after a part finished growing and the camera refit ran.
  */
 function rootSightPolarLimit(): number {
+  return cameraPolarLimit(
+    cameraFliesFree() ? 'free' : 'ground',
+    rootSightRigUnderground(),
+    renderConfig?.cameraMaxPolarAngle ?? Math.PI / 2 - 0.05,
+  );
+}
+
+/**
+ * Whether the *player* asked for the underground rig.
+ *
+ * Root Sight opens by itself when a buried part starts growing, so the new root
+ * is visible from the surface. That opening is a window into the pit, not a
+ * request to fly the camera through the hill: an auto-opened cavity used to
+ * uncap the orbit and switch the ground clamp off, and then an ordinary upward
+ * drag parked the eye under the lawn with no key pressed. The rig follows what
+ * the player did (R, or the Root Sight pill, or picking a root to inspect), and
+ * only then may the eye go under the soil or the orbit pass the horizon.
+ */
+function rootSightRigUnderground(): boolean {
   const open = rootSightMachine ? rootSightStateMachineIsEnabled(rootSightMachine) : false;
-  return open ? Math.PI - 0.05 : (renderConfig?.cameraMaxPolarAngle ?? Math.PI / 2 - 0.05);
+  return open && rootSightPlayerDriven;
 }
 
 function rootSightHoldsACavity(): boolean {
@@ -2631,6 +3184,10 @@ function settlePlayerOnGround(deltaTime: number): void {
   // changes a pan across a hill used to produce (plan item 11).
   if (cameraFliesFree()) {
     lastPivotY = null;
+    // A free camera stands on nothing and is never moved by the ground under it.
+    // No pivot follow, no target floor, and no Root Sight ceiling: the orbit
+    // limit is the configured one and stays put while weather, growth or an
+    // auto-opened cavity changes around it.
     controls.maxPolarAngle = renderConfig?.cameraMaxPolarAngle ?? Math.PI - 0.05;
     return;
   }
@@ -2676,8 +3233,14 @@ function settlePlayerOnGround(deltaTime: number): void {
   // the only case where looking at the target means looking at something below the
   // soil.
   const targetGroundY = planetTerrainY(planetRadius, controls.target.x, controls.target.z, field);
-  const targetFloorY =
-    rootSightHoldsACavity() && eyeOverAperture() ? Math.min(targetGroundY, feetY) : targetGroundY;
+  // Root Sight is the one mode where the player asked for the underground. Panning
+  // the aim below the surface used to be impossible: the floor was the ground, so
+  // the eye could not look at anything buried even while it stood in the pit. The
+  // floor drops to the deepest the burrow clamp allows, and the camera follows it.
+  const undergroundRig = rootSightRigUnderground();
+  const targetFloorY = undergroundRig
+    ? targetGroundY - Math.max(0, rootSightConfig?.maxBurrowDepthM ?? 12)
+    : targetGroundY;
   if (controls.target.y < targetFloorY + 0.15) {
     const lift = targetFloorY + 0.15 - controls.target.y;
     controls.target.y += lift;
@@ -2773,10 +3336,17 @@ function settlePlayerOnGround(deltaTime: number): void {
   // has to be able to drop the eye into the pit, and the cavity-depth rules above
   // are what keep it out of solid earth. Capping it here meant a stray floor pass
   // could pin the eye at the surface with Root Sight still "on".
-  const configuredLimit =
-    rootSightMachine && rootSightStateMachineIsEnabled(rootSightMachine)
-      ? Math.PI - 0.05
-      : (renderConfig?.cameraMaxPolarAngle ?? Math.PI - 0.05);
+  const configuredLimit = rootSightRigUnderground()
+    ? Math.PI - 0.05
+    : (renderConfig?.cameraMaxPolarAngle ?? Math.PI - 0.05);
+  // A camera pulled back to planet scale is not orbiting the play patch: the ground
+  // under it is the planet's curve, kilometres below, and solving the local soil
+  // ceiling there capped the polar angle at the surface. That is what made a drag
+  // up or down at wide zoom snap the eye instantly onto the ground.
+  if (rootSightRigUnderground() || reach > GROUND_CLAMP_MAX_REACH_M) {
+    controls.maxPolarAngle = configuredLimit;
+    return;
+  }
   const probes = [0.3, 0.55, 0.8, 1];
   // The limit is not seeded at "horizontal". A polar angle of exactly horizontal
   // means the eye can never drop below the target's height - which is precisely
@@ -2856,6 +3426,10 @@ function settlePlayerOnGround(deltaTime: number): void {
 const cavityLookDirection = new THREE.Vector3();
 
 function clampEyeToCavity(deltaTime: number): void {
+  // Above the surface the pit is a window, not a corridor: pulling the eye in
+  // towards a mouth the player never asked to enter is what made an ordinary
+  // orbit feel stuck near a plant with an open cavity.
+  if (!rootSightRigUnderground()) return;
   if (!rootSightHoldsACavity()) return;
   if (!(rootSightConfig?.cameraBurrowEnabled ?? false)) return;
   const radius = soilCutawayUniforms.uRootSightApertureRadius.value;
@@ -2959,7 +3533,7 @@ const cameraAimOffset = new THREE.Vector3();
  */
 function applyCameraAim(): void {
   if (planetViewActive) return;
-  if (rootSightHoldsACavity()) return;
+  if (rootSightRigUnderground()) return;
   if (lastPivotY === null) return;
   cameraAimOffset.copy(camera.position).sub(controls.target);
   const lift = aimLiftY({
@@ -2975,15 +3549,26 @@ function applyCameraAim(): void {
   camera.lookAt(cameraAimPoint);
 }
 
+/**
+ * How close the eye must be to the play patch before the soil is allowed to stop it.
+ *
+ * The clamp exists for a camera standing among the plants, where the ground is a
+ * real obstacle a hand's width away. Past this the eye is looking at the basin and
+ * the planet, and the "ground" under it is the world's curve: keeping the clamp on
+ * there pinned every orbit to the surface (the snap to ground level at wide zoom).
+ */
+const GROUND_CLAMP_MAX_REACH_M = 800;
+
 function clampEyeToGround(): void {
   if (planetViewActive) return;
   const planetRadius = renderConfig?.planetRadiusM ?? 0;
   if (planetRadius <= 0) return;
+  if (camera.position.distanceTo(controls.target) > GROUND_CLAMP_MAX_REACH_M) return;
   // Progress, not the on/off flag: while the cutaway opens or closes the eye is
   // still allowed under the soil, so the ground cannot shove it up mid-fade -
   // but only while it is standing in the opening itself. An eye under the
   // surface anywhere else is in solid dirt, and this is how it gets back up.
-  if (rootSightHoldsACavity() && eyeOverAperture()) return;
+  if (rootSightRigUnderground() && rootSightHoldsACavity() && eyeOverAperture()) return;
   const touch = renderConfig?.cameraGroundTouchM ?? 0.02;
   const field = getTerrainParams();
   const dir = camera.position.clone().sub(controls.target);
@@ -3019,10 +3604,24 @@ function clampEyeToGround(): void {
     const margin = travel <= 0.05 ? 0 : touch;
     return controls.target.y + dir.y * travel >= ground + margin;
   };
+  const eyeGround = planetTerrainY(planetRadius, camera.position.x, camera.position.z, field);
+  // Root Sight is the only view that is allowed under the soil. Outside it,
+  // rescue an eye that the controls have already carried below the surface
+  // before running the spring arm: the old branch treated a buried eye as a
+  // deliberate burrow and left it there, so one downward drag could park the
+  // camera under the world until the player dragged it back out. There is no
+  // burrow to preserve when the underground view is off.
+  if (!(rootSightRigUnderground() && rootSightHoldsACavity())) {
+    if (camera.position.y < eyeGround + touch) {
+      camera.position.y = eyeGround + touch;
+      return;
+    }
+  }
   if (clearAt(reach)) return;
   // Nothing along the ray is clear: the player's own spot is buried, which another
   // clamp owns. Leave the eye alone rather than collapsing it onto the target.
   if (!clearAt(0)) return;
+  if (camera.position.y < eyeGround - touch) return;
   let near = 0;
   let far = reach;
   for (let step = 0; step < 20; step += 1) {
@@ -3043,6 +3642,12 @@ let environmentRenderer: EnvironmentRenderer | null = null;
 // independent camera; toggling never moves or mutates the plant.
 let rootSightConfig: RootSightConfig | null = null;
 let rootSightMachine: RootSightStateMachine | null = null;
+/**
+ * True once the player has driven the underground rig themselves (R, the action
+ * pill, or picking a root). Root Sight opening on its own does not set it: the
+ * pit may be open while the camera still belongs to the surface.
+ */
+let rootSightPlayerDriven = false;
 const rootSightTarget = new THREE.Vector3();
 /** The player's body anchor for this frame (see player/ownPlantAnchor.ts). */
 const ownAnchorVector = new THREE.Vector3();
@@ -3165,8 +3770,9 @@ function noteUndergroundGrowth(type: string | undefined, layer?: string | undefi
 // Root Sight is a silent, player-controlled view mode (R key).
 // It activates the soil cutaway shader and allows underground polar angles.
 // It does NOT move the camera - the player keeps control at all times.
-function setRootSightEnabled(enabled: boolean, plantId?: string): void {
+function setRootSightEnabled(enabled: boolean, plantId?: string, playerDriven = false): void {
   if (!rootSightMachine) return;
+  if (playerDriven) rootSightPlayerDriven = enabled;
 
   if (enabled) {
     // Drive the state machine toward underground whenever enabling.
@@ -3181,6 +3787,8 @@ function setRootSightEnabled(enabled: boolean, plantId?: string): void {
       rootSightStateMachineSetTarget(rootSightMachine, 'surface');
     }
   }
+  // A closed cavity cannot hold an underground rig, whoever asked.
+  if (!enabled && rootSightActivePlants.size === 0) rootSightPlayerDriven = false;
 
   // Adjust polar angle limits so underground nodes are reachable, but do NOT
   // move the camera - the player orbits freely at all times. One owner for the
@@ -3225,6 +3833,7 @@ function toggleRootSight(): void {
   const machine = rootSightMachine;
   if (!machine) return;
   rootSightStateMachineToggle(machine);
+  rootSightPlayerDriven = rootSightStateMachineIsEnabled(machine);
   syncRootSightAction();
   const state = rootSightStateMachineGetState(machine);
   const opening = state === 'underground' || state === 'transitioning_to_underground';
@@ -3375,13 +3984,24 @@ function updateRootSight(deltaTime: number): void {
     const rival: CavityNodeInput[] = [];
     const grownFraction = (node: PlantNodeData): number =>
       Math.min(1, Math.max(0, node.growthProgress ?? 1));
+    // The bubble sits where the part is drawn, not where it is headed. The server
+    // ships a growing node standing at its attachment with a target and a
+    // progress, and the pit used to be sized from the *target*: on the first
+    // frame of growth every bubble already sat at the far end, so a root heading
+    // down dropped the floor to its final depth at once and one heading sideways
+    // widened the mouth to its full spread at once, whichever way the part was
+    // going. `drawnNodePosition` is where the picks and gizmos already put a
+    // growing part, so the cavity follows the same point: a descending root
+    // deepens the pit, a lateral one widens it, and a part that is shortened or
+    // removed gives the size back down to the config floor.
     const input = (node: PlantNodeData): CavityNodeInput => {
       const grown = grownFraction(node);
+      const tip = drawnNodePosition(node);
       return {
         id: node.id,
-        x: node.position.x,
-        y: node.position.y,
-        z: node.position.z,
+        x: tip.x,
+        y: tip.y,
+        z: tip.z,
         // A part that has just started is already opening soil. Waiting for the
         // part to emerge (radius × 0 and an early skip) meant Root Sight stayed
         // shut for the whole first growth the player paid for, so it looked as
@@ -3619,14 +4239,10 @@ function updateRootSight(deltaTime: number): void {
     envelopeNodes[envelopeCount].set(bubble.x, bubble.y, bubble.z, bubble.radius);
     envelopeCount += 1;
   }
-  for (let i = envelopeCount; i < envelopeNodes.length; i += 1) envelopeNodes[i].w = 0;
-
-  // Nothing dug, nothing drawn. With no underground root bubbles (a seed, or a
-  // plant that has not pushed anything down yet) there is no cavity, so the soil
-  // must stay whole: the cut and the bowl both hang off this progress. This is
-  // decided *before* the eye window is added, because a buried camera on its own
-  // must not excavate a cavity the plant never opened.
-  const cavityOpen = envelopeCount > 0;
+  // Count the roots before the eye. A buried camera on its own must not
+  // excavate a cavity the plant never opened; if the eye needs a slot and the
+  // envelope is full, a root's slot is taken instead of the eye being dropped.
+  let rootBubbleCount = envelopeCount;
 
   // The eye window.
   //
@@ -3638,7 +4254,11 @@ function updateRootSight(deltaTime: number): void {
   // goes, and the tunnels between it and the cavity are the sightline.
   let eyeBubbleAdded = false;
   const eyeWindowRadius = rootSightConfig.eyeWindowRadius;
-  if (cavityOpen && eyeUnderSoil && eyeWindowRadius > 0 && envelopeCount < envelopeNodes.length) {
+  if (rootBubbleCount > 0 && eyeUnderSoil && eyeWindowRadius > 0 && envelopeNodes.length > 0) {
+    if (envelopeCount >= envelopeNodes.length) {
+      envelopeCount = Math.max(0, envelopeCount - 1);
+      rootBubbleCount -= 1;
+    }
     envelopeNodes[envelopeCount].set(
       camera.position.x,
       camera.position.y,
@@ -3648,12 +4268,18 @@ function updateRootSight(deltaTime: number): void {
     envelopeCount += 1;
     eyeBubbleAdded = true;
   }
+  for (let i = envelopeCount; i < envelopeNodes.length; i += 1) envelopeNodes[i].w = 0;
+
+  // Nothing dug, nothing drawn. With no underground root bubbles there is no
+  // cavity, so the soil must stay whole: the cut and the bowl both hang off
+  // this progress, never off the buried eye alone.
+  const cavityOpen = rootBubbleCount > 0;
   rootSightDiagnostic.eyeWindow = eyeBubbleAdded;
   soilCutawayUniforms.uRootSightNodeCount.value = envelopeCount;
   // Record what is stopping or driving the opening, so the toggle can say it out
   // loud instead of leaving the player with a view mode and no explanation.
   rootSightDiagnostic.enabled = rootSightStateMachineIsEnabled(rootSightMachine);
-  rootSightDiagnostic.bubbles = envelopeCount - (eyeBubbleAdded ? 1 : 0);
+  rootSightDiagnostic.bubbles = rootBubbleCount;
   rootSightDiagnostic.progress = cavityOpen ? eased : 0;
   rootSightDiagnostic.apertureM = cavityOpen ? cavityApertureM : 0;
   rootSightDiagnostic.reason = !rootSightDiagnostic.enabled
@@ -3709,10 +4335,9 @@ function updateRootSight(deltaTime: number): void {
     eased,
     rootSightTarget,
     sightRadius,
-    // E19: the glow radius both plant passes take. Neither `render.json`'s nor
-    // `root_sight.json`'s aura key is wired into this path; the passes have always
-    // used 3 m, and the two files disagreeing about it is what E19 records.
-    3.0,
+    // E19: the same key the SDF pass reads, so the two plant passes cannot
+    // disagree about how far a root glows.
+    rootSightConfig.auraRadius,
     rootSightConfig.soilOpacity,
     // The hole's actual size. Above ground the plant pass exposes the roots
     // under this radius and hides the rest, instead of the old single sphere
@@ -3733,6 +4358,12 @@ function updateRootSight(deltaTime: number): void {
 let actionBar: ActionBarAPI | null = null;
 let hotbar: HotbarAPI | null = null;
 let sporeChip: SporeChipAPI | null = null;
+/** The cover between Play and the first drawn plant frame (built with the menu). */
+let loadingScreen: LoadingScreenAPI | null = null;
+/** Frames drawn since the world became ready; the cover lifts after the first few. */
+let worldReadyFrames = 0;
+/** Safety valve, so a client that never draws a plant is not left behind a cover. */
+let loadingFailsafeTimer = 0;
 /** The purse, as the last INVENTORY_SYNC reported it. Never written locally. */
 let sporeBalance = 0;
 /**
@@ -3759,6 +4390,20 @@ const growableCounts = new Map<string, number>();
 /** When a node's count was last asked for, so a hover cannot spam the server. */
 const growableAskedAt = new Map<string, number>();
 const GROWABLE_ASK_INTERVAL_MS = 4000;
+
+/**
+ * How often an open growth panel may re-ask, and the values it last asked with.
+ *
+ * The panel is a snapshot of one instant: the server prices each option against
+ * the plant as it was when the click landed. A seed clicked before the first
+ * STATE arrived was priced at 0 energy, and every card said "Needs more energy"
+ * for as long as the panel stayed open - the player had the energy, the panel
+ * never looked again. The panel now re-asks whenever the plant's own totals
+ * move, which is what makes a card light up the moment the player can afford it.
+ */
+const GROWTH_PANEL_REFRESH_MS = 1200;
+let growthPanelAskedAt = 0;
+let growthPanelSignature = '';
 /** The in-world death card, and the chip that leaves spectating. */
 let deathScreen: DeathScreen | null = null;
 let spectateChip: SpectateChip | null = null;
@@ -3774,8 +4419,10 @@ let notificationLog: NotificationLogAPI | null = null;
 let growModeBadge: HTMLDivElement | null = null;
 
 const GROW_MODE_CSS = `
-  /* Grow mode has to look different from moving around: a tinted edge, a crosshair
-     and a badge, not one line of text in a readout nobody reads. */
+  /* Grow mode has to look different from moving around: a tinted edge and a badge,
+     not one line of text in a readout nobody reads. The pointer keeps its shape:
+     the aim is drawn on the plant, and a crosshair over the scene only made the
+     cursor jump between the two halves of one drag. */
   #grow-mode-tint {
     position: fixed;
     inset: 0;
@@ -3788,17 +4435,19 @@ const GROW_MODE_CSS = `
       inset 0 0 0 2px rgba(200, 255, 128, 0.3);
   }
   body.is-grow-mode #grow-mode-tint { opacity: 1; }
-  body.is-grow-mode #app { cursor: crosshair; }
-  /* The mode badge is a row inside the action bar, so it cannot collide with it
-     however the bar wraps. */
+  /* A pill beside the action rail, not a row inside it: the rail is a column of
+     square tiles on the left edge now, and a wide badge inside it would stretch
+     the rail out to the width of its longest word. It is anchored just past the
+     tiles' right edge and lines up with their middle. */
   #grow-mode-badge {
-    order: -1;
-    align-self: stretch;
+    position: fixed;
+    left: calc(var(--hud-corner, 12px) + 58px);
+    top: 50%;
+    transform: translateY(-50%);
     display: none;
     align-items: center;
     justify-content: center;
     gap: 6px;
-    margin-bottom: 2px;
     padding: 3px 10px;
     border-radius: 999px;
     border: 1px solid var(--leaf-500);
@@ -3809,6 +4458,7 @@ const GROW_MODE_CSS = `
     text-transform: uppercase;
     pointer-events: none;
     white-space: nowrap;
+    z-index: 210;
   }
   #grow-mode-badge.is-visible { display: flex; }
   #grow-mode-badge i {
@@ -3904,12 +4554,34 @@ function createWorldChrome(): void {
     onOpenShop: () => openShop(),
   });
   sporeChip.setVisible(false);
+  // The geographic readout: the plant does not move, so this is where it was
+  // sown, in the same latitude/longitude/altitude language the seed scene uses.
+  geodeticReadout = document.createElement('div');
+  geodeticReadout.id = 'pl-geodetic-readout';
+  geodeticReadout.style.cssText = [
+    'position:fixed',
+    'right:14px',
+    'bottom:104px',
+    'z-index:150',
+    'padding:4px 8px',
+    'border-radius:6px',
+    'background:rgba(8,14,10,.58)',
+    'color:var(--warm-ink, #f0ead6)',
+    'font:500 10px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace',
+    'letter-spacing:.02em',
+    'pointer-events:none',
+    'white-space:nowrap',
+    'display:none',
+  ].join(';');
+  mount.appendChild(geodeticReadout);
   // A bar built mid-session inherits the mode it was built in.
   if (rootSightMachine) {
     rootSightActionShown = rootSightStateMachineIsEnabled(rootSightMachine);
     actionBar.setActive('rootsight', rootSightActionShown);
   }
-  if (growModeBadge) actionBar.element.insertBefore(growModeBadge, actionBar.element.firstChild);
+  // The badge is anchored beside the rail (see #grow-mode-badge), so it stays on
+  // the body: a fixed child of the transformed rail would be positioned against
+  // the rail, not the screen.
   // The bar publishes its own height (--pl-bar-offset) and the context hint reads
   // it, so a wrapped or badge-carrying bar never sits under a hint.
 
@@ -4051,6 +4723,16 @@ function handleEscapeKey(event: KeyboardEvent): void {
   // while a different bug made the emote branch swallow every press.
   if (event.key !== 'Escape') return;
   if (entryFlow.step !== 'world') return;
+  // The orbit is a mode the player has to be able to leave. It has no close
+  // button, and while it is up the ground camera's dolly and drag do nothing
+  // visible: the rig re-places the eye on the orbit every frame, so a player who
+  // entered it saw a planet, could not turn, could not zoom and could not find
+  // their plant. Escape puts them back where they were standing.
+  if (planetViewActive) {
+    event.preventDefault();
+    setPlanetView(false);
+    return;
+  }
   if (pauseMenu?.isOpen) return; // the menu handles its own Escape
   // The death card owns Escape while it is up: opening a pause menu behind a
   // modal leaves the player pressing keys into a screen they cannot see.
@@ -4125,6 +4807,7 @@ async function initC01(): Promise<void> {
     loadedRootSightConfig,
     loadedMutationVisuals,
     loadedChatConfig,
+    loadedEmoteDefinitions,
     loadedReportsConfig,
     loadedNetworkConfig,
     loadedGrowthSegmentConfig,
@@ -4142,6 +4825,7 @@ async function initC01(): Promise<void> {
     loadRootSightConfig(httpOrigin),
     loadMutationVisualsConfig(httpOrigin),
     loadChatConfig(httpOrigin),
+    loadEmotesConfig(httpOrigin),
     loadReportsConfig(httpOrigin),
     loadNetworkConfig(httpOrigin),
     loadGrowthSegmentConfig(httpOrigin),
@@ -4168,6 +4852,7 @@ async function initC01(): Promise<void> {
   configureMutationVisuals(loadedMutationVisuals.styles, loadedMutationVisuals.caps);
   rootSightMachine = createRootSightStateMachine(rootSightConfig);
   chatConfig = loadedChatConfig;
+  setEmoteDefinitions(loadedEmoteDefinitions);
   reportConfig = loadedReportsConfig;
   networkConfig = loadedNetworkConfig;
   configureTerrain(loadedTerrainConfig, loadedRenderConfig.soilDepthM);
@@ -4216,24 +4901,6 @@ async function initC01(): Promise<void> {
   createGrowthSelectionUI();
   createChatUI();
 
-  // T04: mutation set, upkeep and the adaptive-pressure readout. It only
-  // appears once the server says this plant carries something.
-  mutationPanel = createMutationPanel({
-    onShed: (shedPlantId, mutationId) => {
-      if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(
-          JSON.stringify({
-            type: MESSAGE_TYPE.MUTATION_SHED,
-            payload: { plantId: shedPlantId, mutationId },
-          }),
-        );
-      }
-    },
-  });
-  // Mutation details now live in the Inspect panel; the old bottom-left panel
-  // is kept in sync but not shown, so there is one place for the list.
-  mutationPanel.panel.style.display = 'none';
-
   plantStatusHud = createPlantStatusHud({
     onReroot: handleRerootControl,
     updateIntervalMs: uiConfig.hudUpdateIntervalMs,
@@ -4270,6 +4937,7 @@ async function initC01(): Promise<void> {
       }
     };
     devPanel = createDevPanel({
+      devConfigUrl: `${httpOrigin}/dev/config`,
       diagnostics: {
         metricsOverlay: {
           get: () => debugOverlay?.isVisible() ?? false,
@@ -4293,6 +4961,14 @@ async function initC01(): Promise<void> {
         setTimeOfDay: (t: number) => {
           environmentRenderer?.setTimeOfDay(t);
           sendDevAction({ type: 'dev_set_time', time_of_day: t });
+          // The orbit follows the sun; a dev jump is not the player taking the
+          // camera. Re-frame on the lit face so a time command rotates the
+          // planet to face the sun instead of leaving the camera staring at the
+          // night side it happened to be over.
+          if (planetViewActive) {
+            planetViewUserAdjusted = false;
+            framePlanetViewTowardSun();
+          }
         },
         setTimeFrozen: (frozen: boolean) => {
           environmentRenderer?.setTimeFrozen(frozen);
@@ -4423,16 +5099,52 @@ async function initC01(): Promise<void> {
       },
       camera: {
         setPlanetView: (enabled: boolean) => setPlanetView(enabled),
+        // Re-aims the orbit at the sunlit side, so a dev time change can be
+        // checked without hunting for the terminator by hand.
+        framePlanetTowardSun: () => framePlanetViewTowardSun(),
+        // A preset used to *pin the orbit limits* instead of moving the eye:
+        // min and max both became 150 and the camera stayed where it was, so
+        // every preset on the panel read as a dead button. Distance now dollies
+        // the eye along its current line and leaves the limits alone.
         setDistance: (dist: number) => {
-          controls.minDistance = dist;
-          controls.maxDistance = dist;
+          dollyCameraTo(dist);
         },
+        setPose: (dist: number, elevationDeg: number) => {
+          frameCameraAt(dist, elevationDeg);
+        },
+        getDistance: () => camera.position.distanceTo(controls.target),
+        getSmoothing: () => controls.dampingFactor,
+        getBounds: () => ({
+          min: currentCameraMinDistance(),
+          max: effectiveCameraMaxDistance(),
+          planetRadiusM: renderConfig?.planetRadiusM ?? 0,
+        }),
         setSmoothing: (s: number) => {
           controls.dampingFactor = s;
         },
         setBounds: (min: number, max: number) => {
           controls.minDistance = min;
           controls.maxDistance = max;
+          applyCameraRange();
+        },
+        // One button back to the view the game starts in. Pulling the eye out
+        // to a hundred kilometres is a dev convenience; the way home has to be
+        // a click, because the wheel would take minutes to travel it.
+        resetView: () => {
+          if (planetViewActive) setPlanetView(false);
+          controls.dampingFactor = renderConfig?.cameraSmoothing ?? 0.05;
+          controls.minDistance = renderConfig?.cameraMinDistance ?? 1;
+          controls.maxDistance = effectiveCameraMaxDistance();
+          controls.maxPolarAngle = renderConfig?.cameraMaxPolarAngle ?? Math.PI * 0.98;
+          controls.target.set(0, 0, 0);
+          camera.position.set(0, 18, 26);
+          targetCameraDistance = -1;
+          controls.update();
+        },
+        unclamped: () => devCameraUnclamped,
+        setUnclamped: (enabled: boolean) => {
+          devCameraUnclamped = enabled;
+          applyCameraRange();
         },
       },
       ui: {
@@ -4472,6 +5184,10 @@ async function initC01(): Promise<void> {
     });
     devPanel.panel.style.marginTop = '0';
     document.body.appendChild(devPanel.panel);
+    // Read the server's switch and benchmark values up front, so the first
+    // time the panel opens it shows what the server is running rather than
+    // every toggle's off default (E21).
+    void devPanel.loadConfig();
   }
 
   // Debug overlay toggle (Shift) - works regardless of dev mode
@@ -4546,6 +5262,10 @@ async function initC01(): Promise<void> {
   controls.minDistance = renderConfig.cameraMinDistance;
   controls.maxDistance = effectiveCameraMaxDistance();
   controls.maxPolarAngle = renderConfig.cameraMaxPolarAngle;
+  // The rig decides whether a pan moves in the screen plane or along the
+  // ground: a config switch between the two modes must not leave the old pan
+  // behind (play-test 2026-11-26: right-drag could not raise the eye).
+  controls.screenSpacePanning = cameraFliesFree();
   sunLight.shadow.mapSize.set(renderConfig.shadowMapSize, renderConfig.shadowMapSize);
   // A shadow texel covers a large patch of the ground, so without these the
   // soil plane self-shadows at low sun angles and the near ground reads as a
@@ -4609,11 +5329,41 @@ async function initC01(): Promise<void> {
 
     // The visible ground is the sphere plus hills, and the sphere alone would
     // leave anything physical standing at the sphere while the hills rise above
-    // it — the player ends up buried up to the waist in a mound. Every drawn
-    // ground patch is collided exactly: the detail patch near the play area and
-    // the coarse patch out to the horizon. The ball stays for the rest of the
-    // planet and as the floor under the relief, which is raise-only.
+    // it — the player ends up buried up to the waist in a mound. The play disc
+    // is a heightfield collider, not its 1.2M-triangle render mesh: same
+    // height function, same bounds, a fraction of the build time. The ball
+    // stays for the rest of the planet.
+    const playDisk = (environmentRenderer?.terrainMeshes ?? []).find(
+      (mesh) => mesh.name === 'planet-play-disk',
+    );
+    if (playDisk && planetRadiusM > 0) {
+      const cells = 512;
+      const width = Math.max(20, renderConfig.terrainRadius) * 2;
+      const heights = new Float32Array((cells + 1) * (cells + 1));
+      const field = getTerrainParams();
+      for (let col = 0; col <= cells; col += 1) {
+        for (let row = 0; row <= cells; row += 1) {
+          const x = (col / cells - 0.5) * width;
+          const z = (row / cells - 0.5) * width;
+          heights[col * (cells + 1) + row] = planetTerrainY(planetRadiusM, x, z, field);
+        }
+      }
+      const terrainBody = rapierWorld.getWorld().createRigidBody(RAPIER.RigidBodyDesc.fixed());
+      terrainColliderRefs.push(
+        rapierWorld.getWorld().createCollider(
+          // Rapier's JS binding takes the number of *cells* and a matrix of
+          // (cells + 1)² heights; passing vertex counts panics the wasm.
+          RAPIER.ColliderDesc.heightfield(cells, cells, heights, {
+            x: width,
+            y: 1,
+            z: width,
+          }),
+          terrainBody,
+        ),
+      );
+    }
     for (const terrainPatch of environmentRenderer?.terrainMeshes ?? []) {
+      if (terrainPatch.name === 'planet-play-disk') continue;
       const geometry = terrainPatch.geometry;
       const positions = geometry.getAttribute('position');
       const vertices = new Float32Array(positions.count * 3);
@@ -4657,13 +5407,24 @@ async function initC01(): Promise<void> {
     setDetail('Physics unavailable');
   }
 
-  // Grow mode is a mode, and it has to look like one: a tinted edge, a crosshair
-  // and a badge, plus the action bar's Grow button held down. It used to be a
-  // line inside the tick card, which was not on screen for players at all.
-  function setGrowMode(enabled: boolean): void {
+  // Grow mode is a mode, and it has to look like one: a tinted edge and a badge,
+  // plus the action bar's Grow button held down. It used to be a line inside the
+  // tick card, which was not on screen for players at all.
+  /**
+   * `announce: false` enters the mode without the "Grow mode enabled" toast and
+   * the "click a part" hint: when a click on a part is what entered it, both
+   * talk over the options panel that click asked for, and the hint tells the
+   * player to do the thing they just did.
+   */
+  function setGrowMode(enabled: boolean, options: { announce?: boolean } = {}): void {
+    const announce = options.announce ?? true;
     isGrowMode = enabled;
     growModeHud = enabled;
     setGrowModeChrome(enabled);
+    if (!announce) {
+      if (!enabled) hideGrowthSelection();
+      return;
+    }
     if (enabled) {
       uiShell?.toast({ message: 'Grow mode enabled', kind: 'info', durationMs: 1800 });
       contextHint?.show({
@@ -4684,7 +5445,7 @@ async function initC01(): Promise<void> {
 
   worldActions.grow = toggleGrowMode;
   worldActions.inventory = () => togglePlayerPanels();
-  worldActions.emotes = () => showEmoteWheel();
+  worldActions.emotes = () => toggleEmoteWheel();
   worldActions.hideEmotes = () => hideEmoteWheel();
   // Whether the wheel is *shown*, not whether its element exists. The wheel is
   // built at world setup, so the existence test was true from the first frame:
@@ -4745,6 +5506,18 @@ async function initC01(): Promise<void> {
         JSON.stringify({
           type: MESSAGE_TYPE.MUTATION_LEVEL,
           payload: { plantId, mutationId, ...(cardId ? { cardId } : {}) },
+        }),
+      );
+    },
+    // T04: the mutation list lives in Inspect, and shedding lives with it. It
+    // used to sit on a bottom-left panel that was retired into Inspect and never
+    // mounted, so no player could reach the only control that sends this.
+    onShed: (mutationId) => {
+      if (!plantId || !ws || ws.readyState !== WebSocket.OPEN) return;
+      ws.send(
+        JSON.stringify({
+          type: MESSAGE_TYPE.MUTATION_SHED,
+          payload: { plantId, mutationId },
         }),
       );
     },
@@ -4812,171 +5585,32 @@ async function initC01(): Promise<void> {
   // once the HUD layers and the settings panel exist.
   createWorldChrome();
 
-  // Emote definitions
-  const EMOTES = [
-    { id: 'wave', label: 'Wave' },
-    { id: 'cheer', label: 'Cheer' },
-    { id: 'thumbs_up', label: 'Thumbs Up' },
-    { id: 'heart', label: 'Heart' },
-    { id: 'think', label: 'Think' },
-    { id: 'sleep', label: 'Sleep' },
-    { id: 'dance', label: 'Dance' },
-    { id: 'sad', label: 'Sad' },
-  ] as const;
-
-  let emoteWheelElement: HTMLDivElement | null = null;
+  let emoteWheel: EmoteWheelAPI | null = null;
   let emoteWheelOpen = false;
 
-  createEmoteWheel();
-
-  function createEmoteWheel(): void {
-    const wheel = document.createElement('div');
-    wheel.id = 'emote-wheel';
-    wheel.className = 'hud-panel';
-    wheel.style.cssText = `
-      position: fixed;
-      top: 50%;
-      left: 50%;
-      transform: translate(-50%, -50%) scale(0.85);
-      z-index: 400;
-      pointer-events: auto;
-      opacity: 0;
-      transition: opacity 0.2s cubic-bezier(0.4, 0, 0.2, 1),
-                  transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
-      display: none;
-      width: min(340px, 90vw);
-      max-width: 340px;
-      padding: 18px;
-    `;
-
-    const radius = 110;
-    const centerSize = 72;
-
-    // Center close button
-    const center = document.createElement('button');
-    center.type = 'button';
-    center.style.cssText = `
-      position: absolute;
-      top: 50%;
-      left: 50%;
-      transform: translate(-50%, -50%);
-      width: ${centerSize}px;
-      height: ${centerSize}px;
-      border-radius: 50%;
-      background: var(--bark-800);
-      border: 1px solid var(--hud-border);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: calc(1.4rem * var(--text-scale));
-      color: var(--bone-100);
-      cursor: pointer;
-      z-index: 10;
-      box-shadow: var(--hud-shadow);
-      transition: var(--hud-transition);
-    `;
-    center.textContent = 'X';
-    center.title = 'Close (Esc or click away)';
-    center.addEventListener('mouseenter', () => {
-      center.style.borderColor = 'var(--leaf-400)';
-      center.style.background = 'var(--bark-700)';
-    });
-    center.addEventListener('mouseleave', () => {
-      center.style.borderColor = 'var(--hud-border)';
-      center.style.background = 'var(--bark-800)';
-    });
-    center.addEventListener('click', hideEmoteWheel);
-    wheel.appendChild(center);
-
-    // Emote buttons in a circle
-    EMOTES.forEach((emote, index) => {
-      const angle = (index / EMOTES.length) * Math.PI * 2 - Math.PI / 2;
-      const x = Math.cos(angle) * radius;
-      const y = Math.sin(angle) * radius;
-
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.dataset.emoteId = emote.id;
-      btn.style.cssText = `
-        position: absolute;
-        top: 50%;
-        left: 50%;
-        transform: translate(-50%, -50%) translate(${x}px, ${y}px);
-        width: ${centerSize * 0.75}px;
-        height: ${centerSize * 0.75}px;
-        border-radius: 50%;
-        background: var(--bark-800);
-        border: 1px solid var(--hud-border);
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        justify-content: center;
-        font-size: calc(1.1rem * var(--text-scale));
-        font-weight: 700;
-        color: var(--bone-100);
-        cursor: pointer;
-        box-shadow: var(--hud-shadow);
-        transition: var(--hud-transition);
-        line-height: 1.15;
-      `;
-      btn.textContent = emote.label;
-
-      btn.addEventListener('mouseenter', () => {
-        btn.style.transform = `translate(-50%, -50%) translate(${x}px, ${y}px) scale(1.15)`;
-        btn.style.borderColor = 'var(--leaf-400)';
-        btn.style.background = 'var(--bark-700)';
-        btn.style.color = 'var(--leaf-300)';
-        btn.style.boxShadow = '0 0 0 3px var(--leaf-glow), var(--hud-shadow)';
+  /**
+   * The wheel is lazy: a player who never emotes never pays for an SVG dialog.
+   * `sendEmote` is declared below and hoisted, so the factory can close over it.
+   */
+  function ensureEmoteWheel(): EmoteWheelAPI {
+    if (!emoteWheel) {
+      emoteWheel = createEmoteWheel({
+        emotes: emoteDefinitions,
+        onSelect: sendEmote,
+        onOpenChange: (open) => {
+          emoteWheelOpen = open;
+        },
       });
-      btn.addEventListener('mouseleave', () => {
-        btn.style.transform = `translate(-50%, -50%) translate(${x}px, ${y}px) scale(1)`;
-        btn.style.borderColor = 'var(--hud-border)';
-        btn.style.background = 'var(--bark-800)';
-        btn.style.color = 'var(--bone-100)';
-        btn.style.boxShadow = 'var(--hud-shadow)';
-      });
-      btn.addEventListener('click', () => {
-        sendEmote(emote.id);
-        hideEmoteWheel();
-      });
-
-      wheel.appendChild(btn);
-    });
-
-    // Click outside to close
-    wheel.addEventListener('click', (e) => {
-      if (e.target === wheel) hideEmoteWheel();
-    });
-
-    document.body.appendChild(wheel);
-    emoteWheelElement = wheel;
+    }
+    return emoteWheel;
   }
 
-  function showEmoteWheel(): void {
-    if (!emoteWheelElement) createEmoteWheel();
-    const wheel = emoteWheelElement;
-    if (!wheel) return;
-
-    emoteWheelOpen = true;
-    wheel.style.display = 'block';
-    requestAnimationFrame(() => {
-      wheel.style.opacity = '1';
-      wheel.style.transform = 'translate(-50%, -50%) scale(1)';
-    });
-    // Escape is owned by handleEscapeKey, which closes the wheel first and only
-    // then offers the pause menu. A local Escape listener here had to be removed
-    // by itself to avoid leaking one per open, and closing by clicking outside
-    // never removed it.
+  function toggleEmoteWheel(): void {
+    ensureEmoteWheel().toggle();
   }
 
   function hideEmoteWheel(): void {
-    if (!emoteWheelElement) return;
-    emoteWheelOpen = false;
-    emoteWheelElement.style.opacity = '0';
-    emoteWheelElement.style.transform = 'translate(-50%, -50%) scale(0.8)';
-    setTimeout(() => {
-      if (emoteWheelElement) emoteWheelElement.style.display = 'none';
-    }, 150);
+    emoteWheel?.close();
   }
 
   function sendEmote(emoteId: string): void {
@@ -5037,7 +5671,7 @@ async function initC01(): Promise<void> {
       if (actionId === 'inventory_overview_toggle') togglePlayerPanels();
       if (actionId === 'settings_toggle') settingsPanel?.toggle();
       if (actionId === 'emote_wheel' && state.pressed) {
-        showEmoteWheel();
+        toggleEmoteWheel();
       }
       // Hotbar slots (1-0). The keys used to select a slot only when the
       // inventory panel was already open, so during play they did nothing at all.
@@ -5172,11 +5806,8 @@ async function initC01(): Promise<void> {
     // grabbable at its visible tip instead of at its future position.
     const anchor = branchAttachAnchor(node ? drawnNodePosition(node) : position, nodeId);
     if (!node) return anchor;
-    if (node.isSeed === true || node.nodeType === 'seed') {
-      anchor.y +=
-        resolveDrawnRadius(node.nodeType, node.radius ?? 0.05, node.biomass) *
-        getSeedBodyHeightRatio();
-    }
+    // `drawnNodePosition` already returns the seed's body centre. The old lift
+    // here was a second half-height, which put the branch anchor above the seed.
     return anchor;
   };
 
@@ -5207,69 +5838,102 @@ async function initC01(): Promise<void> {
       data.nodeId,
     );
     const centre = anchor.clone().project(camera);
-    const edge = anchor
-      .clone()
-      .setX(anchor.x + worldRadius)
-      .project(camera);
-    return Math.abs(edge.x - centre.x) * 0.5 * rect.width;
+    // A world-space +X offset is not the part's screen radius unless the camera
+    // looks down +Z. Project two camera-facing perpendiculars instead, so an
+    // orbited camera still gives a circle on screen rather than a shortened
+    // horizontal chord that made a fat root impossible to grab from the side.
+    const right = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 0).normalize();
+    const up = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 1).normalize();
+    const edgeRight = anchor.clone().addScaledVector(right, worldRadius).project(camera);
+    const edgeUp = anchor.clone().addScaledVector(up, worldRadius).project(camera);
+    const radiusRight = Math.hypot(
+      (edgeRight.x - centre.x) * 0.5 * rect.width,
+      (edgeRight.y - centre.y) * 0.5 * rect.height,
+    );
+    const radiusUp = Math.hypot(
+      (edgeUp.x - centre.x) * 0.5 * rect.width,
+      (edgeUp.y - centre.y) * 0.5 * rect.height,
+    );
+    return Math.max(radiusRight, radiusUp);
   };
 
   // Screen-space distance to the drawn arrow, so grabbing the arrow anywhere
   // along its length turns the aim instead of orbiting the camera.
   const aimArrowScreenDistance = (clientX: number, clientY: number): number => {
     if (growthAimPath.length < 2) return Number.POSITIVE_INFINITY;
-    const rect = canvas.getBoundingClientRect();
-    const toScreen = (p: THREE.Vector3) => {
-      const v = p.clone().project(camera);
-      return {
-        x: rect.left + (v.x * 0.5 + 0.5) * rect.width,
-        y: rect.top + (-v.y * 0.5 + 0.5) * rect.height,
-      };
-    };
     let best = Number.POSITIVE_INFINITY;
-    let prev = toScreen(growthAimPath[0]);
+    let prev = screenPointOf(growthAimPath[0]);
     for (let i = 1; i < growthAimPath.length; i++) {
-      const cur = toScreen(growthAimPath[i]);
-      const dx = cur.x - prev.x;
-      const dy = cur.y - prev.y;
-      const lengthSq = dx * dx + dy * dy;
-      const t =
-        lengthSq > 1e-6
-          ? Math.max(0, Math.min(1, ((clientX - prev.x) * dx + (clientY - prev.y) * dy) / lengthSq))
-          : 0;
-      best = Math.min(best, Math.hypot(clientX - (prev.x + dx * t), clientY - (prev.y + dy * t)));
+      const cur = screenPointOf(growthAimPath[i]);
+      best = Math.min(best, screenSegmentDistance(clientX, clientY, prev, cur));
       prev = cur;
     }
     return best;
   };
 
-  const startGrowthDragFromEvent = (e: MouseEvent | PointerEvent): boolean => {
+  /** How close a press has to be to belong to the aim; a big part widens it. */
+  const growthAimGrabRadiusPx = (): number =>
+    Math.max(renderConfig?.growthAimGrabPx ?? 34, aimTargetScreenRadius());
+
+  /**
+   * What a press belongs to while aiming: the part (it moves the ring and the
+   * joint), the arrow (it turns the aim), or nothing (the camera may orbit).
+   *
+   * One answer for the press and for the miss message, so a press can never move
+   * the ring and still be reported as a miss.
+   */
+  const growthAimPressTarget = (
+    clientX: number,
+    clientY: number,
+  ): { target: 'origin' | 'direction'; nodeHit: THREE.Vector3 | null } | null => {
+    const grabRadiusPx = growthAimGrabRadiusPx();
+    const nodeHit = pickGrowthAimNodePoint(clientX, clientY);
+    // The joint handle owns the part and the orange puck. A press there moves
+    // the joint only; it must never turn the aim in the same gesture.
+    if (
+      nodeHit !== null ||
+      aimTargetScreenDistance(clientX, clientY) <= grabRadiusPx ||
+      aimPartScreenDistance(clientX, clientY) <= grabRadiusPx
+    ) {
+      return { target: 'origin', nodeHit };
+    }
+    // The direction handle owns the arrow beyond the joint. A press there turns
+    // the aim only; it cannot edit the attach fraction.
+    if (aimArrowScreenDistance(clientX, clientY) <= grabRadiusPx) {
+      return { target: 'direction', nodeHit: null };
+    }
+    return null;
+  };
+
+  const startGrowthDragFromEvent = (e: PointerEvent): boolean => {
     const gState = growthSelectionStateMachineGetState(growthSelectionMachine);
+    // One gesture, one pointer. A second finger must not take over the joint or
+    // the aim; it may still be used for the camera outside this drag.
+    if (growthAimDragging && growthAimPointerId !== e.pointerId) return false;
     // Only an active aim can be grabbed. Starting an aim from option_selected
     // used to happen on any canvas press, so clicking off the panel silently
     // re-armed the gizmo instead of closing it.
     if (gState !== 'drawing') return false;
     // Dragging the part or the arrow turns the aim; anywhere else the camera
     // orbits as usual.
-    const grabRadiusPx = Math.max(renderConfig?.growthAimGrabPx ?? 34, aimTargetScreenRadius());
-    const onPart =
-      aimTargetScreenDistance(e.clientX, e.clientY) <= grabRadiusPx ||
-      pickGrowthAimNodePoint(e.clientX, e.clientY) !== null;
-    const onArrow = aimArrowScreenDistance(e.clientX, e.clientY) <= grabRadiusPx;
-    if (!onPart && !onArrow) return false;
-    // A press on the node itself also chooses where the golden ring sits. The
-    // old gizmo always used the node's cap; this lets the player carry it to the
-    // side, underside or back of the selected part before steering the arrow.
-    if (onPart) {
-      placeGrowthAimRingFromScreen(e.clientX, e.clientY);
-      applyGrowthAimAngles();
-    }
+    const press = growthAimPressTarget(e.clientX, e.clientY);
+    if (!press) return false;
+    // A press on the node also chooses where the golden ring sits, but only once
+    // it is a drag: see GROWTH_AIM_JOINT_DRAG_PX. The press is recorded here and
+    // the joint moves in the move handler.
+    growthAimJointPress = { x: e.clientX, y: e.clientY, kind: press.target };
+    growthAimActiveHandle = press.target;
     growthAimDragging = true;
+    growthAimPointerId = e.pointerId;
+    growthAimCaptureTarget = e.currentTarget as HTMLElement | null;
     growthAimLastX = e.clientX;
     growthAimLastY = e.clientY;
     try {
-      (e.target as HTMLElement)?.setPointerCapture?.((e as PointerEvent).pointerId);
-    } catch {}
+      growthAimCaptureTarget?.setPointerCapture?.(e.pointerId);
+    } catch {
+      // Capture is an optimisation, not a requirement: the window pointerup
+      // listener below ends a gesture that leaves the canvas.
+    }
     return true;
   };
 
@@ -5280,16 +5944,28 @@ async function initC01(): Promise<void> {
       clickStartTime = performance.now();
       clickStartPos = { x: e.clientX, y: e.clientY };
       canvas.focus();
-      if (e.button === 0 && startGrowthDragFromEvent(e)) {
-        e.stopImmediatePropagation();
-        e.preventDefault();
-      }
+      // Growth aiming is pointer-only. The duplicate mouse path used to start a
+      // second gesture from the same press (and again for every touch), with no
+      // id to tell the two apart.
     },
     { capture: true },
   );
   canvas.addEventListener(
     'pointerdown',
     (e) => {
+      if (growthAimDragging) {
+        // A second pointer during a growth gesture is rejected outright. It must
+        // not orbit underneath the joint the first finger is moving.
+        if (growthAimPointerId !== e.pointerId) {
+          e.stopImmediatePropagation();
+          e.preventDefault();
+        }
+        return;
+      }
+      if (e.button === 0) {
+        clickStartTime = performance.now();
+        clickStartPos = { x: e.clientX, y: e.clientY };
+      }
       if (e.button === 0 && startGrowthDragFromEvent(e)) {
         // Swallow just this drag so OrbitControls never sees it; the camera stays
         // enabled, so a drag anywhere else still orbits.
@@ -5360,6 +6036,12 @@ async function initC01(): Promise<void> {
     const isRootSightEnabled = rootSightMachine
       ? rootSightStateMachineIsEnabled(rootSightMachine)
       : false;
+    // Pick sizing is config; read once per click rather than once per node.
+    const pickRadii = {
+      scale: renderConfig?.nodePickRadiusScale ?? 1.15,
+      ownFloorM: renderConfig?.ownNodePickRadius ?? 0.1,
+      rivalFloorM: renderConfig?.rivalNodePickRadius ?? 0.35,
+    };
     const addPickable = (
       id: string,
       nodes: Map<string, PlantNodeData>,
@@ -5375,14 +6057,7 @@ async function initC01(): Promise<void> {
         if (nodeData.type === 0 && !nodeData.isSeed && !isRootSightEnabled && !cameraBelowGround)
           continue;
         const sphere = new THREE.Mesh(
-          // A pick sphere the size of the part, on the part *as drawn*. A flat
-          // 0.35 m floor on the server position made a small child root
-          // unreachable: its sphere swallowed its parent's, the ray hit whichever
-          // came first, and the growth panel then belonged to the parent.
-          // Small enough to sit inside its own part rather than swallowing the
-          // child growing out of it; the surface fallback still catches clicks on
-          // a tube or a leaf between nodes.
-          new THREE.SphereGeometry(Math.max(nodeData.radius * 1.15, 0.1), 8, 8),
+          new THREE.SphereGeometry(nodePickRadius(nodeData.radius, isOwn, pickRadii), 8, 8),
           new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }),
         );
         const pickParent = nodeData.parentId ? nodes.get(nodeData.parentId) : undefined;
@@ -5451,6 +6126,13 @@ async function initC01(): Promise<void> {
     }
 
     if (!picked) {
+      // Off the plant while aiming. Closing the panel here took the aim with it,
+      // and the Grow button with that: the next press did nothing and said
+      // nothing (play-test). A miss now keeps the aim and reports itself.
+      if (growthSelectionStateMachineIsDrawing(growthSelectionMachine)) {
+        reportGrowthAimMiss();
+        return;
+      }
       // Clicked off-plant (but not on UI) -> close growth panel, and stop reading
       // a rival: the panel goes back to being about your own plant.
       hideGrowthSelection();
@@ -5465,7 +6147,8 @@ async function initC01(): Promise<void> {
     // detailed readout (stored water, minerals, options) is yours alone, so a
     // rival gets the low-detail face of Inspect - parts, biomass and owner, which
     // is everything the mirror actually sends - and never a growth option.
-    if (picked && !picked.isOwn) {
+    const clickPlan = planNodeClick({ isOwnPlant: picked.isOwn, growMode: isGrowMode });
+    if (clickPlan.inspectRival) {
       hideGrowthSelection();
       inspectOtherPlant(picked.plantId, picked.nodes);
       return;
@@ -5484,7 +6167,22 @@ async function initC01(): Promise<void> {
       const optionLabel = growthSelectionMachine.selectedOptionLabel ?? optionType;
       if (optionType && beginGrowthAiming(clickedNodeId, optionType, optionLabel)) return;
     }
-    if (growthState === 'drawing' && sameNode) return; // Keep the current aim.
+    if (growthState === 'drawing' && sameNode) {
+      // A tap on the drawn part places the joint where the tap landed. The joint
+      // used to move only on a drag, so a player who clicked the node itself - the
+      // obvious way to say "this node grows from here" - hit the gizmo instead and
+      // got a miss message, which read as the controls eating the click (play-test
+      // 2026-11-26). Press-and-release is now enough, and a press that also travels
+      // still works: this only runs for a tap, because any real drag is swallowed
+      // before it reaches the click handler.
+      placeGrowthAimRingFromScreen(
+        e.clientX,
+        e.clientY,
+        pickGrowthAimNodePoint(e.clientX, e.clientY),
+      );
+      applyGrowthAimAngles();
+      return;
+    }
     if ((growthState === 'options_visible' || growthState === 'loading') && sameNode) {
       // Clicking the node the panel already belongs to must not re-request its
       // options; that was the flash where the panel closed and re-opened.
@@ -5496,9 +6194,12 @@ async function initC01(): Promise<void> {
     if (growthState !== 'hidden' && growthState !== 'options_visible' && !sameNode) {
       hideGrowthSelection();
     }
-    if (isGrowMode) {
-      requestGrowthOptions(clickedNodeId);
-    }
+    // Clicking a part is how growing starts, so it brings grow mode with it:
+    // asking for options only when the mode was already on made a click on the
+    // seed do nothing at all - no panel, no message - while the hint above the
+    // action bar said to click (G13).
+    if (clickPlan.enterGrowMode) setGrowMode(true, { announce: false });
+    if (clickPlan.requestOptions) requestGrowthOptions(clickedNodeId);
   });
 
   // Double-click a plant node to recenter on that node; double-click empty
@@ -5568,19 +6269,38 @@ async function initC01(): Promise<void> {
 
   // Dragging turns the aimed direction; it never sends growth and never drags a
   // line across the world (that read as a rope rather than a plant growing).
-  const handleGrowthDrawMove = (e: MouseEvent | PointerEvent) => {
-    if (!growthAimDragging) return;
+  const handleGrowthDrawMove = (e: PointerEvent) => {
+    if (!growthAimDragging || !growthAimJointPress) return;
+    if (growthAimPointerId !== e.pointerId) return;
     if (!growthSelectionStateMachineIsDrawing(growthSelectionMachine)) return;
     const dx = e.clientX - growthAimLastX;
     const dy = e.clientY - growthAimLastY;
     growthAimLastX = e.clientX;
     growthAimLastY = e.clientY;
-    if (dx === 0 && dy === 0) return;
-    rotateGrowthAim(dx, dy);
+
+    if (growthAimJointPress.kind === 'origin') {
+      // Move joint: only the attachment point changes. The old code placed the
+      // ring and then fell through to rotateGrowthAim in the same gesture, which
+      // is why every attempt to move the joint also turned the shoot.
+      const travel = Math.hypot(
+        e.clientX - growthAimJointPress.x,
+        e.clientY - growthAimJointPress.y,
+      );
+      if (travel >= GROWTH_AIM_JOINT_DRAG_PX) {
+        placeGrowthAimRingFromScreen(
+          e.clientX,
+          e.clientY,
+          pickGrowthAimNodePoint(e.clientX, e.clientY),
+        );
+        applyGrowthAimAngles();
+      }
+    } else if (dx !== 0 || dy !== 0) {
+      // Aim direction: only yaw/pitch changes. No attach fraction is written.
+      rotateGrowthAim(dx, dy, e.shiftKey);
+    }
     e.preventDefault();
     e.stopPropagation();
   };
-  canvas.addEventListener('mousemove', handleGrowthDrawMove);
   canvas.addEventListener('pointermove', handleGrowthDrawMove, { capture: true });
 
   // Hover a part, read what a click there does. Mouse-only by capability, not by
@@ -5691,23 +6411,60 @@ async function initC01(): Promise<void> {
 
   // Releasing the mouse only ends the turn gesture. Growth is committed by the
   // Grow button or Enter, so a slip of the hand never plants a segment.
-  const handleGrowthDrawEnd = (e: MouseEvent | PointerEvent) => {
-    if ((e as MouseEvent).button !== 0) return;
+  const handleGrowthDrawEnd = (e: PointerEvent, cancelled = false) => {
+    if (!cancelled && e.button !== 0) return;
     if (!growthAimDragging) return;
+    if (growthAimPointerId !== null && e.pointerId !== growthAimPointerId) return;
     growthAimDragging = false;
-    // The browser follows a drag with a click. Swallow that click so releasing
-    // the arrow does not close the growth panel.
-    suppressGrowthClickUntil = performance.now() + 350;
+    // How far the press travelled decides what the release was. A drag gets the
+    // click the browser follows it with swallowed, so letting go of the arrow does
+    // not also close the growth panel. A tap travelled nowhere and is a tap: it
+    // must still reach the click handler, which is how a node gets selected.
+    const press = growthAimJointPress;
+    const travel = press
+      ? Math.hypot(e.clientX - press.x, e.clientY - press.y)
+      : Number.POSITIVE_INFINITY;
+    // A tap on the direction handle should turn nothing and select nothing: it
+    // is a handle, not the part. Suppress the click that follows it. A drag is
+    // suppressed too, and a tap on the part still reaches selection.
+    const tappedDirection = press?.kind === 'direction' && travel < GROWTH_AIM_JOINT_DRAG_PX;
+    if (!cancelled && (travel >= GROWTH_AIM_JOINT_DRAG_PX || tappedDirection)) {
+      suppressGrowthClickUntil = performance.now() + 350;
+    }
+    growthAimJointPress = null;
+    growthAimActiveHandle = null;
+    growthAimPointerId = null;
+    // Drop the pressed-handle word on release. It used to stay until the next
+    // aim move, so a finished drag still read "AIM DIRECTION" minutes later.
+    updateGrowthAimCompass();
     try {
-      (e.target as HTMLElement)?.releasePointerCapture?.((e as PointerEvent).pointerId);
+      growthAimCaptureTarget?.releasePointerCapture?.(e.pointerId);
     } catch {}
+    growthAimCaptureTarget = null;
     e.stopPropagation();
   };
-  canvas.addEventListener('mouseup', handleGrowthDrawEnd);
-  canvas.addEventListener('pointerup', handleGrowthDrawEnd, { capture: true });
-  window.addEventListener('mouseup', (e) => {
-    if (growthSelectionStateMachineIsDrawing(growthSelectionMachine)) handleGrowthDrawEnd(e);
-  });
+  const cancelGrowthAimDrag = (): void => {
+    if (!growthAimDragging) return;
+    growthAimDragging = false;
+    growthAimJointPress = null;
+    growthAimActiveHandle = null;
+    if (growthAimPointerId !== null) {
+      try {
+        growthAimCaptureTarget?.releasePointerCapture?.(growthAimPointerId);
+      } catch {}
+    }
+    growthAimPointerId = null;
+    growthAimCaptureTarget = null;
+    updateGrowthAimCompass();
+  };
+  canvas.addEventListener('pointerup', (e) => handleGrowthDrawEnd(e), { capture: true });
+  window.addEventListener('pointerup', (e) => handleGrowthDrawEnd(e));
+  // A cancelled pointer (OS gesture, a phone call, a browser context menu) and a
+  // lost capture both mean the drag is over. Neither may leave the aim stuck on
+  // an invisible pointer id.
+  canvas.addEventListener('pointercancel', (e) => handleGrowthDrawEnd(e, true));
+  canvas.addEventListener('lostpointercapture', () => cancelGrowthAimDrag());
+  window.addEventListener('blur', cancelGrowthAimDrag);
 
   canvas.addEventListener('contextmenu', (e) => {
     if (
@@ -5731,6 +6488,9 @@ async function initC01(): Promise<void> {
     if (!growthSelectionStateMachineIsDrawing(growthSelectionMachine)) return;
     if (e.key === 'Escape') {
       growthAimDragging = false;
+      growthAimJointPress = null;
+      growthAimActiveHandle = null;
+      updateGrowthAimCompass();
       growthSelectionStateMachineCancelDrawing(growthSelectionMachine);
       setGrowthGrowEnabled(false, 'Choose a growth option first');
       removeGrowthDirectionLine();
@@ -5917,7 +6677,6 @@ async function initPlantRenderer(): Promise<void> {
           rainBoxWidth: renderConfig.rainBoxWidth,
           rainBoxHeight: renderConfig.rainBoxHeight,
           impostorEnabled: renderConfig.webgpuImpostorEnabled,
-          impostorUpdateIntervalMs: renderConfig.webgpuImpostorUpdateIntervalMs,
           vramBudgetBytes: renderConfig.webgpuVramBudgetBytes,
           vramMaxVertexBytes: renderConfig.webgpuVramMaxVertexBytes,
           vramMaxIndexBytes: renderConfig.webgpuVramMaxIndexBytes,
@@ -6043,8 +6802,7 @@ async function initPlantRenderer(): Promise<void> {
       // T02: Root Sight specific
       rootSightCutawayRadius:
         rootSightConfig?.cutawayRadius ?? DEFAULT_CONFIG.rootSightCutawayRadius,
-      // E19: the key is not read; 3 m is the radius both passes take.
-      rootAuraRadius: DEFAULT_CONFIG.rootAuraRadius,
+      rootAuraRadius: rootSightConfig?.auraRadius ?? DEFAULT_CONFIG.rootAuraRadius,
       rootSightSoilOpacity: rootSightConfig?.soilOpacity ?? DEFAULT_CONFIG.rootSightSoilOpacity,
       ownRootHighlightColor:
         rootSightConfig?.ownRootHighlightColor ?? DEFAULT_CONFIG.ownRootHighlightColor,
@@ -6246,19 +7004,6 @@ function updateTickDetail(text: string): void {
   detailStats.style.display = text ? 'block' : 'none';
   detailMessage.style.marginTop = text && detailMessage.textContent ? '4px' : '0';
   detailElement.style.display = detailSuppressed || !detailVisible ? 'none' : 'block';
-  positionMutationPanel();
-}
-
-/**
- * Sits the mutation panel directly above the server-tick card, whose height
- * changes with the readout, instead of guessing a fixed offset.
- */
-function positionMutationPanel(): void {
-  const panel = mutationPanel?.panel;
-  if (!panel) return;
-  const tickHeight = detailElement?.getBoundingClientRect().height ?? 0;
-  const bottom = tickHeight > 0 ? tickHeight + 20 : 12;
-  panel.style.bottom = `${Math.round(bottom)}px`;
 }
 
 // The growth panel owns the bottom of the screen while it is open. The
@@ -6268,8 +7013,12 @@ function positionMutationPanel(): void {
 let detailSuppressed = false;
 function setGrowthPanelOpen(open: boolean): void {
   detailSuppressed = open;
-  if (open) actionBar?.setVisible(false);
-  else if (entryFlow.step === 'world') actionBar?.setVisible(true);
+  // The rail stays while the growth panel is open. It is a column on the left
+  // edge now, not a bottom bar under the panel, and its Grow tile is half of what
+  // says the mode is on: hiding it left the mode badge floating at the edge
+  // pointing at nothing (play-test 2026-11-26). The hotbar does step aside - the
+  // panel owns the bottom of the screen.
+  if (!open && entryFlow.step === 'world') actionBar?.setVisible(true);
   hotbar?.setVisible(open ? false : entryFlow.step === 'world');
   sporeChip?.setVisible(!open && entryFlow.step === 'world');
   if (detailElement) {
@@ -6454,7 +7203,11 @@ const VITALS_CSS = `
     width: 100%;
     transform-origin: left center;
     border-radius: 2px;
-    background: linear-gradient(90deg, var(--leaf-700), var(--leaf-300));
+    /* Pale green at the empty end to a deep, saturated green at the full end.
+       It used to run to --leaf-300, which is the near-white foliage-100 step:
+       on a four-pixel bar that read as a white smear rather than a plant's
+       store. Four stops, so the bar always looks alive at any fill level. */
+    background: linear-gradient(90deg, var(--leaf-400) 0%, var(--leaf-500) 45%, var(--leaf-600) 75%, var(--leaf-700) 100%);
     transition: transform 220ms ease-out;
   }
   .pl-vitals__row[data-tone='low'] .pl-vitals__fill { background: linear-gradient(90deg, var(--ember-700), var(--gold-400)); }
@@ -6643,18 +7396,22 @@ function updateResourceReadout(
   // Light is a reading of the sky reaching the leaves, not a store: no bar.
   paintVital('light', { id: 'light', label: 'Light', value: light, precision: 1 });
   // Growth is paid from what the plant itself captured, so the store is shown
-  // against its capacity; the ambient tile average stays in the tooltip.
+  // against its capacity; the ambient tile average stays in the tooltip. The
+  // capacity is latched: only a repaint that actually knows it may replace it,
+  // or a growth message would leave the row as a bare number with no bar.
+  shownWaterCapacity = keepCapacity(shownWaterCapacity, waterCapacity);
+  shownMineralCapacity = keepCapacity(shownMineralCapacity, mineralCapacity);
   paintVital(
     'water',
     {
       id: 'water',
       label: 'Water',
       value: storedWater ?? water,
-      capacity: storedWater === undefined ? null : (waterCapacity ?? null),
+      capacity: storedWater === undefined ? null : shownWaterCapacity,
     },
     storedWater === undefined
       ? undefined
-      : `Water stored: ${storedWater.toFixed(1)}${waterCapacity !== undefined ? `/${Math.round(waterCapacity)}` : ''}. Soil around the roots: ${water.toFixed(1)}.`,
+      : `Water stored: ${storedWater.toFixed(1)}${shownWaterCapacity !== null ? `/${Math.round(shownWaterCapacity)}` : ''}. Soil around the roots: ${water.toFixed(1)}.`,
   );
   paintVital(
     'minerals',
@@ -6662,11 +7419,11 @@ function updateResourceReadout(
       id: 'minerals',
       label: 'Minerals',
       value: storedMinerals ?? minerals,
-      capacity: storedMinerals === undefined ? null : (mineralCapacity ?? null),
+      capacity: storedMinerals === undefined ? null : shownMineralCapacity,
     },
     storedMinerals === undefined
       ? undefined
-      : `Minerals stored: ${storedMinerals.toFixed(1)}${mineralCapacity !== undefined ? `/${Math.round(mineralCapacity)}` : ''}. Soil around the roots: ${minerals.toFixed(1)}.`,
+      : `Minerals stored: ${storedMinerals.toFixed(1)}${shownMineralCapacity !== null ? `/${Math.round(shownMineralCapacity)}` : ''}. Soil around the roots: ${minerals.toFixed(1)}.`,
   );
 }
 
@@ -6767,6 +7524,16 @@ const plantOwners = new Map<string, string>();
 const plantOwnerNames = new Map<string, string>();
 
 /**
+ * Whether a rival's owner is at the keyboard, as the world last said.
+ *
+ * A rival's tag is a name when the owner is connected and an id when they are
+ * not, which means "asleep" was only ever implied by the missing name - a rule
+ * the reader has to be told. The panel says it out loud instead. Absent from an
+ * older server's sync, hence a separate map and not a boolean on the plant.
+ */
+const plantOwnerOnline = new Map<string, boolean>();
+
+/**
  * Inspect a rival plant through the Inspect panel, in low detail.
  *
  * The mirror streams a rival's parts and their biomass and nothing else, so that
@@ -6793,6 +7560,7 @@ function inspectOtherPlant(plantId_: string, nodes: Map<string, PlantNodeData>):
   playerPanels.inspectOther({
     owner: plantOwners.get(plantId_),
     ownerName: plantOwnerNames.get(plantId_),
+    ownerOnline: plantOwnerOnline.get(plantId_),
     plantId: plantId_,
     parts: [...parts].map(([type, entry]) => ({
       type,
@@ -6840,6 +7608,15 @@ function createGrowthSelectionUI(): void {
 
   layer.appendChild(panel);
   growthSelectionPanel = panel;
+
+  // The option's field note, docked at the bottom left. It cannot live inside
+  // the panel: the panel is a fixed element with a centring transform, and a
+  // child of it would be positioned against the panel instead of the screen.
+  const note = document.createElement('div');
+  note.id = 'growth-note';
+  note.setAttribute('aria-live', 'polite');
+  layer.appendChild(note);
+  growthNoteEl = note;
 }
 
 /**
@@ -6856,6 +7633,45 @@ function requestGrowableCount(nodeId: string): void {
   const last = growableAskedAt.get(nodeId) ?? 0;
   if (now - last < GROWABLE_ASK_INTERVAL_MS) return;
   growableAskedAt.set(nodeId, now);
+  ws.send(
+    JSON.stringify({
+      type: MESSAGE_TYPE.GROWTH_OPTIONS_REQUEST,
+      payload: { plantId, nodeId },
+    }),
+  );
+}
+
+/**
+ * The plant's own numbers, as one comparable string.
+ *
+ * Only resources the growth options are priced against belong here: a change in
+ * any of them can turn a card from unavailable to available, and nothing else
+ * can. Biomass is included because some parts are biomass-gated.
+ */
+function growthResourceSignature(): string {
+  const part = (value: number): number => Math.round(value * 10);
+  return [part(plantEnergy), part(plantBiomass), part(plantWater), part(plantMinerals)].join('|');
+}
+
+/**
+ * Re-price the open growth panel against the plant as it is now.
+ *
+ * Only in `options_visible`: a selected card (or an aim in progress) is the
+ * player's own state and re-rendering the cards would drop it. The request goes
+ * out without touching the state machine, so the panel keeps showing its cards
+ * while the answer is in flight and there is no spinner flash every second.
+ */
+function refreshOpenGrowthOptions(): void {
+  if (!growthSelectionStateMachineIsVisible(growthSelectionMachine)) return;
+  if (growthSelectionStateMachineGetState(growthSelectionMachine) !== 'options_visible') return;
+  const nodeId = growthSelectionMachine.selectedNodeId;
+  if (!nodeId || !ws || ws.readyState !== WebSocket.OPEN || !plantId) return;
+  const signature = growthResourceSignature();
+  if (signature === growthPanelSignature) return;
+  const now = performance.now();
+  if (now - growthPanelAskedAt < GROWTH_PANEL_REFRESH_MS) return;
+  growthPanelAskedAt = now;
+  growthPanelSignature = signature;
   ws.send(
     JSON.stringify({
       type: MESSAGE_TYPE.GROWTH_OPTIONS_REQUEST,
@@ -6908,18 +7724,66 @@ function showGrowthPanelMessage(nodeId: string, message: string): void {
   setGrowthGrowEnabled(false, 'Choose a growth option first');
 }
 
-const GROWTH_PART_INFO: Record<string, string> = {
-  radicle: 'The first root. Anchors the seedling and starts drawing water from the soil.',
-  root: 'A thick taproot. Holds the plant steady and stores water and minerals.',
-  lateral_root: 'A fine side root. Spreads through new soil for water and nutrients.',
-  stem: 'The main stem. Lifts new leaves toward the light.',
-  branch: 'A side branch. Opens more space for leaves and flowers.',
-  cotyledon: 'A seed leaf. Feeds the seedling until true leaves can take over.',
-  leaf: 'A true leaf. Turns light, water and minerals into energy.',
-  vine: 'A climbing vine. Reaches new light without building a thick trunk.',
-  flower: 'A flower. The next step toward seed and a new generation.',
-  spore_sac: "A spore sac. Releases the plant's spores when it matures.",
-};
+/** What a card has to say about itself, once the card is too small to say it. */
+interface GrowthNoteData {
+  label: string;
+  requirements: string[];
+  info: string;
+  warning: string;
+}
+
+let growthNoteEl: HTMLElement | null = null;
+/** The card the open note belongs to; null while the note is closed. */
+let growthNoteOwner: HTMLElement | null = null;
+/** True when the note is holding a chosen option rather than a hovered one. */
+let growthNotePinned = false;
+
+/** Fill the docked note with one card's details. */
+function paintGrowthNote(data: GrowthNoteData): void {
+  const note = growthNoteEl;
+  if (!note) return;
+  note.innerHTML = `
+    <div id="growth-note__title">${escapeHtml(data.label)}</div>
+    <ul class="hud-grow-option__requires">
+      ${data.requirements.map((requirement) => `<li>${requirement}</li>`).join('')}
+    </ul>
+    <div class="hud-grow-option__info">${data.info}</div>
+    ${data.warning ? `<div class="hud-grow-option__warning">${data.warning}</div>` : ''}
+  `;
+}
+
+/**
+ * Open the note for a card.
+ *
+ * "Pinned" outranks a hover: once an option is chosen, hovering another card
+ * must not take the note away from the option being aimed, or the numbers would
+ * change while the pointer crosses the row on its way to the Grow button.
+ */
+function showGrowthNote(card: HTMLElement, data: GrowthNoteData, pinned = false): void {
+  const note = growthNoteEl;
+  if (!note) return;
+  if (growthNotePinned && !pinned && card !== growthNoteOwner) return;
+  growthNoteEl?.parentElement?.querySelectorAll('.hud-grow-option.is-noted').forEach((el) => {
+    el.classList.remove('is-noted');
+  });
+  card.classList.add('is-noted');
+  growthNoteOwner = card;
+  growthNotePinned = pinned;
+  paintGrowthNote(data);
+  note.classList.add('is-open');
+  note.classList.toggle('is-pinned', pinned);
+}
+
+/** Close the note, unless it is pinned to a card other than the one leaving. */
+function hideGrowthNote(card?: HTMLElement): void {
+  const note = growthNoteEl;
+  if (!note) return;
+  if (growthNotePinned) return;
+  if (card && card !== growthNoteOwner) return;
+  note.classList.remove('is-open', 'is-pinned');
+  growthNoteOwner?.classList.remove('is-noted');
+  growthNoteOwner = null;
+}
 
 function describeGrowthReason(reason?: string): string {
   switch (reason) {
@@ -6963,6 +7827,15 @@ function renderGrowthOptions(result: GrowthOptionsView): void {
   if (!parts) return;
 
   parts.optionsEl.innerHTML = '';
+  // A real labelled group, not a pile of clickable divs. The cards themselves
+  // are buttons with aria-selected, so keyboard and assistive tech get the same
+  // options and the same chosen state a pointer sees.
+  parts.optionsEl.setAttribute('role', 'group');
+  parts.optionsEl.setAttribute('aria-label', 'Growth options');
+  // The cards now match the plant again: remember what they were priced with,
+  // so the next change in resources is what triggers the next re-ask.
+  growthPanelSignature = growthResourceSignature();
+  growthPanelAskedAt = performance.now();
   setGrowthGrowEnabled(false, 'Choose a growth option first');
   if (result.options.length === 0) {
     setGrowthGrowEnabled(false, 'This node has no growth options');
@@ -6977,20 +7850,10 @@ function renderGrowthOptions(result: GrowthOptionsView): void {
     return;
   }
 
-  // Group options by plant part type for scannable browsing
-  const typeOrder: Record<string, number> = {
-    radicle: 0,
-    root: 1,
-    lateral_root: 2,
-    stem: 3,
-    branch: 4,
-    cotyledon: 5,
-    leaf: 6,
-    vine: 7,
-    flower: 8,
-    spore_sac: 9,
-    seed: 10,
-  };
+  // Group options by plant part type for scannable browsing. The order comes
+  // from the same exhaustive table the renderer uses, so a new organ cannot be
+  // missing from the menu while it is drawn in the world.
+  const typeOrder = growthTypeOrder();
   const sorted = [...result.options].sort(
     (a, b) => (typeOrder[a.type] ?? 99) - (typeOrder[b.type] ?? 99),
   );
@@ -6998,8 +7861,10 @@ function renderGrowthOptions(result: GrowthOptionsView): void {
   // No group headings: each card carries its own type chip, and wrapping at
   // three per row keeps the layout readable without a background panel.
   for (const opt of sorted) {
-    const card = document.createElement('div');
+    const card = document.createElement('button');
+    card.type = 'button';
     card.className = 'hud-grow-option';
+    card.setAttribute('aria-selected', 'false');
     if (!opt.available) card.classList.add('is-unavailable');
     if (!opt.available) card.title = describeGrowthReason(opt.reason);
 
@@ -7009,12 +7874,20 @@ function renderGrowthOptions(result: GrowthOptionsView): void {
 
     // Type-specific description + upkeep
     const typeChipClass = (() => {
-      const tl = opt.type.toLowerCase();
-      if (tl === 'radicle' || tl === 'root' || tl === 'lateral_root')
-        return 'hud-grow-option__chip-root';
-      if (tl === 'stem' || tl === 'branch') return 'hud-grow-option__chip-stem';
-      if (tl === 'cotyledon' || tl === 'leaf' || tl === 'vine') return 'hud-grow-option__chip-leaf';
-      return '';
+      switch (organTraitFor(opt.type).family) {
+        case 'root':
+        case 'storage':
+          return 'hud-grow-option__chip-root';
+        case 'shoot':
+        case 'runner':
+          return 'hud-grow-option__chip-stem';
+        case 'foliage':
+          return 'hud-grow-option__chip-leaf';
+        case 'reproductive':
+          return 'hud-grow-option__chip-flower';
+        default:
+          return 'hud-grow-option__chip-seed';
+      }
     })();
 
     const requirements = [
@@ -7024,6 +7897,15 @@ function renderGrowthOptions(result: GrowthOptionsView): void {
       mineralCost > 0 ? `${mineralCost.toFixed(1)} minerals` : '',
     ].filter(Boolean);
     const reasonText = !opt.available ? describeGrowthReason(opt.reason) : '';
+    const note: GrowthNoteData = {
+      label: opt.label,
+      requirements,
+      info: GROWTH_PART_INFO[opt.type] ?? 'A new part for your plant.',
+      warning: reasonText,
+    };
+    // The card carries only what fits in a card: name, price, and why it cannot
+    // grow. Everything else lives in the field note at the screen's edge, which
+    // is the half that used to float over the aim gizmo.
     card.innerHTML = `
       <div class="hud-grow-option__head">
         <span class="hud-grow-option__chip ${typeChipClass}">${escapeHtml(opt.label)}</span>
@@ -7031,22 +7913,30 @@ function renderGrowthOptions(result: GrowthOptionsView): void {
       <div class="hud-grow-option__cost">
         ${opt.energyCost.toFixed(1)} energy &nbsp;·&nbsp; +${opt.biomassGain.toFixed(1)} biomass &nbsp;·&nbsp; ${opt.expectedSeconds.toFixed(0)} seconds
       </div>
-      <div class="hud-grow-option__details">
-        <div class="hud-grow-option__requires-label">Requires</div>
-        <ul class="hud-grow-option__requires">
-          ${requirements.map((requirement) => `<li>${requirement}</li>`).join('')}
-        </ul>
-        <div class="hud-grow-option__info">${GROWTH_PART_INFO[opt.type] ?? 'A new part for your plant.'}</div>
-        ${reasonText ? `<div class="hud-grow-option__warning">${reasonText}</div>` : ''}
-      </div>
     `;
+    // Hover and keyboard focus fill the note; the note never fills itself, so a
+    // card under the pointer always answers for the note being read.
+    card.addEventListener('pointerenter', () =>
+      showGrowthNote(card, note, card.classList.contains('selected')),
+    );
+    card.addEventListener('pointerleave', () => hideGrowthNote(card));
+    card.addEventListener('focusin', () =>
+      showGrowthNote(card, note, card.classList.contains('selected')),
+    );
+    card.addEventListener('focusout', () => hideGrowthNote(card));
 
     card.onclick = (e) => {
       e.stopPropagation();
       parts.optionsEl.querySelectorAll('.hud-grow-option').forEach((c) => {
         (c as HTMLElement).classList.remove('selected');
+        c.setAttribute('aria-selected', 'false');
+        c.classList.remove('is-noted');
       });
       card.classList.add('selected');
+      card.setAttribute('aria-selected', 'true');
+      // The chosen option's note is pinned: its requirements stay readable while
+      // the player turns the aim, which is the whole reason it exists.
+      showGrowthNote(card, note, true);
 
       if (!opt.available) {
         setGrowthGrowEnabled(false, reasonText);
@@ -7106,7 +7996,6 @@ function hideOverlappingHud(): void {
   };
   const candidates = [
     chatContainer,
-    mutationPanel?.panel ?? null,
     plantStatusHud?.element ?? null,
     document.getElementById('resource-readout'),
     // The hotbar and the purse sit low and to the right, exactly where the
@@ -7172,6 +8061,12 @@ function refreshPlayerPanels(): void {
   playerPanels.update({
     stats,
     phase: plantPhase,
+    archetype: welcome?.archetype
+      ? { id: welcome.archetype.id, name: welcome.archetype.name }
+      : undefined,
+    spawn: welcome?.spawn ? { label: welcome.spawn.label } : undefined,
+    spawnLatitudeDeg: welcome?.spawn?.latitudeDeg,
+    spawnLongitudeDeg: welcome?.spawn?.longitudeDeg,
     rerootWindowRemainingS: rerootRemainingSeconds(),
     nodes: ownNodes.map((node) => ({
       id: node.id,
@@ -7184,7 +8079,10 @@ function refreshPlayerPanels(): void {
       isSeed: node.isSeed === true,
     })),
     pressure: mutationState?.pressure ?? {},
-    mutationShedCooldownS: mutationState?.shedCooldownRemainingS ?? 0,
+    mutationShedCooldownS: cooldownRemainingS(
+      mutationState?.shedCooldownRemainingS ?? 0,
+      (now - mutationStateAtMs) / 1000,
+    ),
     mutations:
       mutationState?.mutations.map((mutation) => ({
         id: mutation.id,
@@ -7363,26 +8261,10 @@ function showPlantLostScreen(): void {
  * If the socket is gone there is nothing to ask, so the title is the fallback.
  */
 function requestNewSeed(): void {
-  if (respawnPending) return;
-  if (!ws || ws.readyState !== WebSocket.OPEN) {
-    exitDeathUi();
-    showPlantLostScreen();
-    return;
-  }
-  respawnPending = true;
-  ws.send(JSON.stringify({ type: MESSAGE_TYPE.RESPAWN, payload: {} }));
-  contextHint?.show({
-    id: 'respawn',
-    text: 'Planting a new seed...',
-    durationMs: 5000,
-  });
-  // A server that never answers must not leave the player behind a dead card.
-  window.setTimeout(() => {
-    if (!respawnPending) return;
-    respawnPending = false;
-    exitDeathUi();
-    showPlantLostScreen();
-  }, 6000);
+  if (respawnPending || spawnScene) return;
+  // The card's seed button opens the same seed scene Play uses. A live socket
+  // means the confirm can send RESPAWN on it instead of rebuilding the world.
+  openSpawnScene('respawn', Boolean(ws && ws.readyState === WebSocket.OPEN));
 }
 
 /** Close the death card and the spectate chip; the plant they describe is gone. */
@@ -7451,6 +8333,7 @@ function handleOwnPlantLoss(
   plantMutationEnergyUpkeep = 0;
   plantMutationBiomassUpkeep = 0;
   mutationState = null;
+  mutationStateAtMs = 0;
   plantPhase = 'rooted';
   uprootWindowEndsAtMs = 0;
   plantStructure = null;
@@ -7541,10 +8424,24 @@ function enterSpectate(): void {
 }
 
 function hideGrowthSelection(): void {
+  // A hidden selection has no aim left to explain. The "that press missed the
+  // part" line describes a press that did not take while aiming, and left up it
+  // outlived the click that resolved it (play-test 2026-11-24), so it goes with
+  // the panel it belongs to rather than with the one press that followed it.
+  contextHint?.hide();
   growthSelectionStateMachineHide(growthSelectionMachine);
   growthAimDragging = false;
+  growthAimJointPress = null;
   suppressGrowthClickUntil = 0;
   growthSelectionPanel?.querySelector('#growth-aim-controls')?.remove();
+  // Drop the cards with the panel. They stay hit-testable-in-JS (each keeps its
+  // own click closure) while the panel is `display: none`, so a DOM reader sees
+  // option cards on a panel that is not on screen - which is how a closed panel
+  // first read as a broken one. Nothing shows the panel without rendering the
+  // cards again first.
+  growthSelectionPanel?.querySelector('#growth-options')?.replaceChildren();
+  growthNotePinned = false;
+  hideGrowthNote();
   removeGrowthDirectionLine();
   controls.enabled = true;
   controls.enableRotate = true;
@@ -8258,19 +9155,8 @@ function escapeHtml(text: string): string {
   return div.innerHTML;
 }
 
-const EMOTE_LABELS: Record<string, string> = {
-  wave: 'Wave',
-  cheer: 'Cheer',
-  thumbs_up: 'Thumbs Up',
-  heart: 'Heart',
-  think: 'Think',
-  sleep: 'Sleep',
-  dance: 'Dance',
-  sad: 'Sad',
-};
-
 function showEmoteAbovePlant(fromPlayerId: string, playerName: string, emoteId: string): void {
-  const emoteLabel = EMOTE_LABELS[emoteId] ?? 'Emote';
+  const emoteLabel = emoteLabels.get(emoteId.toLowerCase()) ?? 'Emote';
   let targetPlantId: string | null = null;
 
   // Find the plant for this player
@@ -8302,6 +9188,17 @@ function showEmoteAbovePlant(fromPlayerId: string, playerName: string, emoteId: 
   }
 
   if (!rootNode) return;
+
+  // Anchor above the highest visible part, not 3 m above the root. A close
+  // camera could project that fixed world offset above the viewport, which put
+  // the bubble at a negative y where nobody could see the emote.
+  let anchorNode = rootNode;
+  const emoteNodes = targetPlantId === plantId ? plantNodes : otherPlayerPlants.get(targetPlantId);
+  if (emoteNodes) {
+    for (const node of emoteNodes.values()) {
+      if (node.position.y > anchorNode.position.y) anchorNode = node;
+    }
+  }
 
   // Create emote bubble above plant
   const bubble = document.createElement('div');
@@ -8351,16 +9248,25 @@ function showEmoteAbovePlant(fromPlayerId: string, playerName: string, emoteId: 
   const projectAndPosition = () => {
     if (!bubble.isConnected) return;
     const v = new THREE.Vector3(
-      rootNode.position.x,
-      rootNode.position.y + 3,
-      rootNode.position.z,
+      anchorNode.position.x,
+      anchorNode.position.y + 0.35,
+      anchorNode.position.z,
     ).project(camera);
     if (v.z >= 1 || v.z <= -1) {
       bubble.style.opacity = '0';
       return;
     }
-    const x = (v.x * 0.5 + 0.5) * window.innerWidth;
-    const y = (-v.y * 0.5 + 0.5) * window.innerHeight;
+    const rawX = (v.x * 0.5 + 0.5) * window.innerWidth;
+    const rawY = (-v.y * 0.5 + 0.5) * window.innerHeight;
+    // Keep a clamped bubble at the screen edge rather than letting a tall plant
+    // or a steep camera put the emote outside the viewport entirely.
+    const margin = 8;
+    const halfWidth = bubble.offsetWidth / 2;
+    const x = Math.min(window.innerWidth - halfWidth - margin, Math.max(halfWidth + margin, rawX));
+    const y = Math.min(
+      window.innerHeight - margin,
+      Math.max(bubble.offsetHeight + margin, rawY - 18),
+    );
     bubble.style.left = `${x}px`;
     bubble.style.top = `${y}px`;
     bubble.style.opacity = '1';
@@ -8495,6 +9401,9 @@ function confirmGrowth(
     nodeType,
     tick: growthIntentTick,
   };
+  // G01: send the joint the gizmo drew instead of letting the server re-derive
+  // one. Only a pressed ring carries a fraction; the server clamps it.
+  if (growthAimAttachFraction !== null) intent.attachFraction = growthAimAttachFraction;
 
   const message = JSON.stringify({
     type: MESSAGE_TYPE.GROWTH_INTENT,
@@ -8599,12 +9508,14 @@ function createControls(): OrbitControls {
   created.enableDamping = true;
   created.dampingFactor = 0.05;
   created.enablePan = true;
-  // Ground-plane pan, not screen-plane. A screen-space pan slides the whole rig
-  // along the camera's tilted plane, so a right-drag towards the soil drove the
-  // eye into the terrain, where the ground clamp held it and the drag stopped
-  // doing anything. Panning across the ground keeps the eye's height, so the
-  // right-drag answers everywhere, including from ground level.
-  created.screenSpacePanning = false;
+  // Screen-plane pan, so a right-drag raises and lowers the eye as well as
+  // sliding it sideways. This used to be ground-plane, because a screen-space
+  // pan slid the rig along the camera's tilted plane and a drag towards the soil
+  // drove the eye into the terrain, where the old ground clamp held it and the
+  // drag stopped doing anything. That clamp is gone with the free camera: the
+  // eye may go under the soil on purpose (item 10), so the drag has no floor to
+  // fight. The ground rig keeps the old answer, because it still has the clamp.
+  created.screenSpacePanning = cameraFliesFree();
   // Mouse: left-drag orbits, middle-drag orbits, right-drag pans (left click
   // still selects). Touch: one-finger drag pans world, two-finger orbits/zooms.
   created.mouseButtons = {
@@ -8626,6 +9537,58 @@ function createControls(): OrbitControls {
 }
 
 let controls = createControls();
+
+// Zoom-to-cursor for the planet orbit, and the orbit's own dolly.
+//
+// OrbitControls dollies by a fraction of the distance to its target, and on a
+// planet that target is the body's centre a hundred kilometres away: one notch
+// near the ground moved the eye ten kilometres, so the only ground an eye could
+// reach was the seat it started on. The step here is a fraction of the *altitude
+// above the ground under the eye* - the same notch is a hundred kilometres at
+// 200 km up and a few metres sixty metres up - and the rig's zoom is switched
+// off while the orbit is active so the two do not both spend the wheel.
+// Ctrl/shift are left alone: those are pinch and pan gestures on a trackpad.
+//
+// A wheel also counts as taking the camera, which it did not: pointerdown was the
+// only thing that stopped the orbit following the sun, so zooming in kept the
+// eye being lerped across the lit hemisphere - the camera slid over the ground
+// and arrived somewhere else instead of descending onto the spot under it.
+renderer.domElement.addEventListener(
+  'wheel',
+  (event) => {
+    if (!planetViewActive || event.ctrlKey || event.metaKey || event.shiftKey) return;
+    focusPlanetViewUnderCursor(event);
+    planetViewUserAdjusted = true;
+    const radius = renderConfig?.planetRadiusM ?? 0;
+    if (radius > 0) {
+      planetViewCentre.set(0, -radius, 0);
+      planetViewEye.copy(camera.position).sub(planetViewCentre);
+      const distance = planetViewEye.length();
+      if (distance > 1e-3) {
+        planetViewFocusDir.copy(planetViewEye).multiplyScalar(1 / distance);
+        const relief = environmentRenderer?.reliefAtDirection(planetViewFocusDir) ?? 0;
+        const altitude = Math.max(0, distance - radius - relief);
+        // 0.0016 per wheel unit: a mouse notch is a hundred units, so about a
+        // sixth of the height per notch - a climb from orbit to the ground in a
+        // handful of turns, and a metre or two of it at sixty metres.
+        const step = Math.exp(THREE.MathUtils.clamp(event.deltaY, -240, 240) * 0.0016);
+        planetViewDolly(altitude * step);
+      }
+    }
+    event.preventDefault();
+  },
+  { capture: true },
+);
+
+// Once the player has touched the orbit, it stops following the sun: a camera
+// that keeps sliding while hands are on it reads as drift, not rotation.
+renderer.domElement.addEventListener(
+  'pointerdown',
+  () => {
+    if (planetViewActive) planetViewUserAdjusted = true;
+  },
+  { capture: true, passive: true },
+);
 
 /**
  * Vertical drag in radians of orbit pitch, positive when the player drags up.
@@ -8762,6 +9725,33 @@ if (isDevMode) {
          * and time the calls instead of waiting for vsync that never comes.
          */
         renderFrame: (deltaTime: number) => void;
+        /**
+         * Per-plant LOD output from the WebGPU compute pass: tier, visibility,
+         * projected size and the mesh/impostor fade. The only way to see the
+         * tier boundary's real numbers, since they live in a GPU storage buffer.
+         */
+        tiers: (
+          limit?: number,
+        ) => Promise<
+          Array<{ tier: number; visible: number; projectedSize: number; blendFactor: number }>
+        >;
+        /**
+         * Dev camera: suspend the orbit cap and the spring-arm collision, and
+         * deepen the far plane, so a long shot can be framed for a measurement.
+         */
+        setCameraUnclamped: (on: boolean) => boolean;
+        /** Plants in render-buffer order, so a tier row can be found on screen. */
+        plants: () => Array<{
+          id: string;
+          x: number;
+          y: number;
+          z: number;
+          radius: number;
+          impostorBaseY: number;
+          impostorTopY: number;
+          impostorHalfWidth: number;
+          isOwn: boolean;
+        }>;
       };
     }
   ).__pl = {
@@ -8782,6 +9772,8 @@ if (isDevMode) {
     journal: () => loadJournal(sessionJournalStorage).entries,
     frameStats: () => frameStatsOf(frameBudget, lastGpuMs),
     renderFrame: (deltaTime) => renderFrame(deltaTime),
+    tiers: (limit?: number) => webgpuRenderer?.readRenderData(limit) ?? Promise.resolve([]),
+    plants: () => webgpuRenderer?.plantTable() ?? [],
     renderer,
     scene,
     setCamera: (px, py, pz, tx, ty, tz) => {
@@ -8790,7 +9782,13 @@ if (isDevMode) {
       controls.target.set(tx, ty, tz);
       controls.update();
     },
-    rootSight: (on) => setRootSightEnabled(on),
+    /** Dev camera: suspends the orbit cap and spring arm for a long shot. */
+    setCameraUnclamped: (on: boolean) => {
+      devCameraUnclamped = on === true;
+      applyCameraRange();
+      return devCameraUnclamped;
+    },
+    rootSight: (on) => setRootSightEnabled(on, undefined, true),
     // Why Root Sight is open or shut, for anyone (or any script) looking in.
     rootSightStatus: () => ({ ...rootSightDiagnostic, summary: describeRootSightStatus() }),
     weather: (state) => environmentRenderer?.setWeatherState(state),
@@ -8857,35 +9855,161 @@ const cameraUpTarget = new THREE.Vector3();
 let planetViewSavedFog: THREE.Fog | null = null;
 let planetViewSavedFar = camera.far;
 let planetViewSavedNear = camera.near;
+// The eye's own seat, kept because leaving the orbit used to guess it. The
+// guessed height (18 m) was the play area's soil when it was written; the relief
+// has since risen above it, so returning from planet view put the eye inside the
+// hill and filled the screen with brown. Whatever the rig was standing on before
+// the orbit is what it must stand on after it.
+const planetViewSavedPosition = new THREE.Vector3();
+const planetViewSavedTarget = new THREE.Vector3();
+// The orbit's hand controls, saved because the ground rig tunes its own speeds
+// and its pan is on. Restoring only the distances left the ground view panning
+// at the orbit's speed and zooming at the orbit's rate.
+let planetViewSavedPanSpeed = 1;
+let planetViewSavedZoomSpeed = 1;
+// The orbit spends the wheel itself (see the wheel handler): OrbitControls' dolly
+// is a fraction of the distance to the body's centre, which near the ground is
+// kilometres per notch.
+let planetViewSavedEnableZoom = true;
+let planetViewSavedRotateSpeed = 1;
+// The orbit opens on the lit side and keeps following the sun until the player
+// takes the camera. Entering the orbit from a fixed seat meant the planet could
+// face away from the sun on the very frame the dev panel set the hour, and the
+// body read as a night disc with no terminator to show for it.
+let planetViewUserAdjusted = false;
+const planetViewAimDir = new THREE.Vector3();
+const planetViewAimTarget = new THREE.Vector3();
+/** Scratch for the orbit camera, allocated once. */
+const planetViewCentre = new THREE.Vector3();
+const planetViewEye = new THREE.Vector3();
+const planetViewFocusDir = new THREE.Vector3();
+const planetViewHitPoint = new THREE.Vector3();
+const planetViewLookUp = new THREE.Vector3();
+const planetViewLookSide = new THREE.Vector3();
+const planetViewLookDir = new THREE.Vector3();
+const planetViewLookMatrix = new THREE.Matrix4();
+const planetViewRay = new THREE.Raycaster();
+const planetViewNdc = new THREE.Vector2();
+
+/**
+ * How close the orbit may come to the soil, in metres.
+ *
+ * The orbit's old floor was 1.4 radii - forty kilometres up - so the only way
+ * to see the surface was to look at it from space: no part of the planet could
+ * be zoomed into, detailed or not. The floor is now the body's own clearance,
+ * which is what keeps the camera outside the earth; what the eye can see up
+ * close is the planet detail's business, not the camera's.
+ */
+function planetViewClearanceM(): number {
+  return renderConfig?.planetViewClearanceM ?? 60;
+}
+
+/**
+ * Put the orbit's eye at an altitude above the ground under it.
+ *
+ * The eye keeps its own seat on the sphere and only its radial distance changes,
+ * so a zoom is a descent onto the ground already framed rather than a dolly
+ * towards the body's centre.
+ */
+function planetViewDolly(altitudeM: number): void {
+  const radius = renderConfig?.planetRadiusM ?? 0;
+  if (!planetViewActive || radius <= 0) return;
+  planetViewCentre.set(0, -radius, 0);
+  planetViewEye.copy(camera.position).sub(planetViewCentre);
+  const distance = planetViewEye.length();
+  if (distance < 1e-3) return;
+  planetViewEye.multiplyScalar(1 / distance);
+  // Signed: the relief can be below the base sphere, and a clamp at zero made
+  // the eye hold that height above the ground as well - which is why a descent
+  // stalled short of the floor instead of reaching it.
+  const relief = environmentRenderer?.reliefAtDirection(planetViewEye) ?? 0;
+  const ceiling = radius * ((renderConfig?.planetViewDistanceMultiplier ?? 3) + 2);
+  const altitude = THREE.MathUtils.clamp(
+    Number.isFinite(altitudeM) ? altitudeM : 0,
+    planetViewClearanceM(),
+    Math.max(planetViewClearanceM() + 1, ceiling - radius - relief),
+  );
+  camera.position.copy(planetViewCentre).addScaledVector(planetViewEye, radius + relief + altitude);
+  controls.update();
+}
 
 function setPlanetView(enabled: boolean): void {
   const radius = renderConfig?.planetRadiusM ?? 0;
   if (radius <= 0) return;
   planetViewActive = enabled;
+  // The renderer decides "the eye is buried in the earth" from the eye's y and
+  // the ground it stands over. An orbit under the planet is below that plane by
+  // construction, and the test then switched off the body, the terrain shells
+  // and the orbital face - looking up at the planet showed empty space.
+  environmentRenderer?.setPlanetViewActive(enabled);
   const distanceMultiplier = renderConfig?.planetViewDistanceMultiplier ?? 3;
   const farMultiplier = renderConfig?.planetViewFarMultiplier ?? 12;
-  const minMultiplier = renderConfig?.planetViewMinDistanceMultiplier ?? 1.4;
+  const minMultiplier = renderConfig?.planetViewMinDistanceMultiplier ?? 1.0002;
   const nearMultiplier = renderConfig?.planetViewNearMultiplier ?? 0.01;
 
   if (enabled) {
     if (scene.fog instanceof THREE.Fog) planetViewSavedFog = scene.fog;
     scene.fog = null;
+    // The ground rig's look-up pitch and its eased framing are answers to a
+    // camera standing on soil. A planet orbit has neither a soil ceiling to
+    // spend a drag against nor a node to refit onto, and both were still armed
+    // here: a drag past the polar ceiling kept turning the camera up (it left
+    // the planet), and any framing tween - a part finishing, a node picked -
+    // pulled the eye back down to the play area and out of the orbit.
+    cameraFocusTween = null;
+    lookUpPitchRad = 0;
+    lookUpPitchTargetRad = 0;
+    orbitUpDragRad = 0;
+    targetCameraDistance = -1;
+    camera.up.set(0, 1, 0);
     planetViewSavedFar = camera.far;
     planetViewSavedNear = camera.near;
+    planetViewSavedPosition.copy(camera.position);
+    planetViewSavedTarget.copy(controls.target);
     // A 100 km body needs a near plane in the kilometres and a far plane past
     // the camera; both scale with the radius so any planet size works.
     camera.near = Math.max(planetViewSavedNear, radius * nearMultiplier);
     camera.far = Math.max(camera.far, radius * farMultiplier);
     camera.updateProjectionMatrix();
-    controls.minDistance = radius * minMultiplier;
+    // The floor is the body's clearance, not a fraction of the radius: the orbit
+    // has to be able to reach the surface anywhere on the planet. The multiplier
+    // stays as a hard lower bound on the distance (it cannot be configured below
+    // 1.0002 radii), but it must never be the thing that decides - at its old
+    // 1.004 default it held the orbit 400 m up, so the only ground the camera
+    // could actually reach was the detail patch it started over.
+    controls.minDistance = Math.max(radius * minMultiplier, radius + planetViewClearanceM());
     controls.maxDistance = radius * (distanceMultiplier + 2);
-    controls.maxPolarAngle = Math.PI * 0.98;
+    // A full turn, not the ground's ceiling: the way to look up at a planet is
+    // to orbit under it. Clamping at 176 degrees stopped the drag dead and, with
+    // the look-up pitch spent on top, re-aimed the view at the body.
+    controls.minPolarAngle = 0.01;
+    controls.maxPolarAngle = Math.PI - 0.01;
+    // Pan is how the eye is moved to another part of the planet. With the target
+    // held at the centre (see `stepPlanetViewCamera`), a pan slides the eye
+    // sideways and the re-centre turns that slide into a different piece of the
+    // surface facing the camera - the orbit equivalent of walking the view.
+    planetViewSavedPanSpeed = controls.panSpeed;
+    planetViewSavedZoomSpeed = controls.zoomSpeed;
+    planetViewSavedEnableZoom = controls.enableZoom;
+    planetViewSavedRotateSpeed = controls.rotateSpeed;
+    controls.enablePan = true;
+    // The hand speeds are tunables, not constants in the rig: the orbit is a
+    // whole planet across, so a drag or a wheel notch that feels right at arm's
+    // length is far too twitchy here (and vice versa).
+    controls.panSpeed = 0.85;
+    // The rig's own dolly is off for the duration of the orbit; the wheel above
+    // moves the altitude instead.
+    controls.enableZoom = false;
+    controls.zoomSpeed = renderConfig?.planetViewZoomSpeed ?? 0.9;
+    controls.rotateSpeed = renderConfig?.planetViewRotateSpeed ?? 0.55;
     controls.target.set(0, -radius, 0);
-    // Frame the globe from slightly above its equator, at the configured
-    // distance from the centre.
+    // Frame the globe from the sunlit side, slightly above its equator, at the
+    // configured distance from the centre.
+    planetViewUserAdjusted = false;
+    planetViewLitDirection(planetViewAimDir);
     camera.position
       .set(0, -radius, 0)
-      .addScaledVector(new THREE.Vector3(0, 0.45, 1).normalize(), radius * distanceMultiplier);
+      .addScaledVector(planetViewAimDir, radius * distanceMultiplier);
     controls.update();
   } else {
     if (planetViewSavedFog) scene.fog = planetViewSavedFog;
@@ -8894,11 +10018,202 @@ function setPlanetView(enabled: boolean): void {
     camera.updateProjectionMatrix();
     controls.minDistance = renderConfig?.cameraMinDistance ?? 0.5;
     controls.maxDistance = effectiveCameraMaxDistance();
+    controls.minPolarAngle = CAMERA_MIN_POLAR_ANGLE;
     controls.maxPolarAngle = renderConfig?.cameraMaxPolarAngle ?? 1.52;
-    controls.target.set(0, 0, 0);
-    camera.position.set(0, 18, 26);
+    controls.enablePan = true;
+    controls.panSpeed = planetViewSavedPanSpeed;
+    controls.zoomSpeed = planetViewSavedZoomSpeed;
+    controls.enableZoom = planetViewSavedEnableZoom;
+    controls.rotateSpeed = planetViewSavedRotateSpeed;
+    // Back to the seat the orbit was entered from, not a remembered number: the
+    // soil under the play area is relief and it moves when the field does.
+    controls.target.copy(planetViewSavedTarget);
+    camera.position.copy(planetViewSavedPosition);
     controls.update();
   }
+}
+
+/**
+ * Hold the orbit camera to the body, and keep its depth range usable.
+ *
+ * Three things are wrong with a plain OrbitControls rig on a planet:
+ * the pan walks the target off the centre (so the orbit stops being an orbit),
+ * the camera can be dollied straight through the surface, and a near/far pair
+ * sized for a wide shot clips the ground once the eye is close. All three are
+ * per-frame questions, so they are answered per frame instead of in the rig.
+ */
+function stepPlanetViewCamera(deltaTime: number): void {
+  if (!planetViewActive) {
+    // The orbit borrows the rig's zoom; if a mode change, a rebuilt control rig
+    // or an interrupted exit left it switched off, the ground camera could not
+    // zoom at all. The closed state is the ground's, so put it back.
+    if (controls.enableZoom !== planetViewSavedEnableZoom) {
+      controls.enableZoom = planetViewSavedEnableZoom;
+    }
+    return;
+  }
+  const radius = renderConfig?.planetRadiusM ?? 0;
+  if (radius <= 0) return;
+  planetViewCentre.set(0, -radius, 0);
+  // Until the player takes the camera, the orbit follows the sun: the planet's
+  // rotation is the same fact seen from the planet (the sun moves across its
+  // sky) and from orbit (the lit hemisphere turns towards the eye). A dev time
+  // change therefore rotates the body to face the sun instead of leaving the
+  // camera on the night side to watch a black disc.
+  if (!planetViewUserAdjusted) {
+    planetViewLitDirection(planetViewAimTarget);
+    planetViewEye.copy(camera.position).sub(planetViewCentre);
+    const distanceToCentre = planetViewEye.length();
+    if (distanceToCentre > 1e-3) {
+      const blend = 1 - Math.exp(-Math.max(0, deltaTime) * 0.6);
+      planetViewEye.lerp(planetViewAimTarget.multiplyScalar(distanceToCentre), blend);
+      const settled = planetViewEye.length();
+      if (settled > 1e-3) {
+        camera.position
+          .copy(planetViewCentre)
+          .addScaledVector(planetViewEye, distanceToCentre / settled);
+      }
+    }
+  }
+  // A pan moves the eye and the target together. Put the target back on the
+  // centre and carry the eye with it: the lateral offset the pan bought becomes
+  // a new seat on the orbit, which is the whole point of panning here.
+  if (!controls.target.equals(planetViewCentre)) {
+    planetViewEye.copy(camera.position).sub(controls.target);
+    controls.target.copy(planetViewCentre);
+    camera.position.copy(planetViewCentre).add(planetViewEye);
+  }
+  planetViewEye.copy(camera.position).sub(planetViewCentre);
+  const distance = planetViewEye.length();
+  // The floor is the clearance above the ground *under the eye*, not above the
+  // base sphere: the planet's relief is hundreds of metres high, and a fixed
+  // clearance over the mean radius would put the camera inside a mountain the
+  // moment it zoomed in anywhere but the flat play area. One surface function,
+  // so the eye and the ground it is above agree about where the ground is.
+  const relief = environmentRenderer?.reliefAtDirection(
+    planetViewFocusDir.copy(planetViewEye).normalize(),
+  );
+  // Signed, like the dolly: a basin is below the base sphere, and a floor held
+  // at the mean radius stops the eye a basin's depth short of the ground.
+  const floor = radius + (relief ?? 0) + planetViewClearanceM();
+  if (distance < floor) {
+    planetViewEye.multiplyScalar(floor / Math.max(distance, 1e-6));
+    camera.position.copy(planetViewCentre).add(planetViewEye);
+  }
+  // Low over the body, look across it instead of straight down at it.
+  //
+  // An orbit camera aims at the centre, which is right from 200 km and useless
+  // from 60 m: the eye arrives on a flat colour with no horizon and no sky. The
+  // look direction is now set through a scratch matrix, which leaves camera.up
+  // alone - an earlier version wrote the body's up into camera.up and that
+  // vector outlived the orbit, rolling the sky on the ground camera and putting
+  // the mouse out of step with the rig.
+  const altitudeAboveGround = distance - radius - Math.max(0, relief ?? 0);
+  const lowBlend = THREE.MathUtils.clamp(1 - altitudeAboveGround / 2_000, 0, 1);
+  if (lowBlend > 0.001) {
+    const up = planetViewLookUp.copy(planetViewEye).normalize();
+    planetViewLookSide.set(0, 1, 0).cross(up);
+    if (planetViewLookSide.lengthSq() < 1e-6) planetViewLookSide.set(0, 0, 1).cross(up);
+    planetViewLookSide.normalize();
+    // Straight down at 2 km, about thirty degrees below the horizon at the floor.
+    //
+    // It was a twelve-degree glance, which from sixty metres showed almost none of
+    // the ground under the eye and a horizon's worth of sea beyond it: a frame
+    // that reads as "the level is not drawn" when the level is drawn and the
+    // camera is looking past it. Thirty degrees puts the relief in the frame and
+    // still keeps the sky and the distance.
+    planetViewLookDir.copy(up).multiplyScalar(-1);
+    planetViewLookSide.addScaledVector(up, -0.55).normalize();
+    planetViewLookDir.lerp(planetViewLookSide, lowBlend).normalize();
+    planetViewLookMatrix.lookAt(
+      camera.position,
+      planetViewHitPoint.copy(camera.position).add(planetViewLookDir),
+      up,
+    );
+    camera.quaternion.setFromRotationMatrix(planetViewLookMatrix);
+  }
+  // The near/far pair belongs to the environment's altitude pass, which sizes it
+  // from the eye's own distance to the surface and runs after this. A second
+  // writer here only ever fought it for a frame.
+}
+
+/**
+ * Aim the orbit at the piece of the body under the cursor, keeping the distance.
+ *
+ * A wheel over the globe means "go there", not "come closer to the middle of
+ * the screen": with the target on the body's centre, a plain dolly only ever
+ * approaches the point the camera already faces, and every other part of the
+ * planet stayed a picture. Re-aiming first puts the cursor's own ground in the
+ * centre of the screen, and the dolly the same wheel event performs then closes
+ * on it.
+ */
+/**
+ * The orbit's framing direction: the sunlit side, nudged up and a little to one
+ * side so the terminator reads as a curve rather than a flat line.
+ */
+function planetViewLitDirection(out: THREE.Vector3): THREE.Vector3 {
+  const sun = environmentRenderer?.getSunDirection() ?? WORLD_UP;
+  out.set(sun.x, sun.y, sun.z);
+  if (out.lengthSq() < 1e-6) out.copy(WORLD_UP);
+  out.normalize().addScaledVector(WORLD_UP, 0.35);
+  out.x += 0.18;
+  out.normalize();
+  return out;
+}
+
+/** Dev/panel action: re-open the orbit on the lit side, whatever the hour. */
+function framePlanetViewTowardSun(): void {
+  const radius = renderConfig?.planetRadiusM ?? 0;
+  if (!planetViewActive || radius <= 0) return;
+  planetViewCentre.set(0, -radius, 0);
+  planetViewLitDirection(planetViewAimDir);
+  const distance = Math.max(
+    camera.position.distanceTo(planetViewCentre),
+    radius + planetViewClearanceM(),
+  );
+  camera.position.copy(planetViewCentre).addScaledVector(planetViewAimDir, distance);
+  planetViewUserAdjusted = false;
+  controls.update();
+}
+
+function focusPlanetViewUnderCursor(event: WheelEvent): void {
+  const radius = renderConfig?.planetRadiusM ?? 0;
+  if (!planetViewActive || radius <= 0) return;
+  const rect = renderer.domElement.getBoundingClientRect();
+  if (rect.width <= 0 || rect.height <= 0) return;
+  planetViewNdc.set(
+    ((event.clientX - rect.left) / rect.width) * 2 - 1,
+    -((event.clientY - rect.top) / rect.height) * 2 + 1,
+  );
+  planetViewRay.setFromCamera(planetViewNdc, camera);
+  planetViewCentre.set(0, -radius, 0);
+  const origin = planetViewRay.ray.origin;
+  const direction = planetViewRay.ray.direction;
+  planetViewEye.copy(origin).sub(planetViewCentre);
+  const halfB = planetViewEye.dot(direction);
+  const constant = planetViewEye.lengthSq() - radius * radius;
+  const discriminant = halfB * halfB - constant;
+  if (discriminant < 0) return;
+  const travel = -halfB - Math.sqrt(discriminant);
+  if (travel <= 0) return;
+  planetViewHitPoint.copy(origin).addScaledVector(direction, travel);
+  planetViewFocusDir.copy(planetViewHitPoint).sub(planetViewCentre).normalize();
+  // A wheel nudges the aim; it does not throw it.
+  //
+  // The screen ray is degenerate when the orbit looks straight down its own up
+  // vector, which is exactly where the play area is (the eye sits over the
+  // body's pole at the start of every orbit): one bad ray re-aimed the eye at a
+  // point on the far side and the planet spun under the camera, which is what
+  // "zooming in moves me somewhere else entirely" was. Half a radian per notch
+  // is still a whole hemisphere of pointing over a gesture.
+  planetViewEye.copy(camera.position).sub(planetViewCentre);
+  if (planetViewEye.lengthSq() > 1e-9) {
+    planetViewEye.normalize();
+    if (planetViewFocusDir.dot(planetViewEye) < Math.cos(0.5)) return;
+  }
+  const distance = camera.position.distanceTo(planetViewCentre);
+  camera.position.copy(planetViewCentre).addScaledVector(planetViewFocusDir, distance);
+  controls.update();
 }
 
 // Physics (Rapier) - client-side cosmetic simulation, server-authoritative state
@@ -8949,6 +10264,9 @@ async function handleWelcome(payload: unknown): Promise<void> {
     totalEnergy: message.totalEnergy,
   });
   welcome = message;
+  pendingSpawn = null;
+  closeSpawnScene();
+  showGeodeticReadout();
   // A WELCOME on an open socket is how a live respawn arrives, and a reconnect
   // after a death lands here too: the card and the chip describe a plant that
   // no longer exists, so they go before the new one is adopted.
@@ -9018,6 +10336,10 @@ async function handleWelcome(payload: unknown): Promise<void> {
   });
   entryFlowWorldReady(entryFlow);
   entryScreen.render(entryFlow);
+  loadingScreen?.show('Waking your plant');
+  worldReadyFrames = 0;
+  window.clearTimeout(loadingFailsafeTimer);
+  loadingFailsafeTimer = window.setTimeout(() => loadingScreen?.hide(), 6000);
   // The title parked the render loop; the world's first frame starts here.
   wakeRenderLoop();
   // Whatever the welcome framing did or skipped (no root node, a plant that
@@ -9071,8 +10393,11 @@ async function handleWelcome(payload: unknown): Promise<void> {
   } else {
     contextHint?.show({
       id: 'first-look',
-      text: 'Click your plant to see what it can grow. The bar below has the rest.',
-      touchText: 'Tap your plant to see what it can grow. The bar below has the rest.',
+      // One instruction, not a signpost to a bar that no longer exists: the verbs
+      // are drawings on the left rail, and naming them in a sentence under the
+      // hotbar read as a caption for the buttons rather than help for the plant.
+      text: 'Click your plant to see what it can grow.',
+      touchText: 'Tap your plant to see what it can grow.',
     });
   }
   updateAccountChip();
@@ -9380,6 +10705,9 @@ function handleState(payload: unknown, ctx: MessageContext): void {
       plantMineralCapacity,
     );
     updatePlantStatusHud();
+    // An open growth panel is priced against these totals, so a change here is
+    // the moment it has to look again (see refreshOpenGrowthOptions).
+    refreshOpenGrowthOptions();
   } else {
     markOwnPlantMissing();
   }
@@ -9694,11 +11022,11 @@ function handleSeasonUpdate(payload: unknown): void {
 }
 
 function handleMutationState(payload: unknown): void {
-  const state = payload as Parameters<MutationPanelAPI['update']>[0] & {
+  const state = payload as MutationStateView & {
     appearance?: { petalCount: number; leafScale: number; seedScale: number };
   };
   mutationState = state;
-  mutationPanel?.update(state);
+  mutationStateAtMs = performance.now();
   plantMutationCount = state.mutations?.length ?? 0;
   plantMutationEnergyUpkeep = state.mutations.reduce(
     (sum, mutation) => sum + (mutation.energyPerSecond ?? 0),
@@ -9877,19 +11205,8 @@ function handlePlantDamage(payload: unknown): void {
   const amount = typeof damage.amount === 'number' ? damage.amount : 0;
   if (amount > 0 && Date.now() - lastDamageToastAtMs > 2500) {
     lastDamageToastAtMs = Date.now();
-    // A partial map on purpose: the payload's `source` is whatever a server
-    // build sent, so an unknown one still has to render.
-    const sourceLabels: Partial<Record<DamageSource, string>> = {
-      weather: 'weather',
-      tool: 'a tool',
-      herbivore: 'herbivores',
-      terrain: 'terrain',
-      // E18: tissue shed because the plant could not pay its own upkeep. Without
-      // this the toast read "Took 0.8 biomass damage (damage)."
-      starvation: 'starvation',
-    };
     uiShell?.toast({
-      message: `Took ${amount.toFixed(1)} biomass damage (${sourceLabels[damage.source as DamageSource] ?? 'damage'}).`,
+      message: `Took ${amount.toFixed(1)} biomass damage (${damageSourceLabel(damage.source)}).`,
       kind: 'error',
       durationMs: 2500,
     });
@@ -10129,7 +11446,8 @@ function handleGrowthEvent(payload: unknown): void {
       // server-reported growthProgress, not from zero.
       if ((nodeData.growthProgress ?? 1.0) < 1.0) {
         const durationMs = (node.growthTimeSeconds ?? 5) * 1000;
-        const startDelayMs = EMERGENCE_DELAY_MS[node.type ?? ''] ?? 0;
+        // E26: the stagger is a tunable, not a map in this file.
+        const startDelayMs = plantRendererConfig?.emergenceDelayMs?.[node.type ?? ''] ?? 0;
         const alreadyElapsedMs = (nodeData.growthProgress ?? 0) * durationMs;
         growingNodes.set(node.id, {
           startTime: now + startDelayMs - alreadyElapsedMs,
@@ -10177,6 +11495,10 @@ function handleGrowthEvent(payload: unknown): void {
       plantEnergy,
       storedWater,
       storedMinerals,
+      // The store's own limits, not just its level: a growth repaint without
+      // them dropped the bar and left a bare number (U07).
+      plantWaterCapacity,
+      plantMineralCapacity,
     );
     if (plantRenderer) {
       const otherNodes: PlantNodeData[] = [];
@@ -10225,7 +11547,8 @@ function handleGrowthEvent(payload: unknown): void {
       // Track growing animation for other players' newly grown nodes
       if ((nodeData.growthProgress ?? 1.0) < 1.0 && node.growthTimeSeconds) {
         const durationMs = node.growthTimeSeconds * 1000;
-        const startDelayMs = EMERGENCE_DELAY_MS[node.type ?? ''] ?? 0;
+        // E26: the stagger is a tunable, not a map in this file.
+        const startDelayMs = plantRendererConfig?.emergenceDelayMs?.[node.type ?? ''] ?? 0;
         // Back-date startTime by already-elapsed server progress so the
         // animation continues from the server-reported fraction, not from 0.
         const alreadyElapsedMs = (nodeData.growthProgress ?? 0) * durationMs;
@@ -10361,19 +11684,45 @@ function handleError(payload: unknown): void {
   const message = error.message?.trim() || refusalCopy(error.code);
   notify(message, error.code === 'report_received' ? 'info' : 'error', 4000);
   if (error.code === 'SESSION_REPLACED') {
-    // The same account opened somewhere else and the server kicked this
-    // socket. Reconnecting would quietly come back as a guest.
+    // The same plant is being driven from another window or device now, and the
+    // server closed this socket. Reconnecting would take it straight back and
+    // start a tug of war between the two windows, so this one stops here.
     suppressReconnect = true;
-    clearReconnectData();
-    updateAccountChip();
-    entryFlowConnectionFailed(entryFlow, 'Signed in on another device. Sign in again to continue.');
-    entryScreen.render(entryFlow);
+    if (storedSession().accessToken) {
+      // A signed-in player can get the account back by signing in again.
+      clearReconnectData();
+      updateAccountChip();
+      entryFlowConnectionFailed(
+        entryFlow,
+        'Signed in on another device. Sign in again to continue.',
+      );
+      entryScreen.render(entryFlow);
+    } else {
+      // A guest has no account to sign back into: the plant belongs to this
+      // browser. Clearing the identity here would have abandoned the plant for
+      // good, so the world is left exactly as it was - frozen and explained -
+      // and a reload is all it takes to take the plant back.
+      setStatus('Offline', 'down');
+      setDetail('This plant is open in another window.');
+      notify('This plant is open in another window. Reload here to take it back.', 'error', 9000);
+    }
   }
   if (error.code === 'AUTH_FAILED') {
     // The socket is about to close with 4001; the stored session is dead.
     clearReconnectData();
     updateAccountChip();
     entryFlowConnectionFailed(entryFlow, 'Your session expired. Sign in again.');
+    entryScreen.render(entryFlow);
+  }
+  if (error.code === 'SPAWN_REFUSED') {
+    // The server is the authority on the price and the ground. Do not let the
+    // close handler reconnect with the same selection in a loop; return to the
+    // title, where Play reopens the seed bed with the refusal already shown.
+    suppressReconnect = true;
+    pendingSpawn = null;
+    loadingScreen?.hide();
+    exitDeathUi();
+    entryFlowConnectionFailed(entryFlow, message);
     entryScreen.render(entryFlow);
   }
 }
@@ -10403,6 +11752,8 @@ function handlePlantSync(payload: unknown): void {
       ownerId: string;
       /** The owner's display name, when the owner is connected. */
       ownerName?: string;
+      /** Whether they are connected; absent from an older server. */
+      ownerOnline?: boolean;
       appearance?: { petalCount: number; leafScale: number; seedScale: number };
       pigment?: {
         visualSignature: number;
@@ -10506,6 +11857,9 @@ function handlePlantSync(payload: unknown): void {
         rivalTagLabel(plant.ownerId, plant.ownerName, plant.mutations),
       );
       if (plant.ownerName?.trim()) plantOwnerNames.set(plant.id, plant.ownerName.trim());
+      if (typeof plant.ownerOnline === 'boolean') {
+        plantOwnerOnline.set(plant.id, plant.ownerOnline);
+      }
     }
     if (isOwn && !plantId) {
       plantId = plant.id;
@@ -10682,6 +12036,8 @@ function handlePlantCreated(payload: unknown): void {
       ownerId: string;
       /** The owner's display name, when the owner is connected. */
       ownerName?: string;
+      /** Whether they are connected; absent from an older server. */
+      ownerOnline?: boolean;
       rootNodeId: string | null;
       totalBiomass: number;
       totalUpkeep: number;
@@ -10764,6 +12120,9 @@ function handlePlantCreated(payload: unknown): void {
   if (created.plant.ownerId) plantOwners.set(created.plant.id, created.plant.ownerId);
   if (created.plant.ownerName?.trim()) {
     plantOwnerNames.set(created.plant.id, created.plant.ownerName.trim());
+  }
+  if (typeof created.plant.ownerOnline === 'boolean') {
+    plantOwnerOnline.set(created.plant.id, created.plant.ownerOnline);
   }
   // Tag it now, not at the next full sync: a rival that sprouts beside the
   // player used to stand there nameless for up to the sync interval.
@@ -10980,6 +12339,9 @@ async function connect(): Promise<void> {
         // The name the menu shows. The server sanitizes and caps it; the menu is
         // the only place a player chooses it.
         displayName: currentDisplayName(),
+        // Only a fresh plant carries a selection. A reconnect sends the stored
+        // plantId and lets the server hand that same plant back for free.
+        spawn: reconnectData?.plantId ? undefined : (pendingSpawn ?? undefined),
       },
     });
     console.log('[PlantLegacy] Sending HELLO:', hello);
@@ -11093,6 +12455,18 @@ async function connect(): Promise<void> {
   ws.onclose = (event) => {
     // No pong can arrive for a probe sent on this socket any more.
     pingSentAt = null;
+    // 4002 is not a dropped connection: another window took this plant and the
+    // server retired this socket on purpose. Retrying would take the plant
+    // straight back, so the two windows would bounce it off each other every
+    // three seconds and neither would ever settle. This one stops, keeps what it
+    // has on screen, and says why.
+    if (event.code === 4002) {
+      connecting = false;
+      setStatus('Offline', 'down');
+      setDetail('This plant is open in another window. Reload here to take it back.');
+      notify('This plant is open in another window. Reload here to take it back.', 'error', 9000);
+      return;
+    }
     if (suppressReconnect) {
       // Signing out closes the socket on purpose. The retry below would connect
       // straight back as a guest, which looks exactly like being signed in.
@@ -11306,6 +12680,15 @@ function recordRenderCost(cpuMs: number): void {
  */
 function resolveCameraCollision(): void {
   if (planetViewActive) return;
+  // A free camera is a flight camera: terrain is something to fly through, not
+  // an obstruction that shortens the arm. The ground and cavity clamps below are
+  // skipped for the same reason.
+  if (cameraFliesFree()) return;
+  // The dev camera is a measurement tool, not a view: what it looks at sits far
+  // outside the planted world, and the neighbours between can only get in the
+  // way of a silhouette. The dev panel's Unclamped Distance already lifts the
+  // orbit limit; this lifts the other half, the spring arm.
+  if (devCameraUnclamped) return;
   if (!physicsReady || !rapierWorld.isReady) return;
   if (!renderConfig?.cameraCollisionEnabled) return;
 
@@ -11371,9 +12754,74 @@ function sizeClassCameraMultiplier(): number {
   return sizeClassConfig()?.cameraMaxDistanceMultiplier ?? 1;
 }
 
+/**
+ * Dev-only: the camera's two distance limits, lifted.
+ *
+ * A size class caps how far the eye may orbit, and the spring-arm collision
+ * pulls the eye back to the first solid thing between it and the orbit target,
+ * which in a planted field is a neighbouring plant rather than terrain. A grown
+ * body cannot be framed at the 80 px tier boundary inside either of those, so
+ * `__pl.setCameraUnclamped(true)` (the panel's Camera -> Unclamped Distance)
+ * suspends both and deepens the far plane, without touching plant or world.
+ */
+let devCameraUnclamped = false;
+
+/**
+ * How far the wheel may travel when the player wants to see the planet.
+ *
+ * The world is a rock 100 km in radius with a 180 m play patch on it, so a
+ * 200 m arm is a view of one leaf and 20 m of soil. The eye is allowed to pull
+ * out until the whole body is in frame; at 250 km it is a sphere a little over
+ * a screen wide, which is what makes the planet feel like a place rather than
+ * a backdrop. The far plane follows the eye's altitude (EnvironmentRenderer),
+ * so this only had to lift the orbit limit: capping it at `camera.far * 0.9`
+ * kept the cap at 2 km on the ground, and every wheel notch was clipped back
+ * before the eye could climb far enough for the far plane to grow.
+ *
+ * Dev-only reach (the panel's presets and __pl camera helpers) is wider still:
+ * `devCameraUnclamped` lifts both limits for measurement shots.
+ */
+const PLANET_ZOOM_OUT_DISTANCE_M = 250_000;
+
 function effectiveCameraMaxDistance(): number {
+  if (devCameraUnclamped) return 1_000_000;
   const base = renderConfig?.cameraMaxDistance ?? 200;
-  return Math.min(camera.far * 0.9, base * sizeClassCameraMultiplier());
+  const orbit = base * sizeClassCameraMultiplier();
+  // Never shorter than the config allowance, and never so short that the planet
+  // cannot be framed: a size class that multiplies the arm down still has to
+  // reach the orbit view. A constant cap keeps the panel's Max Distance field
+  // stable; the far plane follows the eye's altitude on its own.
+  return Math.max(orbit, PLANET_ZOOM_OUT_DISTANCE_M);
+}
+
+/**
+ * Dev panel presets: dolly the eye to a distance along the line it already
+ * looks down. Pinning `minDistance` and `maxDistance` to the same number, which
+ * is what `setDistance` used to do, changed the allowed range and never moved
+ * the camera, so Top Down / Side View / Close Up / Far View were dead buttons.
+ */
+function dollyCameraTo(distance: number): void {
+  if (planetViewActive) return;
+  const max = effectiveCameraMaxDistance();
+  const wanted = THREE.MathUtils.clamp(distance, Math.max(0.5, currentCameraMinDistance()), max);
+  tempVector.copy(camera.position).sub(controls.target);
+  if (tempVector.lengthSq() < 1e-6) tempVector.set(0, 0.45, 1);
+  tempVector.normalize();
+  camera.position.copy(controls.target).addScaledVector(tempVector, wanted);
+  targetCameraDistance = -1;
+  controls.update();
+}
+
+/** Dev panel presets: stand the eye at an elevation (degrees above the target). */
+function frameCameraAt(distance: number, elevationDeg: number): void {
+  if (planetViewActive) return;
+  const elevation = THREE.MathUtils.degToRad(THREE.MathUtils.clamp(elevationDeg, -80, 89));
+  const max = effectiveCameraMaxDistance();
+  const wanted = THREE.MathUtils.clamp(distance, Math.max(0.5, currentCameraMinDistance()), max);
+  tempVector.set(0, Math.sin(elevation), Math.cos(elevation)).normalize();
+  camera.position.copy(controls.target).addScaledVector(tempVector, wanted);
+  targetCameraDistance = -1;
+  controls.update();
 }
 
 /**
@@ -11382,10 +12830,12 @@ function effectiveCameraMaxDistance(): number {
  */
 function applyCameraRange(): void {
   if (!renderConfig) return;
-  const wantedFar = Math.max(
-    camera.far,
-    (renderConfig.cameraMaxDistance * sizeClassCameraMultiplier()) / 0.9,
-  );
+  // Planet view owns its own near/far and its own orbit limits; the ground preset
+  // (a 2.5 km far plane and a 200 m arm) would clip the body and snap the wheel.
+  if (planetViewActive) return;
+  const wantedFar = devCameraUnclamped
+    ? Math.max(camera.far, 20_000)
+    : Math.max(camera.far, (renderConfig.cameraMaxDistance * sizeClassCameraMultiplier()) / 0.9);
   camera.near = Math.max(0.1, wantedFar / 25000);
   camera.far = wantedFar;
   camera.updateProjectionMatrix();
@@ -11500,6 +12950,25 @@ function renderFrame(deltaTime: number): void {
   // The camera is a physical object here: the distance to the orbit target
   // changes by cameraZoomSpeed metres per second, the field of view never does.
   if (keyboardZoomState.in || keyboardZoomState.out) {
+    // In the orbit the keys move the altitude, the same measure the wheel uses:
+    // the distance to the body's centre is a hundred kilometres, so a metres-per-
+    // second dolly along it is invisible - the keys looked dead up there.
+    if (planetViewActive) {
+      const radius = renderConfig?.planetRadiusM ?? 0;
+      if (radius > 0) {
+        planetViewEye.copy(camera.position).sub(planetViewCentre.set(0, -radius, 0));
+        const distance = planetViewEye.length();
+        if (distance > 1e-3) {
+          planetViewFocusDir.copy(planetViewEye).multiplyScalar(1 / distance);
+          const relief = environmentRenderer?.reliefAtDirection(planetViewFocusDir) ?? 0;
+          const altitude = Math.max(0, distance - radius - relief);
+          const step = keyboardZoomState.in ? 0.86 : 1.18;
+          planetViewUserAdjusted = true;
+          planetViewDolly(altitude * step);
+        }
+      }
+      return;
+    }
     const currentDist = camera.position.distanceTo(controls.target);
     const dollySpeed = renderConfig?.cameraZoomSpeed ?? 2.0;
     let delta = 0;
@@ -11599,6 +13068,10 @@ function renderFrame(deltaTime: number): void {
   lookUpPitchTargetRad = lookUp.targetRad;
   lookUpPitchRad = lookUp.appliedRad;
   controls.update();
+  // The orbit camera's own per-frame rules - re-centre after a pan, hold the
+  // clearance, size the depth range from the altitude - run before the ground
+  // clamps, which are all off in this mode anyway.
+  stepPlanetViewCamera(deltaTime);
   resolveCameraCollision();
   // Drops bob and fade on their own clock; the server still owns their life.
   worldDrops.update(performance.now());
@@ -11631,7 +13104,11 @@ function renderFrame(deltaTime: number): void {
     applyCameraAim();
     // A camera looks along its local -Z: a positive turn about its own X lifts
     // that direction towards +Y, which is up.
-    if (lookUpPitchRad > 1e-4) camera.rotateX(lookUpPitchRad);
+    // The pitch exists because an orbit camera standing on the soil has no angle
+    // left that points at the sky. A planet orbit has angles to spare (it may go
+    // under the body), so spending a drag here only tilts the view off the planet
+    // the player is looking at.
+    if (!planetViewActive && lookUpPitchRad > 1e-4) camera.rotateX(lookUpPitchRad);
   }
   // ... and a held dev pose after that, because the point of holding one is to
   // look from places the rig exists to prevent, such as inside the earth.
@@ -11715,6 +13192,9 @@ function renderFrame(deltaTime: number): void {
       // sun's own number and reads zero. Not the sun's uniforms - those are the
       // raymarcher's, and its night look is tuned around them.
       plantRenderer.setLeafBacklight(sunDir, sunLight.color, sunLight.intensity);
+      // The shade the plant throws is projected along the same light, so a part
+      // high on the stem lays its ellipse where the sun would actually put it.
+      plantRenderer.setSunDirection(sunDir);
     }
     plantRenderer.render(deltaTime);
   }
@@ -11747,7 +13227,7 @@ function renderFrame(deltaTime: number): void {
     // Puddles and snow belong to the ground under the player, not to the camera:
     // a zoom step moves the eye but not the soil.
     environmentRenderer.setGroundAnchor(controls.target.x, controls.target.z);
-    environmentRenderer.update(deltaTime);
+    environmentRenderer.update(deltaTime, 0, renderer.domElement.height);
     updatePlantLabelPositions();
     updateGrowthDebug();
     // Keep WebGPU plant/ground lighting in sync with the visual sun every frame.
@@ -11902,6 +13382,19 @@ function renderFrame(deltaTime: number): void {
     renderer.render(scene, camera);
   }
 
+  // Lift the loading cover on a frame that actually shows the plant. Counting
+  // frames after the greeting was not enough: the greeting beats the first
+  // plant frame, and the plant's first frame is the one that compiles its
+  // shaders. Two drawn frames of a world that has an own node means the meshes
+  // exist, the programs are warm, and the next frame is ordinary play.
+  if (loadingScreen?.visible && entryFlow.step === 'world') {
+    worldReadyFrames += 1;
+    const hasPlant = Array.from(plantNodes.values()).some((node) => node.isOwnPlant);
+    if (worldReadyFrames >= 2 && (hasPlant || worldReadyFrames >= 30)) {
+      window.clearTimeout(loadingFailsafeTimer);
+      loadingScreen.hide();
+    }
+  }
   // Growth aim gizmo last, on its own canvas above the plant/ground layer.
   renderGrowthAimOverlay();
   // AL-03: close the GPU timing query after the last draw call of the frame.
@@ -12360,6 +13853,12 @@ async function handleSignIn(username: string, password: string): Promise<void> {
     });
     entryScreen.setDisplayName(session.displayName ?? username);
     entryScreen.render(entryFlow);
+    if (!loadReconnectData()?.plantId) {
+      openSpawnScene('new', false);
+      return;
+    }
+    loadingScreen?.show('Connecting to the garden');
+    worldReadyFrames = 0;
     void connect();
   } catch (error) {
     entryFlowRequestFailed(entryFlow, error instanceof Error ? error.message : String(error));
@@ -12389,6 +13888,12 @@ async function handleSignUp(
     });
     entryScreen.setDisplayName(session.displayName ?? displayName);
     entryScreen.render(entryFlow);
+    if (!loadReconnectData()?.plantId) {
+      openSpawnScene('new', false);
+      return;
+    }
+    loadingScreen?.show('Connecting to the garden');
+    worldReadyFrames = 0;
     void connect();
   } catch (error) {
     entryFlowRequestFailed(entryFlow, error instanceof Error ? error.message : String(error));
@@ -12410,11 +13915,108 @@ function modalMount(shell: UIShell | null): HTMLElement {
 // an ad-hoc z-index instead of in the layer stack.
 let entryScreen!: MainMenu;
 
+/** A selection waiting for the next HELLO. Null on reconnect/reclaim. */
+let pendingSpawn: SpawnSelection | null = null;
+let spawnScene: SpawnScene | null = null;
+
+async function loadSpawnOptions(): Promise<SpawnSceneOptions> {
+  const stored = loadReconnectData();
+  const headers: Record<string, string> = {};
+  if (stored?.accessToken) headers.Authorization = `Bearer ${stored.accessToken}`;
+  const response = await fetch(`${httpOrigin}/spawn/options`, { headers, cache: 'no-store' });
+  if (!response.ok) throw new Error(`(${response.status})`);
+  const raw = (await response.json()) as Partial<SpawnSceneOptions>;
+  return {
+    archetypes: Array.isArray(raw.archetypes) ? raw.archetypes : [],
+    namedAreas: Array.isArray(raw.namedAreas) ? raw.namedAreas : [],
+    playRadiusM: Number(raw.playRadiusM) || 620,
+    exactCoordinateCost: Number(raw.exactCoordinateCost) || 0,
+    balance: Number(raw.balance) || 0,
+    startingBalance: Number(raw.startingBalance) || 0,
+    enabled: raw.enabled !== false,
+    planetRadiusM: Number(raw.planetRadiusM) || 100_000,
+    authenticated: raw.authenticated === true,
+  };
+}
+
+function closeSpawnScene(): void {
+  spawnScene?.destroy();
+  spawnScene = null;
+  entryScreen?.setOverlayOpen(false);
+}
+
+/**
+ * Open the seed scene. `liveSocket` makes the confirm send RESPAWN on the
+ * socket already held; otherwise it connects fresh with the selection on HELLO.
+ */
+function openSpawnScene(mode: 'new' | 'respawn', liveSocket: boolean): void {
+  if (spawnScene) return;
+  if (entryFlow.step !== 'spawn') {
+    if (!entryFlowChooseSpawn(entryFlow)) return;
+    entryScreen.render(entryFlow);
+  }
+  entryScreen.setOverlayOpen(true);
+  spawnScene = new SpawnScene({
+    mount: modalMount(uiShell),
+    mode,
+    loadOptions: loadSpawnOptions,
+    callbacks: {
+      onCancel: () => {
+        closeSpawnScene();
+        entryFlowCancelSpawn(entryFlow);
+        entryScreen.render(entryFlow);
+      },
+      onConfirm: (selection, cost) => {
+        pendingSpawn = selection;
+        closeSpawnScene();
+        if (liveSocket && ws && ws.readyState === WebSocket.OPEN) {
+          respawnPending = true;
+          ws.send(JSON.stringify({ type: MESSAGE_TYPE.RESPAWN, payload: { spawn: selection } }));
+          loadingScreen?.show(cost > 0 ? 'Buying this seed' : 'Planting a new seed');
+          contextHint?.show({
+            id: 'respawn',
+            text: 'Planting a new seed...',
+            durationMs: 5000,
+          });
+          window.setTimeout(() => {
+            if (!respawnPending) return;
+            respawnPending = false;
+            loadingScreen?.hide();
+            exitDeathUi();
+            showPlantLostScreen();
+          }, 12000);
+          return;
+        }
+        clearPlantIdentity();
+        entryFlowSpawnConfirmed(entryFlow);
+        entryScreen.render(entryFlow);
+        loadingScreen?.show('Connecting to the garden');
+        worldReadyFrames = 0;
+        void connect();
+      },
+    },
+  });
+}
+
 const entryCallbacks: MainMenuCallbacks = {
   // Play is the only way in now: with a stored session it resumes the account,
   // without one it starts a guest plant. The name comes from the box.
   onPlay: (displayName) => {
     rememberDisplayName(displayName);
+    const stored = loadReconnectData();
+    // Reconnect/reclaim bypasses the seed scene: the plant already exists and
+    // the server must not charge for it again.
+    if (!stored?.plantId) {
+      openSpawnScene('new', false);
+      return;
+    }
+    // The cover goes up before the socket does. The greeting used to be what
+    // swapped the title for the world, and the plant only arrived a second
+    // later, so the first thing a new player saw of their garden was an empty
+    // hillside. It stays up until the plant has been drawn.
+    loadingScreen?.show('Connecting to the garden');
+    worldReadyFrames = 0;
+    pendingSpawn = null;
     if (entryFlow.hasSession) {
       entryFlowAuthenticated(entryFlow, displayName);
     } else {
@@ -12438,11 +14040,8 @@ const entryCallbacks: MainMenuCallbacks = {
     void handleSignUp(username, displayName, password);
   },
   onReseed: () => {
-    entryFlowReseed(entryFlow);
-    entryScreen.render(entryFlow);
-    // A signed-in player keeps their account and gets a fresh plant for it.
-    clearPlantIdentity();
-    void connect();
+    exitDeathUi();
+    openSpawnScene('respawn', Boolean(ws && ws.readyState === WebSocket.OPEN));
   },
   onBack: () => {
     entryFlowBack(entryFlow);
@@ -12502,6 +14101,18 @@ function rememberAvatar(avatar: string | null): void {
 }
 
 let shopPanel: ShopPanel | null = null;
+let geodeticReadout: HTMLElement | null = null;
+
+function showGeodeticReadout(): void {
+  if (!geodeticReadout) return;
+  const spawn = welcome?.spawn;
+  if (!spawn) {
+    geodeticReadout.style.display = 'none';
+    return;
+  }
+  geodeticReadout.textContent = formatGeodetic(spawn);
+  geodeticReadout.style.display = 'block';
+}
 
 function openShop(): void {
   if (shopPanel) return;
@@ -12510,14 +14121,24 @@ function openShop(): void {
   // Ask for the pouch first: the shop's balance and the item counts are the
   // server's, and a panel that opens with a stale purse invites a refusal.
   requestInventory();
+  // Buying needs a live socket and a purse the server has told us about. The
+  // title screen has neither: it used to show a zero balance and a Buy button
+  // that returned silently, so the player "spent" spores that never left, then
+  // met a fresh 120 on Play and read the whole shop as broken. The catalogue is
+  // still there to read; the market opens with the garden.
+  const live = Boolean(ws && ws.readyState === WebSocket.OPEN) && entryFlow.step === 'world';
   shopPanel = createShopPanel({
     config: shopConfig,
     mount: layer,
-    balance: sporeBalance,
-    onBuy: (itemId) => {
-      if (!ws || ws.readyState !== WebSocket.OPEN) return;
-      ws.send(JSON.stringify({ type: MESSAGE_TYPE.SHOP_PURCHASE, payload: { itemId } }));
-    },
+    balance: live ? sporeBalance : null,
+    balanceNote: live ? undefined : 'Spores load with your garden',
+    buyNote: live ? undefined : 'Open the garden to buy',
+    onBuy: live
+      ? (itemId) => {
+          if (!ws || ws.readyState !== WebSocket.OPEN) return;
+          ws.send(JSON.stringify({ type: MESSAGE_TYPE.SHOP_PURCHASE, payload: { itemId } }));
+        }
+      : undefined,
     onClose: () => {
       shopPanel?.destroy();
       shopPanel = null;
@@ -12610,6 +14231,9 @@ function mountMenu(initialTimeOfDay: number | null): void {
     // what the session had just done when it stopped.
     onDiagnostic: (kind, detail) => recordSessionEvent(kind, detail),
   });
+  // Built with the menu, on the modal layer, so it is above the title and below
+  // a toast: Play, then a cover until there is a plant on screen.
+  loadingScreen = createLoadingScreen({ mount: modalMount(uiShell) });
   // The machine may already be past booting: the title can mount after a slow
   // `/world/time` while the rest of the world has finished. Render it in
   // whatever state the flow is in, and let the boot finish it if it is ready.
@@ -12680,6 +14304,9 @@ interface PlantLegacyDebugHandle {
   readonly mutationLook: MutationLook | null;
   readonly plantLabels: { count(): number } | null;
   readonly environmentRenderer: EnvironmentRenderer | null;
+  /** The planet rig, for a pass that has to reach it without the dev panel. */
+  readonly setPlanetView: (enabled: boolean) => void;
+  readonly planetView: () => boolean;
   /** Why the camera is where it is: automatic framing state. */
   readonly cameraStatus: () => {
     userMoved: boolean;
@@ -12709,6 +14336,30 @@ interface PlantLegacyDebugHandle {
   readonly devCavity: CavityProbe;
   /** How many nodes carry a nub, and by how much: the same rule the meshes use. */
   readonly devNubs: () => NubReport;
+  /**
+   * How much of the aiming ring the player's own plant stands in front of.
+   *
+   * The ring's ink is per vertex (cream, orange where a part crosses it), so the
+   * arc the plant hides can be counted instead of judged by eye against a
+   * hillside (U09).
+   */
+  readonly devAimRing: () => { vertices: number; behind: number; ink: number } | null;
+  /**
+   * Dev-only: what the ghost shoot is made of this frame.
+   *
+   * A screenshot can say the ghost is there; it cannot say whether the part of a
+   * radicle under the soil was faded, whether the pierce hoop found a crossing,
+   * or where the bud actually sits. Those are the three numbers that decide
+   * whether the gizmo is telling the truth about the aim.
+   */
+  readonly devAimGhost: () => {
+    visible: boolean;
+    vertices: number;
+    underSoil: number;
+    bud: [number, number, number];
+    pierce: boolean;
+    tipRing: boolean;
+  } | null;
   /**
    * Dev-only: one head drawn alone on a flat background at a chosen growth
    * progress, measured in pixels.
@@ -12928,6 +14579,11 @@ if (import.meta.env.DEV) {
     get controls() {
       return controls;
     },
+    // The planet rig has no button outside the dev panel, and its own guards
+    // (`planetViewActive`) are exactly what a bug report needs to see: the state
+    // and the two switches that leave it are here so a browser pass can drive it.
+    setPlanetView: (enabled: boolean) => setPlanetView(enabled),
+    planetView: () => planetViewActive,
     cameraStatus: () => ({
       userMoved: cameraUserMoved,
       refitPending: refitFramingOnFirstNodes,
@@ -13003,6 +14659,59 @@ if (import.meta.env.DEV) {
     // The nub swell is a few per cent of a tube: too small to check by eye, so the
     // count and the range come from the same rule the mesh builders apply.
     devNubs: () => nubReport(plantNodes.values()),
+    devAimRing: () => {
+      const geometry = growthAimGizmoInstance?.parts?.ring.geometry;
+      const color = geometry?.getAttribute('color');
+      if (!color) return null;
+      // The attribute holds working-space colour, so compare against the two
+      // inks built the same way rather than guessing at one channel's value.
+      const mixed = new THREE.Color();
+      const inkColour = new THREE.Color(AIM_RING_INK);
+      const behindInk = new THREE.Color(AIM_RING_BEHIND_INK);
+      const away = (a: THREE.Color, b: THREE.Color) =>
+        Math.abs(a.r - b.r) + Math.abs(a.g - b.g) + Math.abs(a.b - b.b);
+      let behind = 0;
+      let ink = 0;
+      for (let i = 0; i < color.count; i += 1) {
+        mixed.fromBufferAttribute(color, i);
+        if (away(mixed, behindInk) < away(mixed, inkColour)) behind += 1;
+        else ink += 1;
+      }
+      return { vertices: color.count, behind, ink };
+    },
+    devAimGhost: () => {
+      const parts = growthAimGizmoInstance?.parts;
+      if (!parts) return null;
+      const alpha = parts.ghost.geometry.getAttribute('color');
+      let underSoil = 0;
+      if (alpha) {
+        for (let i = 0; i < alpha.count; i += 1) {
+          if (alpha.getW(i) < 0.5) underSoil += 1;
+        }
+      }
+      return {
+        visible: parts.ghost.visible && parts.group.visible,
+        vertices: parts.ghost.geometry.getAttribute('position')?.count ?? 0,
+        underSoil,
+        bud: parts.bud.position.toArray() as [number, number, number],
+        pierce: parts.pierce.visible,
+        tipRing: parts.tipRing.visible,
+        // The ground half of the aim, in the order the eye reads it: footprints on
+        // the soil, the marker under the end, and the post to a bud in the air.
+        ground: {
+          trail: {
+            visible: parts.trail.visible,
+            dashes: Math.round((parts.trail.geometry.getAttribute('position')?.count ?? 0) / 6),
+          },
+          landing: {
+            visible: parts.landing.visible,
+            y: parts.landing.position.y,
+            radius: parts.landing.scale.x,
+          },
+          drop: { visible: parts.drop.visible, height: parts.drop.scale.y },
+        },
+      };
+    },
     groundAt: (x: number, z: number) =>
       planetTerrainY(renderConfig?.planetRadiusM ?? 0, x, z, getTerrainParams()),
   };

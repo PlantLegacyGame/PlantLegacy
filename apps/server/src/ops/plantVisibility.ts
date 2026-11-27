@@ -30,6 +30,8 @@ export interface SelectVisiblePlantsOptions<T extends PlantVisibilityLike> {
   isInRange: (playerId: string, x: number, z: number) => boolean;
   /** Announcements exclude the requester's own plant; syncs include it. */
   includeOwn?: boolean;
+  /** Maximum plants returned; the requester's own plant is kept first. */
+  limit?: number;
 }
 
 /**
@@ -40,16 +42,28 @@ export function selectVisiblePlants<T extends PlantVisibilityLike>(
   options: SelectVisiblePlantsOptions<T>,
 ): T[] {
   const includeOwn = options.includeOwn ?? true;
+  const cap =
+    options.limit === undefined || !Number.isFinite(options.limit)
+      ? Number.POSITIVE_INFINITY
+      : Math.max(0, Math.floor(options.limit));
+  if (cap === 0) return [];
   const visible: T[] = [];
-  for (const plant of options.plants) {
+  const plants = Array.from(options.plants);
+
+  // Keep the owner's own plant first even when the world list reaches the cap.
+  const own = includeOwn ? plants.find((plant) => plant.id === options.ownPlantId) : undefined;
+  if (own) visible.push(own);
+  if (visible.length >= cap) return visible;
+
+  for (const plant of plants) {
     if (plant.id === options.ownPlantId) {
-      if (includeOwn) visible.push(plant);
       continue;
     }
     const position = plantRootPosition(plant);
     if (!position) continue;
     if (options.isInRange(options.playerId, position.x, position.z)) {
       visible.push(plant);
+      if (visible.length >= cap) break;
     }
   }
   return visible;

@@ -1,247 +1,234 @@
-// Impostor baking shader: renders a single plant from multiple views into an atlas.
-// This is a variant of the mesh shader that filters by a target plant index.
-// C02b: Texture arrays for plant variation.
-
-// Import shared structures and functions from common.wgsl
-// Note: FrameUniforms and PlantRenderData come from common.wgsl; the vertex
-// structures are declared here because this pass does not include mesh.wgsl.
-
-struct VertexInput {
-  @location(0) position: vec3f,
-  @location(1) normal: vec3f,
-  @location(2) uv: vec2f,
-  @location(3) packed: u32,
-  @location(4) spawnTime: f32,
-  @location(5) growthProgress: f32,
-  @location(6) jointIndices: vec4<u32>,
-  @location(7) jointWeights: vec4<f32>,
-}
+// L2/L3 impostor pass: one analytic ellipsoid per distant plant.
+//
+// DESIGN Part 14.2.0 and ADR-042 make the 12–80 px band (L2) an ellipsoid SDF
+// with procedural bark and canopy colour, relit live: no atlas, no baked views,
+// no camera-facing leaf card. L3 (2–12 px) is the same ellipsoid, where it is
+// only a coloured point. The old atlas billboard is gone from the renderer.
+//
+// The quad is only the screen footprint the ray is traced in. What is drawn is
+// the intersection of the eye ray with the plant's ellipsoid, so the silhouette,
+// the lighting and the colour all follow the real surface at any hour.
 
 struct VertexOutput {
   @builtin(position) clipPosition: vec4f,
   @location(0) worldPosition: vec3f,
-  @location(1) normal: vec3f,
-  @location(2) uv: vec2f,
-  @location(3) nodeType: f32,
-  @location(4) isOwn: f32,
-  @location(5) @interpolate(flat) variationIndex: u32,
-}
-
-struct ImpostorUniforms {
-  targetPlantIndex: u32,
-  _pad1: u32,
-  _pad2: u32,
-  _pad3: u32,
-}
-
-struct ImpostorViewUniforms {
-  viewProjections: array<mat4x4<f32>, 16>,
+  @location(1) @interpolate(flat) plantIndex: u32,
+  @location(2) @interpolate(flat) isOwn: f32,
+  @location(3) @interpolate(flat) blend: f32,
 }
 
 @group(0) @binding(0) var<uniform> frame: FrameUniforms;
 @group(0) @binding(1) var<storage, read> renderData: array<PlantRenderData>;
-@group(0) @binding(2) var<uniform> impostor: ImpostorUniforms;
-@group(0) @binding(3) var<uniform> impostorViews: ImpostorViewUniforms;
-// C02b: Texture arrays for plant variation (bindings 4-8)
-@group(0) @binding(4) var barkTextureArray: texture_2d_array<f32>;
-@group(0) @binding(5) var leafTextureArray: texture_2d_array<f32>;
-@group(0) @binding(6) var flowerTextureArray: texture_2d_array<f32>;
-@group(0) @binding(7) var sporeSacTextureArray: texture_2d_array<f32>;
-@group(0) @binding(8) var seedTextureArray: texture_2d_array<f32>;
-@group(0) @binding(9) var textureArraySampler: sampler;
-// T04 appearance: the composed look of the plant being baked.
-@group(0) @binding(10) var<storage, read> impostorLooks: array<PlantLook>;
+@group(0) @binding(2) var<storage, read> plants: array<PlantData>;
+@group(0) @binding(3) var<storage, read> impostorLooks: array<PlantLook>;
 
-/** The composed look for one organ of the plant being baked. */
-fn impostorLook(nodeType: f32) -> LookOrgan {
-  if (impostor.targetPlantIndex >= arrayLength(&impostorLooks)) {
-    return neutralLookOrgan();
-  }
-  let look = impostorLooks[impostor.targetPlantIndex];
-  if (nodeType < 2.5) {
-    return look.woody;
-  }
-  if (nodeType > 2.5 && nodeType < 3.5) {
-    return look.foliage;
-  }
-  if (nodeType > 3.5 && nodeType < 4.5) {
-    return look.seed;
-  }
-  if (nodeType > 4.5 && nodeType < 6.5) {
-    return look.bloom;
-  }
-  return look.foliage;
+/** The quad carries this much margin around the body's widest axis, so the
+ * silhouette is never clipped by the window it is traced in. */
+const QUAD_MARGIN: f32 = 1.35;
+
+/**
+ * The ellipsoid is the plant's drawn body, not its bounding sphere.
+ *
+ * `center.w` is a sphere over every part of the plant including roots - it is
+ * what the cull pass measures for the tier, and it stays that. For a seedling
+ * the roots are most of it, so an ellipsoid sized from the sphere stood several
+ * times taller than the stem the mesh draws and the 1<->2 swap shrank the plant
+ * (E41).
+ */
+/**
+ * The body never draws smaller than this across, however far away it is.
+ *
+ * The floor is a plateau, not a cure: only about a third of it survives into
+ * the drawn pod (a 24 px floor measured as an 8 px dot, 4 and 6 px floors both
+ * as a 2x2 px core), so it keeps a distant plant present without pretending to
+ * make it legible. A plateau it cannot avoid while the true body is under it.
+ */
+const MIN_BODY_PX: f32 = 4.0;
+
+/**
+ * Half the height of the drawn body, from the soil up.
+ *
+ * The base is lifted to the terrain height: a seed crown's own box reaches
+ * below the surface, and an ellipsoid left there had its widest part buried and
+ * hidden by the soil test, so a grown plant drew at half its canopy width.
+ */
+fn impostorHalfHeight(plant: PlantData) -> f32 {
+  let baseY = max(plant.impostorBaseY, plant.groundY);
+  let topY = max(plant.impostorTopY, baseY + 0.02);
+  return max((topY - baseY) * 0.5, 0.02);
+}
+
+/** Where the body meets the soil: the point the pixel floor is measured from. */
+fn impostorFoot(plant: PlantData) -> vec3f {
+  return vec3f(
+    plant.center.x,
+    max(plant.impostorBaseY, plant.groundY),
+    plant.center.z,
+  );
+}
+
+fn impostorRadii(plant: PlantData, footDistance: f32) -> vec3f {
+  // L3 is 2-12 px, where a seedling's true body is under a pixel: hold the
+  // ellipsoid at MIN_BODY_PX across so the tier still draws a plant.
+  let floorPx =
+    MIN_BODY_PX * 0.5 * footDistance / max(frame.proj11 * frame.viewportHeight, 1.0);
+  let halfWidth = max(plant.impostorHalfWidth, floorPx);
+  let halfHeight = max(impostorHalfHeight(plant), floorPx);
+  return vec3f(halfWidth, halfHeight, halfWidth);
+}
+
+fn impostorCentre(plant: PlantData, footDistance: f32) -> vec3f {
+  // The body stands on the soil, so the ellipsoid sits where the stem is rather
+  // than at the sphere's centre, which roots pull underground. The half height
+  // is the one the radii use, so a floored body still rests on the ground
+  // instead of sinking half the floor below it.
+  let foot = impostorFoot(plant);
+  let radii = impostorRadii(plant, footDistance);
+  return vec3f(foot.x, foot.y + radii.y, foot.z);
 }
 
 fn hiddenVertex() -> VertexOutput {
   return VertexOutput(
     vec4f(2.0, 2.0, 2.0, 1.0),
     vec3f(0.0, 0.0, 0.0),
-    vec3f(0.0, 1.0, 0.0),
-    vec2f(0.0, 0.0),
-    0.0,
-    0.0,
     0u,
+    0.0,
+    0.0,
   );
 }
 
 @vertex
 fn vs_main(
-  input: VertexInput,
+  @builtin(vertex_index) vertexIndex: u32,
   @builtin(instance_index) instanceIndex: u32,
 ) -> VertexOutput {
-  let plantIndex = input.packed & 0xffffu;
-  if (plantIndex >= arrayLength(&renderData)) {
+  if (instanceIndex >= arrayLength(&renderData) || instanceIndex >= arrayLength(&plants)) {
     return hiddenVertex();
   }
 
-  // Filter: only render the target plant for impostor baking
-  if (plantIndex != impostor.targetPlantIndex) {
+  let renderInfo = renderData[instanceIndex];
+  // Tier 2 and below is the impostor; tier 0/1 is the merged mesh, and a tier 1
+  // plant still fading toward the impostor is drawn by the mesh pass alone.
+  if (renderInfo.visible == 0u || renderInfo.tier < 2u) {
     return hiddenVertex();
   }
 
-  let renderInfo = renderData[plantIndex];
-  if (renderInfo.visible == 0u) {
-    return hiddenVertex();
-  }
+  let corners = array<vec2f, 6>(
+    vec2f(0.0, 0.0),
+    vec2f(1.0, 0.0),
+    vec2f(0.0, 1.0),
+    vec2f(1.0, 0.0),
+    vec2f(1.0, 1.0),
+    vec2f(0.0, 1.0),
+  );
+  let corner = corners[vertexIndex];
 
-  let nodeType = f32((input.packed >> 16u) & 0xffu);
-  let isOwn = f32((input.packed >> 24u) & 0x1u);
-  let variationIndex = (input.packed >> 25u) & 0xfu;
+  let plant = plants[instanceIndex];
+  let footDistance = distance(frame.cameraPos.xyz, impostorFoot(plant));
+  let centre = impostorCentre(plant, footDistance);
+  let radii = impostorRadii(plant, footDistance);
+  let size = 2.0 * max(radii.x, radii.y) * QUAD_MARGIN;
 
-  // C02b: GPU skinning - emergence animation
-  var emergence = input.growthProgress;
-  if (input.spawnTime > 0.0) {
-    let elapsed = frame.time - input.spawnTime;
-    emergence = smoothstep(0.0, 0.9, elapsed) * input.growthProgress;
-  }
-
-  var worldPosition = windOffset(input.position, frame, 0.3, renderInfo.groundY);
-  worldPosition *= emergence;
-
-  // Impostor baking uses the unskinned rest pose. The baking bind group does
-  // not provide joint matrices; live rendering applies skinning in the mesh pass.
-  let skinnedNormal = input.normal;
-
-  let isOutline = nodeType >= 7.5 && nodeType < 8.5;
-  let outlineOffset = select(0.0, 0.025, isOutline);
-  worldPosition += skinnedNormal * outlineOffset;
-
-  // Use the view-projection matrix for the current view instance
-  let viewProj = impostorViews.viewProjections[instanceIndex];
-  let clipPosition = viewProj * vec4f(worldPosition, 1.0);
+  // The quad faces the eye, but it is not the plant: it is the window the
+  // ellipsoid is traced through.
+  let worldPosition = centre
+    + frame.cameraRight.xyz * (corner.x - 0.5) * size
+    + frame.cameraUp.xyz * (corner.y - 0.5) * size;
 
   return VertexOutput(
-    clipPosition,
+    frame.viewProjection * vec4f(worldPosition, 1.0),
     worldPosition,
-    skinnedNormal,
-    input.uv,
-    nodeType,
-    isOwn,
-    variationIndex,
+    instanceIndex,
+    plant.color.w,
+    renderInfo.blendFactor,
   );
 }
 
 @fragment
-fn fs_main(input: VertexOutput, @builtin(front_facing) frontFacing: bool) -> @location(0) vec4f {
-  var normal = normalize(input.normal);
-  if (!frontFacing) {
-    normal = -normal;
+fn fs_main(input: VertexOutput) -> @location(0) vec4f {
+  let index = input.plantIndex;
+  let plant = plants[index];
+  let footDistance = distance(frame.cameraPos.xyz, impostorFoot(plant));
+  let centre = impostorCentre(plant, footDistance);
+  let radii = impostorRadii(plant, footDistance);
+
+  let eye = frame.cameraPos.xyz;
+  let toward = input.worldPosition - eye;
+  let rayLength = length(toward);
+  if (rayLength < 1e-4) {
+    discard;
+  }
+  let direction = toward / rayLength;
+
+  // Ray against the ellipsoid, in the space where it is the unit sphere.
+  let scaledOrigin = (eye - centre) / radii;
+  let scaledDirection = direction / radii;
+  let a = dot(scaledDirection, scaledDirection);
+  let b = dot(scaledOrigin, scaledDirection);
+  let c = dot(scaledOrigin, scaledOrigin) - 1.0;
+  let discriminant = b * b - a * c;
+  if (discriminant < 0.0) {
+    discard;
+  }
+  let root = sqrt(discriminant);
+  let nearHit = (-b - root) / a;
+  let farHit = (-b + root) / a;
+  let depthAlongRay = select(farHit, nearHit, nearHit > 0.0);
+  if (depthAlongRay <= 0.0) {
+    discard;
   }
 
-  let isOutline = input.nodeType >= 7.5 && input.nodeType < 8.5;
-
-  // C02b: Sample from texture arrays based on node type and variation
-  var baseColor = vec3f(0.34, 0.62, 0.20);
-  var texColor = vec3f(1.0, 1.0, 1.0);
-  var hasTexture = false;
-  let variationIndex = input.variationIndex;
-
-  if (isOutline) {
-    baseColor = vec3f(1.0, 0.84, 0.0); // Gold
-  } else if (input.nodeType < 0.5) {
-    // Root: bark texture
-    texColor = textureSampleLevel(barkTextureArray, textureArraySampler, input.uv, variationIndex, 0.0).rgb;
-    hasTexture = true;
-  } else if (input.nodeType < 1.5) {
-    // Stem: bark texture
-    texColor = textureSampleLevel(barkTextureArray, textureArraySampler, input.uv, variationIndex, 0.0).rgb;
-    hasTexture = true;
-  } else if (input.nodeType < 2.5) {
-    // Vine: bark texture (darker)
-    texColor = textureSampleLevel(barkTextureArray, textureArraySampler, input.uv, variationIndex, 0.0).rgb;
-    hasTexture = true;
-  } else if (input.nodeType < 3.5) {
-    // Leaf: leaf texture
-    texColor = textureSampleLevel(leafTextureArray, textureArraySampler, input.uv, variationIndex, 0.0).rgb;
-    hasTexture = true;
-  } else if (input.nodeType < 4.5) {
-    // Seed: seed texture
-    texColor = textureSampleLevel(seedTextureArray, textureArraySampler, input.uv, variationIndex, 0.0).rgb;
-    hasTexture = true;
-  } else if (input.nodeType < 5.5) {
-    // Flower: flower texture
-    texColor = textureSampleLevel(flowerTextureArray, textureArraySampler, input.uv, variationIndex, 0.0).rgb;
-    hasTexture = true;
-  } else if (input.nodeType < 6.5) {
-    // Spore sac: spore sac texture
-    texColor = textureSampleLevel(sporeSacTextureArray, textureArraySampler, input.uv, variationIndex, 0.0).rgb;
-    hasTexture = true;
-  } else if (input.nodeType < 7.5) {
-    // Cotyledon: leaf texture (yellow-green)
-    texColor = textureSampleLevel(leafTextureArray, textureArraySampler, input.uv, variationIndex, 0.0).rgb;
-    hasTexture = true;
+  let surface = eye + direction * depthAlongRay;
+  // The overlay has no depth against the WebGL ground, so the surface the ray
+  // found is what has to survive the planet's own occlusion tests.
+  if (soilOccludes(surface) || groundBlocks(surface)) {
+    discard;
   }
 
-  if (hasTexture) {
-    baseColor = texColor;
-  } else {
-    // Fallback to procedural colors
-    if (isOutline) {
-      baseColor = vec3f(1.0, 0.84, 0.0); // Gold
-    } else if (input.nodeType < 0.5) {
-      baseColor = vec3f(0.38, 0.28, 0.18); // Root: brown
-    } else if (input.nodeType < 1.5) {
-      baseColor = vec3f(0.22, 0.55, 0.22); // Stem: green
-    } else if (input.nodeType < 2.5) {
-      baseColor = vec3f(0.26, 0.48, 0.16); // Vine: darker green
-    } else if (input.nodeType < 3.5) {
-      baseColor = vec3f(0.20, 0.70, 0.25); // Leaf: vibrant green
-    } else if (input.nodeType < 4.5) {
-      baseColor = vec3f(0.42, 0.28, 0.16); // Seed: rich organic brown
-    } else if (input.nodeType < 5.5) {
-      baseColor = vec3f(0.95, 0.35, 0.45); // Flower: pink/red
-    } else if (input.nodeType < 6.5) {
-      baseColor = vec3f(0.75, 0.45, 0.20); // Spore sac: orange/brown
-    } else if (input.nodeType < 7.5) {
-      baseColor = vec3f(0.45, 0.75, 0.30); // Cotyledon: yellow-green
-    }
+  let scaled = (surface - centre) / radii;
+  let normal = normalize(scaled / radii);
+
+  // Height up the ellipsoid turns the body from bark into canopy. The noise
+  // breaks the boundary so the silhouette is a plant, not a smooth egg.
+  let height = clamp((surface.y - (centre.y - radii.y)) / (2.0 * radii.y), 0.0, 1.0);
+  let mottle =
+    0.5
+    + 0.5 * sin(surface.x * 6.3 + surface.y * 4.1) * sin(surface.z * 5.7 - surface.y * 2.3);
+  let canopy = smoothstep(0.24, 0.74, height + (mottle - 0.5) * 0.22);
+
+  var barkLook = neutralLookOrgan();
+  var leafLook = neutralLookOrgan();
+  if (index < arrayLength(&impostorLooks)) {
+    barkLook = impostorLooks[index].woody;
+    leafLook = impostorLooks[index].foliage;
   }
 
-  // T04: the atlas is baked with the plant's own mutations, on their own
-  // organs, so a distant plant keeps its colours instead of going generic.
-  let look = impostorLook(input.nodeType);
-  if (!isOutline) {
-    baseColor = applyPlantLook(baseColor, look, input.worldPosition, frame);
+  // The plant's own mutations are painted onto its organs (ADR-059), so a
+  // distant bioluminescent plant still glows and a variegated one still has
+  // its pattern instead of turning generic green.
+  let bark = applyPlantLook(vec3f(0.33, 0.25, 0.17), barkLook, surface, frame);
+  let foliage = applyPlantLook(
+    vec3f(0.20, 0.52, 0.22) * (0.85 + 0.30 * mottle),
+    leafLook,
+    surface,
+    frame,
+  );
+  let albedo = mix(bark, foliage, canopy);
+
+  let sun = normalize(frame.sunDirection.xyz);
+  let sunDot = max(dot(normal, sun), 0.0);
+  var lit = albedo * (0.30 + 0.70 * sunDot);
+  let view = normalize(eye - surface);
+  let rim = pow(1.0 - max(dot(normal, view), 0.0), 3.0);
+  lit += vec3f(0.18, 0.30, 0.18) * rim * 0.18;
+  lit += lookEmissive(leafLook, surface, frame) * canopy;
+  lit = applyRootSight(lit, surface, 1.0, input.isOwn, frame).rgb;
+
+  // The mesh pass fades a plant out as it crosses the boundary; the impostor
+  // fades in with the same factor, premultiplied for the transparent pass.
+  let alpha = clamp(input.blend, 0.0, 1.0);
+  if (alpha < 0.02) {
+    discard;
   }
-
-  let healthFactor = 1.0 - frame.healthTintStrength * 0.3;
-  baseColor = mix(vec3f(0.42, 0.30, 0.16), baseColor, healthFactor);
-
-  let sunDirection = normalize(frame.sunDirection.xyz);
-  let nDotL = max(dot(normal, sunDirection), 0.0);
-  var lit = baseColor * (0.30 + 0.70 * nDotL);
-
-  let viewDirection = normalize(frame.cameraPos.xyz - input.worldPosition);
-  let rim = pow(1.0 - max(dot(normal, viewDirection), 0.0), 3.0) * 0.18;
-  lit += vec3f(0.18, 0.30, 0.18) * rim;
-
-  // The old glow read a single global parameter, so every baked impostor glowed
-  // green whether or not it held a bioluminescent mutation. The look now says.
-  if (!isOutline) {
-    lit += lookEmissive(look, input.worldPosition, frame);
-  }
-
-  lit = applyRootSight(lit, input.worldPosition, input.nodeType, input.isOwn, frame).rgb;
-  return vec4f(lit, 1.0);
+  return vec4f(lit * alpha, alpha);
 }

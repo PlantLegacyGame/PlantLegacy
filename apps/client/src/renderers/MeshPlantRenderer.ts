@@ -14,7 +14,10 @@
 import {
   getSeedBodyHeightRatio,
   getSegmentTaperExponent,
+  isRootOrgan,
   jointStartRadius,
+  organMorphologyFor,
+  organStageFrame,
   resolveDrawnRadius,
   seedBodyCentreY,
   seedBodyHalfHeight,
@@ -38,11 +41,16 @@ import {
 } from './environment/standardAtmosphere.js';
 import { type OrganKey, organRoleForNodeType, resolveOrganColours } from './organPalette.ts';
 import {
+  footprintKey,
   PlantContactShadows,
   type PlantFootprint,
   plantFootprints,
+  plantShadowPatches,
+  type ShadowPatch,
+  shadowPatchKey,
 } from './PlantContactShadows.ts';
 import type { HeadCaptureSource } from './plant/headCapture.ts';
+import { jointElbow, MIN_ELBOW_ANGLE } from './plant/jointElbow.ts';
 import {
   geometryKey,
   lookAppliesTo,
@@ -53,7 +61,9 @@ import {
   organLook,
 } from './plant/mutations.ts';
 import { nubSwellForNode } from './plant/nubBulge.js';
+import { buildOrganAccents } from './plant/organAccents.ts';
 import { bladeEmergence, headEmergence } from './plant/organEmergence.js';
+import { organMeshSpecFor } from './plant/organMeshSpec.ts';
 import {
   applyLeafTranslucency,
   applySoilRamp,
@@ -62,6 +72,7 @@ import {
   createInkMaterial,
   INK_WIDTH_M,
   inkColourFor,
+  inkOrganFor,
   organTaperExponent,
   setLeafBacklight,
   setSoilLine,
@@ -70,7 +81,16 @@ import {
 } from './plant/organShading.ts';
 import type { PlantNodeData } from './plant/plantNodeData.js';
 import { segmentStartFor } from './plant/segmentStart.js';
+import { buildSocketFilletGeometry, socketFilletFor } from './plant/socketFillet.ts';
 import { buildSpineGeometry } from './plant/spineGeometry.ts';
+import {
+  buildInkHullGeometry,
+  buildLiveInkHullGeometry,
+  buildLiveTubeGeometry,
+  buildTubeGeometry,
+  type TubeElbow,
+  type TubeTurn,
+} from './plant/tubeShape.ts';
 
 interface MeshAppearance {
   petalCount: number;
@@ -117,6 +137,8 @@ interface MeshSegmentData {
   growthProgress: number;
   mesh: THREE.Mesh;
   jointMesh: THREE.Mesh | null;
+  /** A socket knuckle where a part leaves its parent mid-segment (G03). */
+  socketMesh: THREE.Mesh | null;
   leafMeshes: THREE.Mesh[];
   /** The ink pads drawn under the blades: one per leaf, same count and order. */
   leafInkMeshes: THREE.Mesh[];
@@ -129,6 +151,8 @@ interface MeshSegmentData {
   /** Health band the material was built from; a change rebuilds the materials. */
   healthBand: NodeHealthStatus;
   ornament: THREE.Group | null;
+  /** Organ-specific geometry (cap, rings, tuber body, tendril, pad). */
+  organAccent: THREE.Group | null;
   /** The plate's ink line for a root: an inverted hull of the tube's geometry. */
   inkMesh: THREE.Mesh | null;
   parentPosition: THREE.Vector3;
@@ -150,6 +174,26 @@ interface MeshSegmentData {
   originalLength: number;
   /** Mid-segment lateral bow, in metres. */
   bend: number;
+  /**
+   * The turns this segment makes at its joints, in its own frame.
+   *
+   * The joints do not move for them: a child that leaves at an angle either
+   * bends the parent's last stretch into its direction, or - when it leaves
+   * mid-way along the parent - starts along the parent's line and turns into its
+   * own. Either way the two bodies meet flush instead of two squared-off tubes
+   * crossing at a notch (G15).
+   */
+  elbow: TubeElbow | null;
+  /** Which way this segment runs, so its children can leave along it. */
+  axis: THREE.Vector3;
+  /** Which children the elbow was built from; a new one rebuilds this part. */
+  childrenKey: string;
+  /**
+   * True while the body and hull are this segment's own live shapes (see
+   * buildLiveTubeGeometry): a live shape is disposed here, a shared one belongs
+   * to the shape cache.
+   */
+  liveGeometry: boolean;
 }
 
 /**
@@ -302,96 +346,6 @@ function baseMaterialFor(nodeType: string): THREE.MeshStandardMaterial {
   return ORGAN_MATERIALS[organRoleForNodeType(nodeType)];
 }
 
-function isRootNodeType(nodeType: string): boolean {
-  return nodeType === 'radicle' || nodeType === 'root' || nodeType === 'lateral_root';
-}
-
-// Tube geometry cache: avoids rebuilding CylinderGeometry on every rebuild/growth
-// frame when the same (radius0, radius1, length) recurs. Keys are rounded to
-// 3 decimals so near-identical segments share geometry.
-const tubeGeometryCache = new Map<string, THREE.BufferGeometry>();
-function tubeGeometryCacheKey(
-  r0: number,
-  r1: number,
-  length: number,
-  quality: MeshQualityConfig,
-  taper: number,
-): string {
-  // The taper exponent is part of the shape: a cached tube built with a
-  // different exponent is the wrong silhouette, not just a different number.
-  return `${r0.toFixed(3)},${r1.toFixed(3)},${length.toFixed(3)},${quality.tubeRadialSegments}x${quality.tubeLengthSegments},${taper.toFixed(2)}`;
-}
-
-/**
- * Bend a cylinder's rings onto the shared segment profile.
- *
- * CylinderGeometry interpolates radius linearly from base to tip, which draws
- * every internode as a funnel. The neck belongs at the junction: rescale each
- * ring by `segmentRadiusAt / linear`, so the belly is at the joint and the shank
- * holds for the rest of the segment. The tube's own ends keep the radii it was
- * built with, so joints and tips are unchanged.
- */
-function applySegmentProfile(
-  geometry: THREE.BufferGeometry,
-  r0: number,
-  r1: number,
-  length: number,
-  taper: number,
-): void {
-  const position = geometry.getAttribute('position');
-  const span = Math.max(length, 1e-4);
-  for (let i = 0; i < position.count; i += 1) {
-    const t = THREE.MathUtils.clamp(position.getY(i) / span, 0, 1);
-    const linear = r0 + (r1 - r0) * t;
-    if (linear <= 1e-6) continue;
-    const scale = segmentRadiusAt(r0, r1, t, taper) / linear;
-    position.setX(i, position.getX(i) * scale);
-    position.setZ(i, position.getZ(i) * scale);
-  }
-  position.needsUpdate = true;
-}
-
-function buildTubeGeometry(
-  r0: number,
-  r1: number,
-  length: number,
-  quality: MeshQualityConfig,
-  bend = 0,
-  /** The organ's own taper exponent: roots hold their body, shoots neck. */
-  taper = getSegmentTaperExponent(),
-): THREE.BufferGeometry {
-  const key = `${tubeGeometryCacheKey(r0, r1, length, quality, taper)}|${bend.toFixed(3)}`;
-  let geo = tubeGeometryCache.get(key);
-  if (!geo) {
-    geo = new THREE.CylinderGeometry(
-      r0,
-      r1,
-      length,
-      quality.tubeRadialSegments,
-      quality.tubeLengthSegments,
-      false,
-    );
-    // CylinderGeometry is centred on its Y axis. Move the base to the origin
-    // and keep +Y as the growth axis; the old rotateX made the geometry run
-    // along Z while the mesh was aligned from +X, so every tube was off-axis.
-    geo.translate(0, length / 2, 0);
-    applySegmentProfile(geo, r0, r1, length, taper);
-    if (Math.abs(bend) > 1e-5) {
-      const position = geo.getAttribute('position');
-      for (let i = 0; i < position.count; i += 1) {
-        const t = THREE.MathUtils.clamp(position.getY(i) / Math.max(length, 1e-4), 0, 1);
-        // Bow the middle while keeping both endpoints on the parent/joint, so
-        // roots wander without detaching from the graph.
-        position.setX(i, position.getX(i) + bend * Math.sin(Math.PI * t));
-      }
-      position.needsUpdate = true;
-    }
-    geo.computeVertexNormals();
-    tubeGeometryCache.set(key, geo);
-  }
-  return geo;
-}
-
 /**
  * Thorn cones along one woody segment, for `spined_epidermis`.
  *
@@ -532,17 +486,71 @@ function buildLeafOutlineGeometry(
   return geometry;
 }
 
-/** A deterministic, type-appropriate mid-segment bow. */
-function segmentBend(node: MeshNode, length: number): number {
-  const type = node.nodeType.toLowerCase();
-  const sign = hash01(node.id, 'segment-bend') * 2 - 1;
-  if (type === 'radicle') return sign * length * 0.06;
-  if (type === 'lateral_root') return sign * length * 0.24;
-  if (type === 'root') return sign * length * 0.14;
-  if (type === 'stem' || type === 'branch') return sign * length * 0.05;
-  if (type === 'vine') return sign * length * 0.1;
-  return 0;
+/** How close to its parent's tip a child may leave before the tip turns for it. */
+const TIP_ATTACH = 0.85;
+
+/** Which way a node's own part runs, from where it leaves its parent to its tip. */
+function parentDirection(parent: {
+  position: THREE.Vector3;
+  parentAttachPosition?: THREE.Vector3;
+}): THREE.Vector3 | null {
+  const from = parent.parentAttachPosition ?? parent.position;
+  const dir = parent.position.clone().sub(from);
+  return dir.lengthSq() > 1e-8 ? dir.normalize() : null;
 }
+
+/**
+ * The elbow a growing part has reached so far.
+ *
+ * A part grows along its own axis and only meets its children as it arrives at
+ * the joint, so turning the tip early would draw the bend hanging in the air.
+ */
+function elbowAtProgress(elbow: TubeElbow | null, progress: number): TubeElbow | null {
+  if (!elbow) return null;
+  const at = THREE.MathUtils.clamp(progress, 0, 1);
+  const scaled = (turn: TubeTurn | undefined): TubeTurn | undefined => {
+    if (!turn) return undefined;
+    const angle = turn.angle * at;
+    return angle > 1e-3 ? { angle, azimuth: turn.azimuth } : undefined;
+  };
+  const base = scaled(elbow.base);
+  const tip = scaled(elbow.tip);
+  return base || tip ? { base, tip } : null;
+}
+
+/** A deterministic, organ-appropriate mid-segment bow. */
+function segmentBend(node: MeshNode, length: number): number {
+  const sign = hash01(node.id, 'segment-bend') * 2 - 1;
+  return sign * length * organMorphologyFor(node.nodeType).bend;
+}
+
+/**
+ * How often the contact patches may be re-laid, in milliseconds.
+ *
+ * Laying them asks the terrain for heights, and one height is a raycast across
+ * every triangle drawn: on the shipped map that is about five milliseconds, so
+ * doing it on every plant update (a dozen a second while a part grows) spent
+ * half the frame budget on shade nobody could see move. The shade is a soft
+ * ellipse; a few frames of lag is invisible, a stutter is not.
+ */
+const CONTACT_SHADOW_MIN_MS = 150;
+/**
+ * Node types that are under the soil.
+ *
+ * A root tip can never be part of the shade on the soil: it is below it, and the
+ * ray from it would surface beside the plant, wherever its search had reached.
+ */
+const SHADE_ROOT_TYPES = new Set([
+  'radicle',
+  'root',
+  'lateral_root',
+  'rhizome',
+  'pneumatophore',
+  'tuber',
+]);
+
+/** Health/look material variants are cheap but not free; cap the cache. */
+const MAX_MATERIAL_VARIANTS = 512;
 
 export class MeshPlantRenderer {
   /**
@@ -600,11 +608,19 @@ export class MeshPlantRenderer {
   private readonly inkColour = new THREE.Color();
 
   /**
-   * Ink for one node's own colour. `blade` is the flat band a leaf lies on; `hull`
-   * is the inverted hull a flower or spore sac wears.
+   * Ink for one part's own colour. `blade` is the flat band a leaf lies on;
+   * `hull` is the inverted hull a flower or spore sac wears.
+   *
+   * `organType` is the organ the part is *drawn as*, which is not always the node
+   * type: a flower's stalk is drawn as a stem, so it is inked as one (see
+   * `inkOrganFor`). The head keeps the node's own pigment.
    */
-  private inkFor(node: MeshNode, kind: 'blade' | 'hull'): THREE.MeshStandardMaterial {
-    const base = this.materialFor(node.nodeType, this.lookFor(node), this.healthBandOf(node)).color;
+  private inkFor(
+    node: MeshNode,
+    kind: 'blade' | 'hull',
+    organType: string = node.nodeType,
+  ): THREE.MeshStandardMaterial {
+    const base = this.materialFor(organType, this.lookFor(node), this.healthBandOf(node)).color;
     inkColourFor(base, this.inkColour);
     const key = `${kind}:${this.inkColour.getHexString()}`;
     const cached = this.inkVariants.get(key);
@@ -634,6 +650,10 @@ export class MeshPlantRenderer {
   private nodeFirstSeen = new Map<string, number>();
   private hasPlantData = false;
   private structureDirty = true;
+  /** The footprints the patches were last laid from, to the centimetre. */
+  private lastFootprintKey = '';
+  /** When they were last laid, so a plant update cannot re-lay them every tick. */
+  private lastFootprintAtMs = Number.NEGATIVE_INFINITY;
   private readonly quality: MeshQualityConfig;
   // One tinted material per (organ type, signature). Materials live on the
   // instance and are never mutated after creation, so two plants with different
@@ -652,6 +672,9 @@ export class MeshPlantRenderer {
   private readonly drawnGround = new DrawnGround();
   /** One contact patch per plant, laid in the ground plane like a drop's. */
   private contactShadows!: PlantContactShadows;
+  /** Where the sun stands, for the shade each part of the body throws. */
+  private readonly sunDirection = new THREE.Vector3(0, 1, 0);
+  private sunDirectionKnown = false;
 
   /**
    * Give the mesh pass the mesh the ground is drawn as.
@@ -810,6 +833,22 @@ export class MeshPlantRenderer {
       }
     }
     this.materialVariants.set(key, material);
+    // A plant that has seen many health bands, looks and tissues must not keep
+    // every variant alive forever. Evict only a material no live mesh uses, so
+    // the cap cannot blank a part that is still on screen.
+    if (this.materialVariants.size > MAX_MATERIAL_VARIANTS) {
+      for (const [oldKey, oldMaterial] of this.materialVariants) {
+        if (oldKey === key) continue;
+        let inUse = false;
+        this.meshGroup.traverse((object) => {
+          if (object instanceof THREE.Mesh && object.material === oldMaterial) inUse = true;
+        });
+        if (inUse) continue;
+        this.materialVariants.delete(oldKey);
+        oldMaterial.dispose();
+        break;
+      }
+    }
     return material;
   }
 
@@ -939,37 +978,82 @@ export class MeshPlantRenderer {
   }
 
   /**
+   * Where the sun is, so each part can throw its shade away from it.
+   *
+   * The caller reads this from the sky - the same direction the light itself
+   * uses - so the shade on the soil and the highlights on the leaves agree.
+   */
+  setSunDirection(direction: { x: number; y: number; z: number }): void {
+    if (!Number.isFinite(direction.x) || !Number.isFinite(direction.y)) return;
+    if (Math.abs(direction.x) + Math.abs(direction.y) + Math.abs(direction.z) < 1e-6) return;
+    this.sunDirection.set(direction.x, direction.y, direction.z).normalize();
+    this.sunDirectionKnown = true;
+  }
+
+  /**
    * One footprint per plant, from the parts that stand above its soil, seated on
    * the drawn ground rather than the field under it.
    */
-  private updateContactShadows(): void {
+  private updateContactShadows(nowMs = performance.now()): void {
+    // The patch is shade on the soil, not a part of the plant: it follows the
+    // foot, not the tip. A plant update arrives many times a second while a part
+    // grows, and each of these rays costs milliseconds, so the patches are
+    // re-laid on a slow clock and only when a foot actually moved.
+    if (nowMs - this.lastFootprintAtMs < CONTACT_SHADOW_MIN_MS) return;
     // One truth for both questions. "Is this part above the soil?" and "where
     // does the patch lie?" have to ask the same surface, or on a bank - where the
     // drawn triangle stands up to half a metre over the field - a buried root
     // counts as standing and drags the patch to the top of the hill.
     const soilY = (x: number, z: number): number => this.drawnGround.height(x, z);
-    const footprints: PlantFootprint[] = plantFootprints(
-      [...this.nodeMap.values()].map((node) => ({
-        plantId: node.plantId,
-        isOwnPlant: node.isOwnPlant,
-        position: node.position,
-      })),
-      soilY,
-    ).map((foot) => ({ ...foot, groundY: soilY(foot.x, foot.z) }));
-    this.contactShadows.update(footprints);
+    const parts = [...this.nodeMap.values()].map((node) => ({
+      plantId: node.plantId,
+      isOwnPlant: node.isOwnPlant,
+      type: SHADE_ROOT_TYPES.has(node.nodeType) ? 0 : 2,
+      radius: node.radius,
+      position: node.position,
+    }));
+    const footprints: PlantFootprint[] = plantFootprints(parts, soilY).map((foot) => ({
+      ...foot,
+      groundY: soilY(foot.x, foot.z),
+    }));
+    // The body's own shade: one ellipse per drawn part, thrown down the light.
+    // Its key carries the sun too, so the shade follows the sun without the
+    // plant having to move for it to be re-laid.
+    const patches: ShadowPatch[] = this.sunDirectionKnown
+      ? plantShadowPatches(parts, soilY, this.sunDirection).map((patch) => ({
+          ...patch,
+          groundY: soilY(patch.x, patch.z),
+        }))
+      : [];
+    const key = `${footprintKey(footprints)}#${shadowPatchKey(patches)}`;
+    if (key === this.lastFootprintKey) return;
+    this.lastFootprintKey = key;
+    this.lastFootprintAtMs = nowMs;
+    this.contactShadows.update(footprints, patches);
   }
 
-  /** Drop every mesh a segment owns; geometry is disposed, materials are shared. */
+  /**
+   * Drop every mesh a segment owns.
+   *
+   * A part removed mid-growth carries live shapes of its own, so those go with
+   * it; a settled part's tube belongs to the shape cache and may be shared with
+   * a segment the plant still draws, so that one is not this segment's to
+   * dispose.
+   */
   private disposeSegment(seg: MeshSegmentData): void {
     this.meshGroup.remove(seg.mesh);
-    seg.mesh.geometry.dispose();
+    if (seg.liveGeometry) seg.mesh.geometry.dispose();
     if (seg.inkMesh) {
-      // The hull shares the tube's geometry, which the line above has disposed.
       this.meshGroup.remove(seg.inkMesh);
+      if (seg.liveGeometry) seg.inkMesh.geometry.dispose();
     }
     if (seg.jointMesh) {
       this.meshGroup.remove(seg.jointMesh);
       seg.jointMesh.geometry.dispose();
+    }
+    if (seg.socketMesh) {
+      this.meshGroup.remove(seg.socketMesh);
+      seg.socketMesh.geometry.dispose();
     }
     for (const leaf of seg.leafMeshes) {
       this.meshGroup.remove(leaf);
@@ -982,12 +1066,24 @@ export class MeshPlantRenderer {
     for (const hull of seg.inkOrnament) {
       hull.removeFromParent();
     }
+    if (seg.organAccent) {
+      seg.organAccent.traverse((object) => {
+        if (object instanceof THREE.Mesh) object.geometry.dispose();
+      });
+      seg.organAccent.removeFromParent();
+    }
     for (const spine of seg.spineMeshes) {
       this.meshGroup.remove(spine);
       spine.geometry.dispose();
     }
     if (seg.ornament) {
       this.meshGroup.remove(seg.ornament);
+      // The ornament group owns child geometries (petals share one within the
+      // group, hulls share the petals'); disposing twice is harmless, leaking
+      // them is not.
+      seg.ornament.traverse((object) => {
+        if (object instanceof THREE.Mesh) object.geometry.dispose();
+      });
     }
   }
 
@@ -1040,18 +1136,14 @@ export class MeshPlantRenderer {
       // shape and height as the one the WebGPU pass builds.
       const seedScale = this.appearanceFor(node).seedScale;
       mesh.scale.set(0.95 * seedScale, getSeedBodyHeightRatio() * seedScale, 0.85 * seedScale);
-      // Sit the rounded base on the ground: the stored y is the contact point,
-      // not the centre. The lift is the height actually drawn, so it takes the
-      // same seedScale the ovoid is scaled by - lifting by the unscaled half
-      // height left the base hovering whenever a plant's look shrank its seed.
-      //
-      // And the contact point is only trusted downwards: a seed that crawled
-      // keeps the height it was placed at, so on soil drawn a few centimetres
-      // lower it hung in the air. Seat it on the ground under it; never lift it
-      // off that ground, so a stored point lower than the drawing still wins.
-      const contactY = Number.isFinite(node.position.y)
-        ? this.drawnGround.height(node.position.x, node.position.z)
-        : node.position.y;
+      // The stored point is the contact point the whole client uses (gizmo,
+      // focus, pick and now the mesh). Seating the mesh on the drawn triangle
+      // instead made the coat and its pick sphere disagree on a slope; one seat
+      // is worth more than a centimetre of ground contact.
+      const contactY = Number.isFinite(node.position.y) ? node.position.y : 0;
+      // The stored y is the contact point, not the centre; lift by the height
+      // actually drawn so a mutation that shrinks the seed does not leave it
+      // hovering or buried.
       mesh.position.set(
         node.position.x,
         seedBodyCentreY(contactY, radius * seedScale),
@@ -1073,6 +1165,30 @@ export class MeshPlantRenderer {
       seedHull.castShadow = false;
       seedHull.receiveShadow = false;
       mesh.add(seedHull);
+      // The hilum is anatomy of the coat, built on a unit sphere and scaled
+      // into the coat's own radius. The seed body's geometry already carries
+      // that radius, so without this scale the hilum is a metre-wide bump
+      // floating above a ten-centimetre seed.
+      const seedAccent = buildOrganAccents('seed', { length: 2, radius: 1 });
+      if (seedAccent) {
+        seedAccent.scale.setScalar(radius);
+        // The hilum is a scar, not another patch of coat: a slightly paler
+        // material is what makes it legible on a dark seed at play distance.
+        const scarMaterial = mat.clone();
+        // Derived from the coat's palette colour, never a separate literal: the
+        // organ palette remains the one place a plant colour is chosen.
+        scarMaterial.color.offsetHSL(0.02, -0.12, 0.18);
+        scarMaterial.roughness = 1;
+        scarMaterial.metalness = 0;
+        seedAccent.traverse((object) => {
+          if (!(object instanceof THREE.Mesh)) return;
+          object.material = object.name === 'seed-hilum' ? scarMaterial : mat;
+          object.castShadow = true;
+          object.receiveShadow = true;
+        });
+        mesh.userData.seedScarMaterial = scarMaterial;
+        mesh.add(seedAccent);
+      }
       this.meshGroup.add(mesh);
       this.seedMeshes.set(id, mesh);
     }
@@ -1081,14 +1197,51 @@ export class MeshPlantRenderer {
       if (!activeSeedIds.has(id)) {
         this.meshGroup.remove(mesh);
         mesh.geometry.dispose();
+        (mesh.userData.seedScarMaterial as THREE.Material | undefined)?.dispose();
+        // The hilum is child geometry, not part of the coat's sphere.
+        mesh.traverse((object) => {
+          if (object instanceof THREE.Mesh && object.geometry !== mesh.geometry) {
+            object.geometry.dispose();
+          }
+        });
         this.seedMeshes.delete(id);
       }
     }
+
+    // The parts that leave each node at its tip. A node carrying a child that
+    // runs on at an angle bends its own tip into it (see jointElbow), and the
+    // key is what tells a built part that the set has changed since.
+    const jointChildren = new Map<
+      string,
+      { end: THREE.Vector3; radius: number; atTip: boolean }[]
+    >();
+    for (const [, child] of this.nodeMap) {
+      if (!child.parentId) continue;
+      const siblings = jointChildren.get(child.parentId) ?? [];
+      siblings.push({
+        end: (child.targetPosition ?? child.position).clone(),
+        radius: resolveDrawnRadius(child.nodeType, child.radius, child.biomass),
+        atTip: (child.attachFraction ?? 1) >= TIP_ATTACH,
+      });
+      jointChildren.set(child.parentId, siblings);
+    }
+    const childrenKeyFor = (id: string): string => {
+      const siblings = jointChildren.get(id);
+      if (!siblings) return '';
+      return siblings
+        .filter((sibling) => sibling.atTip)
+        .map(
+          (sibling) =>
+            `${sibling.end.x.toFixed(3)},${sibling.end.y.toFixed(3)},${sibling.end.z.toFixed(3)}`,
+        )
+        .join('|');
+    };
 
     // Build segments for nodes with parents
     for (const [id, node] of this.nodeMap) {
       if (!node.parentId || !this.nodeMap.has(node.parentId)) continue;
       const existingSegment = this.segments.get(id);
+      const childrenKey = childrenKeyFor(id);
       if (existingSegment) {
         const attach = node.parentAttachPosition;
         const builtAttach = existingSegment.sourceAttach;
@@ -1103,7 +1256,13 @@ export class MeshPlantRenderer {
             .clone()
             .sub(existingSegment.sourcePosition)
             .distanceToSquared(attach.clone().sub(node.position)) > 1e-8;
-        if (!jointMoved && existingSegment.lookRevision === this.geometryRevision) continue;
+        if (
+          !jointMoved &&
+          existingSegment.lookRevision === this.geometryRevision &&
+          existingSegment.childrenKey === childrenKey
+        ) {
+          continue;
+        }
         // The look changed shape (bark thickness, spines), or the joint moved
         // under the tube: rebuild this part.
         this.disposeSegment(existingSegment);
@@ -1156,11 +1315,8 @@ export class MeshPlantRenderer {
       // Anything emerging from a seed starts thin so the seed never turns into
       // a cone with a giant base.
       if (parent.nodeType === 'seed') {
-        tubeStartRadius = Math.min(
-          parentVisualRadius,
-          isRootNodeType(node.nodeType) ? 0.03 : 0.035,
-        );
-        if (isRootNodeType(node.nodeType)) {
+        tubeStartRadius = Math.min(parentVisualRadius, isRootOrgan(node.nodeType) ? 0.03 : 0.035);
+        if (isRootOrgan(node.nodeType)) {
           tubeEndRadius = Math.min(tubeEndRadius, 0.03);
         }
       }
@@ -1202,6 +1358,7 @@ export class MeshPlantRenderer {
       // Start inside the parent and let its own surface hide the base disc.
       // Pushing the base out to the surface leaves its rim tangent to it, which
       // reads as a crease rather than grown tissue.
+      const socketPoint = segmentStart.clone();
       if (parentType !== 'seed') {
         const socket = Math.min(socketInset(parentRadiusAtAttach), length * 0.4);
         segmentStart.addScaledVector(dir.clone().normalize(), socket);
@@ -1211,6 +1368,49 @@ export class MeshPlantRenderer {
       }
 
       const bend = segmentBend(node, length);
+      // The tip turns into whatever leaves it: a child that runs on at an angle
+      // would otherwise meet a squared-off end and the joint would read as two
+      // sticks pushed together instead of as one living body (see jointElbow).
+      const axisDir = dir.clone().normalize();
+      const tubeQuaternion = new THREE.Quaternion().setFromUnitVectors(
+        new THREE.Vector3(0, 1, 0),
+        axisDir,
+      );
+      // A part that leaves its parent mid-way along it starts along the parent's
+      // own line and turns into its own: that is what makes the joint a collar
+      // rather than a tube pushed into a tube. A part that leaves at the parent's
+      // very tip needs nothing here - the parent's tip turns to face it instead.
+      const attachAt = typeof node.attachFraction === 'number' ? node.attachFraction : 1;
+      const toLocal = (world: THREE.Vector3) =>
+        world.clone().applyQuaternion(tubeQuaternion.clone().invert());
+      let baseTurn: TubeTurn | null = null;
+      if (attachAt < TIP_ATTACH && parentType !== 'seed') {
+        const parentAxis = parentSegment?.axis ?? parentDirection(parent);
+        if (parentAxis) {
+          const local = toLocal(parentAxis);
+          const angle = Math.acos(THREE.MathUtils.clamp(local.y, -1, 1));
+          if (angle > MIN_ELBOW_ANGLE) {
+            baseTurn = { angle, azimuth: Math.atan2(local.z, local.x) };
+          }
+        }
+      }
+      const tipChildren = (jointChildren.get(id) ?? []).filter((sibling) => sibling.atTip);
+      const turn = jointElbow(
+        axisDir,
+        tipChildren.map((sibling) => ({
+          direction: sibling.end.clone().sub(segmentEnd),
+          weight: sibling.radius,
+        })),
+      );
+      // The elbow arrives in world space; the tube is built in its own frame,
+      // where the bend is a sideways offset on local +X.
+      let tipTurn: TubeTurn | null = null;
+      if (turn) {
+        const lateral = toLocal(turn.lateral);
+        tipTurn = { angle: turn.angle, azimuth: Math.atan2(lateral.z, lateral.x) };
+      }
+      const elbow: TubeElbow | null =
+        baseTurn || tipTurn ? { base: baseTurn ?? undefined, tip: tipTurn ?? undefined } : null;
       // Bark thickness is geometry, not paint: a thickened-bark plant is
       // physically fatter, and the same look also darkens the tube.
       const organLookNow = this.lookFor(node);
@@ -1221,23 +1421,65 @@ export class MeshPlantRenderer {
         tubeEndRadius *= barkScale;
       }
       const taper = organTaperExponent(node.nodeType, getSegmentTaperExponent());
+      const spec = organMeshSpecFor(node.nodeType);
+      // Morphology owns the tube's silhouette: sides and cross-section come from
+      // the same spec the accents and UI read, not from a separate quality knob
+      // that ignored the organ.
+      const tubeQuality = {
+        ...this.quality,
+        tubeSides: spec.sides,
+        tubeCrossSection: spec.crossSection,
+      };
       const geo = buildTubeGeometry(
         tubeStartRadius,
         tubeEndRadius,
         length,
-        this.quality,
+        tubeQuality,
         bend,
         taper,
+        elbow,
+      );
+      // The line round that tube is the same shape without its caps (see
+      // buildInkHullGeometry), so a joint cannot draw one part's end across the
+      // part it grew into.
+      const inkGeo = buildInkHullGeometry(
+        tubeStartRadius,
+        tubeEndRadius,
+        length,
+        tubeQuality,
+        bend,
+        taper,
+        elbow,
       );
       const mat =
         node.nodeType === 'flower' || node.nodeType === 'spore_sac'
           ? this.materialFor('stem', this.lookFor(node), this.healthBandOf(node))
           : this.materialFor(node.nodeType, this.lookFor(node), this.healthBandOf(node));
       const mesh = new THREE.Mesh(geo, mat);
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
       mesh.position.copy(segmentStart);
       if (length > 0.001) {
         // The tube geometry grows along +Y from its base now.
-        mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.clone().normalize());
+        mesh.quaternion.copy(tubeQuaternion);
+      }
+      // Organ-specific geometry rides on the tube's own transform. It is local
+      // to the segment (+Y from socket to tip), so the growth animation and a
+      // rigid crawl carry it without a second placement rule.
+      const organAccent = buildOrganAccents(node.nodeType, {
+        length,
+        radius: tubeEndRadius,
+        tip: spec.tipShape,
+        appendages: spec.appendages,
+      });
+      if (organAccent) {
+        organAccent.traverse((object) => {
+          if (!(object instanceof THREE.Mesh)) return;
+          object.material = mat;
+          object.castShadow = true;
+          object.receiveShadow = true;
+        });
+        mesh.add(organAccent);
       }
       this.meshGroup.add(mesh);
 
@@ -1257,6 +1499,7 @@ export class MeshPlantRenderer {
           spines.position.copy(mesh.position);
           spines.quaternion.copy(mesh.quaternion);
           spines.castShadow = true;
+          spines.receiveShadow = true;
           this.meshGroup.add(spines);
           spineMeshes.push(spines);
         }
@@ -1272,7 +1515,30 @@ export class MeshPlantRenderer {
         );
         jointMesh = new THREE.Mesh(jointGeo, mat);
         jointMesh.position.copy(segmentEnd);
+        jointMesh.castShadow = true;
+        jointMesh.receiveShadow = true;
         this.meshGroup.add(jointMesh);
+      }
+
+      // A branch that leaves its parent part-way down has no parent endpoint
+      // sphere behind it: two tapering tubes met at an angle and the outside of
+      // the corner was a crease. A socket knuckle of the child's own start
+      // radius fills that corner from inside the parent, so the junction reads
+      // as one body at 30, 90 and 150 degrees alike.
+      let socketMesh: THREE.Mesh | null = null;
+      if (parentType !== 'seed' && (node.attachFraction ?? 1) < 0.999 && tubeStartRadius > 0.012) {
+        const fillet = socketFilletFor(parentVisualRadius, tubeStartRadius, length);
+        const socketGeo = buildSocketFilletGeometry(fillet, this.quality.jointWidthSegments);
+        socketMesh = new THREE.Mesh(socketGeo, mat);
+        // The cone's +Y end is the child's start; its base is inside the parent,
+        // so the joint is swept from one radius to the other rather than capped
+        // by a ball that only happens to hide the seam at 90 degrees.
+        const socketAxis = new THREE.Vector3(0, 1, 0).applyQuaternion(tubeQuaternion);
+        socketMesh.position.copy(socketPoint).addScaledVector(socketAxis, -fillet.length * 0.5);
+        socketMesh.quaternion.copy(tubeQuaternion);
+        socketMesh.castShadow = true;
+        socketMesh.receiveShadow = true;
+        this.meshGroup.add(socketMesh);
       }
 
       // Foliage: one broad blade per cotyledon (a seed leaf is a single organ),
@@ -1308,6 +1574,8 @@ export class MeshPlantRenderer {
             leafGeo,
             this.materialFor(node.nodeType, this.lookFor(node), this.healthBandOf(node)),
           );
+          leaf.castShadow = true;
+          leaf.receiveShadow = true;
           const angle = (i / Math.max(1, leafCount)) * Math.PI * 2;
           this.placeLeaf(leaf, segmentEnd, axis, angle, isCotyledon);
           // The plate's ink under a blade: the same blade, a few per cent bigger,
@@ -1350,6 +1618,10 @@ export class MeshPlantRenderer {
         for (const child of [...ornament.children]) {
           const asMesh = child as THREE.Mesh;
           if (!asMesh.isMesh) continue;
+          // Every visible head receives and casts the same shadows as the tube it
+          // grew from; otherwise a flower floats unlit above a shadowed branch.
+          asMesh.castShadow = true;
+          asMesh.receiveShadow = true;
           const hull = new THREE.Mesh(asMesh.geometry, this.inkFor(node, 'hull'));
           hull.position.copy(child.position);
           hull.quaternion.copy(child.quaternion);
@@ -1376,10 +1648,13 @@ export class MeshPlantRenderer {
       // reason for its stalk to go bare.
       let inkMesh: THREE.Mesh | null = null;
       // A green stem in the roots' warm brown reads as a root that grew upwards:
-      // above the soil the line is the organ's own colour, deepened.
+      // above the soil the line is the organ's own colour, deepened. The organ is
+      // the one the tube is *drawn* as, so a flower's stalk is inked as a stem and
+      // only the flower's head takes the petal's ink.
+      const inkOrgan = inkOrganFor(node.nodeType);
       inkMesh = new THREE.Mesh(
-        geo,
-        usesOwnInkColour(node.nodeType) ? this.inkFor(node, 'hull') : this.inkMaterial,
+        inkGeo,
+        usesOwnInkColour(inkOrgan) ? this.inkFor(node, 'hull', inkOrgan) : this.inkMaterial,
       );
       inkMesh.position.copy(mesh.position);
       inkMesh.quaternion.copy(mesh.quaternion);
@@ -1410,6 +1685,7 @@ export class MeshPlantRenderer {
         growthProgress: node.growthProgress ?? 1.0,
         mesh,
         jointMesh,
+        socketMesh,
         leafMeshes,
         leafInkMeshes,
         inkOrnament,
@@ -1417,6 +1693,7 @@ export class MeshPlantRenderer {
         lookRevision: this.geometryRevision,
         healthBand: this.healthBandOf(node),
         ornament,
+        organAccent,
         inkMesh,
         parentPosition: segmentStart.clone(),
         targetPosition: segmentEnd.clone(),
@@ -1426,6 +1703,10 @@ export class MeshPlantRenderer {
         originalRadius1: tubeEndRadius,
         originalLength: length,
         bend,
+        elbow,
+        axis: axisDir.clone(),
+        childrenKey,
+        liveGeometry: false,
       });
     }
 
@@ -1516,9 +1797,14 @@ export class MeshPlantRenderer {
     );
     for (let i = 0; i < 4; i += 1) {
       const angle = (i / 4) * Math.PI * 2;
-      const capsule = new THREE.Mesh(new THREE.SphereGeometry(1, 9, 7), sporeMaterial);
+      const capsule = new THREE.Mesh(
+        new THREE.SphereGeometry(1, 9, 7),
+        this.materialFor('spore_sac', this.lookFor(node), this.healthBandOf(node)),
+      );
       capsule.position.set(Math.cos(angle) * r * 0.34, r * 0.1, Math.sin(angle) * r * 0.34);
       capsule.scale.set(r * 0.27, r * 0.42, r * 0.27);
+      capsule.castShadow = true;
+      capsule.receiveShadow = true;
       group.add(capsule);
     }
     return group;
@@ -1552,6 +1838,7 @@ export class MeshPlantRenderer {
         const shift = new THREE.Vector3(shiftX, shiftY, shiftZ);
         seg.mesh.position.add(shift);
         seg.jointMesh?.position.add(shift);
+        seg.socketMesh?.position.add(shift);
         for (const leaf of seg.leafMeshes) leaf.position.add(shift);
         for (const pad of seg.leafInkMeshes) pad.position.add(shift);
         for (const spine of seg.spineMeshes) spine.position.add(shift);
@@ -1580,17 +1867,26 @@ export class MeshPlantRenderer {
         const dir = new THREE.Vector3().subVectors(currentEnd, p0);
         const length = dir.length();
 
-        // Update geometry in-place
-        const newGeo = buildTubeGeometry(
+        // The shape of a growing part is new every frame, so it is built live
+        // rather than looked up: a cache entry for it would be a shape nothing
+        // ever asks for again, kept alive on the GPU forever. The segment owns a
+        // live shape, so it disposes the one it replaces; when the part arrives
+        // (below) it is handed back to the shared cache.
+        // Whether the geometry being replaced is this segment's to dispose:
+        // the first live frame replaces a shared tube, which the cache owns.
+        const wasLive = seg.liveGeometry;
+        const newGeo = buildLiveTubeGeometry(
           seg.originalRadius0,
           seg.originalRadius1 * currentProgress,
           length,
           this.quality,
           seg.bend * (length / Math.max(seg.originalLength, 1e-4)),
           organTaperExponent(seg.nodeType, getSegmentTaperExponent()),
+          elbowAtProgress(seg.elbow, currentProgress),
         );
-        seg.mesh.geometry.dispose();
+        if (wasLive) seg.mesh.geometry.dispose();
         seg.mesh.geometry = newGeo;
+        seg.liveGeometry = true;
         seg.mesh.position.copy(p0);
         if (length > 0.001) {
           seg.mesh.quaternion.setFromUnitVectors(
@@ -1598,9 +1894,22 @@ export class MeshPlantRenderer {
             dir.clone().normalize(),
           );
         }
-        // The ink hull is the same tube: it follows the growth step exactly.
+        // The hull is the same shape without caps, so it follows the growth step
+        // exactly, and like the body it is this segment's own live shape.
         if (seg.inkMesh) {
-          seg.inkMesh.geometry = newGeo;
+          const hullGeo = buildLiveInkHullGeometry(
+            seg.originalRadius0,
+            seg.originalRadius1 * currentProgress,
+            length,
+            this.quality,
+            seg.bend * (length / Math.max(seg.originalLength, 1e-4)),
+            organTaperExponent(seg.nodeType, getSegmentTaperExponent()),
+            elbowAtProgress(seg.elbow, currentProgress),
+          );
+          // The body's flag covers the hull too: both are live shapes this
+          // segment owns while it grows, and both go back to the cache together.
+          if (wasLive) seg.inkMesh.geometry.dispose();
+          seg.inkMesh.geometry = hullGeo;
           seg.inkMesh.position.copy(seg.mesh.position);
           seg.inkMesh.quaternion.copy(seg.mesh.quaternion);
         }
@@ -1610,6 +1919,8 @@ export class MeshPlantRenderer {
           seg.jointMesh.position.copy(currentEnd);
           seg.jointMesh.scale.setScalar(currentProgress);
         }
+        // The socket stays at the joint; only its size follows growth.
+        if (seg.socketMesh) seg.socketMesh.scale.setScalar(currentProgress);
 
         // Update leaves: stay pinned to the tip while it extends, and unfurl.
         const leafDir = dir.clone().normalize();
@@ -1625,6 +1936,49 @@ export class MeshPlantRenderer {
           }
         }
 
+        needsUpdate = true;
+      } else if (seg.liveGeometry) {
+        // The part has arrived. Hand its shape back to the shared cache, so an
+        // idle plant holds one tube per shape instead of the last frame's
+        // private copy, and the same plant drawn twice shares it again.
+        const p0 = seg.parentPosition;
+        const dir = new THREE.Vector3().subVectors(seg.targetPosition, p0);
+        const length = dir.length();
+        const taper = organTaperExponent(seg.nodeType, getSegmentTaperExponent());
+        const settled = buildTubeGeometry(
+          seg.originalRadius0,
+          seg.originalRadius1,
+          length,
+          this.quality,
+          seg.bend,
+          taper,
+          seg.elbow,
+        );
+        seg.mesh.geometry.dispose();
+        seg.mesh.geometry = settled;
+        seg.mesh.position.copy(p0);
+        if (length > 0.001) {
+          seg.mesh.quaternion.setFromUnitVectors(
+            new THREE.Vector3(0, 1, 0),
+            dir.clone().normalize(),
+          );
+        }
+        if (seg.inkMesh) {
+          const settledHull = buildInkHullGeometry(
+            seg.originalRadius0,
+            seg.originalRadius1,
+            length,
+            this.quality,
+            seg.bend,
+            taper,
+            seg.elbow,
+          );
+          seg.inkMesh.geometry.dispose();
+          seg.inkMesh.geometry = settledHull;
+          seg.inkMesh.position.copy(seg.mesh.position);
+          seg.inkMesh.quaternion.copy(seg.mesh.quaternion);
+        }
+        seg.liveGeometry = false;
         needsUpdate = true;
       }
 
@@ -1648,6 +2002,14 @@ export class MeshPlantRenderer {
       for (const pad of seg.leafInkMeshes) {
         pad.scale.set(bladeLength, bladeWidth, bladeWidth);
       }
+      const stage = organStageFrame(seg.nodeType, currentProgress);
+      if (seg.organAccent) {
+        // The segment's length is already animated by the live tube. The accent
+        // follows that same endpoint, and only its girth/detail arrives with the
+        // organ's own growth stage.
+        seg.organAccent.scale.set(stage.width, currentProgress, stage.width);
+        seg.organAccent.visible = stage.detail > 0.02;
+      }
       if (seg.ornament) {
         const ornamentEnd = new THREE.Vector3().lerpVectors(
           seg.parentPosition,
@@ -1659,7 +2021,10 @@ export class MeshPlantRenderer {
         // that way), so the spread and the stand-off are separate scales: a
         // bud is narrow and tall before it opens wide.
         const head = headEmergence(currentProgress);
-        seg.ornament.scale.set(head.spread, head.alongStem, head.spread);
+        // The head's stand-off follows the organ's own stage length as well as its
+        // emergence: a spore sac's mature frame is 1, while a bud's short frame
+        // keeps it gathered close to the tube it is still leaving.
+        seg.ornament.scale.set(head.spread, head.alongStem * stage.length, head.spread);
       }
     }
 
@@ -1679,10 +2044,6 @@ export class MeshPlantRenderer {
   setVisible(visible: boolean): void {
     this.meshGroup.visible = visible;
     this.contactShadows.setVisible(visible);
-  }
-
-  setLOD(): void {
-    // LOD handled by tier selection in caller; mesh renderer always renders full detail
   }
 
   /**
@@ -1714,27 +2075,64 @@ export class MeshPlantRenderer {
       };
       push(seg.mesh);
       push(seg.jointMesh);
+      push(seg.socketMesh);
       for (const leaf of seg.leafMeshes) push(leaf);
       for (const spine of seg.spineMeshes) push(spine);
-      push(seg.ornament);
+      if (seg.organAccent) {
+        seg.organAccent.traverse((object) => {
+          if (object instanceof THREE.Mesh) push(object);
+        });
+      }
+      // Raycasts in the caller are non-recursive, so a Group is not a surface:
+      // each visible head has to be pushed itself or flowers and spore sacs are
+      // the one part of the plant that cannot be clicked.
+      if (seg.ornament) {
+        seg.ornament.traverse((object) => {
+          if (object instanceof THREE.Mesh && !seg.inkOrnament.includes(object)) push(object);
+        });
+      }
+    }
+    for (const [nodeId, mesh] of this.seedMeshes) {
+      const node = this.nodeMap.get(nodeId);
+      out.push({
+        nodeId,
+        plantId: node?.plantId,
+        isOwnPlant: node?.isOwnPlant ?? true,
+        object: mesh,
+      });
     }
     return out;
   }
 
   dispose(): void {
     for (const seg of this.segments.values()) {
-      seg.mesh.geometry.dispose();
+      // The tube is the shape cache's, and the cache is shared by every plant
+      // renderer, so tearing this one down must not free geometry a neighbour's
+      // segment still draws. Everything below is built per segment.
       if (seg.jointMesh) seg.jointMesh.geometry.dispose();
+      if (seg.socketMesh) seg.socketMesh.geometry.dispose();
+      if (seg.inkMesh && seg.liveGeometry) seg.inkMesh.geometry.dispose();
       for (const leaf of seg.leafMeshes) leaf.geometry.dispose();
       for (const pad of seg.leafInkMeshes) pad.geometry.dispose();
+      for (const spine of seg.spineMeshes) spine.geometry.dispose();
       if (seg.ornament) {
         seg.ornament.traverse((obj) => {
+          if (obj instanceof THREE.Mesh) obj.geometry.dispose();
+        });
+      }
+      if (seg.organAccent) {
+        seg.organAccent.traverse((obj) => {
           if (obj instanceof THREE.Mesh) obj.geometry.dispose();
         });
       }
     }
     for (const mesh of this.seedMeshes.values()) {
       mesh.geometry.dispose();
+      mesh.traverse((object) => {
+        if (object instanceof THREE.Mesh && object.geometry !== mesh.geometry) {
+          object.geometry.dispose();
+        }
+      });
     }
     this.meshGroup.clear();
     this.scene.remove(this.meshGroup);

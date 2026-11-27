@@ -260,6 +260,145 @@
       },
       "notes": "Drawn radius in metres per node type. nominalBiomass is the biomass drawn at radius; the cube root keeps the growth response. Shared by server, WebGPU mesh pass and Plant Lab."
     },
+    "organ_morphology": {
+      "type": "object",
+      "value": {
+        "seed": {
+          "cross_section": "lobed",
+          "sides": 14,
+          "taper_exponent": 1,
+          "bend": 0,
+          "stages": [[0.72, 0.9, 0.15], [0.84, 1, 0.45], [0.94, 1.08, 0.8], [1, 1, 1]]
+        },
+        "radicle": {
+          "cross_section": "round",
+          "sides": 8,
+          "taper_exponent": 1,
+          "bend": 0.06,
+          "stages": [[0.08, 0.55, 0.05], [0.46, 0.72, 0.35], [0.82, 0.9, 0.7], [1, 1, 1]]
+        },
+        "root": {
+          "cross_section": "round",
+          "sides": 8,
+          "taper_exponent": 1,
+          "bend": 0.12,
+          "stages": [[0.06, 0.6, 0.05], [0.4, 0.78, 0.3], [0.78, 0.92, 0.65], [1, 1, 1]]
+        },
+        "lateral_root": {
+          "cross_section": "round",
+          "sides": 7,
+          "taper_exponent": 0.95,
+          "bend": 0.22,
+          "stages": [[0.04, 0.4, 0.05], [0.36, 0.62, 0.35], [0.76, 0.88, 0.7], [1, 1, 1]]
+        },
+        "stem": {
+          "cross_section": "ribbed",
+          "sides": 9,
+          "taper_exponent": 1.15,
+          "bend": 0.05,
+          "stages": [[0.12, 0.55, 0.05], [0.5, 0.75, 0.4], [0.84, 0.92, 0.75], [1, 1, 1]]
+        },
+        "branch": {
+          "cross_section": "round",
+          "sides": 8,
+          "taper_exponent": 1.15,
+          "bend": 0.07,
+          "stages": [[0.06, 0.42, 0.05], [0.4, 0.66, 0.35], [0.8, 0.9, 0.7], [1, 1, 1]]
+        },
+        "trunk": {
+          "cross_section": "round",
+          "sides": 10,
+          "taper_exponent": 1.15,
+          "bend": 0.025,
+          "stages": [[0.16, 0.42, 0.05], [0.52, 0.68, 0.35], [0.82, 0.9, 0.7], [1, 1, 1]]
+        },
+        "rhizome": {
+          "cross_section": "ribbed",
+          "sides": 8,
+          "taper_exponent": 0.95,
+          "bend": 0.16,
+          "stages": [[0.05, 0.5, 0.05], [0.4, 0.72, 0.35], [0.8, 0.92, 0.7], [1, 1, 1]]
+        },
+        "culm": {
+          "cross_section": "hollow",
+          "sides": 8,
+          "taper_exponent": 1.05,
+          "bend": 0.025,
+          "stages": [[0.14, 0.5, 0.05], [0.5, 0.74, 0.4], [0.84, 0.92, 0.75], [1, 1, 1]]
+        },
+        "floating_leaf": {
+          "cross_section": "flattened",
+          "sides": 6,
+          "taper_exponent": 1,
+          "bend": 0,
+          "stages": [[0.18, 0.25, 0.05], [0.5, 0.55, 0.35], [0.82, 0.82, 0.75], [1, 1, 1]]
+        },
+        "pneumatophore": {
+          "cross_section": "lobed",
+          "sides": 7,
+          "taper_exponent": 1,
+          "bend": 0.2,
+          "stages": [[0.04, 0.4, 0.05], [0.38, 0.62, 0.35], [0.78, 0.88, 0.7], [1, 1, 1]]
+        },
+        "thorn": {
+          "cross_section": "round",
+          "sides": 6,
+          "taper_exponent": 1.15,
+          "bend": 0.04,
+          "stages": [[0.08, 0.45, 0.05], [0.42, 0.7, 0.4], [0.78, 0.9, 0.75], [1, 1, 1]]
+        },
+        "stolon": {
+          "cross_section": "ribbed",
+          "sides": 7,
+          "taper_exponent": 1,
+          "bend": 0.1,
+          "stages": [[0.05, 0.4, 0.05], [0.38, 0.62, 0.35], [0.78, 0.9, 0.7], [1, 1, 1]]
+        },
+        "tuber": {
+          "cross_section": "lobed",
+          "sides": 10,
+          "taper_exponent": 0.95,
+          "bend": 0,
+          "stages": [[0.12, 0.35, 0.05], [0.46, 0.58, 0.35], [0.78, 0.84, 0.7], [1, 1, 1]]
+        },
+        "vine": {
+          "cross_section": "round",
+          "sides": 7,
+          "taper_exponent": 1.05,
+          "bend": 0.12,
+          "stages": [[0.08, 0.45, 0.05], [0.42, 0.68, 0.35], [0.8, 0.9, 0.7], [1, 1, 1]]
+        },
+        "leaf": {
+          "cross_section": "flattened",
+          "sides": 4,
+          "taper_exponent": 1,
+          "bend": 0,
+          "stages": [[0.08, 0.18, 0.05], [0.42, 0.42, 0.35], [0.8, 0.82, 0.75], [1, 1, 1]]
+        },
+        "cotyledon": {
+          "cross_section": "flattened",
+          "sides": 4,
+          "taper_exponent": 1,
+          "bend": 0,
+          "stages": [[0.06, 0.3, 0.05], [0.4, 0.62, 0.35], [0.8, 0.92, 0.75], [1, 0.92, 1]]
+        },
+        "flower": {
+          "cross_section": "lobed",
+          "sides": 8,
+          "taper_exponent": 1,
+          "bend": 0,
+          "stages": [[0.18, 0.22, 0.05], [0.48, 0.45, 0.35], [0.82, 0.86, 0.75], [1, 1, 1]]
+        },
+        "spore_sac": {
+          "cross_section": "lobed",
+          "sides": 8,
+          "taper_exponent": 1,
+          "bend": 0,
+          "stages": [[0.14, 0.24, 0.05], [0.44, 0.5, 0.35], [0.8, 0.88, 0.75], [1, 1, 1]]
+        }
+      },
+      "notes": "Per-organ drawn shape and four growth-stage frames (initiation, juvenile, expansion, mature), each [length, width, detail]. Compiled defaults live in organMorphology.ts and are used when this key is absent or malformed; the client and server apply this table through setGrowthGeometryTunables so the organism is drawn from one source."
+    },
     "seed_node": {
       "type": "object",
       "value": {

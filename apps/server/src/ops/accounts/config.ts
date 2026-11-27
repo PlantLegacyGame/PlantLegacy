@@ -15,6 +15,7 @@ export interface AccountsConfig {
   rateLimitSignupPerHour: number;
   rateLimitLoginPerMinute: number;
   rateLimitRefreshPerMinute: number;
+  rateLimitDisplayNamePerMinute: number;
   lockoutMaxFailedAttempts: number;
   lockoutDurationMin: number;
   argon2MemoryKib: number;
@@ -47,6 +48,11 @@ export function loadAccountsConfig(configs: Map<string, ConfigFile>): AccountsCo
     rateLimitSignupPerHour: readInteger(configs, 'accounts', 'rate_limit_signup_per_hour'),
     rateLimitLoginPerMinute: readInteger(configs, 'accounts', 'rate_limit_login_per_minute'),
     rateLimitRefreshPerMinute: readInteger(configs, 'accounts', 'rate_limit_refresh_per_minute'),
+    rateLimitDisplayNamePerMinute: readInteger(
+      configs,
+      'accounts',
+      'rate_limit_display_name_per_minute',
+    ),
     lockoutMaxFailedAttempts: readInteger(configs, 'accounts', 'lockout_max_failed_attempts'),
     lockoutDurationMin: readInteger(configs, 'accounts', 'lockout_duration_min'),
     argon2MemoryKib: readInteger(configs, 'accounts', 'argon2_memory_kib'),

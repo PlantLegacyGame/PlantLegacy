@@ -1,15 +1,21 @@
 # Partitioning and LOD
 
-**Status:** implemented (C02b WebGPU, C02 SDF Raymarched). Owner: **T03** (weeks 10–11).
+**Status:** implemented (C02b WebGPU, C02 SDF Raymarched). Owners: **C02/C02b**
+(renderer and tiers), **T03** (server interest management).
 **Source of truth:** DESIGN.md Parts 13.5, 13.6, 13.7. Tier numbering is owned
 by DESIGN.md Part 14.2.0 (v5.3.2) and is not restated here (ADR-042, ADR-049).
+
+**Scope:** the tiers below are **plants**, not terrain. The planet's ground
+levels, the detail budget, the sparse crust and the water/weather scale split
+are in [planet-scale.md](./planet-scale.md). A player-area terrain boundary is
+not a plant LOD tier and is not fixed by changing these values.
 
 ## Overview
 
 The system uses a **dual rendering path**:
 1. **C02 mesh (Three.js, shipped default)**: the close plant is drawn as real mesh geometry per organ in `MeshPlantRenderer.ts`. It sits in the scene graph, so terrain, the Root Sight cavity and the plant sort in one depth buffer. This is the path `PlantRenderer` uses by default (`useMeshL0L1 = true`).
 2. **C02 SDF raymarched (fallback)**: Raymarched Signed Distance Fields with polynomial smooth minimum (`smin`) organic fusion inside local bounding volumes, drawn as a fullscreen quad. Used when the mesh pass is disabled or for the far tier.
-3. **C02b (WebGPU Compute-Driven)**: GPU-driven plant rendering path with compute culling/LOD, merged mesh for tiers 0/1, ellipsoid SDF impostor at L2, colour-only atlas billboards at L3, coloured point at T4, WebGL2 fallback. Off by default.
+3. **C02b (WebGPU Compute-Driven)**: GPU-driven plant rendering path with compute culling/LOD, merged mesh for tiers 0/1, analytic ellipsoid impostor for tiers 2/3 (a coloured point at L3's size), WebGL2 fallback. Off by default.
 
 ## Architecture
 
@@ -47,15 +53,16 @@ close plants.
 | 0 (Near) | ≥ 300 px | Full merged mesh | `mesh.wgsl` |
 | 1 (Mid) | 80–300 px | Merged mesh (no leaves) | `mesh.wgsl` |
 | 2 (Far) | 12–80 px | Ellipsoid SDF impostor | `impostor.wgsl` |
-| 3 (Distant) | 2–12 px | Colour-only atlas billboard | `billboard.wgsl` |
+| 3 (Distant) | 2–12 px | Same ellipsoid impostor (a coloured point at this size) | `impostor.wgsl` |
 
-As **shipped in the v1 slice**, billboards still cover tiers 2–3. ADR-042 makes L2
-an ellipsoid SDF (no atlas, relit live) and restricts the atlas billboard to L3
-(2–12 px, colour only), so `billboard.wgsl` becomes an L3 path only.
+As **shipped**, tiers 2 and 3 are one analytic ellipsoid pass, relit live; there
+is no atlas, no bake and no billboard (ruling 2026-11-24). `webgpu_tier2_threshold`
+is **12**, so the ellipsoid starts where the ADR-042 band starts. The old atlas
+billboard and its baker are deleted rather than left switched off.
 
 #### Compute Pipeline (`cull.wgsl`)
 - Frustum culling per plant
-- Distance-based tier assignment with hysteresis (promote 1.15×, demote 0.85×)
+- Projected-size tier assignment with hysteresis (promote 1.15×, demote 0.85×); distance is a consequence, not the rule (Part 14.2.0)
 - Minimum dwell time (0.5s) prevents oscillation
 - Outputs `PlantRenderData` (tier, visible, projectedSize)
 
@@ -65,10 +72,34 @@ an ellipsoid SDF (no atlas, relit live) and restricts the atlas billboard to L3
 - Wind animation in vertex shader
 - Root-specific: simpler geometry (4 sides vs 8 for canopy)
 
-#### Billboard Pipeline (`billboard.wgsl`) — L3 only (tiers 2–3 as shipped)
-- Camera-facing quads, no vertex buffer
-- 6 vertices per plant, instanced
-- Procedural leaf breakup in fragment shader
+#### Impostor Pipeline (`impostor.wgsl`) — tiers 2 and 3
+- Camera-facing quad, no vertex buffer, 6 vertices per plant, instanced; the
+  quad is only the window the eye ray is traced through
+- Ray-ellipsoid intersection in the fragment shader, normal from the gradient
+- Procedural bark/canopy colour, the plant's own composed look, and the same
+  ground-map hill test the mesh pass uses
+- Lit from the frame's sun every frame, so a distant plant turns with the day
+  instead of carrying a baked copy of one hour
+- Its extent is the plant's own body above the soil (`impostorBaseY`,
+  `impostorTopY`, `impostorHalfWidth`), not the bounding sphere the cull pass
+  measures: that sphere carries the roots, and a seedling sized from it drew
+  several times its stem and shrank at the 1<->2 swap (E41). The sphere still
+  drives the tier, so the LOD decision and the silhouette cannot disagree about
+  where the plant is, only about how big its body is. The box takes every leaf
+  blade at its drawn position, so a canopy wider than its stem is covered; its
+  base is lifted to `max(impostorBaseY, groundY)` because a seed crown's box
+  reaches below the soil and a buried base hid the widest part of the pod; and
+  the resulting radii have a floor of `MIN_BODY_PX` (4 px across) so the 2–12 px
+  tier keeps drawing a coloured point instead of fraying to nothing. The floor
+  is a plateau by nature: while a body's true width is under it the pod stays
+  one size however far the plant is, which is what keeps the distant tier legible
+  and what made 6 px hold a seedling at a constant 4 px across a 12–27 px
+  cull-sphere span. 4 px halves that error and still draws a 2x2 px point;
+  a 24 px probe floor drew an 8 px dot at the same distance, so only about a
+  third of the floor reaches the drawn pod and no floor of 5-6 px changes what
+  a far plant looks like. On the shipped 80 px boundary the same 3.38 m body
+  measured 7x24 px as the impostor and 6x32 px as the mesh, 2.95 m against
+  3.42 m of body
 
 ### Plant Mesh Generation (`PlantMeshBuilder.ts`)
 
@@ -82,7 +113,7 @@ an ellipsoid SDF (no atlas, relit live) and restricts the atlas billboard to L3
 #### Performance
 - Single merged vertex/index buffer for all plants (C02b)
 - Rebuild throttled (100ms interval) during active growth
-- 10k plants = ~2M vertices at L0 (fits in single buffer)
+- 10k plants do not all reach L0: a fixed slot pool holds the full meshes (256 T0 + 1,280 T1 slots, DESIGN 14.2.1) and everything beyond it is an impostor, so the merged buffer's size is set by the pools, not by the plant count
 
 #### Cost of the shipped mesh path
 
@@ -98,16 +129,16 @@ ranked, with effort, in
 | Config | Default | Notes |
 |--------|---------|-------|
 | `webgpu_enabled` | `false` | Enable the WebGPU overlay; off because its separate depth buffer cannot sort against terrain |
-| `webgpu_max_plants` | 10000 | Capacity of plant/render storage buffers |
+| `webgpu_max_plants` | 20000 | Capacity of plant/render storage buffers |
 | `webgpu_tier0_threshold` | 300 | Projected pixel size for tier 0 |
 | `webgpu_tier1_threshold` | 80 | Projected pixel size for tier 1 |
-| `webgpu_tier2_threshold` | 12 | Projected pixel size for tier 2 |
+| `webgpu_tier2_threshold` | 12 | Projected pixel size for tier 2, the ellipsoid band (ADR-042: 12–80 px) |
 | `webgpu_tier3_threshold` | 2 | Projected pixel size for tier 3 |
 | `webgpu_hysteresis_promote` | 1.15 | Multiplier before promoting tier |
 | `webgpu_hysteresis_demote` | 0.85 | Multiplier before demoting tier |
-| `webgpu_min_dwell_time` | 0.5s | Minimum seconds in tier before change |
-| `smin_blend_radius` | 0.08 | SDF organic fusion blend radius |
-| `max_raymarch_steps` | 32 | Max sphere tracing steps per ray |
+| `webgpu_min_dwell_time` | 0.5 | Minimum seconds in tier before change |
+| `smin_blend_radius` | 0.15 | SDF organic fusion blend radius (`config/plant_renderer.json`) |
+| `max_raymarch_steps` | 128 | Max sphere tracing steps per ray (`config/plant_renderer.json`) |
 | `wind_strength` | 0.3 | Wind displacement amplitude |
 | `wind_speed` | 1.0 | Wind displacement frequency |
 
@@ -137,6 +168,6 @@ ranked, with effort, in
 | `apps/client/src/renderers/webgpu/PlantMeshBuilder.ts` | C02b mesh generation, Murray's law, growth |
 | `apps/client/src/renderers/webgpu/shaders/cull.wgsl` | C02b frustum culling + LOD assignment |
 | `apps/client/src/renderers/webgpu/shaders/mesh.wgsl` | C02b tube vertex/fragment shader |
-| `apps/client/src/renderers/webgpu/shaders/billboard.wgsl` | C02b billboard vertex/fragment shader |
+| `apps/client/src/renderers/webgpu/shaders/impostor.wgsl` | C02b ellipsoid impostor (tiers 2–3) |
 | `apps/server/src/ops/plantWorld.ts` | Growth sim, photosynthesis, tiers, interest |
 | `apps/server/src/ops/interestManager.ts` | T03 spatial interest management |

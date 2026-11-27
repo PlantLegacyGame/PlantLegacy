@@ -21,6 +21,7 @@ export type EntryStep =
   | 'title'
   | 'sign_in'
   | 'sign_up'
+  | 'spawn'
   | 'connecting'
   | 'world'
   | 'plant_lost';
@@ -74,6 +75,32 @@ export function entryFlowBack(machine: EntryFlowStateMachine): void {
   machine.step = 'title';
   machine.error = null;
   machine.busy = false;
+}
+
+/** Play (or Grow again) opens the seed scene before any socket is made. */
+export function entryFlowChooseSpawn(machine: EntryFlowStateMachine): boolean {
+  if (machine.step !== 'title' && machine.step !== 'plant_lost') return false;
+  if (machine.busy) return false;
+  machine.step = 'spawn';
+  machine.busy = false;
+  machine.error = null;
+  return true;
+}
+
+/** Back out of the seed scene without planting anything. */
+export function entryFlowCancelSpawn(machine: EntryFlowStateMachine): void {
+  if (machine.step !== 'spawn') return;
+  machine.step = 'title';
+  machine.busy = false;
+  machine.error = null;
+}
+
+/** A selection was accepted by the scene: connect and send it on HELLO. */
+export function entryFlowSpawnConfirmed(machine: EntryFlowStateMachine): void {
+  if (machine.step !== 'spawn') return;
+  machine.step = 'connecting';
+  machine.busy = false;
+  machine.error = null;
 }
 
 /**
@@ -151,12 +178,10 @@ export function entryFlowPlantLost(
   machine.lostStats = stats;
 }
 
-/** Reconnecting after a loss: same "connecting" screen as the first join. */
+/** Reconnecting after a loss: choose the next seed, then connect. */
 export function entryFlowReseed(machine: EntryFlowStateMachine): void {
   if (machine.step !== 'plant_lost') return;
-  machine.step = 'connecting';
-  machine.busy = false;
-  machine.error = null;
+  entryFlowChooseSpawn(machine);
   machine.lostReason = null;
   machine.lostStats = null;
 }

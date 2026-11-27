@@ -1,33 +1,53 @@
-# Bug-fix plan — verified 2026-11-16
+# Bug-fix plan — opened 2026-11-16, updated 2026-11-23
 
-An ordered plan for the defects that exist in the code **today**, each with the
-evidence that it is real, the exact edit, and a check that proves the fix. This
-is the execution order; the defect list itself stays in
-[`bug-inventory.md`](./bug-inventory.md), documentation-only debt is
-[`tasks/DOC-01.md`](./tasks/DOC-01.md), and what a fix must not break is
-`DESIGN.md`.
+An ordered plan for the defects that were in the code on 2026-11-16, each with
+the evidence that it was real, the exact edit, and a check that proves the fix.
+**It is now a record of how each item was resolved**, not a backlog: every item
+below is either done (with the change that landed, which is sometimes not the one
+proposed), partly done, or waiting on a decision that is written down in §8. The
+line numbers are from the original reading and have drifted — the function and
+file names are the durable reference.
+
+The live defect list stays in [`bug-inventory.md`](./bug-inventory.md),
+documentation-only debt is [`tasks/DOC-01.md`](./tasks/DOC-01.md), and what a fix
+must not break is `DESIGN.md`. New work goes into the inventory first and then
+into the owning task record; this page is history and should not grow.
 
 Produced by reading the tree and running the gate, not by copying older audits.
-Every line number below was read in this pass.
 
 ## 0. What the gate says today
 
-Re-run after the first pass of this plan landed (FIX-01, 02, 03, 06, 07).
+**2026-11-23, re-run on the current tree.** This is the shape of a green gate;
+the commands are the check, not this table.
 
 | Command | Result | Evidence |
 |---|---|---|
-| `pnpm lint` | pass | 275 files, 0 errors (was 1 formatter error in `tools/docs-check/check.mjs`) |
-| `pnpm typecheck` | pass | 7 workspace projects |
-| `pnpm config:validate` | pass at this pass | 79 files then (80 today; the count is owned by `docs/tunables.md`), schema + rarity ban, including the two new Root Sight keys |
-| `pnpm test` | pass | client 247, server 279, shared 183, weather 9; 0 failures |
-| `pnpm docs:check` | pass | 0 mismatched quoted defaults in 95 rows (was 24, reported while exiting 0); 45/45 protocol rows |
-| `pnpm build` | pass | chunk-size warning unchanged (5.4 MB main bundle) |
+| `pnpm lint` | pass | 0 errors (warnings and infos are pre-existing style notes) |
+| `pnpm typecheck` | pass | every workspace project |
+| `pnpm config:validate` | pass | 83 files, schema + rarity ban (the count is owned by `docs/tunables.md`) |
+| `pnpm config:keys` | pass | every declared key name appears in code or is allowlisted (a name that is read and then dropped still passes — E20) |
+| `pnpm palette:check` | pass | 7 ramps × 5 steps, 31 roles; the art bible and sheet match `config/palette.json` |
+| `pnpm test` | pass | 0 failures in tools, client, server, shared and weather |
+| `pnpm docs:check` | pass | 50/50 protocol rows, 139 quoted config cells, 83 tunables rows, every top-level doc linked |
+| `pnpm build` | pass | chunk-size warning unchanged |
 | `pnpm verify` | pass | the whole chain above, end to end |
 
-Working tree state at the time of this pass: branch `main`, **192 changed
-paths** (122 files, +13,558 / −2,107) uncommitted. These results therefore
-describe uncommitted work, not `HEAD`. Nothing here has been committed by this
-pass.
+Test **counts** are deliberately not quoted here: they change with every test
+added, and a table of them is stale before the next session reads it. The run
+prints them, and bare `pnpm` lists the scripts.
+
+CI runs every gate `verify` runs, plus the production build. The two it had been
+missing — `config:keys` and `palette:check` — were added on 2026-11-23, which is
+FIX-05's second half, below.
+
+**The 2026-11-16 snapshot, kept for the record.** That pass was the first after
+FIX-01, 02, 03, 06 and 07 landed: lint 275 files with 0 errors (was 1 formatter
+error in `tools/docs-check/check.mjs`), tests client 247 / server 279 / shared
+183 / weather 9, `docs:check` 0 mismatched quoted defaults in 95 rows (was 24,
+reported while still exiting 0) and 45/45 protocol rows, config 79 files (80 the
+next day), and `pnpm build` with its chunk-size warning unchanged. The tree was
+192 changed paths (122 files, +13,558 / −2,107) uncommitted, so those numbers
+described uncommitted work rather than `HEAD`.
 
 ## 1. Order at a glance
 
@@ -36,17 +56,17 @@ pass.
 | FIX-01 ✔ | Format `check.mjs` so `pnpm lint` passes | L1 | S | — |
 | FIX-02 ✔ | Correct the 24 quoted config defaults | F11 | M | — |
 | FIX-03 ✔ | Make the drift check fatal; retire the dangling pointer | F10 | S | FIX-02 |
-| FIX-04 | One protocol version, enforced in code | F12 | S | decision D1 |
-| FIX-05 | Make `pnpm verify` mean what the README says | F13 | S | decision D2 |
+| FIX-04 ✔ | One protocol version, enforced in code | F12 | S | — |
+| FIX-05 ✔ | Make `pnpm verify` mean what the README says | F13 | S | — |
 | FIX-06 ✔ | Underground test against the soil, not Y=0 | A2 | M | — |
 | FIX-07 ✔ | Root Sight uniforms from config | A8 | S | — |
-| FIX-08 | Frame-rate-independent ambient fade | F9 | S | — |
-| FIX-09 | One path into a UI layer | D5 | S | — |
-| FIX-10 | Panels: give Mutation a close control; hit-test the rest | D3 | M | browser access |
-| FIX-11 | Report tissue lost to drought and upkeep | E5 | M | — |
-| FIX-12 | Test that growth cannot emit `PLANT_DAMAGE` | E3 | S | — |
-| FIX-13 | Delete or document the dead protocol surface | F7 | S | decision D3 |
-| FIX-14 | One helper for the planet-body draw range | F6 | S | — |
+| FIX-08 ✔ | Frame-rate-independent ambient fade | F9 | S | — |
+| FIX-09 ✔ | One path into a UI layer | D5 | S | — |
+| FIX-10 ~ | Panels: give Mutation a close control; hit-test the rest | D3 | M | one half left: a real hit test |
+| FIX-11 ✔ | Report tissue lost to drought and upkeep | E5 | M | landed as FIX-16 |
+| FIX-12 ✔ | Test that growth cannot emit `PLANT_DAMAGE` | E3 | S | — |
+| FIX-13 ✔ | Delete or document the dead protocol surface | F7 | S | — |
+| FIX-14 ✔ | One helper for the planet-body draw range | F6 | S | — |
 | FIX-15 | Shared panel primitive | D4 | L | FIX-09, FIX-10 |
 | FIX-16 ✔ | One damage cue per second, and upkeep loss on the pipeline cadence | F14 | S | — |
 | FIX-17 ✔ | Grade the beam, its disk and the fill light with the weather multiplier | F15 | S | — |
@@ -66,7 +86,9 @@ pass.
 | FIX-31 ✔ | Stand the seed on the highest ground under its footprint, in every mapping path | F30 | S | — |
 | FIX-32 ✔ | Cut the soil a percent inside the bowl's lip | F29 | S | — |
 
-Sizes: S ≈ under an hour, M ≈ half a day, L ≈ a day or more.
+Sizes: S ≈ under an hour, M ≈ half a day, L ≈ a day or more. Marks: `✔` fixed
+and verified, `~` partly done, `?` waiting on a ruling (the inventory row is not
+yet agreed to be a defect), `⊘` closed without a code change.
 
 Wave 0 (FIX-01) is not optional: CI runs `pnpm lint` as its first gate, so the
 current tree cannot go green.
@@ -167,7 +189,7 @@ block) and its header comment at `:1-10`.
 
 **Verify:** edit one row, run `pnpm docs:check; echo $?`, revert.
 
-### FIX-04 · one protocol version, enforced (F12)
+### FIX-04 · one protocol version, enforced (F12) — **done**
 
 **Why:** the version is documented as 1, 2 and 3 in different files, and nothing
 ties the config key to the code constant even though
@@ -200,7 +222,18 @@ no config file declares a version; the server still rejects a stale client.
 
 **Verify:** `pnpm --filter @plant-legacy/server test`, then log in with the client.
 
-### FIX-05 · `pnpm verify` is not the CI chain (F13)
+**How it landed:** the key stayed and the second option was taken, deliberately:
+`apps/server/src/ops/net.ts` reads `net_proto.protocol_version`, compares it with
+`PROTOCOL_VERSION` and throws at boot when they differ, then hands
+`PROTOCOL_VERSION` to the server so the config can never override the wire. The
+config file keeps the key because the validator, the tunables table and the task
+records describe it; it is a value that must never be tuned. The wire is 5 today
+(v4 added `SHOP_PURCHASE`, `DROP_COLLECT` and the spore balance; v5 added
+`LEDGER_ENTRY`), and every document that quoted an older number was corrected in
+the 2026-11-23 sweep — `pnpm docs:check` now fails on a present-tense claim that
+disagrees with the constant.
+
+### FIX-05 · `pnpm verify` is not the CI chain (F13) — **done**
 
 **Why:** README says "To run the checks CI runs: `pnpm verify`". `verify` is
 `lint && typecheck && config:validate && test`; `ci.yml` also runs `docs:check`
@@ -218,6 +251,14 @@ Recommend the first: one command, one meaning.
 order.
 
 **Verify:** compare `package.json` to `ci.yml` step by step.
+
+**How it landed:** the first option, in two halves. `verify` grew `config:keys`
+and `palette:check` before `test`, and on 2026-11-23 CI grew the same two steps,
+which it had been missing — so a palette drift or an unread config key passed CI
+locally-green while `verify` caught it. `verify:ci` (`verify` plus `build`) exists
+for the full chain. CI still runs the steps individually rather than calling
+`verify:ci`, which is the only difference and is a cosmetic one; keep the two
+lists in step when either changes.
 
 ---
 
@@ -279,7 +320,7 @@ the first drawn frame.
 **Verify:** `apps/client/src/renderers/RootSightStateMachine.test.ts` pattern —
 add a parse test asserting the uniforms take the file's numbers.
 
-### FIX-08 · ambient smoothing is frame-rate dependent (F9)
+### FIX-08 · ambient smoothing is frame-rate dependent (F9) — **done**
 
 **Why:** `EnvironmentRenderer.ts:789` passes a fixed `alpha: 0.3`, so the
 day/night fade closes 30% of the remaining gap per *frame*: a 144 Hz client
@@ -299,7 +340,13 @@ a small tolerance of the same baseline.
 **Verify:** extend `apps/client/src/renderers/environment/celestial.test.ts`
 (it already steps the function at different rates).
 
-### FIX-09 · elements bypass the layer's pointer-events opt-in (D5)
+**How it landed:** the time constant is `render.json` **`ambient_fade_tau_s`** (0.35),
+not the `ambient_smoothing_tau_s` this plan proposed — the key that shipped is the
+one `clientConfig.ts` reads and `stepAmbientLighting` takes as `ambientFadeTauS`.
+The alpha is computed from `dt` rather than per frame, and the frame-rate test
+steps the same second at 30 Hz and 144 Hz.
+
+### FIX-09 · elements bypass the layer's pointer-events opt-in (D5) — **done**
 
 **Why:** `UIShell.attachTo` (`apps/client/src/ui/UIShell.ts:102-109`) is the one
 place that sets `pointer-events: auto` for a child of a layer whose CSS is
@@ -316,23 +363,35 @@ setting it itself; this is the class of bug that produced D2 (dead chat buttons)
 
 **Acceptance:** every child of a `ui-layer` either opts in or is deliberately
 inert (a label). A grep for `layer.appendChild` in `apps/client/src` returns only
-`UIShell.attachTo`.
+`UIShell.attachTo`, or a container that sets `pointer-events: none` on itself and
+`auto` on its own interactive children.
 
 **Verify:** the grep; plus a click on the resource readout tooltip and the hint
 card in the browser.
 
+**How it landed:** `DebugOverlay` takes the `UIShell` and calls
+`attachTo('debug', el)`; everything else appends to `document.body` or `#app`,
+which is not a layer. One container still appends to a layer:
+`main.ts`'s growth-selection panel (`#growth-options`'s parent), which is the
+second kind — it is `pointer-events: none` and `#growth-options > *` opts back in
+(`styles.css`). The acceptance line above was written before that case existed and
+read as "grep must return one hit", which is now wrong in a way that invites
+someone to "fix" working CSS.
+
 ### FIX-10 · panels and their close controls (D3)
 
-**Verified correction:** `MutationPanel` has **no close control at all** — the
-word "close" does not appear in
-`apps/client/src/ui/MutationPanel.ts`, and its API is
-`update / clear / panel / dispose` with no `hide()`. So "the X does nothing" is
-the wrong diagnosis for that panel: there is no X. `PlayerPanels` binds
+**Verified correction at the time:** `MutationPanel` had **no close control at
+all** — the word "close" did not appear in
+`apps/client/src/ui/MutationPanel.ts`, and its API was
+`update / clear / panel / dispose` with no `hide()`. So "the X does nothing" was
+the wrong diagnosis for that panel: there was no X. That panel has since been
+deleted (Resolution below); the current mutation list and its only shed control
+live in `ui/PlayerPanels.ts`. `PlayerPanels` binds
 `[data-close="inspect"]` and `[data-close="inventory"]` (`:323-324`) and
 `SettingsPanel` binds `.pl-settings__close` (`:157`), so those two need a hit
 test, not a rewrite.
 
-**Change:**
+**Historical proposal (superseded by the Resolution):**
 
 1. Give `MutationPanel` a header close button and a `hide()` on its API, wired in
    `main.ts` next to the existing show path (the panel is created at
@@ -350,7 +409,22 @@ and `elementFromPoint` at each X returns that X.
 **Verification limit:** this needs a browser. `main.ts` has no DOM test harness,
 so this fix cannot be proven from the command line.
 
-### FIX-11 · tissue lost to drought and upkeep is silent (E5)
+**Resolution (2026-11-24):** steps 1-3 were the wrong shape for that panel. The
+X step 1 added could never be reached, because `main.ts` never mounts
+`MutationPanel` - it is created, kept in sync and its `display` pinned to `none`
+- so "hit test the mutation panel" was untestable by construction. What the
+panel alone carried was the client's only `MUTATION_SHED` button, so once the
+mutation list moved into Inspect, shedding had no reachable control at all. The
+shed control now sits on Inspect's mutation rows (`ui/PlayerPanels.ts`) under one
+rule in `ui/mutationState.ts` (tested in `mutationState.test.ts`), the dead panel
+is deleted, and the browser pass hit-tested the new button and shed a granted
+mutation with a real click. Two things that pass then corrected: the button was
+29 x 13 px rendered and is now a 44 x 28 CSS px target (the panel's close control
+is 28), and the cooldown read as a frozen `MUTATION_STATE` snapshot - the server
+sends that state only when the set changes - so `cooldownRemainingS` now counts
+it down from the arrival time, and the button re-enables when it reaches zero.
+
+### FIX-11 · tissue lost to drought and upkeep is silent (E5) — **done, as FIX-16**
 
 **Why:** `shedTissueMass` (`apps/server/src/ops/plantWorld.ts:1864-1926`) drains
 node biomass, calls `refreshRadius`, and `detachNode`s any part that empties —
@@ -373,7 +447,20 @@ many nodes in one tick and the client should see one message.
 `lowers health when drought sheds tissue and repairs it once fed` (`:1978`) is the
 natural place to assert the event.
 
-### FIX-12 · nothing asserts growth cannot damage the plant (E3)
+**How it landed:** E5 was real and this plan's shape was half wrong. The loss is
+reported, but not per node and not with a `drought` source: `drainShedDamage`
+already batched per plant per tick, `apps/server/src/tick/shedDamage.ts` sums the
+batches and flushes them on the damage pipeline's own cadence (twice a second),
+and `main.ts`'s shed flush sends one `PLANT_DAMAGE` with
+`source: 'starvation'`, `nodeId: null` and an empty `destroyedNodeIds`. The client
+draws one damage cue per message, so the per-tick version this plan proposed had
+already shipped once and made a wilting plant flicker. What the coalescing did
+**not** do is make the new source legal: `starvation` is not in the shared
+`DamageSource` union and the client's source labels have no entry for it, so the
+toast reads "Took 0.8 biomass damage (damage)." That is recorded as **E18** in
+`bug-inventory.md` and is the one piece of this fix left open.
+
+### FIX-12 · nothing asserts growth cannot damage the plant (E3) — **done**
 
 **Why:** E1's fix (ADR-051) is only watched by the bot's `growth-damage` rule. A
 regression in the collapse path would ship green.
@@ -393,7 +480,7 @@ makes the test fail.
 
 ## 5. Wave 3 — cleanup
 
-### FIX-13 · dead protocol surface (F7)
+### FIX-13 · dead protocol surface (F7) — **done**
 
 `validateMovement` (`apps/server/src/ops/net.ts:504`) has no call sites, and
 `INPUT` is consumed only to advance `lastInputTick`. Under RULE_1 the camera is
@@ -402,7 +489,7 @@ enforcement. **D3:** either delete `validateMovement` and its tests, or keep it
 and document `INPUT` in `docs/protocol.md` as an ack-only heartbeat. Deleting is
 cleaner while nothing depends on it; documented dead code still costs a reader.
 
-### FIX-14 · one helper for the planet-body draw range (F6)
+### FIX-14 · one helper for the planet-body draw range (F6) — **done**
 
 `EnvironmentRenderer.update` and the renderer's own state both recompute the
 planet-body draw range and `surfaceShells` visibility from the eye height each
@@ -425,10 +512,10 @@ others settled first.
 | Item | Why it is not a bug |
 |---|---|
 | E4 "drought shrinks node radii" | The shrink is deliberate and documented in the code: `plantWorld.ts:1855-1863` says every part's radius is recomputed after losing mass "so the renderer actually draws the decline". `shedTissueMass` drains leaves, then canopy stems, and reaches roots only after the canopy is gone. As written the entry is false; if the complaint is really "root thinning looks wrong", that is an art decision, not a defect. |
-| F5 `docs/tasks/T02.md` quotes 50 / 0.3 | Already fixed: the table at `docs/tasks/T02.md:51,53` reads 7.0 and 0.45. The inventory row is stale and must move to **Fixed**. |
-| A6 transition direction | Already fixed: `RootSightStateMachine` derives direction from target + progress and has a test. The inventory row is stale. |
+| F5 `docs/tasks/T02.md` quotes 50 / 0.3 | Already fixed: the `## Config:` table in `docs/tasks/T02.md` reads `cutaway_radius` 7.0 and `soil_opacity` 0.45, and `pnpm docs:check` now compares those cells with `config/` so they cannot drift back. The inventory row is `[x]`. |
+| A6 transition direction | Already fixed: `RootSightStateMachine` derives direction from target + progress and has a test. The inventory row is `[x]` and says so. |
 | Build warning "Top-level await is not available in the configured target environment" | Checked the artefact, not the warning: `dist/assets/index-legacy-*.js` is a `System.register` module with no top-level `await` (the bootstrap was wrapped). No confirmed defect. Re-check only if `main.ts` gains another top-level `await`. |
-| A1 "no strata to reveal" | A capability limit, not a bug. It needs real volume terrain (T56/C10), which `DESIGN.md` Part 11 specifies and which nothing has started. |
+| A1 "no strata to reveal" | A capability limit rather than a bug, and no longer untouched: **T56 has started** (2026-11-23) — an authored arch is meshed by surface nets, and the ground under the Root Sight aperture is a real volume with per-vertex beds, so a buried eye sees earth with a floor and a shaft wall. The rest of the ground is still a heightfield skin, so the limit stands everywhere else; the inventory row is `[~]` and names the two regions. |
 | 5.45 MB main chunk | A size warning, not a defect. Code-splitting is a performance task (AL-01 family), not a fix. |
 
 ## 7. To-do ledger
@@ -446,38 +533,48 @@ Tick these; each is one commit at most.
 - [x] FIX-06 `isBelowSoil` used at `main.ts:2085,3745,3853,8446,8733`
 - [x] FIX-07 Root Sight uniforms read `root_sight.json` (aperture derived from two new keys)
 - [x] FIX-08 ambient fade uses `1 - exp(-dt/tau)` with `render.ambient_fade_tau_s`
-- [x] FIX-09 no `layer.appendChild` outside `UIShell.attachTo` (DebugOverlay now attaches through the shell)
+- [x] FIX-09 no `layer.appendChild` outside `UIShell.attachTo` except a container that is deliberately inert (DebugOverlay now attaches through the shell; `main.ts`'s growth panel keeps `pointer-events: none` and opts its children back in)
 - [~] FIX-10 Mutation panel has a close control (button + Escape; close is per plant). X-button `elementFromPoint` hit tests are browser checks and have **not** been run
 
 **Server**
-- [x] FIX-11 drought/upkeep tissue loss emits one `PLANT_DAMAGE` per tick (`PlantWorld.drainShedDamage` batches per plant; the server broadcasts it)
+- [x] FIX-11 drought/upkeep tissue loss reaches the wire (`drainShedDamage` batches per plant, `tick/shedDamage.ts` sums it, one `PLANT_DAMAGE` with `source: 'starvation'` twice a second). The source is not in the shared `DamageSource` union and the client has no label for it — **E18**, still open
 - [x] FIX-12 growth-cannot-damage test: a grown, fed plant leaves the shed-damage queue empty in `plantWorld.test.ts`
 
 **Cleanup**
 - [x] FIX-13 `validateMovement` deleted; `INPUT` documented as an ack-only heartbeat. `net_proto.max_velocity_units_per_tick` and the cross-field rule that read it (`growth.root_speed_exceeds_max_velocity`) went with it.
-- [x] FIX-14 `EnvironmentRenderer.updatePlanetBodyVisibility` is the one place that sets the body draw range and shell visibility
+- [x] FIX-14 `EnvironmentRenderer.updatePlanetBodyVisibility` is the one place that sets the body draw range, the outer shells' visibility and the arch's, from the eye's own state
 - [x] Dev panel grants any configured item (`dev_grant_item`), so every definition can be read in the inventory panel instead of only the three in a starting pouch
 - [ ] FIX-15 shared panel primitive
 
 **Docs**
 - [x] Inventory rows F5, A6, E4 corrected (see §6) — already done on 2026-11-16 and the ledger row was stale: `docs/bug-inventory.md` carries all three as `[x]` with the correction (A6 at line 46, E4 at 144, F5 at 196), each naming the code or doc that resolves it.
-- [x] Protocol version agrees everywhere at the time of this pass: `PROTOCOL_VERSION = 3`, `net_proto.protocol_version` 3, and the docs all said 3; `CONTEXT.md` §5.6 states that the key must equal the constant or the server refuses to boot. It has since moved to v4, and the same rule still holds.
+- [x] Protocol version has one source and the docs agree with it: the constant is **5** today (3 at the time of this pass), `net_proto.protocol_version` must equal it or the server refuses to boot, and `pnpm docs:check` fails on a present-tense claim that disagrees.
 - [x] README `pnpm verify` claim matches reality (verify includes `docs:check`; `verify:ci` adds the build)
 
 ## 8. Open decisions
 
-1. **D1 — protocol version.** Delete `net_proto.protocol_version` and read the
-   shared constant (recommended), or keep the key and assert equality at boot?
-2. **D2 — `verify` scope.** Add `docs:check` + `build` to `verify` and add
-   `verify:fast` (recommended), or weaken the README sentence?
-3. **D3 — dead protocol surface.** Delete `validateMovement`, or document `INPUT`
-   as an ack-only heartbeat?
-4. **D4 — E4.** Confirm the entry is withdrawn, or restate it as an art
-   complaint about root thickness during a drought.
-5. **D5 — W2 / water depth.** Immersion needs a surface the eye can get under;
-   river depth is 0.02–0.6 m, so only burrowing or a dev flood triggers it.
-   Deepen water bodies or add a wade/swim camera? Not scheduled here because it
-   is a design decision, not a fix.
+Closed decisions are recorded here with the answer, so a later session does not
+re-open them by accident.
+
+1. **D1 — protocol version.** *Answered: assert at boot.* The key stayed and
+   `loadNetProtoConfig` refuses to boot when it disagrees with
+   `PROTOCOL_VERSION`. Deleting the key would have removed the only place the
+   validator, the tunables table and the task records describe it.
+2. **D2 — `verify` scope.** *Answered: widen `verify`.* `docs:check`,
+   `config:keys` and `palette:check` joined it, `verify:ci` adds the build, and CI
+   gained the two gates it had been missing (2026-11-23).
+3. **D3 — dead protocol surface.** *Answered: delete it.* `validateMovement` is
+   gone and `INPUT` is documented as an ack-only heartbeat.
+4. **D4 — E4.** *Answered: withdrawn.* The radius shrink on tissue loss is
+   deliberate; restating it would invent an art complaint nobody made.
+5. **D5 — W2 / water depth.** *Still open.* Immersion needs a surface the eye can
+   get under; river depth is 0.02–0.6 m, so only burrowing or a dev flood triggers
+   it. Deepen water bodies or add a wade/swim camera? A design decision, not a
+   fix, and `improvement-plan.md` Wave 3-C keeps it ranked.
+6. **D6 — the upkeep damage source.** *Open, recorded as E18.* Give
+   `DamageSource` a `starvation` member (and the client a label for it), or send
+   upkeep loss as a separate message so `PLANT_DAMAGE` stays the pipeline's own?
+   The wire carries `starvation` today and `docs/protocol.md` documents it.
 
 ## 9. Verification discipline for every item
 

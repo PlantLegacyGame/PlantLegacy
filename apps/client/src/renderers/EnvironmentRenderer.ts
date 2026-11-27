@@ -39,48 +39,65 @@ const skyDuskScratch = new THREE.Color();
 const skyNightScratch = new THREE.Color();
 
 import {
-  APERTURE_SOIL_BELOW_FLOOR_M,
-  APERTURE_SOIL_EYE_HOLD_M,
-  APERTURE_SOIL_HOLD_SLACK_M,
-  apertureSoilParamsFor,
-  createApertureSoilMesh,
-  setApertureSoilEye,
-  setApertureSoilLight,
-} from './environment/apertureSoilMesh.ts';
-import {
   CAVITY_CUT_OVERREACH,
   CAVITY_WATER_DRAIN_APERTURES,
-  cavityDepthM,
   createCavityBowl,
-  createCavitySkirt,
   setCavityBowlLight,
   setCavityBowlSun,
   updateCavityBowl,
-  updateCavitySkirt,
 } from './environment/cavity/index.ts';
 import { CAVITY_PALETTE, type CavityPalette } from './environment/cavity/profile.ts';
 import {
   applyCelestialLighting,
   type CelestialBodies,
+  createMoonBody,
   gradeExposure,
+  type MoonBody,
+  placeMoonBody,
   stepAmbientLighting,
   sunWarmth,
   updateCelestialBodies,
 } from './environment/celestial.js';
+import { createFarReliefMesh, FAR_RELIEF_DETAIL } from './environment/farReliefMesh.js';
 import {
   createGround,
   getGroundShader,
   setGroundAtmosphere,
   setGroundMoisture,
   setRiverBankDamping,
+  setSurfaceWater,
   setWaterTableDamping,
   updateGroundFill,
+  updateGroundPixelAngle,
   updateGroundSun,
 } from './environment/ground.js';
 import { createLightningBolt, type LightningBolt } from './environment/lightningBolt.js';
 import { localSkyBrightness } from './environment/localBrightness.js';
-import { createOcean, type Ocean } from './environment/ocean.js';
-import { planetTerrainY } from './environment/planetSurface.js';
+import {
+  createOcean,
+  createPlanetSea,
+  OCEAN_DOME_REACH_M,
+  type Ocean,
+  type PlanetSea,
+} from './environment/ocean.js';
+import {
+  createOrbitalShell,
+  ORBITAL_SHELL_FADE_START_M,
+  type OrbitalShell,
+  orbitalShellFadeForAltitude,
+} from './environment/orbitalShell.js';
+import {
+  type PlanetReliefParams,
+  planetReliefAt,
+  planetSurfaceReliefAt,
+} from './environment/planetRelief.js';
+import {
+  createSurfaceRing,
+  planetSurfaceY,
+  planetTerrainY,
+  TERRAIN_SKIN_M,
+  terrainRelief,
+} from './environment/planetSurface.js';
 import { createRainSystem, type RainSystem } from './environment/rainSystem.js';
 import {
   createResourceGrid,
@@ -89,25 +106,29 @@ import {
   type ResourceTile,
   type TileNormalization,
 } from './environment/resourceGrid.js';
+import { createRiverMask, type WaterTableField } from './environment/riverMask.js';
 import type { RootSightUniforms } from './environment/rootSightUniforms.js';
 import { createSkyDome, type SkyDome } from './environment/skyDome.js';
+import {
+  createSurfaceWaterField,
+  DEFAULT_SURFACE_WATER_FIELD,
+  type SurfaceWaterField,
+} from './environment/surfaceWaterField.js';
+import { createSurfaceWaterMesh, type SurfaceWaterMesh } from './environment/surfaceWaterMesh.js';
 import { createTerrainVolumeMesh } from './environment/terrainVolumeMesh.js';
 import {
   sampleUnderwater,
+  seaSurfaceHeightOver,
   type UnderwaterState,
   underwaterFog,
   underwaterSunIntensity,
+  type WaterSurfaceOverPoint,
 } from './environment/underwater.js';
-import {
-  createRiverMask,
-  createWaterField,
-  type WaterField,
-  type WaterFieldTuning,
-  type WaterTableField,
-} from './environment/waterField.js';
+import { airDensityAt, cloudCoverAbove, fogReachAt } from './environment/verticalAtmosphere.js';
 import {
   DEFAULT_WATER_COLORS,
   DEFAULT_WATER_FIELD_TUNING,
+  type WaterFieldTuning,
 } from './environment/waterFieldTuning.js';
 import { createEnvironmentWeatherMachine } from './environment/weatherPresets.js';
 import { advanceWorldClock, applyServerClock, withTimeOfDay } from './environment/worldClock.ts';
@@ -159,13 +180,24 @@ export interface EnvironmentTuning {
  * *sunlit surface* tone, not the floor of a hole three metres down), and
  * `soil_wet` there, which is so dark under the fill that the pit read as a void
  * with no bottom. The day and night fills stay tunable: they are light, not paint.
+ *
+ * The lip used to be `soil_wet` (`#2c1e16`, relative luminance 0.015) while the
+ * ground it opens in is `soil_mid` (`#a27553`, 0.21): the top quarter of the wall,
+ * the part an eye above the rim always sees, was fourteen times darker than the
+ * earth beside it, so every opening wore a near-black collar and its topsoil
+ * read as burnt rather than damp. `soil_shade` (`#66442c`, 0.071) keeps the
+ * topsoil darker than the subsoil - which is what a spade shows - without
+ * leaving the surface's own earth: 3.0x the lip it had, and a third of the
+ * ground around it. The floor shares that role on purpose: the bowl's own depth
+ * falloff and the sky fill darken it far past the lip in the frame, and a
+ * separate step for "deep earth" does not exist in the soil ramp.
  */
 export function cavityPaletteFromWorld(fill: {
   nightFill: number;
   dayFill: number;
 }): CavityPalette {
   return {
-    topsoilColor: worldColour('soil_wet').getStyle(),
+    topsoilColor: worldColour('soil_shade').getStyle(),
     subsoilColor: worldColour('soil_mid').getStyle(),
     deepColor: worldColour('soil_shade').getStyle(),
     nightFill: fill.nightFill,
@@ -192,9 +224,23 @@ export interface WeatherPayload {
   };
 }
 
+/** The static globe sits a few metres under the play disc so the two never z-fight. */
+const FAR_RELIEF_FALLBACK_SINK_M = 5;
+/**
+ * The ring that joins the play disc to the globe. It starts on the disc rim and
+ * reaches the planet-wide field well before the eye can see its outer edge.
+ */
+const HORIZON_RING_OUTER_M = 20_000;
+const HORIZON_RING_BLEND_M = 1_800;
+const HORIZON_RING_LIP_M = 8;
+/** Polar arc where the coarse globe must not draw; the ring covers well past it. */
+const FAR_RELIEF_CUT_M = 18_000;
+/** Arc distance that still counts as the detailed near pole, metres. */
+const NEAR_POLE_ARC_M = 6_200;
+
 export class EnvironmentRenderer {
   private scene: THREE.Scene;
-  private camera: THREE.Camera;
+  private camera: THREE.PerspectiveCamera;
   private config: RenderConfig;
 
   // Weather state machine (explicit transitions)
@@ -208,28 +254,60 @@ export class EnvironmentRenderer {
   private groundMesh: THREE.Mesh | null;
   /** Metre-scale ground patches, exposed so physics can collide with the relief. */
   terrainMeshes: THREE.Mesh[] = [];
-  /**
-   * Coarse ground shells behind the detailed play-area patch: the distant planet
-   * body and the outer LOD ring. A buried eye sees them as nested dark backfaces,
-   * so they are hidden while underground; the detail patch and cavity bowl are
-   * then the single dirt surface around the camera.
-   */
-  private readonly surfaceShells: THREE.Mesh[] = [];
-  /** The base planet sphere; its detail patches are children and stay visible. */
+  /** The base planet sphere; the play disc is its child and stays visible. */
   private planetBodyMesh: THREE.Mesh | null = null;
+  /** The near-ground detail patch, a child of the body. */
+  private planetDetailMesh: THREE.Object3D | null = null;
+  /** The planet's face at orbital range; see environment/orbitalShell. */
+  private orbitalShell: OrbitalShell | null = null;
+  /**
+   * The static globe: one mesh, built once, never re-tessellated or rebuilt as
+   * the camera climbs. It is the backdrop outside the play disc.
+   */
+  private farReliefMesh: THREE.Mesh | null = null;
+  /** The disc-to-globe transition, built once from the play disc's own rim. */
+  private horizonRing: THREE.Mesh | null = null;
+  private reliefParams: PlanetReliefParams | null = null;
+  /** Scratch direction for the far side's relief read. */
+  private readonly reliefScratch = new THREE.Vector3();
+  /** The sea over the whole body, at planet scale: everywhere the dome cannot reach. */
+  private planetSea: PlanetSea | null = null;
+  /** Sea level the body's water stands at, metres of relief. */
+  private planetSeaLevelM = 0;
+  /** The moon as an object in space, not only the dome's disc. */
+  private moonBody: MoonBody | null = null;
+  /** The body's axial spin this frame, radians. */
+  private planetSpinRad = 0;
+  /** Unspun direction for `reliefAtDirection`; the field is planet-fixed. */
+  private readonly reliefSpinScratch = new THREE.Vector3();
+  /** Scratch target for the clear colour as the air thins to vacuum. */
+  private readonly backgroundTarget = new THREE.Color();
+
+  /** Built once, on the first frame the shell covers the world. */
+  private orbitalFarMask: THREE.DataTexture | null = null;
   private planetBodyDrawCount = 0;
   // The cavity as real geometry: a dug bowl of earth under the opening.
   private cavityBowl: THREE.Mesh | null = null;
   private terrainVolume: THREE.Mesh | null = null;
-  // The aperture's soil body (T56 slice 2): earth with a shaft, built lazily
-  // for a buried eye and keyed to the aperture it was cut for.
-  private apertureSoil: THREE.Mesh | null = null;
-  private apertureSoilKey = '';
-  private cavitySkirt: THREE.Mesh | null = null;
   // The soil's cut face at the aperture boundary, so the skin's edge is not a
   // see-through line with nothing behind it.
-  /** Surface puddles and groundwater pools (config/water.json). */
-  private waterField: WaterField | null = null;
+  /**
+   * Standing water: rain depth solved around the player and packed into a
+   * texture (see surfaceWaterField.ts). The soil shader draws the wet ground
+   * from it, and `surfaceWaterMesh` draws the water's own top.
+   */
+  private surfaceWater: SurfaceWaterField | null = null;
+  /** The same field as a surface: its level in geometry, not a tint. */
+  private surfaceWaterMesh: SurfaceWaterMesh | null = null;
+  /** The cave river's own surface, two metres under the ground's. */
+  private undergroundWaterMesh: SurfaceWaterMesh | null = null;
+  /** Throttle for copying the field into the mesh's vertices. */
+  private surfaceWaterSync = 0;
+  /** Seconds the water surface has been running, for ripples and rain rings. */
+  private surfaceWaterTime = 0;
+  /** Where the water on the ground belongs: the player's feet, not the eye. */
+  private groundAnchorX = Number.NaN;
+  private groundAnchorZ = Number.NaN;
   /** The planet-wide sea: one sphere at sea level, shared with the field's water. */
   private ocean: Ocean | null = null;
   private readonly waterTuning: Partial<WaterFieldTuning>;
@@ -311,6 +389,26 @@ export class EnvironmentRenderer {
   private rainLightLevel = 1;
   /** Eye below the drawn terrain: no rain is drawn inside the earth. */
   private eyeUnderSoil = false;
+  /**
+   * True while the camera orbits the whole body in planet view.
+   *
+   * The buried test below compares the eye's y to the terrain height, which is
+   * right for a camera standing on the pole's tangent plane and wrong for an
+   * orbit: the whole lower hemisphere of the orbit is below y = 0, so the body,
+   * every shell and the orbital face were switched off as "buried" and looking
+   * at the planet from under it showed empty space. In an orbit the eye is never
+   * inside the earth, whatever its y.
+   */
+  private planetViewActive = false;
+  /**
+   * Metres the eye stands above the drawn terrain under it. Read by the sky
+   * (the air overhead is the sky, and there is none in space) and by the fog
+   * (the same air seen along the ground, which stops hiding the planet once
+   * the eye is above most of it).
+   */
+  private eyeAltitudeM = 0;
+  /** Smoothed share of the air column still overhead, 1 at the soil, 0 in space. */
+  private airDensity = 1;
   /** The rain field samples the real terrain once the planet radius is known. */
   private terrainSamplerBound = false;
   private lightningIntensity = 0;
@@ -337,7 +435,7 @@ export class EnvironmentRenderer {
 
   constructor(
     scene: THREE.Scene,
-    camera: THREE.Camera,
+    camera: THREE.PerspectiveCamera,
     config: RenderConfig,
     sunLight: THREE.DirectionalLight,
     ambientLight: THREE.AmbientLight,
@@ -376,7 +474,11 @@ export class EnvironmentRenderer {
     // `undergroundViewColor * 1.9`, a pale tan that the soil shader faded its rim
     // into: that is the light band that read as a ring around and inside the
     // cavity's lip from above, which no crater has.
-    this.cavityWallColor.copy(worldColour('soil_wet')).multiplyScalar(0.9);
+    // The same role the bowl's lip band uses (`cavityPaletteFromWorld`): the two
+    // paths draw one cut face, so a darker number here than there is a seam where
+    // the meshed bowl meets the shader's cavity. It was `soil_wet` x 0.9, which
+    // with the bowl's own `soil_wet` lip made the whole mouth near-black.
+    this.cavityWallColor.copy(worldColour('soil_shade'));
     this.soilUniforms.uRootSightWallColor.value.copy(this.cavityWallColor);
 
     // 2. Terrain and the Root Sight cutaway.
@@ -392,10 +494,9 @@ export class EnvironmentRenderer {
         // visibility/layers fail, which also hid planet-terrain-detail. Emptying
         // only the body's draw range leaves the child patch in the scene.
         this.planetBodyMesh = object;
+        this.planetDetailMesh = object.getObjectByName('planet-play-disk') ?? null;
         this.planetBodyDrawCount =
           object.geometry.index?.count ?? object.geometry.getAttribute('position')?.count ?? 0;
-      } else if (object.name === 'planet-terrain-far') {
-        this.surfaceShells.push(object);
       } else if (object.name === 'planet-soil-slab') {
         // The earth's body stays drawn while the eye is buried: it *is* the
         // earth the eye is standing in. It was hidden with the coarse ring, and
@@ -430,15 +531,6 @@ export class EnvironmentRenderer {
         day: palette.dayFill,
       });
       scene.add(this.cavityBowl);
-      // Its own mesh, not extra rings in the bowl: ring counts drive the floor
-      // depth, the rim indices and the vertex layout, and a hidden sixth ring in
-      // that buffer quietly changed all three. As a child it still shares the
-      // bowl's transform and material.
-      // A shallow collar, not the full soil depth: it backs the ground sheet's
-      // cut edge from below, and anything taller stands in front of the pit's
-      // wall and covers the strata (see CAVITY_SKIRT_DEPTH_M).
-      this.cavitySkirt = createCavitySkirt(this.cavityBowl);
-      this.cavityBowl.add(this.cavitySkirt);
       // 2b. T56 slice 1: real volume, one authored region. The rest of the
       //     ground is still the T25 height field; here the field is a signed
       //     distance over a 3D grid and the surface is meshed by surface nets,
@@ -459,6 +551,7 @@ export class EnvironmentRenderer {
           tuning.volume,
           (x, z) => planetTerrainY(config.planetRadiusM, x, z, getTerrainParams()),
           rockColour,
+          this.groundMaterial,
         );
         if (this.terrainVolume) scene.add(this.terrainVolume);
       }
@@ -485,47 +578,6 @@ export class EnvironmentRenderer {
           strength: (this.waterTuning.wetGroundOpacity ?? 0.35) * 0.8,
         });
       }
-      const planetRadius = config.planetRadiusM;
-      // The terrain is drawn as two meshes, so the water's underground test uses
-      // both: the detail patch's own cell size and radius near the player, and
-      // the far ring's past its edge. These are the meshes, not a guess at them.
-      const innerSegments = Math.max(16, config.terrainMeshSubdivisions || 256);
-      const innerRadiusM = Math.min(180, terrainParams.patchRadiusM * 2);
-      const innerCellM = (innerRadiusM * 2) / innerSegments;
-      const farSegments = Math.max(24, Math.round(innerSegments * 0.6));
-      const farCellM = (Math.max(20, terrainParams.patchRadiusM) * 2) / farSegments;
-      // `water_enabled` is the whole field: sheets, table, stream and sea. It is
-      // off while the current water is replaced - a flat sheet draped over the
-      // terrain floods slopes and covers the ground at eye level - and leaving the
-      // meshes in the scene hidden would only make the next bug hide there.
-      const waterEnabled = this.waterTuning.enabled ?? true;
-      this.waterField = waterEnabled
-        ? createWaterField(
-            (x, z) => planetTerrainY(planetRadius, x, z, getTerrainParams()),
-            {
-              ...this.waterTuning,
-              groundTestCellM: farCellM,
-              groundTestFineCellM: innerCellM,
-              groundTestFineRadiusM: innerRadiusM,
-            },
-            // Wet ground is the same colour the soil shader uses for wetness, taken
-            // a step darker: soil in contact with standing water is waterlogged.
-            worldColour('soil_wet').multiplyScalar(0.55),
-            surveyedRiver && riverMask
-              ? {
-                  stations: surveyedRiver.stations,
-                  halfWidthM: surveyedRiver.halfWidthM,
-                  waterDepthM: surveyedRiver.waterDepthM,
-                  flowMps: Math.max(0, terrainParams.riverFlowSpeedMps ?? 0),
-                  mask: riverMask,
-                }
-              : null,
-            // The water's own colours: body, shallow end, reflection. Data, so the
-            // underwater tint and the sheet it comes from are one value.
-            this.waterTuning.colors ?? DEFAULT_WATER_COLORS,
-          )
-        : null;
-      if (this.waterField) scene.add(this.waterField.group);
     }
     // The cavity bowl is the only underground backdrop. There used to be a
     // second, concentric "subsoil" sphere below the ground as well; from above
@@ -538,7 +590,7 @@ export class EnvironmentRenderer {
       // sphere for the whole world. The puddles, the stream and the water table
       // are local detail on top of it; this is the water that has to be
       // somewhere, everywhere, with no edge.
-      if ((this.waterTuning.enabled ?? true) && (this.waterTuning.oceanEnabled ?? true)) {
+      if (this.waterTuning.oceanEnabled ?? true) {
         this.ocean = createOcean(
           config.planetRadiusM,
           this.waterTuning.seaLevelM ?? DEFAULT_WATER_FIELD_TUNING.seaLevelM,
@@ -549,13 +601,153 @@ export class EnvironmentRenderer {
           this.waterTuning,
         );
         scene.add(this.ocean.mesh);
-        this.waterField?.attachOcean(this.ocean.material);
       }
+      // 2c. The same world at orbital range. Two metres above the body, hidden
+      //     until the play patch is subpixel, so it can never be mistaken for
+      //     the ground a plant is growing on.
+      // The same palette roles the ground uses, and the same land cover it
+      // paints: the shell's green is the ground's own `uSoilCoverColor` (the
+      // foliage shade pulled 45% into dry soil), so orbit and the dirt under the
+      // player's feet are one world at two scales.
+      this.orbitalShell = createOrbitalShell(
+        config.planetRadiusM,
+        {
+          soilLow: worldColour('soil_shade'),
+          // `soil_mid` is the ground shader's own dry colour, so the planet's base
+          // tone is the tone of the dirt in front of the player, not a paler step.
+          soilHigh: worldColour('soil_mid'),
+          // Kept as a neutral soil step so nothing can tint the globe green
+          // while the world has no vegetation.
+          vegetation: worldColour('soil_lit'),
+          haze: worldColour('sky_horizon'),
+          // The same darkened deep role the ocean uses (see createOcean), so the
+          // shell's sea and the dome's sea are the same body at the fade.
+          seaDeep: worldColour('water_deep').multiplyScalar(0.62),
+          seaShallow: worldColour('water_shallow'),
+        },
+        // The shell is a smooth ball, so it has to clear the *highest* ground,
+        // not sit two metres over the mean. At a 50 m offset every hill above
+        // 50 m punched through it as a sharp lozenge - the diamond lattice over
+        // the disc in planet view. One amplitude plus a margin is the honest
+        // floor; the extra 120 m hides the relief's own interpolation overshoot.
+        Math.max(50, (config.planetReliefAmplitudeM ?? 0) + 120),
+      );
+      scene.add(this.orbitalShell.mesh);
+      // S35: the sea survives the climb. Up here the ocean dome is subpixel and
+      // the shell is opaque, so the shell paints the sea from the far relief
+      // field (see ensureOrbitalFarMask). One field for the whole face: a second,
+      // fine bed over the middle used to meet it with a square seam.
+
+      // 2d. The whole body's relief. The authored patches own six kilometres of
+      //     a 100 km radius; every other square metre of the planet used to be
+      //     the bare sphere, which is why planet view could only be zoomed into
+      //     near the play area: everywhere else the body was a painted ball. One
+      //     field now covers the globe, faded to exactly zero inside the radius
+      //     the patches own, so the globe and the play area are one surface.
+      const reliefField = getTerrainParams();
+      this.reliefParams = {
+        amplitudeM: Math.max(0, config.planetReliefAmplitudeM ?? 0),
+        seed: reliefField.seed,
+        surfaceRadiusM: config.planetRadiusM,
+        // The far field's own square. The holdoff is measured on the square's
+        // max axis, so both fields are zero on that exact line and the handoff
+        // has no corner for one to poke through the other. Four kilometres of
+        // ramp lets the global hills grow from the bare sphere instead of
+        // standing up as a ring wall just past the play area.
+        // The holdoff is the authored *ring's* outer edge, not the horizon's.
+        // The horizon is rebuilt below with this same field, so the global hills
+        // begin where the ring ends and reach full height by the chunk cap. The
+        // six-kilometre holdoff left the horizon flat right up to the square edge
+        // while the chunks outside stood on full hills: that edge was the square
+        // shade seen from ten kilometres.
+        holdoffM: 620,
+        rampM: 2_380,
+      };
+      if (this.reliefParams.amplitudeM > 0) {
+        this.ensureFarRelief(this.reliefParams);
+        this.ensureHorizonRing(this.reliefParams);
+        // 2e. The planet-wide sea, when the world is wet. Off by default now:
+        //     the world is land, and a second water sphere at a fixed level
+        //     painted the whole horizon and every basin as ocean.
+        if (this.waterTuning.oceanEnabled ?? true) {
+          this.planetSeaLevelM = this.waterTuning.seaLevelM ?? DEFAULT_WATER_FIELD_TUNING.seaLevelM;
+          this.planetSea = createPlanetSea(
+            config.planetRadiusM,
+            this.planetSeaLevelM,
+            (direction) => planetReliefAt(direction, this.reliefParams as PlanetReliefParams),
+            this.waterTuning.colors ?? DEFAULT_WATER_COLORS,
+          );
+          scene.add(this.planetSea.mesh);
+        }
+      }
+      // 2f. The moon, as a body. The dome draws its disc for an eye on the
+      //     ground; from planet view the same body has to exist out there, or
+      //     the sky is a sun and nothing else.
+      this.moonBody = createMoonBody(config.planetRadiusM, worldColour('soil_lit'));
+      scene.add(this.moonBody.mesh);
+      // The authored cave opening is not part of the shipped ground. A shaft
+      // made of cylinders, rings and cones is scenery dressed as a cave; the
+      // depth has to come from a signed-distance volume meshed with surface nets
+      // (T56), not from primitives cut into the ground sheet.
     }
     this.resourceGrid = createResourceGrid(() => getGroundShader(this.groundMaterial), this.tiles);
 
     // 3. Rain.
     this.rain = createRainSystem(scene, config, tuning.showRain ?? true);
+
+    // 4. Standing water. The rain lays it down, the solver runs it into hollows,
+    // and the soil shader draws it: a puddle is where the ground is below the
+    // water, not a quad laid on top of it. Its cells are the resolution of the
+    // shoreline, so it is the one number that decides how round a pool is.
+    this.surfaceWater = createSurfaceWaterField({
+      cells: this.waterTuning.surfaceCells ?? DEFAULT_SURFACE_WATER_FIELD.cells,
+      extentM: this.waterTuning.surfaceExtentM ?? DEFAULT_SURFACE_WATER_FIELD.extentM,
+      flowRatePerS: this.waterTuning.flowRatePerS ?? DEFAULT_SURFACE_WATER_FIELD.flowRatePerS,
+      infiltrationPerS:
+        this.waterTuning.infiltrationPerS ?? DEFAULT_SURFACE_WATER_FIELD.infiltrationPerS,
+      evaporationPerS:
+        this.waterTuning.evaporationPerS ?? DEFAULT_SURFACE_WATER_FIELD.evaporationPerS,
+      maxDepthM: this.waterTuning.maxDepthM ?? DEFAULT_SURFACE_WATER_FIELD.maxDepthM,
+      rainDepthPerS: this.waterTuning.rainDepthPerS ?? DEFAULT_SURFACE_WATER_FIELD.rainDepthPerS,
+      dampOpacity: this.waterTuning.wetGroundOpacity ?? DEFAULT_SURFACE_WATER_FIELD.dampOpacity,
+      dampDryPerS: this.waterTuning.wetGroundDryPerS ?? DEFAULT_SURFACE_WATER_FIELD.dampDryPerS,
+      dampHaloCells:
+        this.waterTuning.wetGroundHaloCells ?? DEFAULT_SURFACE_WATER_FIELD.dampHaloCells,
+    });
+    this.surfaceWater.setTerrainSampler((x, z) =>
+      planetTerrainY(this.planetRadiusM, x, z, getTerrainParams()),
+    );
+    // 4b. The same field as a surface. The soil shader can paint water into the
+    // ground, but a tint has no top: this mesh is the water's level in geometry,
+    // so the pool has a surface that reflects the sky and a shoreline that ends
+    // where the solve says the column does.
+    if (this.waterTuning.enabled ?? true) {
+      this.surfaceWaterMesh = createSurfaceWaterMesh({
+        cells: this.surfaceWater.cells,
+        extentM: this.surfaceWater.options.extentM,
+        colors: this.waterTuning.colors ?? DEFAULT_WATER_COLORS,
+        shoreDepthM: this.waterTuning.minVisibleDepthM ?? 0.01,
+      });
+      scene.add(this.surfaceWaterMesh.mesh);
+
+      // The cave river is a second body on a lower bed, not a second tint: it
+      // has its own level, its own flow and its own texture. The ground is what
+      // hides it - the mesh is under the terrain, so the only place it can be
+      // seen is a hole cut through that terrain, which is exactly where a river
+      // running under the world should become visible.
+      if (this.surfaceWater.underground) {
+        this.undergroundWaterMesh = createSurfaceWaterMesh({
+          cells: this.surfaceWater.cells,
+          extentM: this.surfaceWater.options.extentM,
+          colors: this.waterTuning.colors ?? DEFAULT_WATER_COLORS,
+          shoreDepthM: this.waterTuning.minVisibleDepthM ?? 0.01,
+          opacity: 0.82,
+          name: 'undergroundWater',
+        });
+        this.undergroundWaterMesh.mesh.renderOrder = 1;
+        scene.add(this.undergroundWaterMesh.mesh);
+      }
+    }
 
     // Initial weather state and lighting, before the first render.
     this.weatherMachine.requestStateChange('clear');
@@ -574,7 +766,24 @@ export class EnvironmentRenderer {
    * told from the outside by looking: the rules' own state is the number to read.
    */
   public groundCover(): { water: number; snow: number } {
-    return this.rain.groundCover();
+    const coverage = this.surfaceWater?.coverage() ?? 0;
+    const snowing = this.surfaceWater?.mode() === 'snow';
+    return snowing ? { water: 0, snow: coverage } : { water: coverage, snow: 0 };
+  }
+
+  /**
+   * Dev readout: what each stacked body of water is holding.
+   *
+   * "Water above and below" is otherwise unverifiable from a screenshot - a
+   * cave river is hidden by the ground it runs under - so the solve reports its
+   * own volumes and the two numbers can be watched move independently.
+   */
+  public waterLayers(): { surfaceM3: number; undergroundM3: number; underground: boolean } {
+    return {
+      surfaceM3: this.surfaceWater?.volumeM3() ?? 0,
+      undergroundM3: this.surfaceWater?.underground?.volumeM3() ?? 0,
+      underground: Boolean(this.surfaceWater?.underground),
+    };
   }
 
   public getRainDebug(): Record<string, number | boolean> {
@@ -593,10 +802,6 @@ export class EnvironmentRenderer {
       transitioning: this.weatherMachine.isTransitioning(),
     };
   }
-
-  /** Terrain identity of the last water-sheet sample, so a late config reload
-   *  re-seats the water on the ground that is actually drawn. */
-  private waterTerrainKey = '';
 
   /** Pose the water cut around the opening was last sampled for, and its radius. */
   private waterCutKey = '';
@@ -652,20 +857,38 @@ export class EnvironmentRenderer {
     return reach;
   }
 
-  /** Dev: flood the surface sheet so the water rendering can be inspected. */
+  /**
+   * Dev: pour water on the ground so the water rendering can be inspected.
+   *
+   * It goes into the rain field the soil shader draws from, which is the water
+   * the game has: the old sheet pipeline is retired, so filling it would change
+   * nothing on screen.
+   */
   public debugFillSurface(depthM: number): void {
-    this.waterField?.fillSurface(depthM);
+    this.surfaceWater?.addRain(depthM);
   }
 
   /** Dev diagnostic: how much water the world currently shows. */
   public getWaterDebug(): Record<string, number | boolean> {
-    if (!this.waterField) return { enabled: false };
-    const table = this.waterField.waterTableRange();
+    const field = this.surfaceWater;
+    if (!field) return { enabled: false };
+    let depthMax = 0;
+    let depthSum = 0;
+    const count = field.cells * field.cells;
+    for (let i = 0; i < count; i += 1) {
+      const depth = field.depthAt(
+        field.originX + ((i % field.cells) + 0.5) * field.cellSizeM,
+        field.originZ + (Math.floor(i / field.cells) + 0.5) * field.cellSizeM,
+      );
+      depthSum += depth;
+      depthMax = Math.max(depthMax, depth);
+    }
     return {
       enabled: true,
-      surfaceVolumeM3: this.waterField.surfaceVolumeM3(),
-      tableMinY: table.min,
-      tableMaxY: table.max,
+      surfaceVolumeM3: field.volumeM3(),
+      surfaceDepthMaxM: Math.round(depthMax * 1000) / 1000,
+      surfaceDepthMeanM: Math.round((depthSum / count) * 100000) / 100000,
+      surfaceMeshCells: this.surfaceWaterMesh ? count : 0,
       groundwaterFraction: this.groundwaterFraction,
       rootSightProgress: this.soilUniforms.uRootSightProgress.value,
     };
@@ -680,7 +903,6 @@ export class EnvironmentRenderer {
     // table is clamped just under the terrain; the simulation keeps its own
     // heights, and standing water is the surface sheet's job.
     const clamped = this.clampTableToTerrain(field);
-    this.waterField?.setWaterTable(clamped);
     this.pushWaterTableToSoil(clamped);
   }
 
@@ -910,19 +1132,41 @@ export class EnvironmentRenderer {
    * surface and stays in air.
    */
   private sampleUnderwaterView(): void {
-    const field = this.waterField;
-    if (!field) {
-      this.underwater = null;
-      return;
-    }
     const eye = this.camera.position;
-    const surfaces = field.waterSurfacesAt(eye.x, eye.z);
+    const surfaces: WaterSurfaceOverPoint[] = [];
+    // The standing water is wherever the solved column is positive; its top is
+    // the ground under that point plus the column it carries.
+    const depth = this.surfaceWater?.depthAt(eye.x, eye.z) ?? 0;
+    if (depth > 0) {
+      surfaces.push({
+        height:
+          planetTerrainY(this.planetRadiusM, eye.x, eye.z, getTerrainParams()) + depth + 0.005,
+        kind: 'puddle',
+      });
+    }
     // The sea is the one surface the field does not own: it is the planet's
     // curvature, not a sheet on the ground, so it is sampled here and appended
     // to the same list. Without it a step into the ocean read as a walk, with
     // clear air and a sky instead of water over the eye.
+    //
+    // Which sea depends on where the eye is. The local dome is a tangent grid
+    // around the pole and its own parabola is the exact surface over that cap;
+    // past the cap the water is the body's sphere, and the parabola is metres
+    // out - a hundred at ten kilometres, four hundred at forty. Sampled with the
+    // parabola, an eye two kilometres over open water on the far side read as
+    // nine kilometres *under* it, so the whole frame was underwater: fog at a
+    // twelfth of its reach, the horizon washed grey, and the sea's swell with
+    // nothing left to be seen through.
     if (this.ocean) {
-      surfaces.push({ height: this.ocean.seaSurfaceYAt(eye.x, eye.z), kind: 'sea' });
+      const height = seaSurfaceHeightOver({
+        x: eye.x,
+        z: eye.z,
+        domeReachM: OCEAN_DOME_REACH_M,
+        planetSeaRadiusM: this.planetSea?.radiusM ?? 0,
+        planetRadiusM: this.planetRadiusM,
+        domeSurfaceY: this.ocean.seaSurfaceYAt(eye.x, eye.z),
+      });
+      if (height !== null) surfaces.push({ height, kind: 'sea' });
     }
     const state = sampleUnderwater(eye.y, surfaces);
     if (!state.submerged) {
@@ -930,7 +1174,9 @@ export class EnvironmentRenderer {
       return;
     }
     this.underwater = state;
-    this.underwaterTint.copy(field.waterColor());
+    this.underwaterTint.copy(
+      worldColour(this.waterTuning.colors?.deep ?? DEFAULT_WATER_COLORS.deep),
+    );
   }
 
   /** Per-frame render loop update. */
@@ -943,10 +1189,12 @@ export class EnvironmentRenderer {
    * orbit target, which stands still while the camera zooms.
    */
   public setGroundAnchor(x: number, z: number): void {
-    this.rain.setGroundAnchor(x, z);
+    if (!Number.isFinite(x) || !Number.isFinite(z)) return;
+    this.groundAnchorX = x;
+    this.groundAnchorZ = z;
   }
 
-  public update(dt: number, devOverrideUntil = 0): void {
+  public update(dt: number, devOverrideUntil = 0, viewportHeightPx = 0): void {
     const lerpRate = Math.min(1.0, dt * 2.5);
     this.sampleUnderwaterView();
 
@@ -1012,8 +1260,95 @@ export class EnvironmentRenderer {
         this.camera.position.z,
         terrain,
       );
-      const eyeUnder = this.camera.position.y < surfaceY - 0.02;
+      const eyeUnderNearPole = this.camera.position.y < surfaceY - 0.02;
+      // How much air is between the eye and space. Everything above the soil is
+      // a shell with a scale height of a few kilometres: a hill is still the
+      // ground floor of the sky, a kilometre up is thin, and past the top of the
+      // shell the eye is outside the atmosphere looking at a rock in vacuum.
+      // Height is measured from the planet's centre, not straight up from
+      // whatever sits under the eye on the pole's plane. A point 273 km from the
+      // pole is not 273 km above the soil at that (x, z) - the body's own
+      // curvature has dropped away from it - and the flat reading put an eye
+      // 223 km up at 123 km, so the air, the far plane and the sky were all
+      // sized for an altitude the eye was not at. Close to the surface, relief
+      // still matters and the ground reading is the exact one.
+      const centreY = -this.planetRadiusM;
+      const offsetX = this.camera.position.x;
+      const offsetY = this.camera.position.y - centreY;
+      const offsetZ = this.camera.position.z;
+      const radialDistance = Math.hypot(offsetX, offsetY, offsetZ);
+      const radialAlt = radialDistance - this.planetRadiusM;
+      const surfaceAlt = this.camera.position.y - surfaceY;
+      // Which surface the eye is over.
+      //
+      // Inside the far field the authored patches own the ground and their own
+      // height is the truth. Past it the body is the surface, and the flat
+      // (x, z) reading is not: seventy kilometres from the pole that plane is
+      // thirty kilometres under the eye, so an eye sixty metres above the far
+      // side was classified as buried - the planet's skin was hidden, the sky
+      // was told the eye was underground, and the LOD believed the eye was on
+      // the ground. Measured radially, everything is already right.
+      const arcFromPoleM =
+        Math.acos(THREE.MathUtils.clamp(offsetY / Math.max(1e-6, radialDistance), -1, 1)) *
+        this.planetRadiusM;
+      const nearPole = arcFromPoleM < NEAR_POLE_ARC_M;
+      const eyeUnder = nearPole ? eyeUnderNearPole : radialAlt < -0.5;
       this.eyeUnderSoil = eyeUnder;
+      const reliefUnderEye = nearPole
+        ? 0
+        : Math.max(
+            0,
+            this.reliefAtDirection(this.reliefScratch.set(offsetX, offsetY, offsetZ).normalize()),
+          );
+      this.eyeAltitudeM = Math.max(
+        0,
+        nearPole && radialAlt <= 2_000 ? surfaceAlt : radialAlt - reliefUnderEye,
+      );
+      // The far plane is a hillside's reach at the soil. From a kilometre up the
+      // planet is the thing in view, and from orbit it is a 100 km body 200 km
+      // away: a 2.5 km far plane clipped the whole world out of the sky and left
+      // the eye floating in gradient. The near plane rises with the far one so the
+      // depth range stays usable instead of losing every metre to z-fighting.
+      const horizonFar = THREE.MathUtils.clamp(
+        2_500 * (1 + this.eyeAltitudeM / 60),
+        2_500,
+        // Planet view frames the body and the moon beside it; six planet radii
+        // is the moon's orbit, and a far plane at four clipped it out of the
+        // sky exactly when the player had climbed far enough to see it.
+        Math.max(2_500, (this.planetViewActive ? 10 : 4) * this.planetRadiusM),
+      );
+      const horizonNear = Math.max(0.1, this.eyeAltitudeM * 0.002);
+      if (
+        Math.abs(this.camera.far - horizonFar) > 1 ||
+        Math.abs(this.camera.near - horizonNear) > 0.01
+      ) {
+        this.camera.far = horizonFar;
+        this.camera.near = horizonNear;
+        this.camera.updateProjectionMatrix();
+      }
+      const airTarget = airDensityAt(this.eyeAltitudeM);
+      // Eased, so climbing at a walk does not pop the sky from blue to black in
+      // one frame and a fast climb still reads as passing through the air.
+      this.airDensity += (airTarget - this.airDensity) * Math.min(1, dt * 4);
+      const skyAir = this.sky.material.uniforms;
+      if (skyAir.uAirDensity) skyAir.uAirDensity.value = this.airDensity;
+      if (skyAir.uCloudAbove) {
+        skyAir.uCloudAbove.value = cloudCoverAbove(this.eyeAltitudeM);
+      }
+      // The planet's limb, in dome coordinates: from the eye the horizon dips
+      // by arccos(R / (R + altitude)), and that dip is where the last of the
+      // air is seen edge-on and glows. From the soil it is zero: the edge of the
+      // world is the horizon.
+      if (skyAir.uLimbY) {
+        const dip = Math.acos(
+          THREE.MathUtils.clamp(
+            this.planetRadiusM / (this.planetRadiusM + this.eyeAltitudeM),
+            -1,
+            1,
+          ),
+        );
+        skyAir.uLimbY.value = Math.sin(dip);
+      }
       // An eye standing in the open pit is below the ground's sheet but not
       // inside the earth: the mouth above it is real sky, and the ground around
       // it is lit hillside. Treated as buried, the sky dome paints its earth
@@ -1024,20 +1359,49 @@ export class EnvironmentRenderer {
       // The camera's own answer says which case this is: the flag is set while
       // it is buried *and* standing inside the opening's column.
       const eyeInPit = this.soilUniforms.uRootSightEyeInPit.value > 0.5;
-      const eyeBuried = eyeUnder && !eyeInPit;
+      const eyeBuried = eyeUnder && !eyeInPit && !this.planetViewActive;
       const skyUniforms = this.sky.material.uniforms;
       if (skyUniforms?.uEyeUnderGround) {
         skyUniforms.uEyeUnderGround.value = eyeBuried ? 1 : 0;
+      }
+      // The eye in the opening is under the sheet too. Its sky overhead is real
+      // (the mouth is open), but nothing below its horizon is: that half of the
+      // dome painted the pale below-horizon air straight through the cavity,
+      // which is the frame where the sky sits along the bottom of the screen
+      // with the ground along the top. One flag per half: the cone for an eye
+      // buried away from the opening, the floor for an eye standing in it.
+      if (skyUniforms?.uEyeInPit) {
+        skyUniforms.uEyeInPit.value = eyeUnder && eyeInPit && !this.planetViewActive ? 1 : 0;
       }
       const groundUniforms = this.groundMaterial.userData.shader?.uniforms;
       if (groundUniforms?.uEyeUnderGround) {
         groundUniforms.uEyeUnderGround.value = eyeBuried ? 1 : 0;
       }
       this.updatePlanetBodyVisibility(eyeBuried);
-      // T56 slice 2: the ground under the aperture, as a volume. It is drawn
-      // under the sheet (see the module), so it only matters - and is only
-      // built - when an eye is actually down there.
-      this.syncApertureSoil(eyeBuried, surfaceY);
+      // The planet's own face at orbital range. The soil shader is a plot
+      // shader - from 50 km up it averages into one brown disc - so above the
+      // altitude where the play patch is subpixel a shell paints the world's
+      // provinces, terminator and air instead (see environment/orbitalShell).
+      if (this.orbitalShell) {
+        this.orbitalShell.setSunDir(this.bodies.sunDir);
+        this.orbitalShell.setTime(this.elapsedSeconds);
+        // The weather's own cloudiness, the same number that thickens the sky's
+        // overcast: orbit shows the sky the player is standing under, so a clear
+        // day has no veil on the disc at all.
+        this.orbitalShell.setCloudCover(
+          THREE.MathUtils.clamp((1 - this.lightMultiplier) * 1.3, 0, 1),
+        );
+        this.orbitalShell.setFade(eyeBuried ? 0 : orbitalShellFadeForAltitude(this.eyeAltitudeM));
+        // The coarse far sea is only worth building once the shell starts to
+        // cover the real world; before that the ocean dome is what is on screen.
+        // The mask is baked terrain, not a per-frame effect, and the shell
+        // begins blending in at 25 km: build it now, or the first frames of the
+        // climb paint the land flat brown (the far branch has no mask yet).
+        if (this.eyeAltitudeM > ORBITAL_SHELL_FADE_START_M - 3000) this.ensureOrbitalFarMask();
+      }
+      // The whole body: which relief level is drawn, the body's own spin and
+      // the moon's place on its orbit.
+      this.updatePlanetSurfaces();
     }
     this.elapsedSeconds += dt;
     if (this.cavityBowl) {
@@ -1066,17 +1430,12 @@ export class EnvironmentRenderer {
         this.soilUniforms.uRootSightApertureRadius.value,
         deepestRootY,
       );
-      if (this.cavitySkirt) {
-        // After the bowl, from the bowl: the skirt's top edge is the rim the bowl
-        // just conformed, so the two cannot disagree about where the hole is.
-        updateCavitySkirt(this.cavitySkirt, this.cavityBowl);
-      }
       // Water inside the opening would cover the roots with a dark disc, and
       // the water table stands above the cavity floor. Root Sight is a
       // cut-away, so water is clipped out of the same volume the soil shader
       // removes - not by a separate guess: the water shader reads these three
       // uniforms directly, so water and soil cannot disagree about the opening.
-      if (this.waterField) {
+      if (this.surfaceWaterMesh) {
         // The plan column only. Height is deliberately not part of it: the cut
         // is a cut-away, so any water surface inside the opening hides the roots
         // and reads as water seen through the ground - including a lake lapping
@@ -1096,7 +1455,7 @@ export class EnvironmentRenderer {
         // above the mouth between the eye and the dug earth.
         const cavityX = this.soilUniforms.uRootSightCenter.value.x;
         const cavityZ = this.soilUniforms.uRootSightCenter.value.z;
-        this.waterField.setCavityClip(
+        this.surfaceWaterMesh.setCavityClip(
           cavityX,
           cavityZ,
           cavityOpen
@@ -1108,28 +1467,6 @@ export class EnvironmentRenderer {
               )
             : 0,
         );
-      }
-      // Water is environment, not a Root Sight ornament: the surface sheet and
-      // the soil pools run their own hydrology here, so leaving Root Sight no
-      // longer leaves the world dry.
-      if (this.waterField) {
-        // `/config/terrain` arrives after the renderer is built. Until then the
-        // sheet was sampled from the default field and floated (or sank) the
-        // moment the real relief loaded, so the water showed up as dark blotches
-        // instead of a surface. Re-sample once per terrain identity.
-        const terrainKey = `${terrain.seed}|${terrain.amplitudeM}|${terrain.baseFrequency}|${terrain.octaves}`;
-        if (terrainKey !== this.waterTerrainKey) {
-          this.waterTerrainKey = terrainKey;
-          this.waterField.resample((x, z) => planetTerrainY(this.planetRadiusM, x, z, terrain));
-        }
-        this.waterField.update({
-          dt,
-          elapsedSeconds: this.elapsedSeconds,
-          raining: weatherTargets.isRaining,
-          sunDir: this.bodies.sunDir,
-          sunColor: this.sunLight.color,
-          skyColor: this.sky.horizonColor,
-        });
       }
     }
     this.soilUniforms.uRootSightCamera.value.copy(this.camera.position);
@@ -1195,15 +1532,33 @@ export class EnvironmentRenderer {
       near: weatherTargets.fogNear * mistScale,
       far: weatherTargets.fogFar * mistScale,
     };
-    const fogTargets = underwater ? underwaterFog(baseFog, underwater) : baseFog;
+    // The same gas, looked through from above it. At the soil this is a 320 m
+    // view; a kilometre up it is kilometres, and from orbit the whole planet has
+    // to be visible instead of sitting in the haze of its own ground floor.
+    const reach = fogReachAt(baseFog.far, this.eyeAltitudeM) / Math.max(1e-3, baseFog.far);
+    const airFog = { near: baseFog.near * reach, far: baseFog.far * reach };
+    const fogTargets = underwater ? underwaterFog(airFog, underwater) : airFog;
     if (this.scene.fog instanceof THREE.Fog) {
       this.scene.fog.near = THREE.MathUtils.lerp(this.scene.fog.near, fogTargets.near, lerpRate);
       this.scene.fog.far = THREE.MathUtils.lerp(this.scene.fog.far, fogTargets.far, lerpRate);
       this.scene.fog.color.lerp(this.sky.horizonColor, lerpRate);
+      // And above the air the fog is not blue any more: from orbit the planet
+      // hangs in black, so distance has to reach space, not a blue floor.
+      if (this.airDensity < 0.999) {
+        this.scene.fog.color.multiplyScalar(0.04 + 0.96 * this.airDensity);
+      }
       if (underwater) this.scene.fog.color.lerp(this.underwaterTint, underwater.amount * 0.55);
     }
     if (this.scene.background instanceof THREE.Color) {
-      this.scene.background.lerp(this.sky.horizonColor, lerpRate);
+      // The clear colour is only ever seen where the sky dome is not - and from
+      // altitude that is space. It was lerped to the horizon colour at every
+      // altitude, so any frame the dome did not cover in orbit was pale
+      // sky-violet in vacuum: the "purple instead of black" above the planet.
+      // It now goes to black as the air thins, on the same density that dims
+      // the fog, so the two cannot disagree at the limb.
+      const vacuum = 0.04 + 0.96 * THREE.MathUtils.clamp(this.airDensity, 0, 1);
+      this.backgroundTarget.copy(this.sky.horizonColor).multiplyScalar(vacuum);
+      this.scene.background.lerp(this.backgroundTarget, lerpRate);
     }
 
     // 3. Soil moisture tint and the sun frame fed to the soil shader.
@@ -1224,6 +1579,10 @@ export class EnvironmentRenderer {
       this.sunLight.color,
       this.sunLight.intensity,
     );
+    // The soil's detail fade must follow the eye, not the LOD triangle. The
+    // caller passes the drawing-buffer height (not the CSS size): device-pixel
+    // ratio changes how many samples a metre gets and when fine detail aliases.
+    updateGroundPixelAngle(this.groundMaterial, this.camera, viewportHeightPx);
     updateGroundFill(
       this.groundMaterial,
       this.hemisphereLight.color,
@@ -1239,57 +1598,175 @@ export class EnvironmentRenderer {
     // What is already lying on the ground keeps filling or drying whether or not
     // anything is still falling.
     this.rain.advance(dt);
+    // Where the ground is, and what it holds, does not depend on the shower. The
+    // cover lingers and dries for half a minute after the last drop, so it is
+    // anchored to the player every frame: baking it only while rain fell left
+    // yesterday's puddles behind the moment the player walked away from them.
+    this.rain.follow(this.camera.position);
+    // The rings land on the drawn surface under the eye, not on a plane at zero.
+    this.rain.setGround(
+      this.planetRadiusM > 0
+        ? planetTerrainY(
+            this.planetRadiusM,
+            this.camera.position.x,
+            this.camera.position.z,
+            getTerrainParams(),
+          )
+        : this.camera.position.y - 1.7,
+    );
+    // A landing and a puddle both stand on the height field the ground is drawn
+    // from, not on a plane at zero.
+    if (this.planetRadiusM > 0 && !this.terrainSamplerBound) {
+      this.terrainSamplerBound = true;
+      this.rain.setTerrainSampler((x, z) =>
+        planetTerrainY(this.planetRadiusM, x, z, getTerrainParams()),
+      );
+    }
+    // Rain does not fall into the cavity: the opening is air, and a streak over
+    // it was the one thing that made the cut look like a decal on a solid plane.
+    {
+      const aperture = this.soilUniforms.uRootSightApertureRadius.value;
+      const apertureCentre = this.soilUniforms.uRootSightApertureCenter.value;
+      this.rain.setCutaway(apertureCentre.x, apertureCentre.z, aperture);
+    }
+    // The hour lights what the shower left behind as much as the shower itself: a
+    // puddle that keeps noon's colour after dusk is a sticker on the ground.
+    this.rainTint.copy(this.sunLight.color).lerp(this.sky.horizonColor, 0.7);
+    this.rainLightLevel = THREE.MathUtils.clamp(
+      0.25 + this.ambientLight.intensity * 1.6 + this.sunLight.intensity * 0.25,
+      0.2,
+      1,
+    );
+    this.rain.setLight(this.rainTint, this.rainLightLevel);
+
     const precipitating = weatherTargets.isRaining || weatherTargets.isSnowing;
+    const snowing = weatherTargets.isSnowing;
     if (precipitating) {
       // Weather does not fall inside the earth. A shower drawn over the cavity and
       // through the soil face was the one thing that made Root Sight read as an
       // outdoor scene with a brown filter on it.
       this.rain.setVisible(!this.eyeUnderSoil);
-      // A crown that landed on the surface is water on the wrong side of the
-      // ground for an eye under it: the pass says so rather than drawing rings
-      // in the roof of the pit.
-      this.rain.setEyeUnderGround(this.eyeUnderSoil);
-      this.rain.setMode(weatherTargets.isSnowing ? 'snow' : 'rain');
-      // Every drop stops on the terrain under its own column, sampled from the
-      // same height field the ground is drawn from.
-      if (this.planetRadiusM > 0 && !this.terrainSamplerBound) {
-        this.terrainSamplerBound = true;
-        this.rain.setTerrainSampler((x, z) =>
-          planetTerrainY(this.planetRadiusM, x, z, getTerrainParams()),
-        );
-      }
-      this.rain.follow(this.camera.position);
-      // The rings land on the drawn surface under the eye, not on a plane at zero.
-      this.rain.setGround(
-        this.planetRadiusM > 0
-          ? planetTerrainY(
-              this.planetRadiusM,
-              this.camera.position.x,
-              this.camera.position.z,
-              getTerrainParams(),
-            )
-          : this.camera.position.y - 1.7,
-      );
-      // Rain does not fall into the cavity: the opening is air, and a streak over
-      // it was the one thing that made the cut look like a decal on a solid plane.
-      const aperture = this.soilUniforms.uRootSightApertureRadius.value;
-      const apertureCentre = this.soilUniforms.uRootSightApertureCenter.value;
-      this.rain.setCutaway(apertureCentre.x, apertureCentre.z, aperture);
-      // Drops carry the light of the hour they fall through: sun or moon colour,
-      // dimmed to the ambient level, so a night shower is a grey curtain in
-      // moonlight rather than a glowing cyan sheet.
-      // Sky, not sun: a drop reflects the air it falls through. Tinting with the
-      // sun turned golden hour into amber rain and a noon storm warm, which is
-      // exactly the "weird colour" rain had.
-      this.rainTint.copy(this.sunLight.color).lerp(this.sky.horizonColor, 0.7);
-      this.rainLightLevel = THREE.MathUtils.clamp(
-        0.25 + this.ambientLight.intensity * 1.6 + this.sunLight.intensity * 0.25,
-        0.2,
-        1,
-      );
-      this.rain.setLight(this.rainTint, this.rainLightLevel);
+      this.rain.setMode(snowing ? 'snow' : 'rain');
     } else {
       this.rain.setVisible(false);
+    }
+
+    // 6. Standing water. It is solved around the player and drawn by the soil
+    //    shader, so it is fed every frame - after the shower has stopped too, or
+    //    the puddles would freeze at the depth they had when the rain left.
+    if (this.surfaceWater) {
+      this.surfaceWaterTime += dt;
+      this.surfaceWater.setMode(snowing ? 'snow' : 'rain');
+      const anchorX = Number.isFinite(this.groundAnchorX)
+        ? this.groundAnchorX
+        : this.camera.position.x;
+      const anchorZ = Number.isFinite(this.groundAnchorZ)
+        ? this.groundAnchorZ
+        : this.camera.position.z;
+      // Falling is only what is landing now; what has already landed keeps
+      // draining even when the sky is clear.
+      const falling = precipitating ? this.rain.intensity() : 0;
+      // Rain is weather on the surface, not a function of the eye. Gating it on
+      // `!eyeUnderSoil` meant a player who looked underground dried the whole
+      // surface world out until they came back up.
+      this.surfaceWater.update(dt, anchorX, anchorZ, falling);
+      if (Number.isFinite(this.surfaceWater.originX)) {
+        setSurfaceWater(this.groundMaterial, {
+          texture: this.surfaceWater.texture,
+          originX: this.surfaceWater.originX,
+          originZ: this.surfaceWater.originZ,
+          cellSizeM: this.surfaceWater.cellSizeM,
+          cells: this.surfaceWater.cells,
+          dampOpacity: this.waterTuning.wetGroundOpacity ?? 0.5,
+          absorptionPerM: this.waterTuning.absorptionPerM ?? 1.6,
+          time: this.surfaceWaterTime,
+          rainStrength: precipitating && !snowing ? 1 : 0,
+          snow: snowing,
+        });
+      }
+      // The visible surface. It copies the solve's level and column at the
+      // field's own upload rate rather than per frame: the solve only changes a
+      // few times a second, and rewriting thirty-six thousand vertices to show
+      // the same water is work for nothing.
+      const mesh = this.surfaceWaterMesh;
+      if (mesh && Number.isFinite(this.surfaceWater.originX)) {
+        this.surfaceWaterSync += dt;
+        // The solve uploads its texture at 10 Hz, and the contour is rebuilt at
+        // 5 Hz: a shoreline moving in half-metre cells does not need a new
+        // mesh every upload, and each rebuild is a full pass over the field.
+        if (this.surfaceWaterSync >= 0.2) {
+          this.surfaceWaterSync = 0;
+          mesh.sync({
+            texture: this.surfaceWater.texture,
+            cells: this.surfaceWater.cells,
+            cellSizeM: this.surfaceWater.cellSizeM,
+            originX: this.surfaceWater.originX,
+            originZ: this.surfaceWater.originZ,
+          });
+          const cave = this.undergroundWaterMesh;
+          const caveSource = this.surfaceWater.underground;
+          // A cave river can only be seen through a Root Sight opening. While
+          // the cut is closed its contour was rebuilt in full every upload and
+          // then drawn under opaque terrain, which was a pure loss.
+          const caveVisible = this.soilUniforms.uRootSightProgress.value > 0.01;
+          if (cave && caveSource) cave.mesh.visible = caveVisible;
+          if (cave && caveSource && caveVisible) {
+            cave.sync({
+              texture: caveSource.texture,
+              cells: this.surfaceWater.cells,
+              cellSizeM: this.surfaceWater.cellSizeM,
+              originX: this.surfaceWater.originX,
+              originZ: this.surfaceWater.originZ,
+            });
+          }
+        }
+        mesh.updateLighting({
+          timeSeconds: this.surfaceWaterTime,
+          sunDir: this.bodies.sunDir,
+          sunColor: this.sunLight.color,
+          skyColor: this.sky.horizonColor,
+          atmosphere: this.atmosphere,
+        });
+        const cave = this.undergroundWaterMesh;
+        const caveSource = this.surfaceWater.underground;
+        if (cave && caveSource) {
+          cave.updateLighting({
+            timeSeconds: this.surfaceWaterTime,
+            sunDir: this.bodies.sunDir,
+            sunColor: this.sunLight.color,
+            skyColor: this.sky.horizonColor,
+            atmosphere: this.atmosphere,
+          });
+        }
+      }
+    }
+
+    // The sea is built once, so its light and its clock have to be fed like the
+    // local sheet's: without this the ocean kept noon's colours through dusk,
+    // its sky reflection was the palette's fixed horizon, and its waves did not
+    // move at all (uTime stayed at zero).
+    if (this.ocean) {
+      const uniforms = this.ocean.material.material.uniforms;
+      uniforms.uTime.value = this.surfaceWaterTime;
+      (uniforms.uSunDir.value as THREE.Vector3).copy(this.bodies.sunDir);
+      (uniforms.uSunColor.value as THREE.Color).copy(this.sunLight.color);
+      (uniforms.uSkyColor.value as THREE.Color).copy(this.sky.horizonColor);
+    }
+    // The planet-wide sea is the same water and must be lit like it: without
+    // this its waves would stand still and it would keep noon's colour after
+    // dusk.
+    if (this.planetSea) {
+      const uniforms = this.planetSea.material.material.uniforms;
+      uniforms.uTime.value = this.surfaceWaterTime;
+      (uniforms.uSunDir.value as THREE.Vector3).copy(this.bodies.sunDir);
+      (uniforms.uSunColor.value as THREE.Color).copy(this.sunLight.color);
+      (uniforms.uSkyColor.value as THREE.Color).copy(this.sky.horizonColor);
+      // The sea's wave trains retire by distance, and how far that is depends on
+      // how high the eye is: a sixty-metre eye resolves a ripple for a few
+      // hundred metres, a two-kilometre one for kilometres. Nothing wrote this
+      // uniform, so the shader read zero and the sea kept a ground eye's reach
+      // from any altitude.
+      if (uniforms.uEyeAltitudeM) uniforms.uEyeAltitudeM.value = this.eyeAltitudeM;
     }
 
     // 6. Lightning is composed into the ambient baseline by updateSunPosition,
@@ -1308,93 +1785,265 @@ export class EnvironmentRenderer {
    * used to be two separate statements that a later edit could leave disagreeing,
    * which shows up as a hollow horizon under a burrowed camera.
    */
-  private updatePlanetBodyVisibility(eyeUnder: boolean): void {
-    if (this.planetBodyMesh) {
-      this.planetBodyMesh.geometry.setDrawRange(0, eyeUnder ? 0 : this.planetBodyDrawCount);
+  /** Told by the camera rig when the planet orbit opens or closes. */
+  setPlanetViewActive(active: boolean): void {
+    this.planetViewActive = active;
+  }
+
+  /** The body's axial spin this frame, radians. */
+  getPlanetSpinRad(): number {
+    return this.planetSpinRad;
+  }
+
+  /**
+   * The body's own life: the static globe's visibility, axial spin, and the
+   * moon's place.
+   *
+   * The spin is the hour angle of the planet, not of the camera. The sky's sun
+   * direction already turns with the clock; the surface used to stay still under
+   * it, so from orbit the world was a fixed picture with a moving light. The
+   * whole surface now turns about its pole, which is the planet's axis and the
+   * play area's own point - so the ground a plant stands on does not move while
+   * the far side rotates through day and night. A dev time change therefore
+   * rotates the face of the planet under the sun rather than only moving a light.
+   */
+  private updatePlanetSurfaces(): void {
+    const params = this.reliefParams;
+    if (!params) return;
+    // One globe, always the same tessellation. The only surfaces that change
+    // with the eye are the play disc and the transition ring (hidden under the
+    // soil or in planet view). The globe itself stays on: the ring now covers
+    // the old disc-to-globe step at every altitude, so hiding the globe below a
+    // kilometre is no longer needed.
+    const globe = this.ensureFarRelief(params);
+    // The globe is the planet. It used to be hidden in planet view, which left
+    // the zoomed-out camera looking at empty space until the separate orbital
+    // shell appeared. Only soil can hide it now; the ring is still a surface-
+    // view detail and gives way to the whole globe at planet scale.
+    globe.visible = !this.eyeUnderSoil;
+    if (this.horizonRing) {
+      this.horizonRing.visible = !this.eyeUnderSoil && !this.planetViewActive;
     }
-    for (const shell of this.surfaceShells) shell.visible = !eyeUnder;
+    // The globe's coarsest triangles span more than the play cap, so at ground
+    // level one can bridge overhead as a brown ceiling. Cut them out under the
+    // fine ring; planet view has no ring and needs the complete globe.
+    const farCut = getGroundShader(this.groundMaterial)?.uniforms?.uFarReliefCutRadius;
+    if (farCut) {
+      farCut.value = this.horizonRing && !this.planetViewActive ? FAR_RELIEF_CUT_M : 0;
+    }
+    for (const mesh of this.terrainMeshes) {
+      mesh.visible = !this.eyeUnderSoil && !this.planetViewActive;
+    }
+    // The terrain is world-fixed. It used to be turned by the hour, but only
+    // the far levels and the shell were turned: the authored six-kilometre
+    // square stayed where it was. At noon that is a half-turn, so the far
+    // ground was the *south* terrain while the square under the player was the
+    // north one - two different surfaces meeting at the square's edge, in two
+    // different shades. The sun already moves through the sky and lights the
+    // one surface; rotating the ground as well is what made the seam.
+    this.planetSpinRad = 0;
+    if (this.farReliefMesh) this.farReliefMesh.rotation.y = this.planetSpinRad;
+    if (this.planetSea) this.planetSea.mesh.rotation.y = this.planetSpinRad;
+    if (this.orbitalShell) this.orbitalShell.mesh.rotation.y = this.planetSpinRad;
+    if (this.moonBody) {
+      // The dome's disc is for an eye on the ground; a body 600 km out over the
+      // same sky would be a second moon. It is drawn once the eye is high enough
+      // that the dome's disc is no longer the thing being looked at.
+      this.moonBody.mesh.visible = this.planetViewActive || this.eyeAltitudeM > 20_000;
+      placeMoonBody(this.moonBody, this.planetCenter, this.bodies.moonDir, this.planetRadiusM);
+    }
+  }
+
+  /**
+   * Join the play disc to the planet, in one ring.
+   *
+   * The disc is a local relief cap raised above the global field. Its rim wall
+   * hides the seam from a ground eye, but from a kilometre up the cap reads as
+   * a circular plate: the rim is a step down to the globe. The ring starts on
+   * that same rim, slopes the local cap into the global field over 1.8 km, and
+   * then follows the global field itself, so there is one continuous surface
+   * from the player's ground to the far side of the planet.
+   */
+  private ensureHorizonRing(params: PlanetReliefParams): THREE.Mesh | null {
+    if (this.horizonRing) return this.horizonRing;
+    const disk = this.planetDetailMesh ?? this.scene.getObjectByName('planet-play-disk');
+    const inner = Number(disk?.userData.playRadiusM);
+    if (!(inner > 0) || !(this.planetRadiusM > 0)) return null;
+    const segments = Number(disk?.userData.playDiskSegments) || 512;
+    const radius = this.planetRadiusM;
+    const direction = new THREE.Vector3();
+    const outer = Math.max(inner + HORIZON_RING_BLEND_M, HORIZON_RING_OUTER_M);
+    const heightAt = (x: number, z: number): number => {
+      const r = Math.hypot(x, z);
+      const surface = planetSurfaceY(radius, x, z);
+      const local = surface + TERRAIN_SKIN_M;
+      const t = Math.min(1, Math.max(0, (r - inner) / HORIZON_RING_BLEND_M));
+      if (t <= 0) return local;
+      const blend = t * t * (3 - 2 * t);
+      // The global field is measured from the body's centre, not the tangent
+      // plane, so the sample direction has to include the surface's curvature.
+      direction.set(x, surface + radius, z).normalize();
+      const global = surface + planetReliefAt(direction, params) - FAR_RELIEF_FALLBACK_SINK_M;
+      return local + (global - local) * blend;
+    };
+    const ring = createSurfaceRing({
+      innerRadiusM: inner,
+      outerRadiusM: outer,
+      segments,
+      rows: 48,
+      heightAt,
+      material: this.groundMaterial,
+      lipDepthM: HORIZON_RING_LIP_M,
+      name: 'planet-horizon-ring',
+    });
+    this.scene.add(ring);
+    this.horizonRing = ring;
+    return ring;
+  }
+
+  private ensureFarRelief(params: PlanetReliefParams): THREE.Mesh {
+    if (this.farReliefMesh) return this.farReliefMesh;
+    this.farReliefMesh = createFarReliefMesh({
+      radiusM: this.planetRadiusM,
+      material: this.groundMaterial,
+      // The globe uses the planet-wide field only. The authored six-kilometre
+      // far field is a square from the retired LOD pipeline: drawing it on a
+      // coarse globe recreated its stamped-block edge and its vertical facets.
+      // The play disc owns the authored ground; outside it the globe is one
+      // continuous field, with no square to find from any altitude.
+      reliefAt: (direction) => planetReliefAt(direction, params) - FAR_RELIEF_FALLBACK_SINK_M,
+      detail: FAR_RELIEF_DETAIL,
+    });
+    this.scene.add(this.farReliefMesh);
+    return this.farReliefMesh;
+  }
+
+  private updatePlanetBodyVisibility(eyeUnder: boolean): void {
+    if (this.planetDetailMesh) {
+      // The detail patch is a child of the body, so the body's zero draw range
+      // does not hide it. From orbit it was the small bright speck showing
+      // through the night side (S37); the orbital face owns the view there.
+      this.planetDetailMesh.visible = !eyeUnder && !this.planetViewActive;
+    }
+    if (this.planetBodyMesh) {
+      // The body is a bare sphere at the mean radius. It is not a backdrop: its
+      // surface is *above* every basin in the relief, so wherever the ground
+      // dips below zero the body punched through it in coarse sphere facets -
+      // the diamond lattice that covered the disc from orbit. With the relief
+      // field on, the whole sphere is covered by a real surface (the authored
+      // cap, the chunk tree, or a whole-sphere relief level), so the body is
+      // never the thing being seen and must not draw at all. A dry world made
+      // this visible: the sea used to hide the body's top half.
+      const reliefCovers = (this.reliefParams?.amplitudeM ?? 0) > 0;
+      this.planetBodyMesh.geometry.setDrawRange(
+        0,
+        eyeUnder || reliefCovers ? 0 : this.planetBodyDrawCount,
+      );
+    }
     // The arch stands on the skin, so it is scenery of the surface: a buried
     // eye is inside the earth and sees none of it.
     if (this.terrainVolume) this.terrainVolume.visible = !eyeUnder;
   }
 
   /**
-   * Keep the aperture soil body in step with the cavity, and show it only to an
-   * eye that is inside it.
-   *
-   * Built lazily: from above it is behind the opaque sheet and cannot be seen,
-   * so a player who never goes underground never pays for it. Rebuilt when the
-   * aperture changes size or moves, which is a Root Sight open or a reroot, not
-   * a per-frame event.
+   * Keep the aperture soil body in step with the cavity. The shaft is part of the
+   * opening whenever it is open, not only while an eye is buried: from above it
+   * gives the pit a real inward-facing wall and floor under the bowl, and from
+   * below it is the earth the buried eye sees. Rebuilt when the aperture changes
+   * size or moves, which is a Root Sight open or a reroot, not a per-frame event.
    */
-  private syncApertureSoil(eyeBuried: boolean, surfaceY: number): void {
-    const progress = this.soilUniforms.uRootSightProgress.value;
-    const centre = this.soilUniforms.uRootSightApertureCenter.value;
-    const aperture = this.soilUniforms.uRootSightApertureRadius.value;
-    const open = progress > 0.98 && aperture > 0.05;
-    if (!open) {
-      if (this.apertureSoil) this.apertureSoil.visible = false;
-      return;
-    }
-    if (!eyeBuried) {
-      if (this.apertureSoil) this.apertureSoil.visible = false;
-      return;
-    }
-
-    // The bowl's mouth is the hole the player sees, and the soil must stay just
-    // behind it. `CAVITY_CUT_OVERREACH` is the same factor the shader cuts the
-    // sheet with, so the body's shaft is wider than the cut by the gap alone.
-    const depthBelowLip = cavityDepthM(aperture);
-    const params = apertureSoilParamsFor({
-      centreX: centre.x,
-      centreZ: centre.z,
-      mouthRadiusM: aperture * CAVITY_CUT_OVERREACH,
-      depthM: depthBelowLip + APERTURE_SOIL_BELOW_FLOOR_M,
-    });
-    const radius = Math.hypot(this.camera.position.x - centre.x, this.camera.position.z - centre.z);
-    // The same margin the camera holds a buried eye to (`apertureSoilHoldRadiusM`),
-    // so the body is never withheld from an eye the clamp allows under the surface.
-    const insidePlan =
-      radius < params.extentM - APERTURE_SOIL_EYE_HOLD_M + APERTURE_SOIL_HOLD_SLACK_M;
-    const depth = this.camera.position.y - surfaceY;
-    const insideDepth = depth < -0.05 && depth > -(params.depthM - 0.2);
-    const inside = insidePlan && insideDepth;
-
-    const key = `${centre.x.toFixed(2)}|${centre.z.toFixed(2)}|${params.voidRadiusM.toFixed(2)}|${params.depthM.toFixed(2)}`;
-    if (key !== this.apertureSoilKey) {
-      if (this.apertureSoil) {
-        this.scene.remove(this.apertureSoil);
-        this.apertureSoil.geometry.dispose();
-        (this.apertureSoil.material as THREE.Material).dispose();
-        this.apertureSoil = null;
+  /**
+   * Bake the shell's planet-wide sea mask, once.
+   *
+   * The ocean's bed texture is 6.4 km across: enough to carry the real coast and
+   * the near islands through the shell's fade, but the ground beyond it is the
+   * bare body, which lies under sea level everywhere. Without this the shell
+   * painted land to the limb over an ocean. Heights here are relief above the
+   * sphere, so the sea level is one number and the shader needs no curvature
+   * term. Only the drawn world (the 12 km far field) contributes relief; past
+   * that the body itself is the bed. The radial sqrt warp spends texels on the
+   * land at the pole instead of on open water.
+   */
+  private ensureOrbitalFarMask(): void {
+    if (this.orbitalFarMask || !this.orbitalShell) return;
+    const width = 512;
+    const height = 256;
+    const field = getTerrainParams();
+    const relief = this.reliefParams;
+    const seaLevelM = this.waterTuning.seaLevelM ?? DEFAULT_WATER_FIELD_TUNING.seaLevelM;
+    const heights = new Float32Array(width * height);
+    const direction = new THREE.Vector3();
+    let minM = Number.POSITIVE_INFINITY;
+    let maxM = Number.NEGATIVE_INFINITY;
+    const latitudeStep = Math.PI / height;
+    const longitudeStep = (Math.PI * 2) / width;
+    // Four samples a texel, at the quarter points. Even with the short octaves
+    // filtered out the 2 km hills are barely two texels wide, so one point per
+    // texel picked a different hill on every row and the disc grew a moire.
+    // Averaging is what a kilometre-wide look at the ground physically is.
+    const offsets = [-0.25, 0.25];
+    const sampleAt = (latitude: number, longitude: number): number => {
+      const cosLat = Math.cos(latitude);
+      direction.set(cosLat * Math.cos(longitude), Math.sin(latitude), cosLat * Math.sin(longitude));
+      return relief
+        ? terrainRelief(direction.x * this.planetRadiusM, direction.z * this.planetRadiusM, field) +
+            planetReliefAt(direction, relief, 1_000)
+        : terrainRelief(direction.x * this.planetRadiusM, direction.z * this.planetRadiusM, field);
+    };
+    for (let j = 0; j < height; j += 1) {
+      const latitude = (0.5 - (j + 0.5) / height) * Math.PI;
+      for (let i = 0; i < width; i += 1) {
+        const longitude = ((i + 0.5) / width - 0.5) * Math.PI * 2;
+        let value = 0;
+        for (const dLat of offsets) {
+          const lat = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, latitude + dLat * latitudeStep));
+          for (const dLon of offsets) {
+            value += sampleAt(lat, longitude + dLon * longitudeStep);
+          }
+        }
+        value *= 0.25;
+        heights[j * width + i] = value;
+        if (value < minM) minM = value;
+        if (value > maxM) maxM = value;
       }
-      this.apertureSoilKey = key;
     }
-
-    if (inside && !this.apertureSoil) {
-      const palette = this.cavityPalette;
-      this.apertureSoil = createApertureSoilMesh(
-        params,
-        (x, z) => planetTerrainY(this.planetRadiusM, x, z, getTerrainParams()),
-        {
-          topsoil: new THREE.Color(palette.topsoilColor),
-          subsoil: new THREE.Color(palette.subsoilColor),
-          deep: new THREE.Color(palette.deepColor),
-        },
-      );
-      if (this.apertureSoil) this.scene.add(this.apertureSoil);
+    if (!Number.isFinite(minM) || !Number.isFinite(maxM)) {
+      minM = -1;
+      maxM = 1;
     }
-    // A rebuild can fail (an empty region); the key still advances so it is not
-    // attempted again for the same numbers on every frame.
-    if (this.apertureSoil) {
-      this.apertureSoil.visible = inside;
-      // The near-side cut follows the eye: it is what lets a camera inside the
-      // earth see the pit instead of a brown wall an arm's length away. This
-      // body is only reached for a buried eye (the early return above), which is
-      // the renderer's own answer that excludes an eye standing in the pit, so
-      // the cut can never fire on the wall beside a player in the opening.
-      setApertureSoilEye(this.apertureSoil, this.camera.position, inside);
+    const spanM = Math.max(0.001, maxM - minM);
+    const data = new Uint8Array(width * height * 4);
+    for (let i = 0; i < heights.length; i += 1) {
+      const value = Math.round(Math.min(1, Math.max(0, (heights[i] - minM) / spanM)) * 255);
+      const at = i * 4;
+      data[at] = value;
+      data[at + 1] = value;
+      data[at + 2] = value;
+      data[at + 3] = 255;
     }
+    const texture = new THREE.DataTexture(data, width, height, THREE.RGBAFormat);
+    // The mask wraps around the planet's axis, and its texels are metres apart
+    // at the limb: a mip chain is what stops the coast from crawling there.
+    texture.wrapS = THREE.RepeatWrapping;
+    texture.generateMipmaps = true;
+    texture.minFilter = THREE.LinearMipmapLinearFilter;
+    texture.magFilter = THREE.LinearFilter;
+    texture.anisotropy = 4;
+    texture.needsUpdate = true;
+    this.orbitalFarMask = texture;
+    this.orbitalShell.setFarLandMask(texture, {
+      extentM: this.planetRadiusM,
+      minM,
+      spanM,
+      seaLevelM,
+    });
+    // The mask carries the relief either way; with no sea it must not paint a
+    // waterline or coastal foam, or a dry world still has blue shores to orbit.
+    this.orbitalShell.setSeaEnabled(this.planetSea !== null);
+    // The mask is 512 columns around the body, so one texel is this many metres
+    // of arc: the relief shading turns its height gradient into a real slope
+    // with it.
+    this.orbitalShell.setReliefTexelArc((2 * Math.PI * this.planetRadiusM) / 512);
   }
 
   /**
@@ -1419,7 +2068,6 @@ export class EnvironmentRenderer {
     // The rim's shadow needs the same sun the ground and the sky use, so the
     // dark side of the pit is the side the light is not on.
     setCavityBowlSun(this.cavityBowl, this.bodies.sunDir);
-    if (this.apertureSoil) setApertureSoilLight(this.apertureSoil, level);
   }
 
   /**
@@ -1509,20 +2157,14 @@ export class EnvironmentRenderer {
   }
 
   /**
-   * Dev: what the water surfaces actually are, so a suspicious sheet can be
-   * identified instead of guessed at. Reports every water mesh with its
-   * visibility, vertex count, geometry type and the box it covers in world
-   * space - enough to tell the rain film from the water table, the river and
-   * the damp-ground stain.
+   * Dev: what the water surfaces actually are. There is one now - the level
+   * surface built from the rain field - so the report says whether it exists,
+   * what it is made of and the box it covers in world space.
    */
   public describeWaterSurfaces(): Array<Record<string, unknown>> {
-    const field = this.waterField;
-    if (!field) return [];
     const entries: Array<[string, THREE.Mesh | null]> = [
-      ['surface', field.surfaceMesh],
-      ['groundwater', field.groundwaterMesh],
-      ['river', field.riverMesh],
-      ['wetGround', field.wetGroundMesh],
+      ['surface', this.surfaceWaterMesh?.mesh ?? null],
+      ['underground', this.undergroundWaterMesh?.mesh ?? null],
     ];
     return entries.map(([name, mesh]) => {
       if (!mesh) return { name, present: false };
@@ -1653,6 +2295,35 @@ export class EnvironmentRenderer {
     return this.bodies.sunDir.clone();
   }
 
+  /**
+   * The drawn relief at a direction on the sphere, metres above the base radius.
+   *
+   * Same function the ground, the relief shells and the orbital face read, so a
+   * camera clearance taken from it is a clearance over the surface that is
+   * actually there - not over the mean sphere.
+   */
+  public reliefAtDirection(direction: THREE.Vector3): number {
+    if (this.planetRadiusM <= 0) return 0;
+    const field = getTerrainParams();
+    // The body turns by its hour angle and the field is planet-fixed, so the
+    // height under a world direction has to be read from the direction *before*
+    // the turn. Without this the camera's floor came from the far side of the
+    // planet: at noon the eye could be dropped straight through the ground it was
+    // looking at and end up under it, staring at the inside of the shell. This is
+    // the one place the two frames meet, so the unspin lives here.
+    const dir = this.reliefSpinScratch.copy(direction);
+    const spin = this.planetSpinRad;
+    if (Math.abs(spin) > 1e-9) {
+      const c = Math.cos(spin);
+      const s = Math.sin(spin);
+      dir.set(direction.x * c - direction.z * s, direction.y, direction.x * s + direction.z * c);
+    }
+    if (this.reliefParams) {
+      return planetSurfaceReliefAt(dir, this.planetRadiusM, field, this.reliefParams);
+    }
+    return terrainRelief(dir.x * this.planetRadiusM, dir.z * this.planetRadiusM, field);
+  }
+
   /** Current sun color. */
   public getSunColor(): THREE.Color {
     return this.sunLight.color.clone();
@@ -1661,5 +2332,37 @@ export class EnvironmentRenderer {
   /** Current weather state (for dev controls). */
   public getWeatherState(): string {
     return this.weatherMachine.getState();
+  }
+
+  /**
+   * Release the meshes and textures this renderer created. The ground material
+   * is shared with the terrain relief, so it is not disposed here; everything
+   * below is this class's own.
+   */
+  public dispose(): void {
+    this.surfaceWater?.dispose();
+    this.surfaceWater = null;
+    if (this.surfaceWaterMesh) {
+      this.scene.remove(this.surfaceWaterMesh.mesh);
+      this.surfaceWaterMesh.dispose();
+      this.surfaceWaterMesh = null;
+    }
+    if (this.undergroundWaterMesh) {
+      this.scene.remove(this.undergroundWaterMesh.mesh);
+      this.undergroundWaterMesh.dispose();
+      this.undergroundWaterMesh = null;
+    }
+    if (this.terrainVolume) {
+      this.scene.remove(this.terrainVolume);
+      this.terrainVolume.geometry.dispose();
+      (this.terrainVolume.material as THREE.Material).dispose();
+      this.terrainVolume = null;
+    }
+    if (this.cavityBowl) {
+      this.scene.remove(this.cavityBowl);
+      this.cavityBowl.geometry.dispose();
+      (this.cavityBowl.material as THREE.Material).dispose();
+      this.cavityBowl = null;
+    }
   }
 }

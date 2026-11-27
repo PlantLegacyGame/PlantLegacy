@@ -47,7 +47,7 @@
             {
               "id": "essence_growth",
               "name": "Growth Essence",
-              "description": "Concentrated growth for the part the plant spends it on.",
+              "description": "Bottled growth energy, drunk straight from the pouch.",
               "price": 45,
               "icon": "◆"
             }

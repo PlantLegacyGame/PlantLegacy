@@ -26,6 +26,17 @@ describe('vitals rows', () => {
     assert.equal(vitalRow({ id: 'n', label: 'Nodes', value: 3, precision: 0 }).valueText, '3');
   });
 
+  it('does not round a fractional capacity below the store it contains', () => {
+    const row = vitalRow({ id: 'w', label: 'Water', value: 46.4, capacity: 46.4 });
+    assert.equal(row.valueText, '46.4/46.4');
+    assert.equal(row.title, 'Water: 46.4 of 46.4');
+    // An exact capacity keeps the old whole-number spelling.
+    assert.equal(
+      vitalRow({ id: 'w', label: 'Water', value: 46, capacity: 46 }).valueText,
+      '46.0/46',
+    );
+  });
+
   it('grades low and critical stores', () => {
     const options = { lowFraction: 0.25, criticalFraction: 0.1 };
     assert.equal(

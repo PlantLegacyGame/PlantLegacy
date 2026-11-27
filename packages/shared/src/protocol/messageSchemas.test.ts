@@ -30,6 +30,10 @@ describe('validateMessage', () => {
     );
   });
 
+  it('treats an optional field set to undefined as absent', () => {
+    assert.deepEqual(validateMessage(1, { clientVersion: 2, accessToken: undefined }).issues, []);
+  });
+
   it('rejects a non-object payload', () => {
     assert.ok(codes(1, 'not-an-object').includes('message.payload_type'));
     assert.ok(codes(1, null).includes('message.payload_type'));
@@ -179,6 +183,13 @@ describe('validateMessage', () => {
     assert.deepEqual(validateMessage(9, { message: 'hi', mode: 'world' }).issues, []);
     assert.deepEqual(validateMessage(9, { message: 'hi' }).issues, []);
     assert.ok(codes(9, { message: 'hi', mode: 3 }).includes('message.field_type'));
+  });
+
+  it('accepts a chat line and an emote broadcast', () => {
+    const from = { playerId: 'p1', playerName: 'Fern Test', timestamp: 1 };
+    assert.deepEqual(validateMessage(23, { ...from, message: 'hello' }).issues, []);
+    // An emote has no message text; requiring one here dropped every emote.
+    assert.deepEqual(validateMessage(23, { ...from, emoteId: 'wave', type: 'emote' }).issues, []);
   });
 
   it('renders issues via formatMessageIssue', () => {

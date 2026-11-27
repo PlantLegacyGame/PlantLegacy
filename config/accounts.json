@@ -87,6 +87,12 @@
       "range": [5, 100],
       "description": "Max token refresh attempts per IP per minute"
     },
+    "rate_limit_display_name_per_minute": {
+      "type": "integer",
+      "value": 5,
+      "range": [1, 60],
+      "description": "Max authenticated display-name changes per account per minute"
+    },
     "lockout_max_failed_attempts": {
       "type": "integer",
       "value": 5,

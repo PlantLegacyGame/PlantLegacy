@@ -32,6 +32,7 @@ const REFUSALS: Record<string, string> = {
   insufficient_energy_for_node: 'Not enough energy - grow leaves to photosynthesize.',
   insufficient_energy: 'Not enough energy - grow leaves to photosynthesize.',
   insufficient_energy_for_germination: 'Not enough energy to germinate.',
+  seed_reserve: 'Keep enough energy for your first leaf before growing more roots.',
   invalid_direction: 'Growth direction is invalid for this node type.',
   max_nodes_reached: 'Plant has reached maximum node limit.',
   invalid_parent_for_cotyledon: 'Cotyledons can only grow from seed crown or root crown.',

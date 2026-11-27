@@ -4,14 +4,15 @@
 **Source of truth:** DESIGN.md Appendix H.
 
 Every gameplay table carries `world_id`. All item and Spore mutations must use
-row-level locks (RULE_17). The pouch and purse now have a restart copy in
+row-level locks (RULE_17). The pouch and purse have a restart copy in
 `player_state`, keyed by account id. The live copy is still the connected
-player; each change is written back in a transaction that locks the row and upserts, and the row is the lock.
-This is a persistence slice, not the whole of T08A: a full read-modify-write
-transaction, `item_flags.json`, and the `items.json` vs
-`inventory.json`/`item_flags.json` ownership decision are still open. See
-[`tasks/T08A.md`](./tasks/T08A.md). T14/T29/T45 must not build on it until
-those are closed.
+player; every pouch and purse mutation (purchase, item use, slot swap, spore
+award, dev grant) is one read-modify-write transaction that locks the row and
+upserts, and the row is the lock (ADR-081). `items.json` owns the item flags and
+is the single catalogue (ADR-082); `inventory.json` and `item_flags.json` are
+deprecated stubs with no readers. What T08A still owes is the trade/mail/list
+systems, not the persistence contract. See [`tasks/T08A.md`](./tasks/T08A.md);
+T14/T29/T45 build on this path.
 
 ## Locked decisions
 
@@ -67,6 +68,7 @@ those are closed.
 | `role` | `text` | `player` \| `admin` |
 | `failed_login_attempts` | `integer` | default 0 |
 | `locked_until` | `timestamptz` | nullable |
+| `last_login_at` | `timestamptz` | nullable; written on a successful sign-in |
 | `created_at` | `timestamptz` | |
 | `updated_at` | `timestamptz` | |
 
@@ -86,12 +88,14 @@ those are closed.
 ### `rate_limits` (T08C)
 | Column | Type | Notes |
 |---|---|---|
-| `ip_address` | `text` | PK part 1 |
-| `endpoint` | `text` | PK part 2 |
+| `id` | `bigserial` | PK |
+| `ip_address` | `text` | unique part 1 |
+| `endpoint` | `text` | unique part 2 |
 | `attempt_count` | `integer` | |
 | `window_start` | `timestamptz` | |
 
-Unique constraint on `(ip_address, endpoint)` for atomic upsert.
+Unique constraint on `(ip_address, endpoint)` (migration 004) so `INSERT … ON CONFLICT`
+is one statement. `id` is a surrogate key and nothing keys off it.
 
 ### `world_state` (T03 season calendar)
 | Column | Type | Notes |
@@ -107,11 +111,42 @@ The base surface derives from the world seed, so only **edited** chunks, their
 voids and an append-only edit log are stored — never one row per voxel, and
 never the whole ground.
 
-| Table | Key | Stores |
+#### `terrain_chunks`
+| Column | Type | Notes |
 |---|---|---|
-| `terrain_chunks` | `(world_id, cx, cz)` | `revision`, plus `heights`, `moisture` and `compaction` as `bytea` |
-| `terrain_edits` | `(world_id, id)` | Append-only: `tick`, `actor_plant_id`, `kind`, position, `radius_m`, `volume_m3`. Indexed by `(world_id, tick)` |
-| `terrain_voids` | `(world_id, id)` | Position, `radius_m`, `volume_m3`, `stability`; a void collapses when dry and loose |
+| `world_id` | `text` | PK part 1 |
+| `cx` | `integer` | PK part 2, chunk column |
+| `cz` | `integer` | PK part 3, chunk row |
+| `revision` | `integer` | Bumped on every write; a client holding an older revision refetches |
+| `heights` | `bytea` | Packed per-vertex height offsets for this chunk only |
+| `moisture` | `bytea` | Packed moisture samples |
+| `compaction` | `bytea` | Packed compaction samples |
+| `updated_at` | `timestamptz` | |
+
+#### `terrain_edits`
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `bigint` | PK part 2, monotonic per world |
+| `world_id` | `text` | PK part 1 |
+| `tick` | `bigint` | Simulation tick; indexed with `world_id` |
+| `actor_plant_id` | `text` | Nullable: an edit with no living author |
+| `kind` | `text` | Which edit (dig, collapse, …) |
+| `x`, `y`, `z` | `double precision` | World position |
+| `radius_m` | `double precision` | |
+| `volume_m3` | `double precision` | Soil removed or added |
+| `created_at` | `timestamptz` | |
+
+Append-only: a row is written once and never updated. Indexed by `(world_id, tick)`.
+
+#### `terrain_voids`
+| Column | Type | Notes |
+|---|---|---|
+| `world_id` | `text` | PK part 1 |
+| `id` | `bigint` | PK part 2 |
+| `x`, `y`, `z` | `double precision` | World position |
+| `radius_m` | `double precision` | |
+| `volume_m3` | `double precision` | |
+| `stability` | `double precision` | Below its threshold and dry, the void collapses |
 
 ### `player_state` (T08A, partial)
 | Column | Type | Notes |

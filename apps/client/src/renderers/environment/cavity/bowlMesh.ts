@@ -11,6 +11,7 @@ import {
   CAVITY_CUT_OVERREACH,
   CAVITY_PALETTE,
   CAVITY_PROFILE_DEPTH,
+  CAVITY_SKIRT_DEPTH_M,
   CAVITY_STRATA_BANDS,
   CAVITY_STRATA_SUBDIVISION,
 } from './profile.ts';
@@ -94,14 +95,40 @@ export function createCavityBowl(
     shell.positions[i] *= CAVITY_CUT_OVERREACH;
     shell.positions[i + 2] *= CAVITY_CUT_OVERREACH;
   }
+  const cols = shell.cols;
+  // The rim collar belongs to the same mesh. As a separate child it was one
+  // more surface that had to agree with the lip every frame; appended here it
+  // is the last two rings of the one shell, and its top row *is* the rim.
+  const collarBase = shell.positions.length / 3;
+  const positions = new Float32Array(shell.positions.length + cols * 2 * 3);
+  positions.set(shell.positions);
+  for (let c = 0; c < cols; c += 1) {
+    const at = (collarBase + c * 2) * 3;
+    positions[at] = shell.positions[c * 3];
+    positions[at + 1] = shell.positions[c * 3 + 1];
+    positions[at + 2] = shell.positions[c * 3 + 2];
+    positions[at + 3] = shell.positions[c * 3];
+    positions[at + 4] = shell.positions[c * 3 + 1] - CAVITY_SKIRT_DEPTH_M;
+    positions[at + 5] = shell.positions[c * 3 + 2];
+  }
+  const indices = Array.from(shell.indices);
+  for (let c = 0; c < cols; c += 1) {
+    const top = collarBase + c * 2;
+    const bottom = top + 1;
+    const nextTop = collarBase + ((c + 1) % cols) * 2;
+    const nextBottom = nextTop + 1;
+    indices.push(top, nextTop, bottom, bottom, nextTop, nextBottom);
+  }
   const geometry = new THREE.BufferGeometry();
   // The column count is a property of the shell, not something to re-derive from
   // the vertex count: a consumer dividing by the profile's ring count got 320
   // columns instead of 96 once the wall had strata courses, and built its index
   // buffer out of vertices that were not its own.
-  geometry.userData.cols = shell.cols;
-  geometry.setIndex(new THREE.BufferAttribute(shell.indices, 1));
-  geometry.setAttribute('position', new THREE.BufferAttribute(shell.positions, 3));
+  geometry.userData.cols = cols;
+  geometry.userData.collarBase = collarBase;
+  geometry.userData.collarDepthM = CAVITY_SKIRT_DEPTH_M;
+  geometry.setIndex(indices);
+  geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
   geometry.computeVertexNormals();
   // The lip ring is a cut edge, not a surface: left with its own computed normals
   // it faced the sky and caught the light as an unbroken bright line round the
@@ -109,8 +136,8 @@ export function createCavityBowl(
   // course's normals shades it as part of the wall, and the ground above it stops
   // looking like something the pit is pushed through.
   const normals = geometry.getAttribute('normal');
-  for (let c = 0; c < shell.cols; c += 1) {
-    const below = shell.cols + c;
+  for (let c = 0; c < cols; c += 1) {
+    const below = cols + c;
     normals.setXYZ(c, normals.getX(below), normals.getY(below), normals.getZ(below));
   }
   normals.needsUpdate = true;

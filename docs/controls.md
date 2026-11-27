@@ -1,7 +1,7 @@
 # Controls
 
-**Status:** implemented (C01 foundation). The named-action input abstraction is complete; bindings are loaded from `config/controls.json` (active, 10 values). `config/controls.json` is no longer a stub.
-**Source of truth:** DESIGN.md Part 19 and the C01 task.
+**Status:** implemented (C01 foundation, C04 settings). The named-action input abstraction is complete; bindings are loaded from `config/controls.json` (active, 7 values) and a player's rebinds are a per-device override map on top of it (`config/controlOverrides.ts`). `config/controls.json` is no longer a stub.
+**Source of truth:** DESIGN.md Part 17 (controls) and Part 18 (UI and HUD); the C01 and C04 tasks.
 
 ## Current bindings (from `config/controls.json`)
 
@@ -14,6 +14,7 @@
 | Pan camera (keyboard) | `A` / `ArrowLeft` | Move camera left on ground plane |
 | Pan camera (keyboard) | `D` / `ArrowRight` | Move camera right on ground plane |
 | Pan camera (touch) | One-finger drag | Drag on world pans camera |
+| Orbit camera (touch) | Two-finger drag | Two-finger drag orbits around the target |
 | Zoom (mouse/touch) | Scroll wheel / Pinch | `OrbitControls`, smooth continuous zoom |
 | Zoom (keyboard) | `-` / `+` (or `=`) | Smooth keyboard zoom with acceleration/damping |
 | Recenter camera | `Space` / Double-click ground / Double-tap | Frames root node |
@@ -21,6 +22,7 @@
 | Name a part | Hover a plant part | Shows `Leaf #2` and its place in the plant, plus how many growth options the server reports. The "click to see what it can grow" promise appears only when that count is above zero |
 | Grow Mode toggle | `G` | Toggles between Normal Mode and Grow Mode |
 | Root Sight toggle | `R` | Toggles organic ground cutaways & subterranean camera elevation. It also opens by itself when a radicle or root starts growing (`root_sight.auto_open_on_root_growth`); a hand-close then stands until the next buried part starts |
+| Root Sight toggle (touch) | Screen-edge button | The same toggle, because a touch player has no `R`; it is why the action bar carries Root sight |
 | Emote wheel | `E` | Opens emote selection |
 | Inventory / Overview | `I` | Opens the inventory and plant overview together; once they are up, toggles the inventory only, so closing one panel never takes the other with it |
 | Inventory slot 1–10 | `1`–`9`, `0` | In the world, selects and uses a hotbar slot. With the inventory open, moves the inventory selection only, where typing a count is the point |
@@ -28,9 +30,11 @@
 | Shop | Spore chip `+` / title screen Shop button | Opens the shop panel; the balance and prices are the server's |
 | Cancel growth / Close panel | `Escape` / Right-click (context) | Cancels growth drawing, closes the open plant panels or wheel, otherwise opens the pause menu. A panel's own close button closes that panel alone |
 | Pause menu | `Escape` in the world | Resume, Settings, Controls, Leave to title. Also the action bar's Menu button, so it is reachable on touch |
+| Settings | `O` | Opens the Settings sheet (Settings / Controls tabs). The same sheet is reachable from the pause menu, so `O` is a shortcut, not the only door |
 | Operator readout, growth readout | dev panel → Debug | The tick card and the growth readout are switches in the dev panel. They were F3 and F2: F3 is the browser's find bar in Chrome and quick-find in Firefox, and both are function keys a browser game must not claim |
 | Dev panel toggle | `` ` `` (backtick) | Opens dev panel with admin commands (only with `?dev=1`). The dev panel's Debug tab also owns the three readouts below |
-| Planet orbit view | Dev panel → Camera → Orbit Planet / Local View | No key binding by request; the action is `planet_view_toggle` but it is not bound |
+| Dev camera limits | Dev panel → Camera → Unclamped Distance | Dev-only. Two things stop a long shot: the size class's orbit cap, and the spring-arm collision, which pulls the eye back to the first solid thing between it and the orbit target - in a planted field that is usually a neighbouring plant, not the terrain. A grown body cannot reach the 80 px tier boundary inside either. The toggle suspends both and deepens the far plane to 20 km, so a measurement can frame a plant from any distance and height |
+| Planet orbit view | Dev panel → Camera → Orbit Planet / Local View | No key binding by request, and no config action either: the two buttons call `cam.setPlanetView()` directly, so there is nothing in `config/controls.json` to rebind |
 | Debug overlay | dev panel → Debug → Metrics overlay | Unbound on purpose. It used to be a bare `Shift`, which fired every time a player held shift to select or capitalise, and swallowed the modifier. |
 | Hints | `H` | Shows the key list on demand and re-enables hints. Hints themselves are contextual: each one appears once, when it is relevant |
 
@@ -95,9 +99,10 @@ game's description of what the player is has one owner.
 - **Normal Mode (default):** Left-click a node → camera smoothly focuses on that node. No growth panel opens.
 - **Grow Mode:** Press `G` to toggle. Left-click a node → growth options panel opens for that node. Select an option, then drag on the canvas to set growth direction, release to confirm.
 
-Mode is shown three ways, none of them text in a readout: the screen edge takes a
-green tint, the cursor becomes a crosshair, and the bar's Grow button is held
-down with a `GROW MODE` badge above it.
+Mode is shown without a line of text in a readout: the screen edge takes a green
+tint, and the bar's Grow button is held down with a `GROW MODE` badge above it.
+The pointer keeps its usual shape - the direction being aimed is drawn on the
+plant itself, so nothing about the cursor has to change.
 
 ## Chat (T05)
 
@@ -108,7 +113,7 @@ down with a `GROW MODE` badge above it.
 
 ## Implemented by C01
 
-- Named-action input abstraction (`move_forward`, `interact`, …) and device producers for keyboard, mouse.
+- Named-action input abstraction (`camera_pan`, `select_part`, `grow_mode_toggle`, …) and device producers for keyboard, mouse and touch.
 - Loading bindings from `config/controls.json`; every key code is data, not source.
 - Context rules: modal > text input > context actions > camera.
 - Gameplay code reads action state via `isActive(actionId)`, never raw keys.
@@ -116,34 +121,53 @@ down with a `GROW MODE` badge above it.
 - **Emote wheel UI** (`E` key): circular emote selector with center close button, click-outside to close, Escape to close. Sends `/emote <id>` via chat message type.
 - **Inventory/Overview panel** (`I` key): centred panel with plant stats and the server's inventory slot grid. The grid and the always-on hotbar are fed by `INVENTORY_SYNC` / `INVENTORY_SLOT_UPDATE`; number keys `1`–`9` and `0` select and use outside the inventory, and select only while it is open. Drag-and-drop reordering is not built yet.
 
+## Implemented by C04 (settings and rebinding)
+
+- **Per-device rebinding.** Settings → Controls lists the actions in the current
+  device's layout and rebinds on a key press. The change is an override map
+  (`plantlegacy.controls.v1` in `localStorage`), never a config write: the
+  server's table stays the source of defaults, and a later config fix still
+  reaches a player who rebound something else.
+- **One key, one action.** Assigning a key takes it from whichever action held
+  it, and the sheet says which actions lost it. An override for an action the
+  config no longer has is ignored, not resurrected.
+- **The table is filtered by device and context.** Every `dev`-context action is
+  hidden from the player's sheet; the dev panel keeps its own buttons.
+- **Reset to the config.** The sheet can drop every override for the device in
+  one action.
+
 ## Not built yet
 
-- Touch producers for growth aiming beyond tap-to-pick (long-press a node for its
-  menu, per DESIGN 17.5). The camera, the action bar, the reroot pad and the panels
-  all work on touch today; the growth aim still turns from a drag, not a gesture.
-- Rebinding UI and persistence.
-- Camera recenter and game actions beyond movement.
-- Inventory slot selection logic (actions bound, grid rendered, selection not wired).
+- **Growth aiming on touch** beyond tap-to-pick: the aim still follows a drag
+  rather than a long-press-then-drag gesture (DESIGN 17.5). The camera, the
+  action bar, the reroot pad and the panels all work on touch today.
+- **A gesture producer beyond the six configured gestures.** `bindings_touch`
+  holds one-finger drag, pinch, two-finger drag, double-tap, tap and the
+  edge button; a seventh gesture needs both a producer and a config row.
+- **Drag-and-drop reordering** in the inventory: slots select and use, and do not
+  yet move.
 
 ## Contract C01 satisfies
 
-- Every binding is a tunable in `config/controls.json`; no key code in source.
-- Actions are **named** (`move_forward`, `interact`, `open_inventory`, …), not
+- Every **desktop** binding is a tunable in `config/controls.json`; no key code in
+  source. The six touch gestures are the stated exception: three.js gets
+  `ONE: PAN` and `TWO: DOLLY_ROTATE` in the controls setup in `main.ts`, the edge
+  button and the double-tap are hand-wired, and `bindings_touch` is the written
+  specification of that set — which is why `config:keys` allowlists it instead of
+  pretending a producer reads it.
+- Actions are **named** (`camera_pan`, `select_part`, `grow_mode_toggle`, …), not
   raw keys. Producers translate devices into actions.
-- Desktop first; touch producers planned.
-- Remapping is data, not code: the settings UI writes the same config shape.
+- Desktop first; the six touch gestures and the finger copy exist, and growth
+  aiming is the remaining touch gap.
+- Remapping is data, not code: the settings UI writes the same binding shape it
+  reads, per device, as an override.
 - Input only produces **intents**. The server validates them (RULE_27).
 
-## Placeholder action groups
+## Where the binding table lives
 
-These names are provisional until C04 adds the full settings UI:
-
-| Group | Examples |
-|---|---|
-| Camera | `camera_orbit`, `camera_pan`, `camera_zoom`, `camera_recenter`, `camera_pan_forward`, `camera_pan_backward`, `camera_pan_left`, `camera_pan_right` |
-| Interaction | `select_part`, `grow_mode_toggle`, `grow_cancel` |
-| UI | `root_sight_toggle`, `emote_wheel`, `inventory_overview_toggle`, `inventory_slot_1`–`inventory_slot_10`, `dev_panel_toggle`, `debug_toggle`, `hint_card_toggle` |
-| Dev | Dev-panel actions, including regenerate, are not bindings |
-
-When the C04 settings UI lands, replace this file with the actual action table,
-default bindings, and the touch layout.
+`config/controls.json` is the table — `bindings_desktop` (28 actions, read by the
+keyboard and mouse producer) and `bindings_touch` (6 gestures, the written
+specification of what the touch handlers implement). This page lists what a player
+can press and why; it is not a second copy of the config, and it does not restate
+every default key. A new binding is a config row plus a row here, and a player's
+change is an override of that row, never a third table.

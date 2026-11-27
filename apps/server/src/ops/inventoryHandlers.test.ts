@@ -220,6 +220,25 @@ describe('useInventorySlot', () => {
     assert.deepEqual(player.inventory.slots[0], { itemId: 'unknown_item', count: 1 });
   });
 
+  it('clamps a resource item to the plant capacity instead of going over', async () => {
+    const { ports, player, plant } = makeHarness([
+      makeDef({
+        id: 'full_fertilizer',
+        use: { kind: 'resources', water: 50, minerals: 50, energy: 50 },
+      }),
+    ]);
+    player.inventory.slots[0] = { itemId: 'full_fertilizer', count: 1 };
+    plant.storedWater = 1000;
+    plant.storedMinerals = 1000;
+    plant.totalEnergy = 1000;
+
+    await useInventorySlot(ports, player, 0);
+
+    assert.equal(plant.storedWater, 1000, 'water stays at its capacity');
+    assert.equal(plant.storedMinerals, 1000, 'minerals stay at their capacity');
+    assert.equal(plant.totalEnergy, 1000, 'energy stays at its capacity');
+  });
+
   it('spends the item under the row lock, then applies the effect', async () => {
     const { ports, player, plant, sent } = makeHarness();
     player.inventory.slots[0] = { itemId: 'fertilizer_basic', count: 2 };

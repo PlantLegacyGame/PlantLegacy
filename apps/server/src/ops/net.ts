@@ -7,9 +7,19 @@ export interface NetProtoConfig {
   maxMessagesPerSecond: number;
   /** Short inbound burst a connection may spend before the sustained rate applies. */
   messageBurst: number;
+  /** Open sockets allowed from one client address before HELLO. */
+  maxConnectionsPerIp: number;
+  /** Minimum interval between expensive full-grid replies to one player. */
+  fullGridMinIntervalMs: number;
+  /** Minimum interval between full visible-plant sync replies. */
+  plantSyncMinIntervalMs: number;
+  /** Minimum interval between terrain-region replies. */
+  terrainRegionMinIntervalMs: number;
+  /** Sustained state-changing actions allowed per player per second. */
+  actionRatePerSecond: number;
+  /** Short state-changing action burst. */
+  actionBurst: number;
   tickRateHz: number;
-  positionQuantization: number;
-  angleQuantizationBits: number;
   keyframeIntervalTicks: number;
   worldBounds: {
     minX: number;
@@ -21,12 +31,22 @@ export interface NetProtoConfig {
   /** Broadcast cadence for weather/day-night, independent of the tick rate. */
   weatherSendRateHz: number;
   helloTimeoutMs: number;
+  /** Interval between ping/pong sweeps (`socket_heartbeat_ms`). */
+  socketHeartbeatMs: number;
   reconnectWindowMs: number;
 }
 
 import type { ConfigFile } from '@plant-legacy/shared/config';
 import { readInteger, readObject } from '@plant-legacy/shared/config';
-import type { Layer, NodeStatModifiers, NodeType, PlantNode } from '@plant-legacy/shared/growth';
+import type {
+  Layer,
+  NodeStatModifiers,
+  NodeType,
+  PlantArchetypeTraits,
+  PlantNode,
+  PlantSpawnPoint,
+} from '@plant-legacy/shared/growth';
+import type { SpawnSelection } from '@plant-legacy/shared/world';
 
 // One table for the wire, owned by the shared package. This module re-exports it
 // so existing server call sites keep importing from here.
@@ -60,9 +80,13 @@ export function loadNetProtoConfig(configs: Map<string, ConfigFile>): NetProtoCo
     maxBufferedBytes: readInteger(configs, 'net_proto', 'max_buffered_bytes'),
     maxMessagesPerSecond: readInteger(configs, 'net_proto', 'max_messages_per_second'),
     messageBurst: readInteger(configs, 'net_proto', 'message_burst'),
+    maxConnectionsPerIp: readInteger(configs, 'net_proto', 'max_connections_per_ip'),
+    fullGridMinIntervalMs: readInteger(configs, 'net_proto', 'full_grid_min_interval_ms'),
+    plantSyncMinIntervalMs: readInteger(configs, 'net_proto', 'plant_sync_min_interval_ms'),
+    terrainRegionMinIntervalMs: readInteger(configs, 'net_proto', 'terrain_region_min_interval_ms'),
+    actionRatePerSecond: readInteger(configs, 'net_proto', 'action_rate_per_second'),
+    actionBurst: readInteger(configs, 'net_proto', 'action_burst'),
     tickRateHz: readInteger(configs, 'net_proto', 'tick_rate_hz'),
-    positionQuantization: readInteger(configs, 'net_proto', 'position_quantization'),
-    angleQuantizationBits: readInteger(configs, 'net_proto', 'angle_quantization_bits'),
     keyframeIntervalTicks: readInteger(configs, 'net_proto', 'keyframe_interval_ticks'),
     worldBounds: {
       minX: rawWorldBounds.min_x,
@@ -73,6 +97,7 @@ export function loadNetProtoConfig(configs: Map<string, ConfigFile>): NetProtoCo
     clientSendRateHz: readInteger(configs, 'net_proto', 'client_send_rate_hz'),
     weatherSendRateHz: readInteger(configs, 'net_proto', 'weather_send_rate_hz'),
     helloTimeoutMs: readInteger(configs, 'net_proto', 'hello_timeout_ms'),
+    socketHeartbeatMs: readInteger(configs, 'net_proto', 'socket_heartbeat_ms'),
     reconnectWindowMs: readInteger(configs, 'net_proto', 'reconnect_window_ms'),
   };
 }
@@ -97,6 +122,8 @@ export interface HelloPayload {
   reconnectToken?: string;
   /** Display name from the menu; sanitized and length-capped before use. */
   displayName?: string;
+  /** T12 selection from the spawn scene. Absent means free random spawn. */
+  spawn?: SpawnSelection;
 }
 
 export interface SeasonUpdatePayload {
@@ -240,6 +267,9 @@ export interface WelcomePayload {
    * server has just handed them a replacement seed.
    */
   previousPlantDied?: { cause: string; source?: string; secondsAgo: number };
+  /** T12 seed identity and where it landed, for the HUD and Inspect. */
+  archetype?: PlantArchetypeTraits;
+  spawn?: PlantSpawnPoint;
   // Full node set for immediate client render (ADR-021)
   nodes?: Array<{
     id: string;
@@ -456,12 +486,17 @@ export interface PlantSyncPayload {
      * optional and the client falls back to the id.
      */
     ownerName?: string;
+    /** True while the owner has a live connection; absent from an older server. */
+    ownerOnline?: boolean;
     rootNodeId: string | null;
     totalBiomass: number;
     totalEnergy: number;
     totalUpkeep: number;
     /** T04 look parameters, so a rival draws its own petals and scales. */
     appearance?: { petalCount: number; leafScale: number; seedScale: number };
+    /** T12 seed identity, so Inspect names the archetype. */
+    archetype?: PlantArchetypeTraits;
+    spawn?: PlantSpawnPoint;
     /** Dominant mutation's pigment, so a rival draws its own colours. */
     pigment?: {
       visualSignature: number;
@@ -504,12 +539,17 @@ export interface PlantCreatedPayload {
     ownerId: string;
     /** The owner's display name when they are here to have one (E22). */
     ownerName?: string;
+    /** Whether they are awake, which the Inspect panel says in words. */
+    ownerOnline?: boolean;
     rootNodeId: string | null;
     totalBiomass: number;
     totalEnergy: number;
     totalUpkeep: number;
     /** T04 look parameters, so a rival draws its own petals and scales. */
     appearance?: { petalCount: number; leafScale: number; seedScale: number };
+    /** T12 seed identity, so Inspect names the archetype. */
+    archetype?: PlantArchetypeTraits;
+    spawn?: PlantSpawnPoint;
     /** Dominant mutation's pigment, so a rival draws its own colours. */
     pigment?: {
       visualSignature: number;
@@ -548,15 +588,6 @@ export interface PlantCreatedPayload {
 
 export interface PlantRemovedPayload {
   plantId: string;
-}
-
-export function quantizePosition(value: number, quantization: number): number {
-  return Math.round(value * quantization) / quantization;
-}
-
-export function quantizeAngle(value: number, bits: number): number {
-  const max = 2 ** bits;
-  return (Math.round((value / (2 * Math.PI)) * max) / max) * (2 * Math.PI);
 }
 
 export function clamp(value: number, min: number, max: number): number {

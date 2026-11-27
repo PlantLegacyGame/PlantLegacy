@@ -18,6 +18,7 @@ const testConfig = {
   rateLimitSignupPerHour: 5,
   rateLimitLoginPerMinute: 10,
   rateLimitRefreshPerMinute: 20,
+  rateLimitDisplayNamePerMinute: 5,
   lockoutMaxFailedAttempts: 5,
   lockoutDurationMin: 15,
   bcryptCost: 4,

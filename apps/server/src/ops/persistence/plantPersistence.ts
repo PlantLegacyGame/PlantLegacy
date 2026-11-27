@@ -3,8 +3,10 @@ import type {
   Layer,
   NodeType,
   Plant,
+  PlantArchetypeTraits,
   PlantMutation,
   PlantNode,
+  PlantSpawnPoint,
   PlantUprootState,
 } from '@plant-legacy/shared/growth';
 import type { Pool } from 'pg';
@@ -33,6 +35,9 @@ export interface PlantSnapshot {
   mutationSignature?: number;
   /** T06 uproot state. Absent means rooted (v3+ only). */
   uproot?: PlantUprootState;
+  /** T12 seed archetype and geographic spawn point (v5+ only). */
+  archetype?: PlantArchetypeTraits;
+  spawn?: PlantSpawnPoint;
 }
 
 export interface PlantEvent {
@@ -107,8 +112,8 @@ const UPROOT_CAUSE_TO_BYTE: Record<UprootCause, number> = {
 const BYTE_TO_UPROOT_CAUSE: UprootCause[] = ['saturation', 'gust', 'collapse', 'structural_damage'];
 
 const MAGIC = 0x504c4e54; // 'PLNT' in little-endian
-/** v3 adds the T06 uproot block. v1/v2 snapshots still load. */
-const VERSION = 4;
+/** v5 adds the seed archetype and spawn point. v1-v4 snapshots still load. */
+const VERSION = 5;
 const MIN_SUPPORTED_VERSION = 1;
 const PRESSURE_CATEGORIES = [
   'root',
@@ -323,6 +328,30 @@ export function serializePlant(plant: Plant): Uint8Array {
     payload.writeUint8(UPROOT_CAUSE_TO_BYTE[uproot.cause ?? 'structural_damage']);
     payload.writeBigInt64(BigInt(uproot.sinceTick));
     payload.writeFloat64(uproot.damageHp);
+  }
+
+  // T12 archetype and spawn. A plant made before the spawn scene writes one 0
+  // byte, so old-style plants stay small and read back as unbalanced defaults.
+  const archetype = plant.archetype;
+  payload.writeUint8(archetype ? 1 : 0);
+  if (archetype) {
+    payload.writeString(archetype.id);
+    payload.writeString(archetype.name);
+    payload.writeFloat64(archetype.growthSpeed);
+    payload.writeFloat64(archetype.waterCapacity);
+    payload.writeFloat64(archetype.mineralCapacity);
+    payload.writeFloat64(archetype.photosynthesis);
+    payload.writeFloat64(archetype.upkeep);
+    payload.writeString(archetype.mutationBias);
+  }
+  const spawn = plant.spawn;
+  payload.writeUint8(spawn ? 1 : 0);
+  if (spawn) {
+    payload.writeFloat64(spawn.latitudeDeg);
+    payload.writeFloat64(spawn.longitudeDeg);
+    payload.writeFloat64(spawn.altitudeM);
+    payload.writeString(spawn.label);
+    payload.writeString(spawn.areaId ?? '');
   }
 
   const payloadBytes = payload.toUint8Array();
@@ -612,6 +641,64 @@ export function deserializePlant(data: Uint8Array): PlantSnapshot {
     }
   }
 
+  let archetype: PlantArchetypeTraits | undefined;
+  let spawn: PlantSpawnPoint | undefined;
+  if (version >= 5) {
+    if (view.getUint8(offset) === 1) {
+      offset += 1;
+      const read = (): string => {
+        const { str, offset: next } = readString(view, offset);
+        offset = next;
+        return str;
+      };
+      const archetypeId = read();
+      const archetypeName = read();
+      const growthSpeed = view.getFloat64(offset, true);
+      offset += 8;
+      const waterCapacity = view.getFloat64(offset, true);
+      offset += 8;
+      const mineralCapacity = view.getFloat64(offset, true);
+      offset += 8;
+      const photosynthesis = view.getFloat64(offset, true);
+      offset += 8;
+      const upkeep = view.getFloat64(offset, true);
+      offset += 8;
+      const mutationBias = read();
+      archetype = {
+        id: archetypeId,
+        name: archetypeName,
+        growthSpeed,
+        waterCapacity,
+        mineralCapacity,
+        photosynthesis,
+        upkeep,
+        mutationBias,
+      };
+    } else {
+      offset += 1;
+    }
+    if (view.getUint8(offset) === 1) {
+      offset += 1;
+      const latitudeDeg = view.getFloat64(offset, true);
+      offset += 8;
+      const longitudeDeg = view.getFloat64(offset, true);
+      offset += 8;
+      const altitudeM = view.getFloat64(offset, true);
+      offset += 8;
+      const labelRead = readString(view, offset);
+      offset = labelRead.offset;
+      const areaRead = readString(view, offset);
+      offset = areaRead.offset;
+      spawn = {
+        latitudeDeg,
+        longitudeDeg,
+        altitudeM,
+        label: labelRead.str,
+        areaId: areaRead.str || null,
+      };
+    }
+  }
+
   return {
     id,
     worldId,
@@ -633,6 +720,8 @@ export function deserializePlant(data: Uint8Array): PlantSnapshot {
     mutationShedCooldownUntil,
     mutationSignature,
     uproot,
+    archetype,
+    spawn,
   };
 }
 

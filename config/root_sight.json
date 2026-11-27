@@ -38,6 +38,12 @@
       "range": [0, 0.9],
       "notes": "Opacity of soil inside the cutaway (0 = invisible, 0.9 = nearly opaque)"
     },
+    "aura_radius": {
+      "type": "number",
+      "value": 3,
+      "range": [0.5, 20],
+      "notes": "Radius in metres of the highlight glow around each root node while Root Sight is open (E19). One key for both plant passes: the SDF fallback and the WebGPU pass. Larger values fuse neighbouring roots into one glow, so 3 m keeps the root structure readable at the 0.3-1 m node spacing."
+    },
     "own_root_highlight_color": {
       "type": "color",
       "value": "#4CAF50",
@@ -112,9 +118,9 @@
     },
     "cavity_escape_lift_mps": {
       "type": "number",
-      "value": 1.6,
+      "value": 0.0,
       "range": [0, 10],
-      "notes": "How fast a buried eye rises back through the opening while the player looks up. The clamps could put the eye in the cavity but had no upward exit; the wall stopped sideways travel and the only way out was recentering."
+      "notes": "How fast a buried eye rises back through the opening while the player looks up. 0 since 2026-11-25: the automatic climb read as the camera shoving the player out of the ground whenever they looked up. The exit is the drag itself now - the orbit is uncapped while Root Sight is on, so dragging up rises."
     },
     "rebuild_hz": {
       "type": "number",

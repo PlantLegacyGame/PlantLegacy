@@ -43,8 +43,7 @@ const COMMON = read('common');
 /** The same concatenation `shaders/index.ts` performs for Vite. */
 const MODULES: Record<string, string> = {
   mesh: `${COMMON}\n${read('skinning')}\n${read('groundMap')}\n${read('mesh')}`,
-  billboard: `${COMMON}\n${read('billboard')}`,
-  impostor: `${COMMON}\n${read('impostor')}`,
+  impostor: `${COMMON}\n${read('groundMap')}\n${read('impostor')}`,
   cull: `${COMMON}\n${read('cull')}`,
   rain: `${COMMON}\n${read('groundMap')}\n${read('rain')}`,
 };
@@ -200,6 +199,42 @@ const BUILTINS = new Set([
   'bitcast',
 ]);
 
+/** One function's body, from its `fn` to its closing brace. */
+function functionBody(source: string, name: string): string {
+  const start = source.indexOf(`fn ${name}(`);
+  assert.ok(start >= 0, `${name} is not defined`);
+  let depth = 0;
+  for (let i = source.indexOf('{', start); i < source.length; i += 1) {
+    if (source[i] === '{') depth += 1;
+    else if (source[i] === '}') {
+      depth -= 1;
+      if (depth === 0) return source.slice(start, i + 1);
+    }
+  }
+  assert.fail(`${name} has no closing brace`);
+  return '';
+}
+
+// The shader cannot run in a Node test, so what is pinned here is the shape of
+// the one branch that was wrong: a buried eye (R5). It used to answer "not
+// occluded" for the whole map, so every plant, the player's and a rival's,
+// drew through solid earth.
+test('a buried eye is occluded by the earth outside its own bubble', () => {
+  const body = functionBody(COMMON, 'soilOccludes');
+  const shaft = body.indexOf('inRootSightShaft');
+  const buried = body.indexOf('frame.cameraUnderSoil != 0u');
+  const sphere = body.indexOf('let centre');
+  assert.ok(
+    shaft > 0 && buried > shaft && sphere > buried,
+    'the open shaft, then the buried eye, then the sphere test',
+  );
+  const branch = body.slice(buried, sphere);
+  // One way out that is not "occluded": the eye's own air bubble.
+  assert.equal((branch.match(/return false;/g) ?? []).length, 1, 'a buried eye exempts the map');
+  assert.match(branch, /frame\.rootSightEyeWindow \* 1\.5/);
+  assert.match(branch, /return true;/);
+});
+
 for (const [name, source] of Object.entries(MODULES)) {
   test(`${name}: braces and parentheses balance`, () => {
     const counts: Record<string, number> = { '{': 0, '}': 0, '(': 0, ')': 0 };
@@ -251,7 +286,7 @@ for (const [name, source] of Object.entries(MODULES)) {
     const declared = new Set(
       [...source.matchAll(/var(?:<[^>]+>)?\s+([A-Za-z_][A-Za-z0-9_]*)/g)].map((m) => m[1]),
     );
-    for (const binding of ['plantLooks', 'plantLooks_billboard', 'renderData', 'frame']) {
+    for (const binding of ['plantLooks', 'impostorLooks', 'renderData', 'frame']) {
       const used = new RegExp(`(?<![\\w.])${binding}(?![\\w])`).test(source);
       if (!used) continue;
       assert.ok(declared.has(binding), `${binding} is used but never declared`);
@@ -269,14 +304,9 @@ function declaredTextureArrays(source: string): Array<{ binding: number; name: s
 }
 
 test('the texture arrays sit at the bindings the JS layouts declare', () => {
-  // The mesh and billboard passes put the five arrays at 3-7; the impostor baker
-  // spends binding 3 on its view uniforms and starts at 4. Both sides are
-  // generated from one order now, but the shader is the authority.
-  const layouts: Array<[string, number]> = [
-    ['mesh', 3],
-    ['billboard', 3],
-    ['impostor', 4],
-  ];
+  // The merged mesh pass is the only one that samples the plant texture arrays;
+  // the impostor is procedural and declares none. The shader is the authority.
+  const layouts: Array<[string, number]> = [['mesh', 3]];
   for (const [name, firstBinding] of layouts) {
     const declared = declaredTextureArrays(MODULES[name]);
     assert.deepEqual(
@@ -485,8 +515,8 @@ function layoutMismatches(
 
 test('every vertex pipeline provides exactly the attributes its shader reads', () => {
   const pipelines = pipelineLayouts(RENDERER);
-  // Mesh, billboard, impostor and rain all create a render pipeline.
-  assert.ok(pipelines.length >= 4, `found only ${pipelines.length} render pipelines`);
+  // Mesh, impostor and rain all create a render pipeline.
+  assert.ok(pipelines.length >= 3, `found only ${pipelines.length} render pipelines`);
   const checked: string[] = [];
   for (const pipeline of pipelines) {
     const moduleName = pipeline.module.replace(/Module$/, '');
@@ -498,7 +528,7 @@ test('every vertex pipeline provides exactly the attributes its shader reads', (
     );
     checked.push(moduleName);
   }
-  assert.deepEqual(checked.sort(), ['billboard', 'impostor', 'mesh', 'rain']);
+  assert.deepEqual(checked.sort(), ['impostor', 'mesh', 'rain']);
 });
 
 test('the layout check catches the rain pipeline that drew nothing', () => {
@@ -537,4 +567,29 @@ test('the render-data stride matches the WGSL struct it describes', () => {
   const stride = RENDERER.match(/const RENDER_STRIDE = (\d+);/);
   assert.ok(stride, 'the renderer does not declare RENDER_STRIDE');
   assert.equal(Number(stride[1]), fields.length * 4, 'RENDER_STRIDE is not four bytes a field');
+});
+test('the plant-data stride is the WGSL array stride, not the member count', () => {
+  // E40: `PlantData` is 13 floats of data but a 64-byte array stride, because
+  // its vec4f members align it to 16 bytes. Writing 13 floats a plant made the
+  // passes read every plant after the first out of a neighbour's record, so
+  // this compares the declared stride against the struct WGSL will lay out.
+  const body = COMMON.slice(COMMON.indexOf('struct PlantData {'));
+  const fields = [...body.slice(0, body.indexOf('}')).matchAll(/^\s*(\w+):\s*(\w+),/gm)];
+  const sizes: Record<string, number> = { f32: 4, u32: 4, vec2f: 8, vec3f: 12, vec4f: 16 };
+  let size = 0;
+  let align = 1;
+  for (const [, , type] of fields) {
+    const fieldSize = sizes[type];
+    assert.ok(fieldSize, `unknown WGSL field type ${type}`);
+    size = Math.ceil(size / fieldSize) * fieldSize + fieldSize;
+    align = Math.max(align, fieldSize);
+  }
+  const structSize = Math.ceil(size / align) * align;
+  const stride = RENDERER.match(/const PLANT_FLOATS = (\d+);/);
+  assert.ok(stride, 'the renderer does not declare PLANT_FLOATS');
+  assert.equal(
+    Number(stride[1]) * 4,
+    structSize,
+    `PLANT_FLOATS says ${Number(stride[1]) * 4} bytes a plant, WGSL lays the struct out as ${structSize}`,
+  );
 });

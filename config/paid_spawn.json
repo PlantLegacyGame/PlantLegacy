@@ -1,11 +1,78 @@
 {
   "_meta": {
     "system": "paid_spawn",
-    "version": "0.1.0",
+    "version": "1.0.0",
     "schema": "extended-1",
     "owner_task": "T21",
-    "status": "stub",
-    "notes": "Declared by T00. Populated by T21 per DESIGN.md Part 5."
+    "status": "active",
+    "notes": "Spawn pricing and the playable disk. Free random spawn is always available; named areas and exact coordinates cost spores and are rechecked by the server. Coordinates are spherical latitude/longitude near the north pole of the 100 km planet."
   },
-  "values": {}
+  "values": {
+    "enabled": {
+      "type": "boolean",
+      "value": true,
+      "notes": "When false, named areas and exact coordinates are refused while free random spawn still works."
+    },
+    "play_radius_m": {
+      "type": "number",
+      "value": 620,
+      "range": [50, 1200],
+      "notes": "Radius of the detailed playable disk, measured from the spawn origin. Exact spawns outside it are refused."
+    },
+    "spawn_spacing_m": {
+      "type": "number",
+      "value": 5,
+      "range": [1, 40],
+      "notes": "Minimum distance from an existing plant root to a new seed."
+    },
+    "exact_coordinate_cost": {
+      "type": "integer",
+      "value": 40,
+      "range": [0, 100000],
+      "notes": "Spores charged for landing at an exact latitude/longitude."
+    },
+    "named_areas": {
+      "type": "array",
+      "item_type": "object",
+      "value": [
+        {
+          "id": "sunmeadow",
+          "name": "Sunmeadow",
+          "description": "Open, level ground with long light and thin shade.",
+          "center_latitude_deg": 89.82,
+          "center_longitude_deg": 0,
+          "radius_m": 70,
+          "cost": 30
+        },
+        {
+          "id": "roothollow",
+          "name": "Root Hollow",
+          "description": "A damp basin where old roots have already broken the soil.",
+          "center_latitude_deg": 89.75,
+          "center_longitude_deg": 90,
+          "radius_m": 55,
+          "cost": 55
+        },
+        {
+          "id": "stonereach",
+          "name": "Stone Reach",
+          "description": "A mineral shelf near the edge of the surveyed ground.",
+          "center_latitude_deg": 89.7,
+          "center_longitude_deg": 180,
+          "radius_m": 65,
+          "cost": 45
+        },
+        {
+          "id": "mistterrace",
+          "name": "Mist Terrace",
+          "description": "High, wet ground that holds the morning cloud a little longer.",
+          "center_latitude_deg": 89.8,
+          "center_longitude_deg": -90,
+          "radius_m": 60,
+          "cost": 65
+        }
+      ],
+      "notes": "Named areas are priced locations, not separate maps. Their centres and radii are validated against the playable disk at boot."
+    }
+  }
 }

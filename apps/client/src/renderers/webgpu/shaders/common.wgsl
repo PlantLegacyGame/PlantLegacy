@@ -74,14 +74,24 @@ struct VertexEmergenceData {
 struct PlantData {
   center: vec4f,
   color: vec4f,
-  lastTier: u32,
-  dwellTime: f32,
+  // E42/E43: reserved, always zero. The cull kept its previous tier and its
+  // fade timer in these two words, but the renderer rewrites this whole buffer
+  // every frame, so neither could survive; both live on PlantRenderData now.
+  // The words stay to hold the offsets of the fields below.
+  reservedTierHistory: u32,
+  reservedDwellTime: f32,
   importance: f32,
   // C02b: OR of the plant's node mutation bits, for billboard tiers.
   mutationMask: u32,
   // Terrain height under the plant, from the same function the ground is drawn
   // from. Sway is measured from it and the soil hides what falls below it.
   groundY: f32,
+  // The drawn body above the soil, for the impostor ellipsoid. `center.w` is a
+  // sphere around the roots too and is what the cull pass measures; sizing the
+  // ellipsoid from it made a seedling's impostor several times its stem (E41).
+  impostorBaseY: f32,
+  impostorTopY: f32,
+  impostorHalfWidth: f32,
 }
 
 struct PlantRenderData {
