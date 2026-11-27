@@ -84,7 +84,7 @@ skipping that plant in `applyCollapse`. Tests:
 ## Next
 
 The same harness grows the in-browser half: a Chrome driver over the DevTools
-protocol that presses `R`, screenshots the Root Sight aperture and clicks the
+protocol that presses `R`, checks the Root Sight aperture on screen and clicks the
 panel buttons. Rendering and click bugs cannot be asserted from a socket.
 
 ## T26 contract (from the placeholder this replaced)

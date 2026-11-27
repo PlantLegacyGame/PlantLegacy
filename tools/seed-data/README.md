@@ -3,7 +3,7 @@
 **Status:** placeholder. Owned by **T03** (world server) and **O02** (restore drill).
 **Not implemented.** No dependencies, no scripts.
 
-Purpose: create a deterministic local world for tests and screenshots. Seeds are
+Purpose: create a deterministic local world for tests and visual checks. Seeds are
 derived from an explicit integer so a failing test can be replayed exactly.
 
 Contract when T03 lands:

@@ -50,7 +50,7 @@ Measured in the running page after the client reloaded on the new code:
 - **The rim, from above:** a 0.63 m aperture shot from 1.7 m up and 2.4 m out
   shows one continuous ellipse of earth — the seed and two roots through it, no
   pale seam, no sky sliver, nothing standing over the hole. Taken on the shipped
-  96-column bowl (`screenshots/wave-c-rim-96.png`), whose geometry reports
+  96-column bowl, whose geometry reports
   1 920 vertices.
 - **The near cut, from inside the earth:** the pose that used to be a brown wall
   (0.95 m out from the aperture centre, 0.45 m under the drawn ground, 0.63 m
@@ -62,8 +62,7 @@ Measured in the running page after the client reloaded on the new code:
   `uEyeUnderGround` reads **0** and the frame is the pit: the near wall whole, the
   stem through the mouth, sky above it — no bubble. Standing on the surface at
   the rim (`eyeUnderSoil` false, `uEyeUnderGround` 0) the ground all round the
-  mouth is intact. Both shots are `screenshots/wave-c-inpit-wall.png` and
-  `screenshots/wave-c-beside-rim.png`. So the bubble was never able to fire at a
+  mouth is intact. So the bubble was never able to fire at a
   player standing in the pit *or* beside it: its gate is `eyeIsUnder`, which the
   renderer fills with its buried flag — under the sheet **and** outside the
   opening's column — and the aperture body is only ever built for that same
@@ -79,15 +78,13 @@ Measured in the running page after the client reloaded on the new code:
   pictures below are the same, the harness is gone. Inside it:
   - 1.0 m under the sheet, 0.3 m from the crown: `eyeInPit` 1,
     `uEyeUnderGround` **0**, the body not drawn, the frame the pit's walls, floor
-    and rim with sky over it, continuous —
-    `screenshots/wave-c-49-inside-devaction.png`.
+    and rim with sky over it, continuous.
   - 0.7 m from the wall (radius 4.22 m), 0.7 m under: `eyeInPit` 1, cut off, the
-    wall rising to its rim and the floor whole, no hole in either —
-    `screenshots/wave-c-49-beside-wall-devaction.png`.
+    wall rising to its rim and the floor whole, no hole in either.
   - Inside the soil just outside the mouth (radius 5.12 m, 1.4 m down):
     `eyeInPit` 0, `uEyeUnderGround` 1, body drawn with its cut on, and the
     bubble opens the mouth — sky disc, rim silhouette, the seed and the sun in
-    it — `screenshots/wave-c-49-body-wall-devaction.png`.
+    it.
   - `setRadius(null)` hands the cavity back: the reported aperture returns to the
     seed's own **0.22 m**, so the override is a replacement, not a latch.
   - 0.65 m outside the mouth (radius 5.56 m, 0.7 m under): cut on, **and the
@@ -99,10 +96,8 @@ Measured in the running page after the client reloaded on the new code:
   ±620 m, so the skirt's 1 240 m is its full perimeter): `planet-terrain-skirt`
   reports **1 240 m span, 7.27 m drop**, world Y 0 (the patch's own placement),
   and the body is drawn. From 12 m inside the edge at eye height the ground runs
-  to a clean horizon with sky above it and no band of gap
-  (`screenshots/wave-c-skirt-eyelevel.png`). From outside — 40 m out at 4 m up
-  (`wave-c-skirt-outside.png`) and 8 m out at 8 m up
-  (`wave-c-skirt-close.png`) — the wall joins the ring's lip to the body with no
+  to a clean horizon with sky above it and no band of gap. From outside — 40 m
+  out at 4 m up and 8 m out at 8 m up — the wall joins the ring's lip to the body with no
   sky between the two surfaces. It does read as a **dark stripe**, because the
   face is vertical and catches no direct sun, so the world's edge is closed
   rather than invisible.
@@ -235,8 +230,8 @@ full depth while its mouth is still growing. Measured on the 43-node plant
 | 270 ms | 0.92 | 0.792 m | 9.962 m | 6.3 : 1 |
 | — | 1.00 | 0.863 m | 9.973 m | 5.8 : 1 |
 
-A screenshot cannot be timed into a 500 ms ease, so the page's clock was pinned
-at a chosen progress for the pictures (`taper-p57.png`, `taper-p82.png`); the
+A still frame cannot be timed into a 500 ms ease, so the page's clock was pinned
+at a chosen progress for the pictures; the
 HUD's own transition was not touched. At the frozen p = 0.58 state:
 
 - the **cut and the mouth agree exactly** — drawn mouth radius 0.497 m, shader
@@ -288,7 +283,7 @@ the floor read with it" was the shared material hiding the bowl as well.
 3. **The grain chart had a singular axis.** It is `atan2 · mouthRadius` by
    world height; at the centre the angle sweeps a full turn within centimetres,
    so the noise was squeezed into 96 radial spokes converging on the floor —
-   the "grey plate with a hub" the screenshots show at both sizes.
+   the "grey plate with a hub" the earlier views show at both sizes.
 4. **The shading is in the shell's own units.** Depth darkening was 14 % over the
    whole profile, which changed almost nothing across the 5.7–9.5 m an eye can
    see, and it is identical at every mouth size. That is why the read was the
@@ -323,7 +318,7 @@ The depth rule is untouched by any of this: rim→floor 9.31 m at a 4.9 m mouth,
 budget**. The roots' worst node is 3.2 cm outside the wall, as it was before the
 reshape.
 
-Re-shot in frozen noon daylight, straight down from 9 m (4.9 m mouth) and 7 m (2.5 m), and from the side at 11.4 m out / 5.5 m up and 6.2 m out / 3.2 m up: `topdown-49-keep2.png`, `topdown-25-keep2.png`, `oblique-49-keep4.png`, `oblique-25-keep2.png`. Both oblique frames show the saucer pit with its cut wall and strata, as earlier passes settled it. Both top-down frames are a smooth grey floor inside an ochre ring — no spokes, but still a disc.
+Re-shot in frozen noon daylight, straight down from 9 m (4.9 m mouth) and 7 m (2.5 m), and from the side at 11.4 m out / 5.5 m up and 6.2 m out / 3.2 m up. Both oblique frames show the saucer pit with its cut wall and strata, as earlier passes settled it. Both top-down frames are a smooth grey floor inside an ochre ring — no spokes, but still a disc.
 
 **What it still does not do.** Reading as a shaft from straight above needs the
 opening to stop being half one flat surface, and that is a profile decision: a
@@ -383,8 +378,6 @@ sun ray leaves outside the mouth`):
 So the cue fixes the frames it can reach and leaves noon alone, which is correct
 rather than a failure: at noon the sun is overhead and the whole floor is lit.
 The top-down read at noon still needs a shape, and the shape is not being changed.
-Frames: `shadow-25-noon.png`, `shadow-25-1500.png`, `shadow-25-1716.png`,
-`shadow-49-noon.png`, `shadow-49-1500.png`.
 
 ### The cue from inside the pit, and from eye level
 
@@ -417,16 +410,16 @@ the ambient with it, so a surface that had no direct sun to lose still loses 45 
 of its light. That is why the inside of the pit is uniformly pressed down and why
 the lit strip does not read:
 
-- **Eye level, 15:00** (`shadow-eyelevel-1500-downhill.png`): the pit reads as a
+- **Eye level, 15:00**: the pit reads as a
   hole, clearly deep, but the cue doing the work is the rim's light against a dark
   interior. The crescent itself is not identifiable as a crescent from this angle.
-- **Eye level, dusk** (`shadow-eyelevel-dusk.png`): same read, darker, with a faint
+- **Eye level, dusk**: same read, darker, with a faint
   strip on the far wall and the floor almost black.
-- **Inside, 15:00** (`shadow-inside-lit-wall-1500.png`): the sun-facing wall shows
+- **Inside, 15:00**: the sun-facing wall shows
   an ochre strip between two dark bands. It reads as a **stratum**, not as
   sunlight, because the strata are ochre too - the shadow has no colour of its own
   to tell them apart.
-- **Inside, dusk** (`shadow-inside-lit-wall-dusk.png`): a short band low on the
+- **Inside, dusk**: a short band low on the
   wall. It says the sun is low; it does not say how far down the floor is.
 
 Next pass, if the inside read matters: apply the lip shadow to the direct sun
@@ -445,8 +438,8 @@ terrain inside the aperture cannot reach either. Measured on a seedling pit
 - **4.6 m from the aperture centre**, `apertureSoil.visible` is `false` - the
   body's footprint is 3.6 m and the renderer only draws it inside 3.35 m - and
   the frame is exactly the sheet's underside: a brown expanse of soil cracks with
-  the plant's own top showing through a thimble-sized hole
-  (`underground-sheet-face.png`). This is the "back face", and it is what every
+  the plant's own top showing through a thimble-sized hole.
+  This is the "back face", and it is what every
   buried pose outside the body sees.
 - **Inside the footprint** the body is drawn, and its top is already 3 cm under
   the sheet: the sheet is behind it, so the frame is the body's own interior -
@@ -463,8 +456,7 @@ near-cut bubble cannot look through both holes at once; four pinning tests). At
 and after frames are the same picture: 1.7 % and 4.5 % of pixels differ and all of
 it is the weather's light level (67.7 -> 64.6 in the HUD) - the cut fires only
 where the body was already standing in front of the sheet, so it removes a surface
-nobody could see. Reverted rather than shipped as a no-op; the frames are kept as
-`underground-before/after-022.png` and `-49.png`.
+nobody could see. Reverted rather than shipped as a no-op.
 
 Two changes would actually move the picture, in this order:
 
@@ -500,8 +492,8 @@ noon, eye 1.5 m under its own ground:
 
 | pit | before: plan 4.6 / 7.0 m, no hold | after: the held radius |
 |---|---|---|
-| 0.22 m | body `visible: false`; the sheet's underside across the frame with the plant's top through a thimble hole (`hold-before2-022.png`) | 3.30 m, `visible: true`; earth wall, floor and the trunk read as a space (`hold-after-022.png`) |
-| 4.9 m | body `visible: false`; the sheet's underside with a wedge of sky through the huge mouth (`hold-before2-49.png`) | 5.90 m, `visible: true`; uniform earth close around the eye (`hold-after-49.png`) |
+| 0.22 m | body `visible: false`; the sheet's underside across the frame with the plant's top through a thimble hole | 3.30 m, `visible: true`; earth wall, floor and the trunk read as a space |
+| 4.9 m | body `visible: false`; the sheet's underside with a wedge of sky through the huge mouth | 5.90 m, `visible: true`; uniform earth close around the eye |
 
 What it does and does not buy: the sheet's back face is gone from every buried
 pose, because wherever the eye can be, the body is drawn. At the 4.9 m pit the
@@ -561,17 +553,17 @@ three strata, so the palette roles stay in one file the world-palette test scans
 
 Two mappings were tried and are recorded so nobody repeats them. `soil_lit` at the
 floor is a *sunlit surface* tone: at that albedo the bowl's own facets and
-specular turned the pit floor into polished ceramic (`palette-dirt-inside.png`).
+specular turned the pit floor into polished ceramic.
 `soil_wet` at the floor is so dark under the day fill that the pit read as a void
-with no bottom (`palette-dirt-inside2.png`). `soil_shade` keeps the floor visible
-and still darker than the wall (`palette-dirt-inside3.png`).
+with no bottom. `soil_shade` keeps the floor visible
+and still darker than the wall.
 
 The dark lines went with two config values: `soil_crack_strength` 0.18 -> 0 and
 `soil_pebble_strength` 0.18 -> 0, both still live knobs. The hardcoded grey grit
 layer in `shaderOverrides.ts` (`mix(dynamicSoil, uSoilMineralColor * 0.6, stones *
 0.22)`) was deleted outright - it was the one speckle nothing could tune. What
 remains on the surface is the moisture mix, the clod and patch variation and the
-fine grit; the ground now reads as flat palette dirt (`palette-dirt-ground.png`).
+fine grit; the ground now reads as flat palette dirt.
 
 The six colour keys were then deleted rather than left as knobs nobody paints
 from: `soil_dry_color`, `soil_wet_color` and `soil_mineral_tint` are gone from
@@ -613,7 +605,7 @@ Two measurements decided the shape of this term, both from the running page:
 At noon, clear weather (`dev_set_time` 0.5 paused, `dev_set_weather` clear, both
 through the DEV_ACTION message - as raw `{type: 'dev_set_weather'}` they are
 ignored, which is why an earlier pass thought the clock would not move):
-`palette-ground-form-day.png` from 7 m up, `palette-ground-form-close-noon3.png`
+ from 7 m up,
 from 1.4 m. Low-contrast clod relief and damp patches, no cracks, no speckle, no
 dark lines.
 
@@ -657,7 +649,7 @@ there is no GPU in the test runner - but they are exactly the two classes of
 breakage that killed this pass.
 
 Two things the first live check found. The palette ground is unchanged, as
-expected (`webgpu-requested-palette-ground2.png`, taken while the pass still
+expected (taken while the pass still
 fell back). And a rainy frame grew soft grey ellipses a metre or two across,
 which were recorded as **E30** and blamed on the rain pass - wrongly. Hiding the
 WebGPU canvas left the ellipses in place, and setting the rain pass to zero
@@ -674,8 +666,7 @@ buffer (the instances, at locations 0 and 1), takes the quad corners from
 `@builtin(vertex_index)`, gives each drop its own fall clock through
 `rain_box_height` (using `fract`, because WGSL has no `mod`) and wraps the copy
 of a drop that leaves the 60 m box round to the far side so the shower follows
-the eye. The dead quad buffer is deleted. A rainy frame now draws thin streaks
-(`webgpu-rain-fixed-4.png`).
+the eye. The dead quad buffer is deleted. A rainy frame now draws thin streaks.
 
 Hiding the WebGPU canvas in that rainy frame showed no rain at all, so this is
 the only rain pass in the overlay, not a second copy of the three.js one; the

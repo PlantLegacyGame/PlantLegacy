@@ -1057,7 +1057,7 @@ Honest list. No feature promises (T42, RULE_13). Updated at every gate.
 
 Covered by `pnpm verify` (1,178 tests on the day; the suite is larger now, and the
 count that matters is the one `pnpm test` prints). The sun/moon change is CSS and
-was not captured as an image: the preview tab cannot screenshot a page that runs a
+was not recorded in a picture: the preview tab cannot draw a page that runs a
 render loop, so the removal is verified by reading the computed styles, not by a
 picture.
 
@@ -1096,10 +1096,9 @@ a wade/swim camera.
 
 ### 2026-11-16 — browser pass
 
-Run in Chromium against the dev stack. A capture cited from this section is a
-curated image committed directly in `docs/verify/` (see its README); a pass
-dump (`docs/verify/pass-YYYY-MM-DD/`, root `*.png`, `screens/`, `screenshots/`)
-is gitignored and is not cited.
+Run in Chromium against the dev stack. Evidence here is a written live check;
+images are local-only, gitignored and are not cited. The clone carries the code,
+tests and these records, not the images.
 
 - **The ground was not being drawn at all**, and this was the "looks weird" part
   of Root Sight and everything else. A trailing comma in a GLSL call stopped the
@@ -1224,7 +1223,7 @@ is gitignored and is not cited.
 
   **Not verified visually.** WebGPU does not initialise in the preview browser
   and the fallback Three.js path needs WebGL, so these numbers come from the
-  bundled builder itself and from tests, not from a screenshot of the shipped
+  bundled builder itself and from tests, not from a live view of the shipped
   pass. A 2D silhouette drawn from the same segments was discarded as evidence:
   it closes each tube as its own shape, while the real pass stitches consecutive
   segments through shared rings, so it exaggerates joints into notches.
@@ -1259,7 +1258,7 @@ is gitignored and is not cited.
   surveyed station, so it follows the carved bed between stations instead of
   cutting under it as disconnected patches.
 
-  **The table's own branch of that test cannot fire, and no screenshot proves it.**
+  **The table's own branch of that test cannot fire, and no live check proves it.**
   `rebuildTableMesh` writes every vertex as `min(y, ground - drySinkM)`, so the
   table mesh always sits at least 0.6 m below the drawn ground; discarding water
   that stands above the ground is therefore unreachable for it. Forcing a table
@@ -1877,7 +1876,7 @@ outcome the players have not built themselves.
   cleared (`dev_set_growth`, mins 0) radicle and two cotyledons grow in one
   session. The rule itself is unchanged.
 - **The night moonlight stays at 0.6.** Measured in the scene as 0.529 against
-  0.28 ambient and 0.28 hemisphere, and the night screenshots stay dark ground and
+  0.28 ambient and 0.28 hemisphere, and the night views stay dark ground and
   dark sky with the plant reading against them: brighter than the old 0.3, not
   washed out.
 
@@ -2041,7 +2040,7 @@ outcome the players have not built themselves.
   style recalculation per sky step over its 923 nodes), so `paletteHosts` no
   longer hands it the sky's properties at all. Residual: ~50 ms per sky step,
   and the hills can lag the sky by up to one ground step (~3.7 min) at dawn/dusk
-  - not viewed in a screenshot.
+  - not viewed live.
 - **The discs hold at high zoom with the clock running.** At zoom **3.100**, 12
   samples over 2.6 s: the smooth offset updated every few frames in sub-pixel
   steps and the disc's rendered centre advanced 1.63 px in steps of at most
@@ -2101,7 +2100,6 @@ outcome the players have not built themselves.
   a separate rim bloom and wide wash were two of everything). Measured at dusk
   (0.82): the disc is at 40% opacity and the glow at 0.23, so it is a dim moon, not
   a white lamp; at 0.97 the disc is at 1 and the glow at 0.79.
-  (![moon](screenshots/title-moon.png)).
 - **The tree stands on the ground it is drawn on.** A drag that lifts the soil
   lifts the trunk by the same amount: the plant was registered with a 0.2 share of
   the near plane's vertical travel while the ground plane had none, so a 100 px
@@ -2120,7 +2118,7 @@ outcome the players have not built themselves.
   (x 46-54, y 1-4), are the plate's thickness (half-width 0.16-0.22 against
   0.4-0.5 before), dive to about half the find's depth before travelling, and fork:
   two branches with two feeders each plus three short ones, in the plate's tip
-  colour (![roots](screenshots/title-roots.png)).
+  colour.
 - **The reaches join the tree.** They leave the crown at the soil line under the
   trunk's foot (the layer used to be clipped six pixels below the line, so every
   reach began in open dirt), flare to twice their width over the first tenth of the
@@ -2140,7 +2138,6 @@ outcome the players have not built themselves.
   find and four grips off its last fifth come onto the piece, so a treasure is held
   by branches instead of spiked by a root's end.
 - **No two maria alike.** Every patch on the moon has its own rotation and aspect
-  (![moon](screenshots/title-moon.png)).
 - **The reaches are the plate's colour, to the value.** The plate's roots resolve
   fixed cream / tan / ink (the palette vars never reach the plant element), so the
   reaches use those same three values at the plate's 0.3 ink, the plate's depth-fade
@@ -2288,9 +2285,7 @@ outcome the players have not built themselves.
   soil, the plant and the finds instead of leaving them behind: measured, a 120 px
   drag moved the outskirts and the soil `-105.23px`, the same translation as the
   ground plane, while the near ridge took its own -116.93. The mill and the rabbit
-  live inside the mid and near layers and ride those depths. The three states are
-  photographed in `docs/screenshots/title-scenery-day.png`, `-dusk.png` and
-  `-rain.png`.
+  live inside the mid and near layers and ride those depths. The three states were checked in sequence.
 
 ## The ground at its edges (2026-11-23)
 
@@ -2532,7 +2527,7 @@ client that has not received (or has not reloaded into) the current weather.
 
 **A title pour reaches the ground.** Droplets hold their opacity to 97% of the fall and fade as they land; each pour owns its pieces and cleans up only those, so pouring again does not erase the first pour's drops in mid-air; meal lies on the soil for 3.2 s; and the wet patch is a 22 px stain anchored at the surface line that grows downward and darkens the soil it soaks into.
 
-Checks: `pnpm verify` exit 0 (client 1024 tests, server 527), `tagScale.test.ts`, `rivalTagLabel.test.ts`, and the captures [`s22-planet-from-orbit.png`](./verify/s22-planet-from-orbit.png) and [`s22-horizon-at-40km.png`](./verify/s22-horizon-at-40km.png).
+Checks: `pnpm verify` exit 0 (client 1024 tests, server 527), `tagScale.test.ts`, `rivalTagLabel.test.ts`.
 
 ### The aim, the note and the air along the ray (2026-11-25)
 
@@ -2546,11 +2541,11 @@ Checks: `pnpm verify` exit 0 (client 1024 tests, server 527), `tagScale.test.ts`
 
 **The orbit gives the eye back where it took it.** Leaving planet view restored a hard-coded seat, `camera.position.set(0, 18, 26)`, whose 18 m was the play area's soil when it was written. The relief has since risen to about 21 m there, so the returning eye stood three metres inside the hill and the screen filled with brown. `setPlanetView` now copies the eye's position and the orbit target on the way in and puts them back on the way out; verified live as `before [0.55, 21.51, -1.19] -> orbit -> after [0.55, 21.51, -1.19]` with the seed projected at (640, 268) in front of the eye.
 
-**The ground has land cover, and it reaches the horizon.** Every structure the soil shader had - clods at half a metre, damp patches at metres, strata, gullies - faded out by about 90 m, so beyond that the plain was one flat brown all the way to where it met the sky, and the planet seen from orbit was two browns in even blotches. The shader now also reads *provinces*: a noise at about 360 m and a second at about 1.8 km mix lichen (the foliage ramp's shade step, pulled 45% back toward bare earth) onto the gentle ground and a paler dry earth onto the crowns of the broad rises, at 0.22 and 0.14 weight. Steep faces keep their cover thin, because cover sheds off a slope and the eroded brown should show. These scales survive to the horizon and to orbit, which is what turns the distant plain from a cut-out into land - see [`s24-ground-land-cover.png`](./verify/s24-ground-land-cover.png) and [`s24-planet-land-cover.png`](./verify/s24-planet-land-cover.png), where the planet now resolves into continents rather than patches.
+**The ground has land cover, and it reaches the horizon.** Every structure the soil shader had - clods at half a metre, damp patches at metres, strata, gullies - faded out by about 90 m, so beyond that the plain was one flat brown all the way to where it met the sky, and the planet seen from orbit was two browns in even blotches. The shader now also reads *provinces*: a noise at about 360 m and a second at about 1.8 km mix lichen (the foliage ramp's shade step, pulled 45% back toward bare earth) onto the gentle ground and a paler dry earth onto the crowns of the broad rises, at 0.22 and 0.14 weight. Steep faces keep their cover thin, because cover sheds off a slope and the eroded brown should show. These scales survive to the horizon and to orbit, which is what turns the distant plain from a cut-out into land - the planet now resolves into continents rather than patches.
 
 **Relief stops running along the lattice.** Value noise on a square lattice puts its features on that lattice's rows, which is what made a hillside read as one dune with two or three parallel crests. `terrainUnitAt` now samples its own coarse noise first and displaces the sample point by up to 0.55 of a base wavelength (capped at 140 m) before the octaves are read, so crests bend around each other. The displacement is authored in the field's own units, so a coarser or finer field warps by the same fraction of its wavelength; the field stays deterministic, inside its amplitude, and smooth across a one-metre step.
 
-Checks: `atmosphere.test.ts` 15 pass (including the level-ground agreement, the altitude ordering and the "more of its own colour" case), `terrainField.test.ts` 15 pass (including the warp's one-metre smoothness), `npx tsc -p apps/client --noEmit` clean, and the live run: the note opens at (18, 547, 248, 99) with its pills, pins on the aimed card, `devAimShadow()` reports an 85-vertex ribbon 0.46-0.53 m long with its head at the tip, the compass reads `away and right - 15 degrees down - 0.82 m out - -0.21 m up`, the world renders with no shader errors after the change, and from planet view the disc keeps its brown and green at 273 km instead of washing to the horizon's white - see [`s23-planet-with-ray-air.png`](./verify/s23-planet-with-ray-air.png).
+Checks: `atmosphere.test.ts` 15 pass (including the level-ground agreement, the altitude ordering and the "more of its own colour" case), `terrainField.test.ts` 15 pass (including the warp's one-metre smoothness), `npx tsc -p apps/client --noEmit` clean, and the live run: the note opens at (18, 547, 248, 99) with its pills, pins on the aimed card, `devAimShadow` reports an 85-vertex ribbon 0.46-0.53 m long with its head at the tip, the compass reads `away and right - 15 degrees down - 0.82 m out - -0.21 m up`, the world renders with no shader errors after the change, and from planet view the disc keeps its brown and green at 273 km instead of washing to the horizon's white.
 
 ### The whole planet, its sea, its spin and its moon (2026-11-25)
 

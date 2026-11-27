@@ -57,7 +57,7 @@ Measured in the running page after restarting the server on the new code
   180 s: the vitals read `snow` with a clear-time forecast, the drop mesh held
   4000 instances with `uSnow = 1`, opacity 0.85 and the clock advancing, the
   splash pass stayed off, and six-armed crystals were visible against the sky and
-  across the ground at noon. Saved as `docs/screenshots/wave-b-snow.png`.
+  across the ground at noon.
 - **Ledger:** using a Starter Dung showed
   `Used Starter Dung · +5 spores · 125 left`, and the spore chip read 125; the
   empty state read "No spore changes yet." A dev grant produced
@@ -66,8 +66,7 @@ Measured in the running page after restarting the server on the new code
 - **Purchase, live:** opened the shop from the spore chip while the world was
   connected and bought a Starter Dung. The shop's balance went 120 → 100, the
   chip followed to 100, the pouch went ×2 → ×3, and the inventory's ledger read
-  `Bought Starter Dung · −20 spores · 100 left`. Saved as
-  `docs/screenshots/wave-b-ledger-purchase.png`.
+  `Bought Starter Dung · −20 spores · 100 left`.
 - **Climate:** not exercised as a watched weather cycle in this pass; §4b is
   the full-day observation that closed that gap and found three defects in the
   field.

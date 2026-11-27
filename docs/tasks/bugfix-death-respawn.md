@@ -81,7 +81,7 @@ new client request, and a client that does not send it behaves exactly as before
   and the pile held one root plate, 6 joints and 5 leaves across four remains -
   one body and three offcuts. Drop shadows now lift 0.027 m off the drawn ground
   at their own x/z (previously the field put them up to tens of centimetres out).
-- The corpse was looked at again after the split (`screenshots/husk-v2.png`): one
+- The corpse was looked at again after the split: one
   body with a dung ball above it and offcuts around, not four pale husks. The
   body was then made half again as long and given a wider shade; that last size
   change is pinned by the test (body over 0.3 m) but was not re-viewed, because

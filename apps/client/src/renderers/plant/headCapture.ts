@@ -1,7 +1,7 @@
 /**
  * Framing and measurement for the dev-only head capture.
  *
- * The in-game captures in `docs/verify` cannot be measured: a spore sac sits
+ * The in-game captures cannot be measured: a spore sac sits
  * about fifteen brightness levels above the ground behind it, so every
  * threshold tried over those frames either swallowed the hillside or found
  * nothing. The capture in `main.ts` draws one head alone on a flat background

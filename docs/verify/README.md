@@ -1,37 +1,24 @@
-# Verification images
+# Verification captures
 
-Evidence captures for the rows in [`../bug-inventory.md`](../bug-inventory.md)
-and [`../what-works-now.md`](../what-works-now.md). Two kinds of capture exist,
-and only one of them is committed.
+Captures are **local-only**. No screenshot is committed, and a screenshot is
+never evidence a document can link to. The clone carries the tests, the code and
+the written checks; it does not carry the images a developer looked at while
+making a change.
 
-## Curated evidence — tracked
+## What to cite
 
-A PNG sitting **directly** in this folder is curated: it is cited by a doc row,
-and it is committed, so the citation can never rot.
+- Cite a test when a test proves the behaviour.
+- Otherwise say plainly that the fix was checked in the running client, and
+  describe what was seen and measured.
+- Never write a capture filename into a doc row: it resolves only on the machine
+  that produced it, and it is not part of the repository.
 
-- Name it after the row it proves: `a14-buried-beside-pit.png`,
-  `r23-sky-open-over-pit.png`.
-- One image per claim. For a before/after pair, say which is which in the row,
-  not in the filename (`a15-above-before.png` / `a15-above-after.png` is fine).
-- If a row's evidence is a test, cite the test. Do not commit a capture that
-  proves nothing the row does not already say.
-- How the growth frames (`g04-*`) were taken, and how to re-run the capture that
-  measured them: [`head-capture.md`](head-capture.md).
+## Where local captures go
 
-## Ad-hoc dumps — ignored
-
-Screenshots taken while checking a change are scratch, not evidence, and git
-never stores them:
-
-- every browser pass's own folder — `docs/verify/pass-YYYY-MM-DD/`
-- root-level `*.png` (`shot-*.png`, `river-*.png`, …)
-- `screens/` and `screenshots/`
-
-They are listed in [`.gitignore`](../../.gitignore), which ignores subfolders of
-this one but not its files. A dump may be looked at and thrown away; it must not
-be cited, because a citation to it points at nothing for anyone else.
-
-The 2026-11-16 and 2026-11-17 pass dumps and the root shots were deleted on
-2026-11-18, which is what left dangling citations in the bug inventory; the rows
-now cite the tests, or say plainly that the fix was verified live in the
-browser.
+- Put a browser pass's files in `docs/verify/pass-YYYY-MM-DD/` or anywhere
+  ignored.
+- Root-level PNGs, `screens/`, `screenshots/`, `docs/screenshots/` and every
+  `docs/verify/*.png` are ignored by [`.gitignore`](../../.gitignore).
+- The growth-capture method is recorded in [`head-capture.md`](head-capture.md);
+  the measurements it produced stay in the bug and history records, the images
+  do not.

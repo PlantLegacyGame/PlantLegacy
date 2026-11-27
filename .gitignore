@@ -20,17 +20,16 @@ coverage/
 # A stray frame/scratch buffer at the root is not source.
 /*.bin
 
-# Local capture artifacts: screenshots taken while checking a change, never
-# committed. Root-level PNG dumps, the two scratch folders, and each browser
-# pass's folder under docs/verify are ad hoc.
+# Screenshots are local verification artifacts, never committed. Root-level
+# dumps, the two scratch folders, docs/screenshots and every image under
+# docs/verify stay out of the clone; docs may describe a live check but must
+# not link or cite an image.
 /*.png
 /screens/
 /screenshots/
+/docs/screenshots/
+/docs/verify/*.png
 /docs/verify/*/
-
-# Curated verification images are the exception: a PNG sitting directly in
-# docs/verify/ (not in a pass subfolder) is evidence a doc row cites, so it is
-# tracked. See docs/verify/README.md.
 
 # Abyssal Garden reference checkout (MIT, study only — never imported by code)
 /tools/abyssal-garden-reference/

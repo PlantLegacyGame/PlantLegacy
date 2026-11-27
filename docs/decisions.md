@@ -1593,7 +1593,7 @@ a title screen, so the cap is deliberate.
 
 **Measured with** a throwaway harness (`public/__layout.html`, deleted after the
 pass) that loaded the real app in one iframe and recorded the title layout at
-390, 768, 1024, 1280, 1440, 1920 and 2560 — the screenshots this environment
+390, 768, 1024, 1280, 1440, 1920 and 2560 — the views this environment
 cannot take, because the preview tab cannot capture a page that runs a render
 loop. Numbers, not impressions.
 
@@ -2015,8 +2015,7 @@ choosing numbers.
 | 14 | Post-MVP defaults | Keep grafting with caps; offspring seeds account-bound until planted; `spore_sac` is a cross-pollination range emitter at T53; defer worker threads until profiling. |
 | 15 | Licence | Keep UNLICENSED/private until public alpha. |
 
-**Consequences.** The code/config commit is `df54098`; the docs/screenshots
-commit is `a9ff286`; a third commit records this scope reset. They are verified
+**Consequences.** The code/config commit is `df54098`; the documentation commit is `a9ff286`; a third commit records this scope reset. They are verified
 by `pnpm verify:ci` but not on `origin/main`; the push must be retried after
 GitHub authentication. The next
 implementation is T08A persistence, not the calamity director; the calamity

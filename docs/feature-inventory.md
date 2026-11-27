@@ -16,7 +16,7 @@ Defects live in `bug-inventory.md`, values in `config/`, task scope in `DESIGN.m
 - **Next action:** the single next thing, if the row is not done.
 - **Pri:** `P0` blocks play or is being worked now, `P1` next, `P2` later, `P3`
   complete enough to leave alone.
-- Close a row only with a named test or a committed capture; update the row in
+- Close a row only with a named test or a live check; update the row in
   the same change as the fix.
 
 ## Entry and accounts
