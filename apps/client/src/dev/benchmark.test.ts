@@ -50,6 +50,27 @@ test('warm-up frames are discarded and each pose is measured', () => {
   assert.equal(report?.gpuMeasured, true);
 });
 
+test('a hidden frame is discarded but still advances the pose clock', () => {
+  const applied: string[] = [];
+  const runner = new BenchmarkRunner({
+    ...CONFIG,
+    applyPose: (pose) => applied.push(pose.id),
+  });
+  runner.start(0);
+  // A hidden tab is drawn by the background timer; its delta is the timer, not
+  // a frame, so the runner is given 0 and must not put it in the percentiles.
+  runner.tick(150, { frameMs: 0, gpuMs: null, triangles: 1, drawCalls: 1 });
+  runner.tick(250, { frameMs: 0, gpuMs: null, triangles: 1, drawCalls: 1 });
+  // Crossing the window still applies the next pose.
+  runner.tick(320, { frameMs: 0, gpuMs: null, triangles: 1, drawCalls: 1 });
+  assert.deepEqual(applied, ['a', 'b']);
+  const report = runner.stop(400);
+  assert.deepEqual(
+    report?.poses.map((pose) => pose.samples),
+    [0, 0],
+  );
+});
+
 test('the run finishes after the last pose and calls back once', () => {
   let finished = 0;
   const runner = new BenchmarkRunner({

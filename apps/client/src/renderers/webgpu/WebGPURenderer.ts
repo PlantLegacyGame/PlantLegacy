@@ -981,7 +981,11 @@ export class WebGPURenderer {
       return;
     }
 
-    this.pendingNodes = nodes;
+    // The caller may hand us a reused scratch array; retain an owned copy,
+    // because a deferred rebuild must not see the next frame's contents. Reuse
+    // this array instead of slicing a fresh one every frame.
+    this.pendingNodes.length = 0;
+    for (const node of nodes) this.pendingNodes.push(node);
     this.pendingNowMs = nowMs;
 
     const countChanged = nodes.length !== this.lastBuildNodeCount;

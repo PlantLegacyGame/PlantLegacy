@@ -347,14 +347,25 @@ export class AccountsService {
         lockedUntil: accountRow.locked_until,
       };
 
-      if (account.lockedUntil && account.lockedUntil > new Date()) {
-        // Account is locked - increment failed attempts to extend lockout
-        const newFailedAttempts = account.failedLoginAttempts + 1;
-        const extendedLockUntil = new Date(Date.now() + this.config.lockoutDurationMin * 60 * 1000);
+      const lockoutPolicy = {
+        maxAttempts: this.config.lockoutMaxFailedAttempts,
+        durationMs: this.config.lockoutDurationMin * 60 * 1000,
+        maxDurationMs: this.config.lockoutMaxDurationMin * 60 * 1000,
+      };
+
+      const now = new Date();
+      if (account.lockedUntil && account.lockedUntil > now) {
+        // INV-AU-05: the locked branch is the same rule as a failed attempt, so
+        // it also gets the configured cap instead of extending forever.
+        const failure = nextFailedAttempt(
+          { attempts: account.failedLoginAttempts, lockedUntil: account.lockedUntil },
+          lockoutPolicy,
+          now,
+        );
 
         await client.query(
           `UPDATE accounts SET failed_login_attempts = $1, locked_until = $2, updated_at = NOW() WHERE id = $3`,
-          [newFailedAttempts, extendedLockUntil, account.id],
+          [failure.attempts, failure.lockedUntil, account.id],
         );
 
         await client.query('COMMIT');
@@ -367,11 +378,8 @@ export class AccountsService {
         // also copied into the test and the test certified its own replica.
         const failure = nextFailedAttempt(
           { attempts: account.failedLoginAttempts, lockedUntil: account.lockedUntil },
-          {
-            maxAttempts: this.config.lockoutMaxFailedAttempts,
-            durationMs: this.config.lockoutDurationMin * 60 * 1000,
-          },
-          new Date(),
+          lockoutPolicy,
+          now,
         );
 
         await client.query(

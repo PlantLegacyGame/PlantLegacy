@@ -1,5 +1,8 @@
 import type { WorldConfig } from './world.ts';
 
+/** Shared empty result; callers must not mutate what they read. */
+const EMPTY_IDS: ReadonlySet<string> = new Set();
+
 export interface CellCoord {
   x: number;
   z: number;
@@ -36,6 +39,11 @@ export class InterestManager {
 
   private clientInterests = new Map<string, ClientInterest>();
   private cellEntities = new Map<string, Set<string>>(); // cellKey -> entityIds
+  /** Reverse index: every cell a player's interest window currently covers. */
+  private readonly playersBySubscribedCell = new Map<string, Set<string>>();
+  /** Plant roots only, separate from the mixed node/entity map above. */
+  private readonly plantIdsByCell = new Map<string, Set<string>>();
+  private readonly plantCellById = new Map<string, string>();
 
   constructor(config: WorldConfig) {
     this.cellSize = config.cellSize;
@@ -72,6 +80,9 @@ export class InterestManager {
   }
 
   registerClient(playerId: string, x: number, z: number): void {
+    const previous = this.clientInterests.get(playerId);
+    if (previous) this.removeClientFromCellIndex(previous);
+
     const cell = this.getCellCoord(x, z);
     const subscribedCells = this.getSubscribedCells(cell);
 
@@ -84,10 +95,34 @@ export class InterestManager {
     };
 
     this.clientInterests.set(playerId, interest);
+    this.addClientToCellIndex(interest);
   }
 
   unregisterClient(playerId: string): void {
+    const interest = this.clientInterests.get(playerId);
+    if (!interest) return;
+    this.removeClientFromCellIndex(interest);
     this.clientInterests.delete(playerId);
+  }
+
+  private addClientToCellIndex(interest: ClientInterest): void {
+    for (const cellKey of interest.subscribedCells) {
+      let players = this.playersBySubscribedCell.get(cellKey);
+      if (!players) {
+        players = new Set();
+        this.playersBySubscribedCell.set(cellKey, players);
+      }
+      players.add(interest.playerId);
+    }
+  }
+
+  private removeClientFromCellIndex(interest: ClientInterest): void {
+    for (const cellKey of interest.subscribedCells) {
+      const players = this.playersBySubscribedCell.get(cellKey);
+      if (!players) continue;
+      players.delete(interest.playerId);
+      if (players.size === 0) this.playersBySubscribedCell.delete(cellKey);
+    }
   }
 
   /**
@@ -109,9 +144,11 @@ export class InterestManager {
       return true;
     }
 
-    // Update subscribed cells
+    // Update subscribed cells and the reverse lookup used by range broadcasts.
+    this.removeClientFromCellIndex(interest);
     interest.cell = newCell;
     interest.subscribedCells = this.getSubscribedCells(newCell);
+    this.addClientToCellIndex(interest);
     interest.announced = true;
     return true;
   }
@@ -213,6 +250,75 @@ export class InterestManager {
     return interest?.subscribedCells.size ?? 0;
   }
 
+  /** The cell key a world position falls in; shared with the state fanout. */
+  getCellKeyAt(x: number, z: number): string {
+    return this.getCellKeyFromWorld(x, z);
+  }
+
+  /** The player's precomputed interest cells, in no per-tick allocation form. */
+  getSubscribedCellKeys(playerId: string): ReadonlySet<string> {
+    return this.clientInterests.get(playerId)?.subscribedCells ?? EMPTY_IDS;
+  }
+
+  /**
+   * Players whose interest window contains this cell. The index holds every
+   * subscribed cell, not just the centre, so a range broadcast is one lookup
+   * plus the recipients instead of a scan over every connected player.
+   */
+  getSubscribedPlayersAt(x: number, z: number): ReadonlySet<string> {
+    return this.playersBySubscribedCell.get(this.getCellKeyFromWorld(x, z)) ?? EMPTY_IDS;
+  }
+
+  /** Track a plant root for interest-cell plant lists; moves it if it moved. */
+  indexPlantRoot(plantId: string, x: number, z: number): void {
+    const cellKey = this.getCellKeyFromWorld(x, z);
+    const previous = this.plantCellById.get(plantId);
+    if (previous === cellKey) return;
+    if (previous !== undefined) this.removePlantFromCellKey(plantId, previous);
+
+    let plants = this.plantIdsByCell.get(cellKey);
+    if (!plants) {
+      plants = new Set();
+      this.plantIdsByCell.set(cellKey, plants);
+    }
+    plants.add(plantId);
+    this.plantCellById.set(plantId, cellKey);
+  }
+
+  removePlantFromCell(plantId: string): void {
+    const cellKey = this.plantCellById.get(plantId);
+    if (cellKey !== undefined) this.removePlantFromCellKey(plantId, cellKey);
+    // Delete the mapping even if the cell bucket was already gone, so a caller
+    // can never leave a plant id stuck in the index.
+    this.plantCellById.delete(plantId);
+  }
+
+  /** Drop every root entry so a bulk create/remove can rebuild it in one pass. */
+  clearPlantIndex(): void {
+    this.plantIdsByCell.clear();
+    this.plantCellById.clear();
+  }
+
+  private removePlantFromCellKey(plantId: string, cellKey: string): void {
+    const plants = this.plantIdsByCell.get(cellKey);
+    if (!plants) return;
+    plants.delete(plantId);
+    if (plants.size === 0) this.plantIdsByCell.delete(cellKey);
+  }
+
+  /** Plant roots whose cells fall inside this player's interest window. */
+  getPlantIdsInRange(playerId: string): ReadonlySet<string> {
+    const interest = this.clientInterests.get(playerId);
+    if (!interest) return EMPTY_IDS;
+    const plantIds = new Set<string>();
+    for (const cellKey of interest.subscribedCells) {
+      const plants = this.plantIdsByCell.get(cellKey);
+      if (!plants) continue;
+      for (const plantId of plants) plantIds.add(plantId);
+    }
+    return plantIds;
+  }
+
   getTotalTrackedEntities(): number {
     let total = 0;
     for (const entities of this.cellEntities.values()) {
@@ -246,9 +352,12 @@ export class InterestManager {
   /** D01: Dev action - set interest ring radius */
   setRingRadius(radius: number): void {
     this.interestRingRadius = radius;
-    // Recalculate subscribed cells for all clients
+    // Recalculate subscribed cells for all clients and keep the reverse index
+    // in step, or a wider window would not receive range broadcasts.
     for (const interest of this.clientInterests.values()) {
+      this.removeClientFromCellIndex(interest);
       interest.subscribedCells = this.getSubscribedCells(interest.cell);
+      this.addClientToCellIndex(interest);
     }
   }
 }

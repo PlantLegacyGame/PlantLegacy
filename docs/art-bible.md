@@ -22,9 +22,9 @@ rim light on plants, aerial-perspective fog.
   one air for ground, plants and the sky), the underwater medium
   (`underwater.ts`, §Water below), sky dome and celestial arcs, weather tinting.
 - *Direction only:* **per-time-of-day colour grading** and any bloom or exposure
-  work. The client renders with no tone mapping and no post chain — the vignette
-  and grain are a DOM overlay — so bright and emissive values clip rather than
-  grade. The ranking for fixing that is Wave 3-D in
+  work. The client sets `LinearToneMapping` so exposure is not a no-op, but there
+  is no HDR target or post chain — the vignette and grain are a DOM overlay — so
+  bright and emissive values still clip rather than grade. The ranking for fixing that is Wave 3-D in
   [`improvement-plan.md`](./improvement-plan.md); the reasoning is §12.2 of
   [`abyssal-garden-source-analysis.md`](./abyssal-garden-source-analysis.md).
 - *Direction only:* cascaded or contact shadows. There is one shadow map,

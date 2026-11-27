@@ -28,6 +28,12 @@ export interface SelectVisiblePlantsOptions<T extends PlantVisibilityLike> {
   /** The requesting player's own plant; null before a plant exists. */
   ownPlantId: string | null;
   isInRange: (playerId: string, x: number, z: number) => boolean;
+  /**
+   * Set when `plants` already came from the interest-cell index. The range
+   * callback is then redundant; skipping it avoids a key allocation per plant
+   * on joins and cell crossings.
+   */
+  prefiltered?: boolean;
   /** Announcements exclude the requester's own plant; syncs include it. */
   includeOwn?: boolean;
   /** Maximum plants returned; the requester's own plant is kept first. */
@@ -59,12 +65,13 @@ export function selectVisiblePlants<T extends PlantVisibilityLike>(
     if (plant.id === options.ownPlantId) {
       continue;
     }
-    const position = plantRootPosition(plant);
-    if (!position) continue;
-    if (options.isInRange(options.playerId, position.x, position.z)) {
-      visible.push(plant);
-      if (visible.length >= cap) break;
+    if (!options.prefiltered) {
+      const position = plantRootPosition(plant);
+      if (!position) continue;
+      if (!options.isInRange(options.playerId, position.x, position.z)) continue;
     }
+    visible.push(plant);
+    if (visible.length >= cap) break;
   }
   return visible;
 }

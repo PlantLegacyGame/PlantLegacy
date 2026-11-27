@@ -1347,7 +1347,7 @@ skinning, texture arrays, tier cross-fade, mutation signatures and a planet-body
 occlusion test. It still does not share depth with the WebGL environment pass,
 which no browser exposes across the two canvases.
 
-The renderer interpolates node positions between ticks (`render/PlantInterpolation.ts`; the dormant-versus-online cue is still open, tracked as 2-B in [`improvement-plan.md`](./improvement-plan.md)). Interest management filters `GROWTH_EVENT` and `PLANT_CREATED`; `STATE` and `KEYFRAME` are built per player and filtered by the same interest test (`broadcastPlantStates` keeps the owner's own plant unconditionally), and their cadence is gated by `client_send_rate_hz` through `stepCadence` (`broadcastCadence.ts`). Binary protocol not on wire.
+The renderer interpolates node positions between ticks (`render/PlantInterpolation.ts`; the dormant-versus-online cue is still open, tracked as 2-B in [`improvement-plan.md`](./improvement-plan.md)). Interest management filters `GROWTH_EVENT` and `PLANT_CREATED` through the reverse cell index; `STATE` and `KEYFRAME` are bucketed once by cell and each player reads only its precomputed interest cells (`broadcastPlantStates` keeps the owner's own plant unconditionally), and their cadence is gated by `client_send_rate_hz` through `stepCadence` (`broadcastCadence.ts`). Binary protocol not on wire.
 
 ## Next
 

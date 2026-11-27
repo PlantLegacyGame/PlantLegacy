@@ -114,6 +114,22 @@ describe('selectVisiblePlants', () => {
     );
   });
 
+  it('trusts prefiltered candidates without a second range lookup', () => {
+    const visible = selectVisiblePlants({
+      plants: [plant('indexed', 10, 0)],
+      playerId: 'p1',
+      ownPlantId: null,
+      isInRange: () => {
+        throw new Error('prefiltered plants must not be range-checked again');
+      },
+      prefiltered: true,
+    });
+    assert.deepEqual(
+      visible.map((p) => p.id),
+      ['indexed'],
+    );
+  });
+
   it('returns nothing when the entity cap is zero', () => {
     const visible = selectVisiblePlants({
       plants: [plant('p1_plant', 0, 0), plant('near', 10, 0)],

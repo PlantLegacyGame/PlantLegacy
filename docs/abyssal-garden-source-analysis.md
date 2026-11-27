@@ -577,8 +577,8 @@ Measured from `apps/client/src` and `config/*.json`, not from the plans.
 | Underwater optics | [`underwater.ts`](../apps/client/src/renderers/environment/underwater.ts) — Beer–Lambert sun dimming, Snell window, 48.6° self-reflection, immersion from 6 cm | **AG's `W_SURF` already ported**, and done from the water field rather than a hardcoded plane |
 | Benchmark and fixed poses | [`benchmark.ts`](../apps/client/src/dev/benchmark.ts), `config/dev.json` `benchmark_poses` | **Matches AG's dev harness** |
 | Depth-correct plant occlusion | [`PlantRenderer.ts`](../apps/client/src/renderers/PlantRenderer.ts) — the SDF fullscreen quad ran with `depthTest: false`, so plants composited over terrain; meshes are now the default path | **AG's lesson 1 already learned and implemented** |
-| Renderer targets | `main.ts:4644` — `WebGLRenderer`, `antialias`, `alpha: true`, `autoClear: false` | Behind AG: no HDR target, no tone mapping, no post |
-| Shadows | `main.ts:4648–4652` — `PCFShadowMap`, `autoUpdate: false`, refresh on a 125/250 ms timer (`:9385`); tiers 1024/1024/2048, `max_triangles` 50k/200k/500k | Behind AG: one map, no cascades, no caster budget, no contact term |
+| Renderer targets | `main.ts:6881` — `WebGLRenderer`, `antialias`, `alpha: true`, `autoClear: false` | Behind AG: `LinearToneMapping` exists for exposure, but there is no HDR target, bloom or post chain |
+| Shadows | `main.ts:6891–6894` — `PCFShadowMap`, `autoUpdate: false`, refresh on a 125/250 ms timer (`:13324`); tiers 1024/1024/2048, `max_triangles` 50k/200k/500k | Behind AG: one map, no cascades, no caster budget, no contact term |
 | Plant geometry | [`MeshPlantRenderer.ts`](../apps/client/src/renderers/MeshPlantRenderer.ts) — one `THREE.Mesh` per stem node and one per leaf, each leaf geometry rebuilt from JS arrays | Behind AG by a wide margin; see §12.1 |
 | Vegetation between plants | no scatter/undergrowth module exists | Behind AG: AG's world is mostly *ground cover and ribbons*, ours is bare ground between organisms |
 

@@ -101,6 +101,7 @@ import { ownBodyNodes, resolveOwnAnchor } from './player/ownPlantAnchor.js';
 import { recenterOffset } from './player/recenterView.js';
 import { decideAutoOpenRootSight } from './player/rootSightAutoOpen.js';
 import { isBelowSoil } from './player/underground.js';
+import { collectPlantNodes } from './render/collectPlantNodes.ts';
 import { createGpuTimer, type GpuTimer } from './render/GpuTimer.js';
 import {
   AIM_RING_BEHIND_INK,
@@ -2425,6 +2426,9 @@ const GROWTH_UPDATE_INTERVAL_MS = 33;
 
 // Other players' plants (plantId -> nodes)
 const otherPlayerPlants = new Map<string, Map<string, PlantNodeData>>();
+// Hot-path scratch for the renderer input. Never retained by a renderer that
+// can defer work: WebGPURenderer copies the nodes it queues.
+const plantNodeScratch: PlantNodeData[] = [];
 
 // Name tags above rival plants: mutation identity for the test gallery and for
 // reading other players' builds at a glance.
@@ -6836,7 +6840,7 @@ async function initPlantRenderer(): Promise<void> {
         }
       }
       for (const node of plantNodes.values()) node.plantId = plantId ?? undefined;
-      const allNodes = [...plantNodes.values(), ...otherNodes];
+      const allNodes = collectPlantNodes(plantNodes, otherPlayerPlants.values(), plantNodeScratch);
       plantRenderer.updatePlantData(allNodes);
     }
     if (webgpuRenderer) {
@@ -6848,7 +6852,7 @@ async function initPlantRenderer(): Promise<void> {
         }
       }
       for (const node of plantNodes.values()) node.plantId = plantId ?? undefined;
-      const allNodes = [...plantNodes.values(), ...otherNodes];
+      const allNodes = collectPlantNodes(plantNodes, otherPlayerPlants.values(), plantNodeScratch);
       webgpuRenderer.updatePlants(allNodes, performance.now());
     }
   }
@@ -11053,7 +11057,9 @@ function handleMutationState(payload: unknown): void {
     webgpuRenderer?.setPlantLook(plantId, look);
   }
   for (const node of plantNodes.values()) node.mutationFlags = look.signature;
-  if (plantNodes.size > 0) plantRenderer?.updatePlantData([...plantNodes.values()]);
+  if (plantNodes.size > 0) {
+    plantRenderer?.updatePlantData(collectPlantNodes(plantNodes, [], plantNodeScratch));
+  }
 }
 
 function handlePlantUproot(payload: unknown): void {
@@ -11137,10 +11143,9 @@ function handlePlantUproot(payload: unknown): void {
         interpolatedNodes.set(nodeId, data);
       }
     }
-    const others: PlantNodeData[] = [];
-    for (const nodes of otherPlayerPlants.values()) others.push(...nodes.values());
-    plantRenderer?.updatePlantData([...plantNodes.values(), ...others]);
-    webgpuRenderer?.updatePlants([...plantNodes.values(), ...others], performance.now());
+    const allNodes = collectPlantNodes(plantNodes, otherPlayerPlants.values(), plantNodeScratch);
+    plantRenderer?.updatePlantData(allNodes);
+    webgpuRenderer?.updatePlants(allNodes, performance.now());
   }
   if (uproot.plantId === plantId) {
     // The crown is the body anchor for Space and Root Sight, and the
@@ -11501,19 +11506,11 @@ function handleGrowthEvent(payload: unknown): void {
       plantMineralCapacity,
     );
     if (plantRenderer) {
-      const otherNodes: PlantNodeData[] = [];
-      for (const nodes of otherPlayerPlants.values()) {
-        otherNodes.push(...nodes.values());
-      }
-      const allNodes = [...plantNodes.values(), ...otherNodes];
+      const allNodes = collectPlantNodes(plantNodes, otherPlayerPlants.values(), plantNodeScratch);
       plantRenderer.updatePlantData(allNodes);
     }
     if (webgpuRenderer) {
-      const otherNodes: PlantNodeData[] = [];
-      for (const nodes of otherPlayerPlants.values()) {
-        otherNodes.push(...nodes.values());
-      }
-      const allNodes = [...plantNodes.values(), ...otherNodes];
+      const allNodes = collectPlantNodes(plantNodes, otherPlayerPlants.values(), plantNodeScratch);
       webgpuRenderer.updatePlants(allNodes, performance.now());
     }
     const lastNode = incomingNodes[incomingNodes.length - 1] ?? updatedParent;
@@ -11578,19 +11575,11 @@ function handleGrowthEvent(payload: unknown): void {
     }
     // Update renderers with other player's newly grown nodes
     if (plantRenderer) {
-      const otherNodes: PlantNodeData[] = [];
-      for (const nodes of otherPlayerPlants.values()) {
-        otherNodes.push(...nodes.values());
-      }
-      const allNodes = [...plantNodes.values(), ...otherNodes];
+      const allNodes = collectPlantNodes(plantNodes, otherPlayerPlants.values(), plantNodeScratch);
       plantRenderer.updatePlantData(allNodes);
     }
     if (webgpuRenderer) {
-      const otherNodes: PlantNodeData[] = [];
-      for (const nodes of otherPlayerPlants.values()) {
-        otherNodes.push(...nodes.values());
-      }
-      const allNodes = [...plantNodes.values(), ...otherNodes];
+      const allNodes = collectPlantNodes(plantNodes, otherPlayerPlants.values(), plantNodeScratch);
       webgpuRenderer.updatePlants(allNodes, performance.now());
     }
   }
@@ -12001,29 +11990,11 @@ function handlePlantSync(payload: unknown): void {
   }
   // Update renderer with all plants
   if (plantRenderer) {
-    const otherNodes: Array<{
-      id: string;
-      position: THREE.Vector3;
-      type: number;
-      radius: number;
-      parentId: string | null;
-      age: number;
-      health: number;
-      mutationFlags: number;
-      biomass: number;
-    }> = [];
-    for (const nodes of otherPlayerPlants.values()) {
-      otherNodes.push(...nodes.values());
-    }
-    const allNodes = [...plantNodes.values(), ...otherNodes];
+    const allNodes = collectPlantNodes(plantNodes, otherPlayerPlants.values(), plantNodeScratch);
     plantRenderer.updatePlantData(allNodes);
   }
   if (webgpuRenderer) {
-    const otherNodes: PlantNodeData[] = [];
-    for (const nodes of otherPlayerPlants.values()) {
-      otherNodes.push(...nodes.values());
-    }
-    const allNodes = [...plantNodes.values(), ...otherNodes];
+    const allNodes = collectPlantNodes(plantNodes, otherPlayerPlants.values(), plantNodeScratch);
     webgpuRenderer.updatePlants(allNodes, performance.now());
   }
   setDetail(`Synced ${sync.plants.length} plants from server`);
@@ -12132,19 +12103,11 @@ function handlePlantCreated(payload: unknown): void {
   );
   // Update renderer with all plants
   if (plantRenderer) {
-    const otherNodes: PlantNodeData[] = [];
-    for (const nodes of otherPlayerPlants.values()) {
-      otherNodes.push(...nodes.values());
-    }
-    const allNodes = [...plantNodes.values(), ...otherNodes];
+    const allNodes = collectPlantNodes(plantNodes, otherPlayerPlants.values(), plantNodeScratch);
     plantRenderer.updatePlantData(allNodes);
   }
   if (webgpuRenderer) {
-    const otherNodes: PlantNodeData[] = [];
-    for (const nodes of otherPlayerPlants.values()) {
-      otherNodes.push(...nodes.values());
-    }
-    const allNodes = [...plantNodes.values(), ...otherNodes];
+    const allNodes = collectPlantNodes(plantNodes, otherPlayerPlants.values(), plantNodeScratch);
     webgpuRenderer.updatePlants(allNodes, performance.now());
   }
   notify('Another plant has sprouted nearby', 'info', 2200);
@@ -12183,19 +12146,11 @@ function handlePlantRemoved(payload: unknown): void {
     }
     // Update renderer with remaining plants
     if (plantRenderer) {
-      const otherNodes: PlantNodeData[] = [];
-      for (const nodes of otherPlayerPlants.values()) {
-        otherNodes.push(...nodes.values());
-      }
-      const allNodes = [...plantNodes.values(), ...otherNodes];
+      const allNodes = collectPlantNodes(plantNodes, otherPlayerPlants.values(), plantNodeScratch);
       plantRenderer.updatePlantData(allNodes);
     }
     if (webgpuRenderer) {
-      const otherNodes: PlantNodeData[] = [];
-      for (const nodes of otherPlayerPlants.values()) {
-        otherNodes.push(...nodes.values());
-      }
-      const allNodes = [...plantNodes.values(), ...otherNodes];
+      const allNodes = collectPlantNodes(plantNodes, otherPlayerPlants.values(), plantNodeScratch);
       webgpuRenderer.updatePlants(allNodes, performance.now());
     }
     notify('A player left the world', 'info', 2000);
@@ -12919,9 +12874,9 @@ function applyStreamedNodeInterpolation(nowMs: number): void {
   }
   // The raymarched body is uploaded from node data, so it is refreshed with the
   // interpolated pose; the mesh renderer keeps its packet-time geometry.
-  const others: PlantNodeData[] = [];
-  for (const nodes of otherPlayerPlants.values()) others.push(...nodes.values());
-  plantRenderer?.updateSdfFrame([...plantNodes.values(), ...others]);
+  plantRenderer?.updateSdfFrame(
+    collectPlantNodes(plantNodes, otherPlayerPlants.values(), plantNodeScratch),
+  );
 }
 
 // Shared render frame logic (used by both requestAnimationFrame and background setInterval)
@@ -13199,9 +13154,10 @@ function renderFrame(deltaTime: number): void {
     plantRenderer.render(deltaTime);
   }
   if (webgpuRenderer) {
-    const allPlants: PlantNodeData[] = [...plantNodes.values()];
-    for (const nodes of otherPlayerPlants.values()) allPlants.push(...nodes.values());
-    webgpuRenderer.updatePlants(allPlants, performance.now());
+    webgpuRenderer.updatePlants(
+      collectPlantNodes(plantNodes, otherPlayerPlants.values(), plantNodeScratch),
+      performance.now(),
+    );
     webgpuRenderer.update(deltaTime);
   }
 
@@ -13266,9 +13222,7 @@ function renderFrame(deltaTime: number): void {
   // rebuild every frame unlike the WebGPU renderer which does joint matrices).
   if (growingNodes.size > 0 || otherGrowingNodes.size > 0) {
     const growNow2 = performance.now();
-    const otherNodes: PlantNodeData[] = [];
-    for (const nodes of otherPlayerPlants.values()) otherNodes.push(...nodes.values());
-    const allNodes = [...plantNodes.values(), ...otherNodes];
+    const allNodes = collectPlantNodes(plantNodes, otherPlayerPlants.values(), plantNodeScratch);
     // Repack the raymarched body every frame: it is a buffer upload, not a
     // rebuild, and it is the only way the emergent tube moves with the camera
     // instead of stepping ten times a second.
@@ -13345,7 +13299,10 @@ function renderFrame(deltaTime: number): void {
   // its report describes the frame the player is actually getting.
   if (benchmarkRunner?.isRunning) {
     benchmarkRunner.tick(performance.now(), {
-      frameMs: frameCostMs,
+      // A hidden tab is drawn by its own timer, so the delta is the timer
+      // interval, not the frame. The tick still advances the pose clock; a
+      // non-positive frame time is discarded instead of recorded.
+      frameMs: document.hidden || skipQualitySample ? 0 : frameCostMs,
       gpuMs: gpuCostMs,
       triangles: renderer.info.render.triangles ?? 0,
       drawCalls: renderer.info.render.calls ?? 0,
@@ -13418,7 +13375,10 @@ function animate(): void {
   }
   const now = performance.now();
   const idleDropEnabledMs = renderConfig?.idleDropTimeoutMs ?? 0;
-  if (shouldIdleRender(now, lastInputAtMs, idleDropEnabledMs)) {
+  // A benchmark is explicit activity: letting the 10 fps idle timer grade a
+  // pose reports the timer's cadence as the frame cost. The run is short and
+  // user-started, so keep the live loop for its duration.
+  if (!benchmarkRunner?.isRunning && shouldIdleRender(now, lastInputAtMs, idleDropEnabledMs)) {
     // One frame, a tenth of a second apart: the "throttles to 10 fps" that
     // `config/render.json` and the C01 record have promised since the client
     // foundation. Asking the compositor for sixty frames a second of a still

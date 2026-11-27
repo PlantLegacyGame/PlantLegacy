@@ -18,6 +18,7 @@ export interface AccountsConfig {
   rateLimitDisplayNamePerMinute: number;
   lockoutMaxFailedAttempts: number;
   lockoutDurationMin: number;
+  lockoutMaxDurationMin: number;
   argon2MemoryKib: number;
   argon2TimeCost: number;
   argon2Parallelism: number;
@@ -55,6 +56,7 @@ export function loadAccountsConfig(configs: Map<string, ConfigFile>): AccountsCo
     ),
     lockoutMaxFailedAttempts: readInteger(configs, 'accounts', 'lockout_max_failed_attempts'),
     lockoutDurationMin: readInteger(configs, 'accounts', 'lockout_duration_min'),
+    lockoutMaxDurationMin: readInteger(configs, 'accounts', 'lockout_max_duration_min'),
     argon2MemoryKib: readInteger(configs, 'accounts', 'argon2_memory_kib'),
     argon2TimeCost: readInteger(configs, 'accounts', 'argon2_time_cost'),
     argon2Parallelism: readInteger(configs, 'accounts', 'argon2_parallelism'),

@@ -138,6 +138,57 @@ describe('InterestManager - Client registration', () => {
   });
 });
 
+describe('InterestManager - reverse indexes', () => {
+  it('indexes subscribed players and moves them between cells', () => {
+    const manager = createManager();
+    manager.registerClient('player_1', 0, 0);
+    assert.equal(manager.getSubscribedPlayersAt(0, 0).has('player_1'), true);
+
+    manager.updateClientPosition('player_1', 100, 100);
+    assert.equal(manager.getSubscribedPlayersAt(0, 0).has('player_1'), false);
+    assert.equal(manager.getSubscribedPlayersAt(100, 100).has('player_1'), true);
+
+    manager.unregisterClient('player_1');
+    assert.equal(manager.getSubscribedPlayersAt(100, 100).has('player_1'), false);
+  });
+
+  it('keeps the reverse index in step with ring-radius changes', () => {
+    const manager = createManager();
+    manager.registerClient('player_1', 0, 0);
+    assert.equal(manager.getSubscribedPlayersAt(50, 0).has('player_1'), true);
+
+    manager.setRingRadius(0);
+    assert.equal(manager.getSubscribedPlayersAt(50, 0).has('player_1'), false);
+    assert.equal(manager.getSubscribedPlayersAt(0, 0).has('player_1'), true);
+  });
+
+  it('tracks plant roots independently from node entities', () => {
+    const manager = createManager();
+    manager.registerClient('player_1', 0, 0);
+    manager.indexPlantRoot('plant_1', 0, 0);
+    manager.addEntityToCell('plant_1', 0, 0);
+    assert.equal(manager.getPlantIdsInRange('player_1').has('plant_1'), true);
+
+    manager.indexPlantRoot('plant_1', 100, 100);
+    assert.equal(manager.getPlantIdsInRange('player_1').has('plant_1'), false);
+
+    manager.indexPlantRoot('plant_2', 0, 0);
+    manager.removePlantFromCell('plant_2');
+    assert.equal(manager.getPlantIdsInRange('player_1').has('plant_2'), false);
+  });
+
+  it('clears every root so a bulk create can rebuild the index', () => {
+    const manager = createManager();
+    manager.registerClient('player_1', 0, 0);
+    manager.indexPlantRoot('plant_1', 0, 0);
+    manager.clearPlantIndex();
+    assert.equal(manager.getPlantIdsInRange('player_1').size, 0);
+
+    manager.indexPlantRoot('plant_1', 0, 0);
+    assert.equal(manager.getPlantIdsInRange('player_1').has('plant_1'), true);
+  });
+});
+
 describe('InterestManager - Entity tracking', () => {
   let manager: InterestManager;
 

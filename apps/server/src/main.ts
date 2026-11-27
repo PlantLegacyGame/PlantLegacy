@@ -461,21 +461,59 @@ class World {
    * moved into view. Repeating the payload is safe: the client upserts by plant id.
    */
   private announcePlantsInRange(player: ConnectedPlayer): void {
-    // Iterate the world, not the player list. A plant whose owner has gone
-    // offline (or was restored from a save) is still simulated, still occupies
-    // tiles and can still be grown into - walking past an invisible one is a
-    // blind spot, not a feature. Building this list from `players` hid every
-    // offline plant for the whole session.
+    // The interest index contains every plant root, including offline and
+    // restored plants, so walking past one still reveals it. Reading the index
+    // also avoids scanning the whole world on every cell crossing.
     const visible = selectVisiblePlants({
-      plants: this.plantWorld.getAllPlants(),
+      plants: this.plantsInInterestCells(player),
       playerId: player.playerId,
       ownPlantId: player.plantId,
       isInRange: (playerId, x, z) => this.interestManager.isPositionInRange(playerId, x, z),
+      prefiltered: true,
       includeOwn: false,
       limit: this.perClientEntityCap,
     });
     for (const plant of visible) {
       this.send(player.ws, MESSAGE_TYPE.PLANT_CREATED, this.plantCreatedPayload(plant));
+    }
+  }
+
+  /**
+   * Candidate plants for a player, read from the interest-cell index. The own
+   * plant is prepended when its root was not indexed (an older save or a plant
+   * whose root was just replaced), so the selector's own-first rule still sees
+   * it. Order is otherwise unspecified; the selector applies the cap.
+   */
+  private plantsInInterestCells(player: ConnectedPlayer): Plant[] {
+    const plants: Plant[] = [];
+    const indexed = this.interestManager.getPlantIdsInRange(player.playerId);
+    if (player.plantId) {
+      const own = this.plantWorld.getPlant(player.plantId);
+      if (own) plants.push(own);
+    }
+    for (const plantId of indexed) {
+      if (plantId === player.plantId) continue;
+      const plant = this.plantWorld.getPlant(plantId);
+      if (plant) plants.push(plant);
+    }
+    return plants;
+  }
+
+  /**
+   * Remove a plant and its cell-index entry together. A dead id left in the
+   * index would be read on every join for the rest of the process.
+   */
+  private removePlantFromWorld(plantId: string): void {
+    this.interestManager.removePlantFromCell(plantId);
+    this.plantWorld.removePlant(plantId);
+  }
+
+  /** Rebuild the root index from the world after a bulk create or remove. */
+  private reindexPlantRoots(): void {
+    this.interestManager.clearPlantIndex();
+    for (const plant of this.plantWorld.getAllPlants()) {
+      const root = plant.rootNodeId ? plant.nodes.get(plant.rootNodeId) : undefined;
+      if (root) this.interestManager.indexPlantRoot(plant.id, root.x, root.z);
     }
   }
 
@@ -537,15 +575,14 @@ class World {
    */
   private broadcastNear(type: number, payload: unknown, x: number, z: number, ownerId?: string) {
     const message = JSON.stringify({ type, payload });
-    for (const player of this.players.values()) {
-      if (
-        player.playerId !== ownerId &&
-        !this.interestManager.isPositionInRange(player.playerId, x, z)
-      ) {
-        continue;
-      }
-      this.writeIfHealthy(player.ws, message, type);
+    for (const playerId of this.interestManager.getSubscribedPlayersAt(x, z)) {
+      // The owner is sent once below, whether or not their window covers it.
+      if (playerId === ownerId) continue;
+      const player = this.players.get(playerId);
+      if (player) this.writeIfHealthy(player.ws, message, type);
     }
+    const owner = ownerId ? this.players.get(ownerId) : undefined;
+    if (owner) this.writeIfHealthy(owner.ws, message, type);
   }
 
   /**
@@ -726,6 +763,7 @@ class World {
         this.damagePipeline?.onPlantDeath(death, this.getTick());
       }
       // Remove plant entities from InterestManager
+      this.interestManager.removePlantFromCell(death.id);
       if (death.rootNodeId) {
         const rootNode = death.nodes.get(death.rootNodeId);
         if (rootNode) {
@@ -839,6 +877,7 @@ class World {
             });
             break;
           case 'uproot':
+            this.interestManager.indexPlantRoot(event.plantId, event.x, event.z);
             this.plantEventLog.append(event.plantId, {
               type: 'uproot',
               tick,
@@ -863,6 +902,7 @@ class World {
             });
             break;
           case 'reroot':
+            this.interestManager.indexPlantRoot(event.plantId, event.x, event.z);
             this.plantEventLog.append(event.plantId, {
               type: 'reroot',
               tick,
@@ -1066,13 +1106,13 @@ class World {
           plant,
           entry.accountId,
           (plantId) => {
-            this.plantWorld.removePlant(plantId);
+            this.removePlantFromWorld(plantId);
             this.processPlantDeaths();
           },
           (msg, meta) => this.log.info(msg, meta),
         );
       } else {
-        this.plantWorld.removePlant(entry.plantId);
+        this.removePlantFromWorld(entry.plantId);
         this.processPlantDeaths();
       }
     }
@@ -1494,7 +1534,7 @@ class World {
         // same account changed its purse mid-join. Do not hand out a paid seed
         // for free: remove it before the client ever sees WELCOME.
         this.players.delete(playerId);
-        this.plantWorld.removePlant(plantId);
+        this.removePlantFromWorld(plantId);
         return {
           refused: true,
           reason: 'insufficient_spores',
@@ -1531,24 +1571,21 @@ class World {
 
     // Broadcast new plant to all other connected players (multiplayer visibility)
     const plantCreatedPayload = this.plantCreatedPayload(plant);
-    for (const otherPlayer of this.players.values()) {
-      if (otherPlayer.playerId === playerId) continue;
-      // Only players who can actually see the new plant need its full node set.
-      if (
-        !this.interestManager.isPositionInRange(
-          otherPlayer.playerId,
-          rootNode?.x ?? 0,
-          rootNode?.z ?? 0,
-        )
-      ) {
-        continue;
-      }
-      this.send(otherPlayer.ws, MESSAGE_TYPE.PLANT_CREATED, plantCreatedPayload);
+    const createdRecipients = this.interestManager.getSubscribedPlayersAt(
+      rootNode?.x ?? 0,
+      rootNode?.z ?? 0,
+    );
+    // Only players who can actually see the new plant need its full node set.
+    for (const recipientId of createdRecipients) {
+      if (recipientId === playerId) continue;
+      const recipient = this.players.get(recipientId);
+      if (recipient) this.send(recipient.ws, MESSAGE_TYPE.PLANT_CREATED, plantCreatedPayload);
     }
 
     // Register plant root node as entity in InterestManager
     if (rootNode) {
       this.interestManager.addEntityToCell(plantId, rootNode.x, rootNode.z);
+      this.interestManager.indexPlantRoot(plantId, rootNode.x, rootNode.z);
     }
 
     return { plantId, welcome };
@@ -1600,7 +1637,7 @@ class World {
     if (spawn.cost > 0) {
       const remaining = spendSpores(player.spores, spawn.cost, this.sporeConfig.maxBalance);
       if (remaining === null) {
-        this.plantWorld.removePlant(plant.id);
+        this.removePlantFromWorld(plant.id);
         return { ok: false, reason: 'insufficient_spores', message: 'Not enough spores.' };
       }
       player.spores = remaining;
@@ -1612,7 +1649,10 @@ class World {
     this.lastRootResourceUpdate.delete(playerId);
 
     const rootNode = plant.rootNodeId ? plant.nodes.get(plant.rootNodeId) : undefined;
-    if (rootNode) this.interestManager.addEntityToCell(plant.id, rootNode.x, rootNode.z);
+    if (rootNode) {
+      this.interestManager.addEntityToCell(plant.id, rootNode.x, rootNode.z);
+      this.interestManager.indexPlantRoot(plant.id, rootNode.x, rootNode.z);
+    }
     // Everyone who can see the spot sees the seed appear, exactly as on a join.
     this.broadcastNear(
       MESSAGE_TYPE.PLANT_CREATED,
@@ -1664,7 +1704,7 @@ class World {
           this.log.info('reconnect window expired, plant stays in the world', { plantId });
           return;
         }
-        this.plantWorld.removePlant(plantId);
+        this.removePlantFromWorld(plantId);
         this.processPlantDeaths();
       },
       (msg, meta) => this.log.info(msg, meta),
@@ -2421,10 +2461,11 @@ class World {
           // every saved or offline plant out of the world for anyone who joined
           // after its owner left, even when it stood right beside them.
           const syncPlants = selectVisiblePlants({
-            plants: this.plantWorld.getAllPlants(),
+            plants: this.plantsInInterestCells(player),
             playerId,
             ownPlantId: player.plantId,
             isInRange: (pid, x, z) => this.interestManager.isPositionInRange(pid, x, z),
+            prefiltered: true,
             limit: this.perClientEntityCap,
           });
           const syncPayload: PlantSyncPayload = {
@@ -2990,9 +3031,11 @@ class World {
       players: Array.from(this.players.values(), (player) => ({
         playerId: player.playerId,
         plantId: player.plantId,
+        cells: this.interestManager.getSubscribedCellKeys(player.playerId),
       })),
       states: plantStates,
       positions: plantPositions,
+      cellKeyFor: (x, z) => this.interestManager.getCellKeyAt(x, z),
       entityCap: this.perClientEntityCap,
     });
     this.stateCadenceAccumulatorMs = stateBroadcast.nextAccumulatorMs;
@@ -3046,14 +3089,13 @@ class World {
     this.updateSeason(tick);
   }
 
-  /** The state fanout's view: write through the health gate, and interest cells. */
+  /** The state fanout's view: write through the health gate. */
   private stateBroadcastPorts(): StateBroadcastPorts {
     return {
       send: (playerId, message, messageType) => {
         const player = this.players.get(playerId);
         return player ? this.writeIfHealthy(player.ws, message, messageType) : false;
       },
-      isInRange: (playerId, x, z) => this.interestManager.isPositionInRange(playerId, x, z),
     };
   }
 
@@ -3416,6 +3458,7 @@ class World {
       const rootNode = plant.nodes.get(plant.rootNodeId);
       if (rootNode) {
         this.interestManager.registerClient(playerId, rootNode.x, rootNode.z);
+        this.interestManager.indexPlantRoot(plant.id, rootNode.x, rootNode.z);
       }
     }
   }
@@ -3556,6 +3599,9 @@ class World {
       clearPersistence: () => this.getPlantPersistence().clearAll(),
       createRandomPlants: (count) => {
         for (let i = 0; i < count; i++) this.plantWorld.createRandomPlant();
+        // Bulk spawns bypass `createPlant`, so the root index is rebuilt once
+        // here instead of being left to miss every plant the stress test made.
+        this.reindexPlantRoots();
       },
       applyConfig: (key, value) => this.applyDevConfig(key, value),
       plantSummaries: () =>
@@ -3598,8 +3644,14 @@ class World {
           const root = candidate.rootNodeId ? candidate.nodes.get(candidate.rootNodeId) : undefined;
           return root ? Math.hypot(root.x - x, root.z - z) <= withinM : false;
         }),
-      spawnRival: (x, z) =>
-        this.plantWorld.createPlant(DEV_RIVAL_OWNER, 'world_0', x, z)?.id ?? null,
+      spawnRival: (x, z) => {
+        const rival = this.plantWorld.createPlant(DEV_RIVAL_OWNER, 'world_0', x, z);
+        if (rival) {
+          const root = rival.rootNodeId ? rival.nodes.get(rival.rootNodeId) : undefined;
+          if (root) this.interestManager.indexPlantRoot(rival.id, root.x, root.z);
+        }
+        return rival?.id ?? null;
+      },
       setDaylight: (fraction) => {
         this.weatherSystem.setTimeOfDay(fraction);
         this.broadcast(MESSAGE_TYPE.WEATHER_UPDATE, {
@@ -3715,8 +3767,13 @@ class World {
         const crown = plant?.rootNodeId ? plant.nodes.get(plant.rootNodeId) : undefined;
         return crown ? { x: crown.x, z: crown.z } : null;
       },
-      mutationGallery: (center) =>
-        this.plantWorld.buildMutationGallery(plant?.worldId ?? '', 8, 10, center),
+      mutationGallery: (center) => {
+        const gallery = this.plantWorld.buildMutationGallery(plant?.worldId ?? '', 8, 10, center);
+        // The gallery replaces its previous plants and creates its own, both
+        // behind the index's back; rebuild so the follow-up PLANT_SYNC sees it.
+        this.reindexPlantRoots();
+        return gallery;
+      },
       grantMutation: (mutationId) =>
         this.plantWorld.grantMutation(player?.plantId ?? '', mutationId, this.getTick()),
       clearMutations: () => this.plantWorld.clearMutations(player?.plantId ?? '', this.getTick()),
@@ -3847,7 +3904,7 @@ class World {
         // Keep the old plant's world id: a literal here would put the new plant in
         // a different world from every other plant and from persistence.
         const worldId = plant.worldId;
-        this.plantWorld.removePlant(player.plantId);
+        this.removePlantFromWorld(player.plantId);
         // Same owner identity and world as addPlayer, otherwise the plant is
         // invisible to reclaim/persistence and every anonymous player shares the
         // literal owner id 'anon'.
@@ -4295,8 +4352,14 @@ async function main(): Promise<void> {
     });
   }
 
-  // Interest management (T03)
+  // Interest management (T03). Seed the plant-root index from every loaded
+  // plant, including ones whose owners are offline: range announcements must
+  // still reveal a restored plant.
   const interestManager = new InterestManager(worldConfig);
+  for (const plant of plantWorld.getAllPlants()) {
+    const root = plant.rootNodeId ? plant.nodes.get(plant.rootNodeId) : undefined;
+    if (root) interestManager.indexPlantRoot(plant.id, root.x, root.z);
+  }
 
   // Accounts service (T08C)
   const accountsConfig = loadAccountsConfig(configs);

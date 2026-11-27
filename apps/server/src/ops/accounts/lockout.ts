@@ -18,6 +18,8 @@ export interface LockoutState {
 export interface LockoutPolicy {
   maxAttempts: number;
   durationMs: number;
+  /** Ceiling on the remaining lock, so retries cannot extend it forever. */
+  maxDurationMs: number;
 }
 
 export interface FailedAttemptResult {
@@ -37,17 +39,27 @@ export function nextFailedAttempt(
   policy: LockoutPolicy,
   now: Date,
 ): FailedAttemptResult {
-  const locked = state.lockedUntil !== null && state.lockedUntil > now;
-  if (locked) {
+  if (state.lockedUntil !== null && state.lockedUntil > now) {
+    // Extend the existing lock, not a fresh window from now: otherwise an
+    // attacker can hold the account forever with one attempt per window. The
+    // cap is measured from now, so the remaining lock cannot exceed it.
+    const requested = new Date(state.lockedUntil.getTime() + policy.durationMs);
     return {
       attempts: state.attempts + 1,
-      lockedUntil: new Date(now.getTime() + policy.durationMs),
+      lockedUntil: capLock(requested, now, policy),
       locked: true,
     };
   }
-  const attempts = 1;
+  // Normal failures build the count; only a lock that has already expired
+  // starts it over (INV-AU-05). `attempts: 1` unconditionally here meant the
+  // counter never reached maxAttempts and the account never locked.
+  const attempts = state.lockedUntil !== null ? 1 : state.attempts + 1;
   if (attempts >= policy.maxAttempts) {
-    return { attempts, lockedUntil: new Date(now.getTime() + policy.durationMs), locked: true };
+    return {
+      attempts,
+      lockedUntil: capLock(new Date(now.getTime() + policy.durationMs), now, policy),
+      locked: true,
+    };
   }
   return { attempts, lockedUntil: null, locked: false };
 }
@@ -55,6 +67,11 @@ export function nextFailedAttempt(
 /** A password that worked clears both the count and the lock. */
 export function nextSuccessfulLogin(): LockoutState {
   return { attempts: 0, lockedUntil: null };
+}
+
+function capLock(requested: Date, now: Date, policy: LockoutPolicy): Date {
+  const cap = now.getTime() + policy.maxDurationMs;
+  return requested.getTime() < cap ? requested : new Date(cap);
 }
 
 /** True while the account may not sign in, whatever the password. */

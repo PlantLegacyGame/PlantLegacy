@@ -264,10 +264,10 @@ this entry is the work item, not a second copy of the analysis.
    the cache; the structural step is per-organ-family merging or instancing.
    The cache is small enough to pull forward out of this wave: it changes no
    pixels and removes a per-growth allocation storm.
-2. **No HDR, no tone mapping, no bloom.** `new THREE.WebGLRenderer(...)` is
-   created without `toneMapping`, there is no composer, and the vignette/grain is
-   a DOM overlay. Emissive mutation channels (`config/mutation_visuals.json`) are
-   computed and then clipped.
+2. **No HDR target, bloom or post chain.** `LinearToneMapping` is set so
+   `toneMappingExposure` is not a no-op, but there is no composer or HDR target,
+   and the vignette/grain is a DOM overlay. Emissive mutation channels
+   (`config/mutation_visuals.json`) are computed and then clipped.
 3. **Shadows are one map on a timer.** `shadowMap.autoUpdate = false` with a
    125/250 ms refresh, no cascade, no caster budget and no contact shadow under a
    near plant. Day/night makes AG's bake-once map inapplicable; the transferable
@@ -318,8 +318,8 @@ files carry whole subsystems as module-scope state.
 
 | File | Lines | Why it is a problem |
 |---|---|---|
-| `apps/client/src/main.ts` | 9478 | 53 imports and **256 module-scope `let`/`const` bindings**. Every subsystem (socket, UI, camera, growth, root sight, physics, benchmark) reaches into the same mutable namespace, so nothing can be imported without the whole app and no function's dependencies are visible in its signature |
-| `apps/server/src/main.ts` | 4972 | Same shape: HTTP + WS + tick loop + persistence + weather + accounts in one module |
+| `apps/client/src/main.ts` | 14684 | 53 imports and **256 module-scope `let`/`const` bindings**. Every subsystem (socket, UI, camera, growth, root sight, physics, benchmark) reaches into the same mutable namespace, so nothing can be imported without the whole app and no function's dependencies are visible in its signature |
+| `apps/server/src/main.ts` | 5207 | Same shape: HTTP + WS + tick loop + persistence + weather + accounts in one module |
 | `apps/client/src/renderers/webgpu/WebGPURenderer.ts` | 2369 | Renderer plus tier policy, culling, impostors and Root Sight highlighting |
 | `apps/client/src/config/clientConfig.ts` | 1723 | Every system's client config type and loader in one file |
 | `apps/client/src/ui/DevPanel.ts` | 1499 | ~40 dev actions in one file, each an ad-hoc fetch |

@@ -16,7 +16,13 @@ export interface StateBroadcastPorts {
    * False when the socket refused it (closed, or over the backlog limit).
    */
   send(playerId: string, message: string, messageType: number): boolean;
-  isInRange(playerId: string, x: number, z: number): boolean;
+}
+
+export interface StateBroadcastPlayer {
+  playerId: string;
+  plantId: string | null;
+  /** Precomputed interest cells from InterestManager, not a world position. */
+  cells: ReadonlySet<string>;
 }
 
 export interface StateBroadcastInput {
@@ -28,10 +34,12 @@ export interface StateBroadcastInput {
   tileSize: number;
   /** Carried accumulator from the previous tick (INV-TM-09). */
   accumulatorMs: number;
-  players: Array<{ playerId: string; plantId: string | null }>;
+  players: StateBroadcastPlayer[];
   states: PlantStateSnapshot[];
-  /** Crown position per plant, used for the interest-cell test. */
+  /** Crown position per plant, used to bucket each state into its cell. */
   positions: Map<string, { x: number; z: number }>;
+  /** The same cell key function InterestManager used for the player cells. */
+  cellKeyFor: (x: number, z: number) => string;
   /** Maximum plants per payload; the player's own plant is kept first. */
   entityCap?: number;
 }
@@ -54,6 +62,12 @@ export interface StateBroadcastResult {
  * always included so a client never loses sight of itself, and a keyframe always
  * sends on its own interval even when the state cadence is slower, so a late
  * joiner and a reconnecting client still get a full snapshot.
+ *
+ * The previous version did `states.find()` once per player and then scanned the
+ * whole state list again for each player, which is O(players x plants) before
+ * the cap can help. Here the states are bucketed once per broadcast and each
+ * player reads only the cells already computed by InterestManager. The cost is
+ * bounded by the visible plant-player pairs plus the per-broadcast bucketing.
  */
 export function broadcastPlantStates(
   ports: StateBroadcastPorts,
@@ -75,21 +89,41 @@ export function broadcastPlantStates(
     return result;
   }
 
+  const cap =
+    input.entityCap === undefined || !Number.isFinite(input.entityCap)
+      ? Number.POSITIVE_INFINITY
+      : Math.max(0, Math.floor(input.entityCap));
+
+  // One pass over the states builds both lookup structures. A state without a
+  // crown position is not visible by range; the owner's own state still comes
+  // from stateById, preserving the old "never lose sight of yourself" rule.
+  const stateById = new Map<string, PlantStateSnapshot>();
+  const statesByCell = new Map<string, PlantStateSnapshot[]>();
+  for (const state of input.states) {
+    if (!stateById.has(state.id)) stateById.set(state.id, state);
+    const position = input.positions.get(state.id);
+    if (!position) continue;
+    const cellKey = input.cellKeyFor(position.x, position.z);
+    let bucket = statesByCell.get(cellKey);
+    if (!bucket) {
+      bucket = [];
+      statesByCell.set(cellKey, bucket);
+    }
+    bucket.push(state);
+  }
+
   for (const player of input.players) {
-    const cap =
-      input.entityCap === undefined || !Number.isFinite(input.entityCap)
-        ? Number.POSITIVE_INFINITY
-        : Math.max(0, Math.floor(input.entityCap));
-    const own = player.plantId
-      ? input.states.find((state) => state.id === player.plantId)
-      : undefined;
+    const own = player.plantId ? stateById.get(player.plantId) : undefined;
     const plants: PlantStateSnapshot[] = cap > 0 && own ? [own] : [];
     if (plants.length < cap) {
-      for (const state of input.states) {
-        if (state.id === own?.id) continue;
-        const position = input.positions.get(state.id);
-        if (!position || !ports.isInRange(player.playerId, position.x, position.z)) continue;
-        plants.push(state);
+      for (const cellKey of player.cells) {
+        const cellStates = statesByCell.get(cellKey);
+        if (!cellStates) continue;
+        for (const state of cellStates) {
+          if (state.id === own?.id) continue;
+          plants.push(state);
+          if (plants.length >= cap) break;
+        }
         if (plants.length >= cap) break;
       }
     }

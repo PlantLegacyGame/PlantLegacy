@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { describe, it } from 'node:test';
+import { nextFailedAttempt } from './lockout.ts';
 
 // Test configs
 const testConfig = {
@@ -21,6 +22,7 @@ const testConfig = {
   rateLimitDisplayNamePerMinute: 5,
   lockoutMaxFailedAttempts: 5,
   lockoutDurationMin: 15,
+  lockoutMaxDurationMin: 60,
   bcryptCost: 4,
   jwtAlgorithm: 'HS256' as const,
   jwtIssuer: 'plant-legacy-test',
@@ -185,34 +187,19 @@ describe('AccountsService - Lockout Logic', () => {
     currentAttempts: number,
     lockedUntil: Date | null,
   ): { newAttempts: number; newLockedUntil: Date | null; locked: boolean } {
-    const now = new Date();
-
-    // Check if already locked
-    if (lockedUntil && lockedUntil > now) {
-      // Locked - extend lockout
-      return {
-        newAttempts: currentAttempts + 1,
-        newLockedUntil: new Date(now.getTime() + lockoutDurationMs),
-        locked: true,
-      };
-    }
-
-    // Not locked - increment attempts
-    const newAttempts = currentAttempts + 1;
-
-    if (newAttempts >= maxAttempts) {
-      // Lock the account
-      return {
-        newAttempts,
-        newLockedUntil: new Date(now.getTime() + lockoutDurationMs),
-        locked: true,
-      };
-    }
-
+    const result = nextFailedAttempt(
+      { attempts: currentAttempts, lockedUntil },
+      {
+        maxAttempts,
+        durationMs: lockoutDurationMs,
+        maxDurationMs: 60 * 60 * 1000,
+      },
+      new Date(),
+    );
     return {
-      newAttempts,
-      newLockedUntil: null,
-      locked: false,
+      newAttempts: result.attempts,
+      newLockedUntil: result.lockedUntil,
+      locked: result.locked,
     };
   }
 

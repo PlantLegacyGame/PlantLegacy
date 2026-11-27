@@ -29,6 +29,7 @@ const config: AccountsConfig = {
   rateLimitDisplayNamePerMinute: 5,
   lockoutMaxFailedAttempts: 5,
   lockoutDurationMin: 15,
+  lockoutMaxDurationMin: 60,
   argon2MemoryKib: 8192,
   argon2TimeCost: 1,
   argon2Parallelism: 1,

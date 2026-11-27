@@ -53,7 +53,7 @@ owning task fills it.
 | File | Owner | Status | Values |
 |---|---|---|---|
 | `account_progress` | T08B | stub | 0 |
-| `accounts` | T08C | active | 28 |
+| `accounts` | T08C | active | 29 |
 | `achievements` | T08B | stub | 0 |
 | `annotations` | T19 | stub | 0 |
 | `anticheat` | T41 | stub | 0 |

@@ -105,6 +105,12 @@
       "range": [5, 1440],
       "description": "Lockout duration in minutes"
     },
+    "lockout_max_duration_min": {
+      "type": "integer",
+      "value": 60,
+      "range": [15, 1440],
+      "description": "Maximum remaining lockout in minutes; retries extend the existing lock but cannot exceed this cap"
+    },
     "argon2_memory_kib": {
       "type": "integer",
       "value": 19456,
