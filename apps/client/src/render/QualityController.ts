@@ -28,6 +28,10 @@ export interface QualityConfig {
   targetFps: number;
   fpsWarningThreshold: number;
   resolutionFloor: number;
+  /** AL-03: the lower floor used only after sustained overload. */
+  emergencyResolutionFloor: number;
+  /** AL-03: how long the cost must stay out of band before the floor moves. */
+  qualityEmergencyAfterMs: number;
   maxPixelRatio: number;
   qualityTiers: QualityTier[];
   /** Frame cost below which detail is restored (ms). */
@@ -83,13 +87,17 @@ export interface QualityState {
   firstSampleMs: number;
   /** When the smoothed cost first went over budget, 0 when it is not over. */
   overBudgetSinceMs: number;
+  /** When the cost first fell inside the recovery band, 0 when it has not. */
+  underBudgetSinceMs: number;
+  /** The lowest effective ratio the band may currently use. */
+  floorRatio: number;
 }
 
 /** How far one decision may move each lever per step. */
 const PIXEL_STEP = 0.1;
 const DISTANCE_STEP = 0.1;
 
-export function createQualityState(_config?: QualityConfig): QualityState {
+export function createQualityState(config?: QualityConfig): QualityState {
   return {
     tier: 0,
     pixelScale: 1,
@@ -99,6 +107,8 @@ export function createQualityState(_config?: QualityConfig): QualityState {
     smoothedCostMs: 0,
     firstSampleMs: 0,
     overBudgetSinceMs: 0,
+    underBudgetSinceMs: 0,
+    floorRatio: config?.resolutionFloor ?? 0.9,
   };
 }
 
@@ -121,7 +131,28 @@ export function effectivePixelRatio(state: QualityState, config: QualityConfig):
   const tier = tiers[Math.min(Math.max(0, state.tier), tiers.length - 1)];
   const base = Math.max(0.01, tier.pixelRatio);
   const ceiling = Math.min(config.maxPixelRatio, nativeRatio(config));
-  return clamp(base * state.pixelScale, config.resolutionFloor, ceiling);
+  const floor =
+    Number.isFinite(state.floorRatio) && state.floorRatio > 0
+      ? state.floorRatio
+      : config.resolutionFloor;
+  return clamp(base * state.pixelScale, floor, ceiling);
+}
+
+/**
+ * Drop one tier without handing pixels back.
+ *
+ * The old code reset `pixelScale` to 1 on a tier drop. Once the band had spent
+ * resolution to the floor, that made the "cheaper" tier draw more pixels than
+ * the expensive one it replaced - a visible pop and a slower frame. Keep the
+ * effective ratio and the draw-distance spend, so a drop can only remove cost.
+ */
+function dropTier(state: QualityState, tiers: QualityTier[], config: QualityConfig): void {
+  const previousRatio = effectivePixelRatio(state, config);
+  state.tier = Math.max(0, state.tier - 1);
+  const base = Math.max(0.01, tiers[state.tier].pixelRatio);
+  const minScale = Math.max(0.05, state.floorRatio / base);
+  const maxScale = Math.max(minScale, config.maxPixelRatio / base);
+  state.pixelScale = clamp(previousRatio / base, minScale, maxScale);
 }
 
 /**
@@ -180,12 +211,41 @@ export function nextQualityState(
   // The levers are multipliers on the tier's own pixel ratio, so their bounds
   // are relative to it: the effective ratio must stay inside the configured
   // floor and ceiling.
-  const minScale = Math.max(0.05, config.resolutionFloor / tierBase);
+  const minScale = Math.max(0.05, state.floorRatio / tierBase);
   const maxScale = Math.max(minScale, config.maxPixelRatio / tierBase);
 
   const overBudget = Number.isFinite(smoothCost) && smoothCost > budgetMax;
   if (!overBudget) state.overBudgetSinceMs = 0;
   else if (state.overBudgetSinceMs <= 0) state.overBudgetSinceMs = now;
+
+  // The normal floor is a visual choice, not a hard limit on a machine that
+  // cannot hold the target. After a sustained overload the band may spend one
+  // more step of resolution; it gives that step back only after the frame has
+  // stayed inside the recovery band for the same window, so the floor cannot
+  // sawtooth between the two.
+  const underBudget = Number.isFinite(smoothCost) && smoothCost <= budgetMin;
+  if (underBudget) {
+    if (state.underBudgetSinceMs <= 0) state.underBudgetSinceMs = now;
+  } else {
+    state.underBudgetSinceMs = 0;
+  }
+  const emergencyFloor = Math.min(config.resolutionFloor, config.emergencyResolutionFloor);
+  if (
+    state.floorRatio > emergencyFloor + 1e-9 &&
+    overBudget &&
+    state.overBudgetSinceMs > 0 &&
+    now - state.overBudgetSinceMs >= config.qualityEmergencyAfterMs
+  ) {
+    state.floorRatio = emergencyFloor;
+  } else if (
+    state.floorRatio < config.resolutionFloor - 1e-9 &&
+    underBudget &&
+    state.underBudgetSinceMs > 0 &&
+    now - state.underBudgetSinceMs >= config.qualityEmergencyAfterMs
+  ) {
+    state.floorRatio = config.resolutionFloor;
+  }
+
   // Sustained, not momentary: the smoothed cost must stay over budget for a
   // full hold window before any detail is spent.
   const sustainedOverBudget = overBudget && now - state.overBudgetSinceMs >= config.holdMs;
@@ -193,11 +253,9 @@ export function nextQualityState(
   const changed = now - state.lastChangeMs >= config.holdMs;
 
   // A triangle overflow is a hard budget: the tier itself is too expensive, so
-  // resolution would not fix it. Drop the tier and reset the finer levers.
+  // resolution would not fix it. Drop the tier without handing pixels back.
   if (trianglesOver && state.tier > 0) {
-    state.tier -= 1;
-    state.pixelScale = 1;
-    state.drawDistanceScale = 1;
+    dropTier(state, tiers, config);
     state.lastChangeMs = now;
     return state;
   }
@@ -213,11 +271,7 @@ export function nextQualityState(
         state.drawDistanceScale - DISTANCE_STEP,
       );
     } else if (state.tier > 0) {
-      state.tier -= 1;
-      // A tier drop resets the finer levers so the cheaper tier is actually
-      // cheaper rather than inheriting a degraded resolution.
-      state.pixelScale = 1;
-      state.drawDistanceScale = 1;
+      dropTier(state, tiers, config);
     }
     state.lastChangeMs = now;
     return state;
@@ -225,8 +279,7 @@ export function nextQualityState(
 
   // Under budget: recover only after the hold window, and only one lever at a
   // time so the frame never oscillates between two settings.
-  const hasHeadroom = Number.isFinite(smoothCost) && smoothCost <= budgetMin;
-  if (!hasHeadroom || !changed) return state;
+  if (!underBudget || !changed) return state;
 
   // Recovery stops at the display's own density, measured or estimated. Past
   // native the pixels are supersampling, and a frame that spends its headroom
@@ -316,6 +369,11 @@ export class QualityController {
   /** One band decision. Call once per frame with the measured costs. */
   update(sample: QualitySample, now = performance.now()): void {
     nextQualityState(this.state, sample, this.config, now);
+  }
+
+  /** The live band state, for the dev readout and for support reports. */
+  snapshot(): QualityState & { effectivePixelRatio: number } {
+    return { ...this.state, effectivePixelRatio: this.pixelRatio };
   }
 
   /**

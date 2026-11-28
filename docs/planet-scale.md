@@ -4,7 +4,8 @@
 uniform 2 m mesh over the whole body is rejected; a screen-space detail chain
 and a sparse shallow crust are the direction. The built baseline is one 620 m
 play disc at 2 m cells, a 20 km transition ring, and a 100 km global-relief
-globe. The detail chain and the streamed crust are **not built**.
+globe. The detail chain and the streamed crust are **not built**. Orbit is still
+the dev-panel camera action described in ADR-077, not a player-facing descent.
 
 **Related:** [DESIGN.md](../DESIGN.md) C03b and T25/T56,
 [T56](./tasks/T56.md) (the first real volumes),
@@ -46,9 +47,9 @@ ground:
 | 160 m | 4.9 M | 9.8 M | tens of kilometres |
 | 1,500 m | 55.8 k | 111 k | the whole body from orbit |
 
-The current 84,500-face globe is the last row. The current 620 m disc is the
-first row. The visible player-area clue is the **step between those two
-regimes**, not a law of the world.
+The current 620 m disc is the first row, the 20 km ring covers the transition,
+and the 84,500-face globe is the last row. The visible player-area clue is the
+**disc-to-ring step**, not a law of the world.
 
 Two rules follow:
 
@@ -247,6 +248,10 @@ experiment and a much larger content budget, not a bigger heightfield.
 The orbit is a camera position, not a second world. The body must be drawn from
 the same relief field and the same weather state as the ground. The camera path
 must not cut between a detailed disc and a painted ball.
+
+**Current state (2026-11-27):** orbit is still the dev-panel camera action
+described in ADR-077. It draws the globe and hides the local disc/ring; the
+continuous descent described below is P2 work, not a shipped player feature.
 
 ### 5.1 What it must do
 

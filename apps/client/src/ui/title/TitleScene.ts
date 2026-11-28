@@ -57,6 +57,9 @@ import { landingBucket } from './weather.ts';
 
 export type SceneLayerId = 'far' | 'mid' | 'near';
 
+/** The foreground's share of the near plane's drag: 0.9 across, half as far up. */
+export const FOREGROUND_PARALLAX = { x: 0.9, y: 0.45 } as const;
+
 /**
  * The depth stack, far to near. Three ranges instead of one: a single silhouetted
  * ridge in front of a flat sky is a backdrop, and the drag had nothing to slide
@@ -156,6 +159,17 @@ export interface TitleScene {
 
 const STYLE_ID = 'pl-scene-style';
 
+/**
+ * How far a palette colour may move before the sky is repainted, in 8-bit
+ * channels.
+ *
+ * A sky step moves most colours by well under two levels; each write repaints
+ * the gradient stack, the clouds and the horizon bands, which is the once-a-step
+ * hitch. Skipping the sub-level steps turns one repaint per step into one every
+ * two or three, and leaves the drawn colour within two levels of the clock.
+ */
+const PALETTE_COLOUR_TOLERANCE = 2;
+
 const STYLE = `
   .pl-scene {
     position: absolute;
@@ -171,6 +185,13 @@ const STYLE = `
     /* A drag surface, not a scrollable page: pan-y let a horizontal touch drag
        scroll instead of moving the scene. */
     touch-action: none;
+    /* None of this picture is a document. Without these a press that travels can
+       select a nearby label or start the browser's own image/link drag, which is
+       what leaves the no-drop cursor behind after a release; the nickname field
+       opts back into selection in the menu's own stylesheet. */
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-user-drag: none;
     /* No cursor of its own until it is being dragged: the scene covers most of the
        title, and a grab cursor over all of it made the grab leaf read as the
        default pointer. It inherits the plain leaf and only changes while held. */
@@ -703,7 +724,9 @@ const STYLE = `
      the whole layer fades on the same nine-second crossfade as the rest of the
      weather. It is off at zero storm, which is every clear sky. */
   .pl-scene__nimbus {
-    --pl-storm-core: color-mix(in srgb, var(--pl-sky-mid, #7fa8c4) 18%, #232b31);
+    /* Written from the ground clock in the palette pass, so a rainstorm's bank
+       does not repaint on every sky step for a hue nobody can see move. */
+    --pl-storm-core: var(--pl-storm-colour, #3b444b);
     position: absolute;
     left: -8%;
     right: -8%;
@@ -742,7 +765,9 @@ const STYLE = `
     inset: 0;
     z-index: 4;
     pointer-events: none;
-    background: color-mix(in srgb, var(--pl-sky-low, #c6d8d8) 18%, #26313a);
+    /* Also from the ground clock: a veil this flat has no visible hue change at
+       the sky's 28-second step, and it covers the whole world when it paints. */
+    background: var(--pl-mood-colour, #26313a);
     opacity: var(--pl-mood, 0);
     transition: opacity 6000ms ease;
   }
@@ -1500,7 +1525,9 @@ export function createTitleScene(options: TitleSceneOptions): TitleScene {
   // Every variable below goes through this: the day cycle rewrites the whole sky
   // on every tick, and a value that has not changed must not invalidate two
   // thousand elements' style for nothing (see title/styleVars.ts).
-  const vars = createStyleVarWriter(options.varsTargets ?? varsTarget);
+  const vars = createStyleVarWriter(options.varsTargets ?? varsTarget, {
+    colourTolerance: PALETTE_COLOUR_TOLERANCE,
+  });
   // The sky's own paint, on the sky's own root.
   //
   // `vars` writes to every palette host - the world's layers, the weather, the
@@ -1509,7 +1536,7 @@ export function createTitleScene(options: TitleSceneOptions): TitleScene {
   // eleven elements, ten of which do not paint with it, and the whole menu was
   // invalidated with the sky. These properties are only used inside the scene, so
   // they are written on the scene and nowhere else.
-  const skyVars = createStyleVarWriter(root);
+  const skyVars = createStyleVarWriter(root, { colourTolerance: PALETTE_COLOUR_TOLERANCE });
   const skyKeys = new Set<keyof TitlePalette>(['skyHigh', 'skyMid', 'skyLow', 'cloud', 'hillNear']);
   // The world the moving layers live in, resolved when asked: the scene is built
   // detached and mounted a moment later, so reading `root.parentElement` at
@@ -1709,8 +1736,10 @@ export function createTitleScene(options: TitleSceneOptions): TitleScene {
   // near plane's travel that the soil, the plant and the finds move at. Without a
   // host the band was a sibling of every moving layer and stood still while the soil
   // slid out from under it - measured, a 120 px drag moved the near ridge 99 px and
-  // the ground 49 px, and the props stayed on exactly the same pixel.
-  addHost(outskirts, 0.9, 0, '', false);
+  // the ground 49 px, and the props stayed on exactly the same pixel. The vertical
+  // share is half the horizontal one, the near plane's ratio, so a lift does not
+  // leave the props hanging above their own ground.
+  addHost(outskirts, FOREGROUND_PARALLAX.x, FOREGROUND_PARALLAX.y, '', false);
 
   // The cloud the rain comes out of. Built from the same soft-lobe gradients as
   // the fair-weather art, lower and heavier, and only visible while it storms.
@@ -1938,9 +1967,9 @@ export function createTitleScene(options: TitleSceneOptions): TitleScene {
     soil.setAttribute('aria-hidden', 'true');
     soil.innerHTML = `<span class="pl-scene__worm">${wormArt()}</span>`;
     options.wetHost.insertBefore(soil, wet);
-    // The worm is in the cut, so it moves with the cut: the same 0.9 the ground plane
-    // and the finds beside it ride.
-    addHost(soil, 0.9, 0, '', false);
+    // The worm is in the wet host, which the menu already moves as part of the
+    // ground plane. Registering it too applied the ground's transform twice: it
+    // slid at 1.8x the dirt it was buried in.
   }
   // Puddles: wet ground does not only darken, it holds water - and it holds what
   // actually fell on it. Every column of the landing field carries its own water
@@ -1979,6 +2008,14 @@ export function createTitleScene(options: TitleSceneOptions): TitleScene {
   }
   let poolSpecs: PoolSpec[] = [];
   let driftSpecs: DriftSpec[] = [];
+  /**
+   * The drift elements the pointer pushes, kept in step with `settle`'s children.
+   *
+   * `paintCover` rebuilds the settle layer whenever the ground's cover changes, so
+   * a list captured once at build time pointed at detached nodes from the first
+   * shower on: the push silently stopped working after the first repaint.
+   */
+  let settleDrifts: HTMLElement[] = [];
 
   // Where the rain actually lands: rings across the whole ground line, not six spots
   // around the tree. A ring opens where a drop lands, so its column is read from the
@@ -2194,6 +2231,8 @@ export function createTitleScene(options: TitleSceneOptions): TitleScene {
           `opacity:${drift.opacity.toFixed(2)}"></i>`,
       )
       .join('');
+    // The push list follows the layer that was just rebuilt (see `settleDrifts`).
+    settleDrifts = [...settle.querySelectorAll<HTMLElement>('i')];
     // The settled lid is masked by the same field: a dry column has no snow lying on
     // it, a heavy one has a thick rim. Stops sit at bucket centres, so the lid ramps
     // between columns instead of stepping like a barcode.
@@ -2321,8 +2360,13 @@ export function createTitleScene(options: TitleSceneOptions): TitleScene {
   // through the rain; a fast pass across the canopy is wind, which the menu passes
   // to the plant. Both are client-coordinate arithmetic, so nothing here reads
   // layout during the movement itself.
+  /**
+   * Whether the title is the screen the player is on. Declared before the
+   * window-level presence listener below, which is registered once and has to
+   * know from the first event whether the title is parked behind the world.
+   */
+  let active = true;
   const splashRings = [...splash.querySelectorAll<HTMLElement>('b')];
-  const settleDrifts = [...settle.querySelectorAll<HTMLElement>('i')];
   // The rings keep their own rhythm (each one has its own duration, so the ground
   // never pulses in step), but a storm makes them land faster and a drizzle slower.
   // Written only when the heat changes by a tenth, not every tick.
@@ -2377,7 +2421,10 @@ export function createTitleScene(options: TitleSceneOptions): TitleScene {
   };
 
   const onPresenceMove = (event: PointerEvent): void => {
-    if (destroyed || event.pointerType === 'touch') return;
+    // The listener is on the window, and the title stays mounted while the world
+    // is played: without this, every pointer move in the game measured the title's
+    // layers, wrote transforms on its rings and rustled its hidden plant.
+    if (destroyed || !active || event.pointerType === 'touch') return;
     const x = event.clientX;
     const y = event.clientY;
     const now = performance.now();
@@ -2485,6 +2532,8 @@ export function createTitleScene(options: TitleSceneOptions): TitleScene {
   let draft: ParallaxPoint | null = null;
   let pointer: ParallaxPoint | null = null;
   let dragStart: { x: number; y: number; base: ParallaxPoint } | null = null;
+  /** The pointer the scene captured for this drag, so it can always be released. */
+  let dragPointerId: number | null = null;
   let frame = 0;
   let lastFrameMs = 0;
   let destroyed = false;
@@ -2738,6 +2787,10 @@ export function createTitleScene(options: TitleSceneOptions): TitleScene {
   };
 
   const onPointerDown = (event: PointerEvent): void => {
+    if (!active) return;
+    // One drag at a time: a second press mid-drag would take the capture and the
+    // resting place from the hand that is still moving the picture.
+    if (dragStart) return;
     if (event.button !== 0 && event.pointerType === 'mouse') return;
     // The plant owns its own presses. Its grab surface is a child of this scene,
     // so without this a bend of the mascot also started a drag of the whole
@@ -2756,6 +2809,7 @@ export function createTitleScene(options: TitleSceneOptions): TitleScene {
     root.dataset.parallaxGate = 'on';
     wake();
     dragStart = { x: event.clientX, y: event.clientY, base: { ...state } };
+    dragPointerId = event.pointerId;
     draft = { ...state };
     root.classList.add('is-dragging');
     // Capture is an optimisation, not the mechanism: if it fails the drag still
@@ -2766,6 +2820,9 @@ export function createTitleScene(options: TitleSceneOptions): TitleScene {
   };
 
   const onPointerMove = (event: PointerEvent): void => {
+    // A pointer still captured when the title is parked must not move its camera
+    // or leave a hover offset waiting for the next visit.
+    if (!active) return;
     wake();
     if (dragStart) {
       draft = clampParallax(
@@ -2782,12 +2839,16 @@ export function createTitleScene(options: TitleSceneOptions): TitleScene {
 
   const endDrag = (event: PointerEvent): void => {
     if (!dragStart) return;
+    // Only the pointer that started the drag can end it; a second finger's
+    // release is not the hand letting go of the picture.
+    if (dragPointerId !== null && event.pointerId !== dragPointerId) return;
     dragStart = null;
     // A release is a new resting place, not a spring-back: the drag is the
     // player's framing decision, so the scene stays where the hand left it.
     if (draft) rest = { ...draft };
     draft = null;
     root.classList.remove('is-dragging');
+    dragPointerId = null;
     wake();
     try {
       root.releasePointerCapture?.(event.pointerId);
@@ -2795,7 +2856,6 @@ export function createTitleScene(options: TitleSceneOptions): TitleScene {
   };
 
   let toggleEnabled = true;
-  let active = true;
   /** The last drag offsets written, so a still scene writes nothing. */
   /** The foreground's own eased offset: it settles with the hills, not before them. */
   let nearState: ParallaxPoint = { ...PARALLAX_ORIGIN };
@@ -2806,7 +2866,9 @@ export function createTitleScene(options: TitleSceneOptions): TitleScene {
     );
   };
   const onKeyDown = (event: KeyboardEvent): void => {
-    if (!toggleEnabled) return;
+    // Window-level, like the wheel: the title is still mounted and hidden behind
+    // the world, and its camera keys must not answer presses meant for the game.
+    if (!active || !toggleEnabled) return;
     if (inTextEntry(event.target)) return;
     if (event.key === 'h' || event.key === 'H') {
       event.preventDefault();
@@ -2850,7 +2912,9 @@ export function createTitleScene(options: TitleSceneOptions): TitleScene {
   };
 
   const onWheel = (event: WheelEvent): void => {
-    if (!toggleEnabled || inTextEntry(event.target)) return;
+    // The title answers the wheel only while it is the screen; a hidden title that
+    // still called preventDefault would eat the world's own camera wheel.
+    if (!active || !toggleEnabled || inTextEntry(event.target)) return;
     // A wheel over a panel that can scroll is that panel's; the title has nothing
     // to scroll, so anywhere else the wheel is the camera.
     const target = event.target as Element | null;
@@ -2872,6 +2936,12 @@ export function createTitleScene(options: TitleSceneOptions): TitleScene {
     root.addEventListener('pointermove', onPointerMove);
     root.addEventListener('pointerup', endDrag);
     root.addEventListener('pointercancel', endDrag);
+    // A capture can be taken away (the window loses focus, another element
+    // captures the pointer) without a pointerup. Without these the scene kept
+    // `is-dragging` - and its grabbing cursor - until the next press.
+    root.addEventListener('lostpointercapture', endDrag);
+    window.addEventListener('pointerup', endDrag);
+    window.addEventListener('pointercancel', endDrag);
     root.addEventListener('pointerleave', (event) => {
       if (!dragStart) {
         // The hover spring is gone, so the scene returns to its resting offset -
@@ -2976,22 +3046,11 @@ export function createTitleScene(options: TitleSceneOptions): TitleScene {
       // The cut's own colours, on the ground clock with the ramp they come from.
       vars.set('--pl-soil-lip', lerpHex(ground.soilEdge, ground.sun, 0.34));
       vars.set('--pl-soil-deep', lerpHex(ground.groundBody, '#000000', 0.38));
-      // Roots are pale bone by day, but a bone-white base *under the ground* at night
-      // is a light source of its own: it lit the trunk's foot brighter than the
-      // moon lit anything, and pulled the eye to the middle of the soil. After dark
-      // the root colour is pulled most of the way to the soil it lies in.
-      vars.set(
-        '--pl-root',
-        lerpHex(
-          lerpHex('#e8dac0', ground.groundTop, 0.16 + palette.star * 0.42),
-          ground.sun,
-          0.18 * (1 - palette.star * 0.8),
-        ),
-      );
-      vars.set('--pl-root-tip', lerpHex('#cbb99b', ground.groundTop, 0.42));
-      // The ink a root is drawn against: the darkest soil, so a pale root reads as
-      // lying in the dirt rather than printed on it.
-      vars.set('--pl-root-ink', lerpHex(ground.groundBody, '#000000', 0.55));
+      // The root plate is drawn inside the plant, and MainMenu's ground pass writes
+      // its root palette onto the plant element itself. Nothing in this scene layer
+      // inherits those words, so they are deliberately not written here: a second
+      // set on the scene hosts was the reason the plate stayed on its fallback bone
+      // colour at every hour while the soil around it changed.
       // Hill crests catch the light: the ridge colour pulled toward the sun, so
       // the two ridges separate at dusk and close up again at night.
       // Every one of these paints a hill band, so they take the ground's clock for
@@ -3025,6 +3084,13 @@ export function createTitleScene(options: TitleSceneOptions): TitleScene {
       skyVars.set('--pl-mill-body', lerpHex(ground.hillNear, '#000000', 0.28));
       skyVars.set('--pl-mill-roof', lerpHex(ground.hillNear, '#000000', 0.44));
       skyVars.set('--pl-mill-sail', lerpHex(palette.cloud, palette.sun, 0.24));
+      // The two weather bands that cover the world. Their tints are written from
+      // the ground's slow palette rather than the sky's: a full-world veil and the
+      // storm bank were two of the largest repaints a sky step caused, for a hue
+      // change too small to see at a 28-second step. The mood's opacity still
+      // follows the weather every render; only its tint is coarse.
+      skyVars.set('--pl-mood-colour', lerpHex('#26313a', ground.skyLow, 0.18));
+      skyVars.set('--pl-storm-colour', lerpHex('#232b31', ground.skyMid, 0.18));
       skyVars.set('--pl-bird', lerpHex(ground.hillFar, '#000000', 0.4));
       skyVars.set('--pl-bat', lerpHex(ground.hillFar, '#000000', 0.55));
       skyVars.set('--pl-rabbit', lerpHex(ground.hillNear, '#000000', 0.26));
@@ -3152,6 +3218,21 @@ export function createTitleScene(options: TitleSceneOptions): TitleScene {
       } else {
         cancelAnimationFrame(frame);
         frame = 0;
+        // Park the pointer work too: a drag or a pending push belongs to the
+        // screen that was showing, not to the one the player is now on.
+        cancelAnimationFrame(pushFrame);
+        pushFrame = 0;
+        clearPush();
+        pointer = null;
+        dragStart = null;
+        draft = null;
+        if (dragPointerId !== null) {
+          try {
+            root.releasePointerCapture(dragPointerId);
+          } catch {}
+          dragPointerId = null;
+        }
+        root.classList.remove('is-dragging');
       }
     },
 
@@ -3264,6 +3345,14 @@ export function createTitleScene(options: TitleSceneOptions): TitleScene {
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('wheel', onWheel);
       window.removeEventListener('pointermove', onPresenceMove);
+      window.removeEventListener('pointerup', endDrag);
+      window.removeEventListener('pointercancel', endDrag);
+      if (dragPointerId !== null) {
+        try {
+          root.releasePointerCapture(dragPointerId);
+        } catch {}
+        dragPointerId = null;
+      }
       cancelAnimationFrame(pushFrame);
       pushFrame = 0;
       root.remove();

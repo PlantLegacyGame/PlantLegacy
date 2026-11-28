@@ -111,7 +111,7 @@ owning task fills it.
 | `prestige` | T08B | stub | 0 |
 | `profiles` | T47 | stub | 0 |
 | `relics` | T18 | stub | 0 |
-| `render` | C01 | active | 137 |
+| `render` | C01 | active | 139 |
 | `reports` | T05 | active | 5 |
 | `reproduction` | T53 | stub | 0 |
 | `reputation` | T43 | stub | 0 |
@@ -132,7 +132,7 @@ owning task fills it.
 | `tutorial` | T33 | stub | 0 |
 | `ui` | C01 | active | 36 |
 | `uproot` | T06 | active | 19 |
-| `water` | T31 | active | 37 |
+| `water` | T31 | active | 39 |
 | `weather` | T07 | active | 18 |
 | `world` | T03 | active | 17 |
 

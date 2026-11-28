@@ -1,11 +1,11 @@
 /**
  * Water's numbers and colours, in one dependency-free module.
  *
- * These lived inside `waterField.ts`, which imports Three.js and the water
- * material shader. Anything that only needs the tuning — the config loader, and
- * its tests under the plain Node test runner — pulled the whole renderer in and
- * failed on Vite-only `.js` specifiers, so the type and its defaults moved here.
- * `waterField.ts` re-exports them so existing importers keep working.
+ * These once lived inside the renderer's water field module, which imports
+ * Three.js and the water material shader. Anything that only needs the tuning —
+ * the config loader, and its tests under the plain Node test runner — pulled the
+ * whole renderer in and failed on Vite-only `.js` specifiers, so the type and
+ * its defaults live here now.
  */
 import { isPaletteRoleName } from '@plant-legacy/shared/color';
 
@@ -38,12 +38,10 @@ export const DEFAULT_WATER_COLORS: WaterColors = {
 
 export interface WaterFieldTuning {
   /**
-   * Draw the water field at all: sheets, table, stream and sea.
+   * Draw standing water at all: the solved surface and its visible mesh.
    *
-   * Off while the current water is replaced. It lies as a flat sheet a couple of
-   * centimetres above the terrain, so it floods slopes and covers the ground at
-   * eye level instead of pooling in basins; a switch in config is the honest way
-   * to take it out of the world instead of leaving meshes hidden in the scene.
+   * Off removes the surface water while the hydrology keeps running, so the
+   * ground still darkens after rain and the world is simply dry.
    */
   enabled: boolean;
   /** Surface sheet resolution (vertices per side). */
@@ -99,29 +97,26 @@ export interface WaterFieldTuning {
    */
   drySinkM: number;
   /**
-   * Spacing of the ground samples the water's "am I underground?" test uses for
-   * the far terrain ring, in metres.
+   * Spacing of the coarse ground guard over the transition ring, in metres.
    *
-   * The ring is a mesh of ~8 m cells, so its surface is a linear interpolation
-   * of the field at that spacing, not the field itself. Testing water against the
-   * field alone let a sheet stand in front of a hill whose drawn triangles dipped
-   * below it. The renderer passes the ring's own cell size; this default is the
-   * documented spacing of the current ring.
+   * The ring's cells grow with radius; 64 m is its outer angular spacing, where
+   * the guard has to cover the most ground. A uniform 8 m grid over 20 km would
+   * be 25 million samples, and the fine disc grid already owns every metre the
+   * player can walk.
    */
   groundTestCellM: number;
   /**
-   * Half-extent of the coarse ground grid, in metres. The water table reaches
-   * further than the surface sheet, so the ground it is tested against has to
-   * too; beyond this the test is simply skipped.
+   * Half-extent of the coarse ground guard, in metres: the transition ring's
+   * outer radius. Beyond this the water test is simply skipped.
    */
   groundTestRadiusM: number;
   /**
-   * Half-extent of the fine ground grid, in metres: the detail patch's radius.
-   * Inside it the drawn ground is the fine mesh, so the water is tested against
-   * the field there and the coarse ring only takes over past its edge.
+   * Half-extent of the fine ground guard, in metres: the play disc's radius.
+   * Inside it the drawn ground is the 2 m disc, so the coarse ring only takes
+   * over past its edge.
    */
   groundTestFineRadiusM: number;
-  /** Cell size of that fine ground grid, in metres (the detail patch's own). */
+  /** Cell size of that fine ground guard, in metres (the play disc's own). */
   groundTestFineCellM: number;
   /**
    * Height of the planet-wide sea above the play area's tangent plane, metres.
@@ -162,10 +157,10 @@ export const DEFAULT_WATER_FIELD_TUNING: WaterFieldTuning = {
   nearDiscardM: 0.35,
   minVisibleDepthM: 0.02,
   drySinkM: 0.6,
-  groundTestCellM: 8,
-  groundTestRadiusM: 560,
-  groundTestFineRadiusM: 180,
-  groundTestFineCellM: 1.4,
+  groundTestCellM: 64,
+  groundTestRadiusM: 20_000,
+  groundTestFineRadiusM: 620,
+  groundTestFineCellM: 2,
   seaLevelM: 6,
   oceanEnabled: true,
   seaWaveStrength: 1.2,
@@ -236,10 +231,10 @@ export function parseWaterTuning(data: Record<string, unknown>): Partial<WaterFi
     nearDiscardM: num('water_near_discard_m', fallback.nearDiscardM ?? 0.35),
     minVisibleDepthM: num('water_min_visible_depth_m', fallback.minVisibleDepthM ?? 0.02),
     drySinkM: num('water_dry_sink_m', fallback.drySinkM ?? 0.6),
-    groundTestCellM: num('ground_test_cell_m', fallback.groundTestCellM ?? 8),
-    groundTestRadiusM: num('ground_test_radius_m', fallback.groundTestRadiusM ?? 560),
-    groundTestFineRadiusM: num('ground_test_fine_radius_m', fallback.groundTestFineRadiusM ?? 180),
-    groundTestFineCellM: num('ground_test_fine_cell_m', fallback.groundTestFineCellM ?? 1.4),
+    groundTestCellM: num('ground_test_cell_m', fallback.groundTestCellM ?? 64),
+    groundTestRadiusM: num('ground_test_radius_m', fallback.groundTestRadiusM ?? 20_000),
+    groundTestFineRadiusM: num('ground_test_fine_radius_m', fallback.groundTestFineRadiusM ?? 620),
+    groundTestFineCellM: num('ground_test_fine_cell_m', fallback.groundTestFineCellM ?? 2),
     puddleFadeStartM: num('puddle_fade_start_m', fallback.puddleFadeStartM ?? 160),
     puddleFadeEndM: num('puddle_fade_end_m', fallback.puddleFadeEndM ?? 260),
     tableFadeStartM: num('table_fade_start_m', fallback.tableFadeStartM ?? 320),

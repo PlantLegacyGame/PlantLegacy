@@ -35,27 +35,29 @@ describe('title roots', () => {
     assert.deepEqual(buildRoots(), SPINES);
   });
 
-  it('starts every root inside another one, so nothing is a detached stick', () => {
-    const taproot = SPINES.find((root) => root.id === 'taproot');
-    assert.ok(taproot);
+  it('starts every fork inside the lateral it divides from', () => {
     for (const spine of SPINES) {
-      if (spine === taproot) continue;
+      if (spine.gen !== 2) continue;
       const [x, y] = spine.p;
       const host = SPINES.filter((other) => other !== spine).find(
         (other) => distanceToSpine(other, x, y) <= sampleSpine(other, 0.5).half + 2,
       );
-      assert.ok(host, `root ${spine.id} starts in open dirt at (${x}, ${y})`);
+      assert.ok(host, `fork ${spine.id} starts in open dirt at (${x}, ${y})`);
+    }
+    // The six base roots are the plate's connection to the stem: they start in
+    // the collar, not on another root.
+    for (const spine of SPINES) {
+      if (spine.gen !== 1) continue;
+      assert.ok(Math.abs(spine.p[0] - 100) < 2.5, `${spine.id} does not leave the collar`);
+      assert.ok(spine.p[1] <= 14, `${spine.id} starts too far below the soil line`);
     }
   });
 
-  it('hides the start of every root inside its parent', () => {
-    const taproot = SPINES.find((root) => root.id === 'taproot');
-    assert.ok(taproot);
+  it('hides the start of every fork inside its parent', () => {
     for (const spine of SPINES) {
-      if (spine === taproot) continue;
-      // A feeder's parent is the lateral it forks from; a lateral's is the taproot.
-      const parentId =
-        spine.gen === 2 ? spine.id.replace(/^fork/, 'lateral').slice(0, -1) : 'taproot';
+      if (spine.gen !== 2) continue;
+      // A feeder's parent is the lateral it forks from.
+      const parentId = spine.id.replace(/^fork/, 'lateral').slice(0, -1);
       const parent = SPINES.find((other) => other.id === parentId);
       assert.ok(parent, `no parent for ${spine.id}`);
       // Where it leaves, and how wide the parent is there. A root wider than its
@@ -81,16 +83,21 @@ describe('title roots', () => {
   });
 
   it('joins the stem at the stem', () => {
-    const taproot = SPINES.find((root) => root.id === 'taproot');
-    assert.ok(taproot);
-    const start = sampleSpine(taproot, 0);
-    // The roots start on the soil line, and the plate starts *under the trunk*: the
-    // stem is 11 wide and the trunk flares to 26 at the line, so the crown belongs
-    // between the two. Exactly the stem's width made the centre of the plate the
-    // thinnest part of it; wider than the flare shows a step under the bark.
-    assert.ok(start.half * 2 > 11, 'the plate starts as a crown, not as a stem');
-    assert.ok(start.half * 2 <= 26, 'the crown cannot be wider than the trunk it holds');
-    assert.equal(start.y, 0);
+    const bases = SPINES.filter((root) => root.gen === 1);
+    assert.equal(bases.length, 6, 'three laterals leave each side of the collar');
+    // The plate starts *under the trunk*: the stem is 11 wide and the trunk's
+    // filled flare is 44 at the line, so the crown of base roots belongs between
+    // the two. The old single crown root was 24 wide; six overlapping bases now
+    // make the same collar without one vertical trunk under the tree.
+    let width = 0;
+    for (const base of bases) {
+      const start = sampleSpine(base, 0);
+      width += start.half * 2;
+      assert.ok(start.y <= 14, 'a base root has to leave near the soil line');
+      assert.ok(Math.abs(start.x - 100) < 2.5, 'a base root has to leave at the trunk');
+    }
+    assert.ok(width > 11, 'the plate starts as a collar, not as a stem');
+    assert.ok(width < 88, 'the collar cannot be wider than the trunk flare doubled');
   });
 
   it('reaches across the cut, and is not a mirror image', () => {
@@ -196,17 +203,25 @@ describe('title roots', () => {
     assert.deepEqual(truncateSpine(spine, 1), spine);
   });
 
-  it('makes the taproot the thickest root in the plate', () => {
-    const tap = SPINES.find((spine) => spine.id === 'taproot');
-    assert.ok(tap, 'the plate has a taproot');
-    // A tree's root crown is the thickest part of its root system and its laterals
-    // leave it thinner. In the scene the centre of the plate was the thinnest part,
-    // which is upside down: the taproot was 11 units wide with a taper exponent of
-    // 1.9 while the laterals were 4.2 and tapered at 0.85, so by mid-depth the stem
-    // of the plate was a hair and the roots spreading out were the widest thing in it.
-    for (const spine of SPINES) {
-      if (spine.id === 'taproot' || spine.gen > 1) continue;
-      assert.ok(tap.w > spine.w * 2, `taproot (${tap.w}) has to dominate ${spine.id} (${spine.w})`);
+  it('makes a root collar at the trunk, not a central taproot', () => {
+    // The old plate had one 24-unit taproot diving down the middle. A mature
+    // tree's support is a ring of structural roots leaving the collar, and that
+    // centre root read as a triangular tooth under the trunk at every age.
+    assert.equal(
+      SPINES.find((spine) => spine.id === 'taproot'),
+      undefined,
+      'a central taproot is not part of the plate',
+    );
+    const bases = SPINES.filter((spine) => spine.gen === 1);
+    assert.equal(bases.length, 6);
+    // No base root runs down the centre: each one leaves sideways, and the
+    // deepest point of the plate belongs to the laterals, not to a collar spine.
+    for (const base of bases) {
+      assert.ok(Math.abs(base.p[6] - 100) > 15, `${base.id} runs down the centre`);
+    }
+    const lowest = Math.max(...SPINES.map((spine) => sampleSpine(spine, 1).y));
+    for (const base of bases) {
+      assert.ok(sampleSpine(base, 1).y < lowest, `${base.id} is a central spine, not a base root`);
     }
   });
 

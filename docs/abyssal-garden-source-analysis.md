@@ -8,10 +8,11 @@
   (`PlantLegacy-Abyssal-Integration-Plan.md` and `abyssal-mechanisms.md`, both
   deleted 2026-11-16 and recoverable from git history); §9 records where they
   disagreed with the source.
-- **Part II (§11–§15)** is about this repository: what our client code actually
-  does today, measured against what Abyssal Garden (AG) does, and what to change
-  in what order. It is derived from `apps/client/src` and `config/*.json`, not
-  from the plan documents.
+- **Part II (§11–§15)** is a snapshot of this repository as of **2026-11-16**:
+  what the client did then, measured against what Abyssal Garden (AG) does, and
+  the renderer order worth taking at that point. It was derived from
+  `apps/client/src` and `config/*.json`, not from the plan documents. Part III
+  supersedes its ground and planet conclusions.
 
 **Why this file exists:** a second opinion that can be checked line by line.
 Where this analysis and an earlier description of AG disagree, this one cites
@@ -539,6 +540,10 @@ Part I answers "what did AG do". This part answers "what should we change", and
 every claim in it is checkable in this repository. It deliberately does not
 import any conclusion from the plan documents.
 
+**Snapshot, 2026-11-16.** The code paths and line numbers below are that
+build's. Part III records the planet direction after 2026-11-27; use
+[`planet-scale.md`](./planet-scale.md) for the current ground.
+
 ### 10.2 The six structural lessons
 
 These are the transferable claims, stated so they can be argued with. They are
@@ -624,9 +629,10 @@ Two steps:
 
 ### 12.2 There is no HDR and no post
 
-The client has no `toneMapping`, no `outputColorSpace`, and no composer: there
-are zero references to `EffectComposer`, `UnrealBloom` or a tone-mapping mode.
-The cinematic vignette and grain are a DOM overlay, not a GPU pass.
+The client sets `LinearToneMapping` so `toneMappingExposure` is not a no-op, but
+there is no HDR target and no composer: zero references to `EffectComposer` or
+`UnrealBloom`, and no post chain. The cinematic vignette and grain are a DOM
+overlay, not a GPU pass.
 
 AG's luminance comes from `rgba16float` + a Narkowicz ACES fit + Karis bloom
 (`mix(c, bloom, .06) + bloom*.03`) + a depth-aware shaft upsample. In our order
@@ -738,14 +744,17 @@ In particular, the earlier instruction **"do not start volumetric terrain
 first"** needs one qualification: do not start a **planet-wide** volumetric
 terrain. Start the sparse crust after the detail chain and the draw-call work,
 because a volume without streaming and collision would be the same static box
-the reference already is.
+the reference already is. The authored T56 arch is a local proof of the mesher
+and field, not the streamed crust; it does not move the planet-wide volume ahead
+of the chain.
 
 ## What the current direction keeps
 
 - A planet-wide surface field with a view-dependent chain from 2 m near the eye
 to roughly 1.5 km at the limb. Detail follows the camera, not player ownership.
 - A shallow editable crust: sparse 3D chunks for caves, arches and root
-tunnels, revisioned and re-meshed locally, with collision only near the player.
+  tunnels, revisioned and re-meshed locally, with collision only near the player.
+  (Not built: the T56 arch is a local proof; there are no streamed chunks yet.)
 - Water at four scales: global sea, coarse river/hydrology field, local
   shallow-water solve and cave aquifer. AG's per-frame water texture is a
   surface trick, not a planet water model.

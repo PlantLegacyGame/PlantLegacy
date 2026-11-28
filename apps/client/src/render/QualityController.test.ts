@@ -11,6 +11,8 @@ const CONFIG: QualityConfig = {
   targetFps: 60,
   fpsWarningThreshold: 0.85,
   resolutionFloor: 0.5,
+  emergencyResolutionFloor: 0.4,
+  qualityEmergencyAfterMs: 4000,
   maxPixelRatio: 1.5,
   // The shipped behaviour: no warm-up and no smoothing, so the existing tests
   // exercise the levers themselves.
@@ -74,11 +76,56 @@ test('draw distance bottoms out before the tier drops', () => {
   // 0.3 is already at/below the floor and the next lever must be draw distance.
   state.pixelScale = 0.3;
   state.drawDistanceScale = 0.5;
+  const before = effectivePixelRatio(state, CONFIG);
   spendSustained(state, { frameMs: 20, gpuMs: 20, triangles: 1000 }, CONFIG, 1000);
   assert.equal(state.tier, 1);
-  // A tier drop resets the finer levers so the cheaper tier is cheaper.
-  assert.equal(state.pixelScale, 1);
-  assert.equal(state.drawDistanceScale, 1);
+  // The drop preserves what was already spent. Resetting pixelScale to 1 made
+  // medium (1.25) draw more pixels than high had been drawing at the floor (0.5).
+  assert.ok(effectivePixelRatio(state, CONFIG) <= before + 1e-9);
+  assert.ok(state.pixelScale <= 0.41, `pixelScale ${state.pixelScale} gives pixels back`);
+  assert.equal(state.drawDistanceScale, 0.5);
+});
+
+test('the emergency floor is used only after sustained overload', () => {
+  const state = createQualityState(CONFIG);
+  let now = 1000;
+  // Three seconds over budget is not enough: the normal floor still applies.
+  for (let i = 0; i < 180; i += 1) {
+    nextQualityState(state, { frameMs: 30, gpuMs: 30, triangles: 1000 }, CONFIG, now);
+    now += 16.7;
+  }
+  assert.equal(state.floorRatio, CONFIG.resolutionFloor);
+
+  // Crossing the emergency window unlocks the lower floor.
+  for (let i = 0; i < 120; i += 1) {
+    nextQualityState(state, { frameMs: 30, gpuMs: 30, triangles: 1000 }, CONFIG, now);
+    now += 16.7;
+  }
+  assert.equal(state.floorRatio, CONFIG.emergencyResolutionFloor);
+  assert.ok(effectivePixelRatio(state, CONFIG) <= CONFIG.emergencyResolutionFloor + 1e-9);
+});
+
+test('the emergency floor is given back only after sustained headroom', () => {
+  const state = createQualityState(CONFIG);
+  state.floorRatio = CONFIG.emergencyResolutionFloor;
+  state.tier = 0;
+  state.pixelScale = CONFIG.emergencyResolutionFloor;
+  state.lastChangeMs = 0;
+  let now = 1000;
+
+  // Mid-band frames are not headroom: the emergency floor stays.
+  for (let i = 0; i < 300; i += 1) {
+    nextQualityState(state, { frameMs: 12, gpuMs: 12, triangles: 1000 }, CONFIG, now);
+    now += 16.7;
+  }
+  assert.equal(state.floorRatio, CONFIG.emergencyResolutionFloor);
+
+  // A full headroom window restores the normal floor.
+  for (let i = 0; i < 300; i += 1) {
+    nextQualityState(state, { frameMs: 5, gpuMs: 5, triangles: 1000 }, CONFIG, now);
+    now += 16.7;
+  }
+  assert.equal(state.floorRatio, CONFIG.resolutionFloor);
 });
 
 test('recovery waits for the hold window', () => {

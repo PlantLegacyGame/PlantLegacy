@@ -107,7 +107,7 @@ Defects live in `bug-inventory.md`, values in `config/`, task scope in `DESIGN.m
 
 | ID | Feature | Task | Code home | Status | Open issues | Next action | Pri |
 |---|---|---|---|---|---|---|---|
-| F50 | Planet sphere, 620 m terrain, exact colliders | T25/C03b | `environment/planetSurface.ts`, `ground.ts` | ◐ | D02: two authored regions have real volume (the arch, and the ground under the Root Sight aperture); the planet is still a skin | T56 volume (started) | P0 |
+| F50 | Planet sphere, 620 m play disc, 20 km ring and global globe | T25/C03b | `environment/planetSurface.ts`, `ground.ts` | ◐ | D02: the authored arch is the only real volume; the aperture body was retired 2026-11-27 when its collar moved into the cavity bowl; the planet is still a skin | T56 volume (started) | P0 |
 | F51 | Sparse soil edits, root tunnels, collapse | T25 | `terrain/terrainState.ts`, `TERRAIN_EDITS` | ◐ | Client height texture (3-A); D02 | — | P1 |
 | F52 | Spherical tile addressing and resource grid | T25 | `shared/world/sphericalGrid.ts` | ✔ | No dense planet grid (by design) | — | P3 |
 | F53 | Raymarched SDF organism renderer | C02 | `renderers/PlantRenderer.ts`, `plant/` | ✔ | — | — | P2 |
@@ -159,8 +159,9 @@ Defects live in `bug-inventory.md`, values in `config/`, task scope in `DESIGN.m
 
 ## Approved, not built
 
-T54 reactive fauna, T55 material simulation, T56 volumetric terrain, C10
-volumetric terrain and material rendering, T57 parametric terrain features, T58
+T54 reactive fauna, T55 material simulation, T56 volumetric terrain (one
+authored arch built; chunking/collision/persistence not built), C10 volumetric
+terrain and material rendering, T57 parametric terrain features, T58
 world-object streaming, T59 ecological succession, C11 fauna rendering, O04
 orchestration. Their specs are `DESIGN.md` Part 11; `config/` has 49 stub systems
 waiting for them (owned by `docs/tunables.md`).

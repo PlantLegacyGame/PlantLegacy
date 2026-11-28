@@ -14,7 +14,15 @@
  * put, because the plant is rooted.
  */
 
-import { GROWTH_POINTS, GROWTH_STAGES, growthProfile } from './growth.ts';
+import {
+  GROWTH_POINTS,
+  GROWTH_STAGES,
+  growthProfile,
+  growthStageAlong,
+  growthTransitionMs,
+  limbGrowAlong,
+  resumeGrowth,
+} from './growth.ts';
 import {
   bendArcPath,
   bendArcSegment,
@@ -48,15 +56,20 @@ export interface TitlePlantOptions {
   reducedMotion: boolean;
   /** Called for every accepted touch, with the running count. */
   onTouch?: (count: number) => void;
+  /** Called after each step of a growth run, so the pane can follow the height. */
+  onGrowthChange?: () => void;
+  /** Called once a growth run has reached the stage the care earned. */
+  onGrowthEnd?: () => void;
 }
 
 export interface TitlePlant {
   element: HTMLElement;
   /**
-   * How well looked after the plant is, 0..3: it fills out, grows two more leaves
-   * and hangs its roots deeper with each stage the player's care earns.
+   * How well looked after the plant is, 0..99. With `animate`, the stage is walked
+   * over a growth run so leaves open one at a time as the light climbs; without
+   * it (a load, a reset) the drawing is simply put at that stage.
    */
-  setGrowthStage(stage: number): void;
+  setGrowthStage(stage: number, animate?: boolean): void;
   /** Start or stop the sway loop (it is pointless while the plant is hidden). */
   setActive(active: boolean): void;
   /** React as if the given part was tapped, from an outside trigger. */
@@ -141,6 +154,100 @@ const STYLE = `
     .pl-title-plant__leaf { transition: filter 220ms ease; }
     .pl-title-plant__leaf:hover { filter: brightness(1.08); }
   }
+  /* Growth energy: a stream of light, not a bead. It gathers at the root crown
+     where care lands, climbs the stem as a bright front with a fading tail, and
+     runs out along each arm while that arm extends. Screen-blended and thin: it is
+     light on the wood, not a second drawing. */
+  .pl-title-plant__stream {
+    pointer-events: none;
+    opacity: 0;
+    mix-blend-mode: screen;
+    transition: opacity 180ms ease;
+  }
+  .pl-title-plant.is-streaming .pl-title-plant__stream { opacity: 1; }
+  .pl-title-plant__stream-glow {
+    fill: none;
+    stroke: var(--pl-energy-glow, #d7e98d);
+    stroke-width: 13;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    opacity: 0.24;
+  }
+  .pl-title-plant__stream-core {
+    fill: none;
+    stroke: var(--pl-energy-core, #fff6c9);
+    stroke-width: 2.3;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    opacity: 0.68;
+  }
+  .pl-title-plant__stream-head {
+    fill: none;
+    stroke: var(--pl-energy-core, #fff6c9);
+    stroke-width: 5.4;
+    stroke-linecap: round;
+    opacity: 0.98;
+  }
+  .pl-title-plant__stream-spark { fill: var(--pl-energy-core, #fff6c9); }
+  /* A seed cannot be climbed yet: the energy it has taken in sits inside the seed
+     as a small circle that grows with the stage and breathes while it waits. */
+  .pl-title-plant__seed-kernel {
+    opacity: 0;
+    mix-blend-mode: screen;
+    transform-box: fill-box;
+    transform-origin: 50% 50%;
+    animation: pl-seed-kernel 2.8s ease-in-out infinite;
+  }
+  .pl-title-plant[data-growth-tier='seed'] .pl-title-plant__seed-kernel { opacity: 1; }
+  @keyframes pl-seed-kernel {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.1); }
+  }
+  /* A second care while the first stream is still climbing adds its own short
+     stream from the root crown. It runs up to the live front and merges there;
+     it never restarts the main stream. */
+  .pl-title-plant__stream-echo {
+    pointer-events: none;
+    opacity: 0;
+    mix-blend-mode: screen;
+    transition: opacity 160ms ease;
+  }
+  .pl-title-plant.is-streaming .pl-title-plant__stream-echo.is-on { opacity: 0.78; }
+  /* The second comet runs beside the first rather than exactly on top of it, so a
+     second care reads as another stream instead of only brightening the trunk. */
+  .pl-title-plant__stream-echo[data-stream-echo='0'] { translate: 2.4px 0; }
+  .pl-title-plant__stream-echo[data-stream-echo='1'] { translate: -2.4px 0; }
+  .pl-title-plant__stream-echo .pl-title-plant__stream-glow {
+    stroke-width: 9;
+    opacity: 0.2;
+  }
+  .pl-title-plant__stream-echo .pl-title-plant__stream-core {
+    stroke-width: 2;
+    opacity: 0.8;
+  }
+  .pl-title-plant__stream-echo .pl-title-plant__stream-head {
+    stroke-width: 4;
+    opacity: 0.95;
+  }
+  .pl-title-plant__limb-stream {
+    pointer-events: none;
+    opacity: 0;
+    mix-blend-mode: screen;
+    transition: opacity 120ms ease;
+  }
+  .pl-title-plant.is-streaming .pl-title-plant__limb-stream.is-lit { opacity: 1; }
+  .pl-title-plant__limb-stream .pl-title-plant__stream-glow {
+    stroke-width: 11;
+    opacity: 0.3;
+  }
+  .pl-title-plant__limb-stream .pl-title-plant__stream-core {
+    stroke-width: 2.6;
+    opacity: 0.9;
+  }
+  .pl-title-plant__limb-stream .pl-title-plant__stream-head {
+    stroke-width: 4.6;
+    opacity: 1;
+  }
   .pl-title-plant.is-budding .pl-title-plant__bud { filter: brightness(1.12) saturate(1.1); }
   .pl-title-plant {
     /* Anchors the roots: they hang off this box, wherever it is placed. */
@@ -149,25 +256,32 @@ const STYLE = `
        holiday or seasonal variant is one variable swap. */
     --pl-stem: #5a902e;
     --pl-stem-dark: #46741f;
-    --pl-leaf-front: #7db83d;
-    --pl-leaf-light: #9ed95c;
-    --pl-leaf-back: #426520;
-    --pl-leaf-deep: #4c7a22;
-    --pl-leaf-shadow: #33501a;
+    --pl-leaf-front: #74a337;
+    --pl-leaf-light: #9ac75a;
+    --pl-leaf-back: #3c5a22;
+    /* The colour of the energy that climbs the stem and runs into the arms during
+       a growth run. */
+    --pl-energy-core: #fff6c9;
+    --pl-energy-glow: #d7e98d;
+    --pl-leaf-deep: #3f6420;
+    --pl-leaf-shadow: #2d451a;
     /* The crown's depth ladder (see depthFill): a tone between the brightest front
        leaf and the darkest back one, a lit version of it, and the cooled green of
        the farthest plane. Distance is not only darker - it is bluer and flatter. */
-    --pl-leaf-mid: #5c8c2c;
-    --pl-leaf-mid-lit: #86bd44;
-    --pl-leaf-far: #39543a;
-    --pl-leaf-tender: #a8c95c;
-    --pl-leaf-tender-lit: #d6e88a;
+    --pl-leaf-mid: #577f2b;
+    --pl-leaf-mid-lit: #7fae40;
+    --pl-leaf-far: #405a45;
+    --pl-leaf-tender: #a4c562;
+    --pl-leaf-tender-lit: #c8dc8b;
     /* Vein and edge ink, kept as variables so a variant can recolour the
        drawing without touching the markup. */
     --pl-leaf-vein: #2c4512;
     --pl-leaf-edge: #2c4512;
-    /* The ink under a root: what keeps pale roots from floating on dark earth.
-       Set from the palette by TitleScene; this is the fallback. */
+    /* The roots' warm bone and their contact ink. MainMenu's ground pass writes
+       these onto this element so the plate moves with the soil; these are the
+       pre-paint defaults. */
+    --pl-root: #d9c3a1;
+    --pl-root-tip: #b59a76;
     --pl-root-ink: #1c1208;
     display: block;
     /* Fluid to a phone, capped so it never outgrows the hero column: 232px was
@@ -236,10 +350,6 @@ const STYLE = `
        resized rather than growing. A long, soft ease lets a care step settle. */
     transition: transform 1100ms cubic-bezier(0.22, 1, 0.36, 1), filter 160ms ease;
   }
-  .pl-title-plant__rim {
-    transform: translateX(var(--pl-plant-rim-x, 0px));
-    transition: transform 240ms ease;
-  }
   /* No outline, no hover highlight, no reaction glow: the mascot is a drawing, not
      a control. It answers a touch with its own sway, and that is the whole reply.
      The scene's light filter stays on focus; clearing it made the plant flash back
@@ -261,8 +371,20 @@ const STYLE = `
      its own. It is also why the old root-depth custom property looked inert: a
      second scale on the same element is not additive, it is overwritten. */
   .pl-title-plant > svg.pl-title-plant__roots {
-    transform: scale(calc(var(--pl-care-scale, 1) * var(--pl-root-depth, 1)));
-    transform-origin: 50% 0%;
+    /* The plate is the same drawing at every care count. A reach-wide 1.8x/1.9x
+       plate was tried, but at the ancient stage it magnified the old central
+       taproot into a triangular monolith and made the static roots compete with
+       the menu's growable reaches. 1.3x/1.34x keeps the root crown under the
+       trunk and leaves the reaches as the roots that cross the cut.
+
+       The care scale is capped: a hundred stages of shoot growth multiplied the
+       plate by more than three, so the same fan became a hand across the whole
+       cut. A root crown grows with the trunk, not without limit; past this cap the
+       reaches are what carry the root spread. */
+    transform: scale(
+      calc(min(var(--pl-care-scale, 1), 1.4) * var(--pl-root-depth, 1) * 1.3),
+      calc(min(var(--pl-care-scale, 1), 1.4) * var(--pl-root-depth, 1) * 1.34)
+    );
     transition: transform 1250ms cubic-bezier(0.22, 1, 0.36, 1);
     /* Scaled up it is wider than the shoot's box, and an SVG clips to its own
        viewport: the outer roots were cut off at the sides. */
@@ -276,20 +398,13 @@ const STYLE = `
        scale, and the two halves read as two drawings stacked. Same width, same
        units, one plant. */
     left: 29.1667%;
-    /* Two pixels up: two SVG boxes meeting on a fractional pixel can leave a
-       hairline the colour of the sky between the stem and its foot. The crown is
-       the same bark on both sides of the joint, so the overlap is invisible. */
-    /* One pixel *below* the shoot's box, not one above it: the plate is the root end
-       of the trunk, and its topmost laterals were drawn right on the joint where a
-       fractional pixel could show them above the soil line - the shallow roots
-       reading as if they grew in the air. A pixel of overlap under the trunk is
-       invisible; a root over the horizon is not. */
-    top: calc(100% + 1px);
-    /* And clipped at the soil line: the plate is proud of the ground, so the overlap
-       above it and any root art drawn past the top of the box showed against the sky
-       and read as a root growing in the air. The sides and the bottom stay free so a
-       scaled plate is not cut off. */
-    clip-path: inset(4px -45% -45% -45%);
+    /* The crown starts on the soil line and goes down: no part of the plate is
+       above the ground. The trunk's flare is clipped at the same line, so the two
+       meet without a strip of soil between them and without the plate's flat top
+       showing as a shelf. */
+    top: 100%;
+    /* Keep the top edge; only the sides and bottom are free for a scaled plate. */
+    clip-path: inset(0 -45% -45% -45%);
     width: 41.6667%;
     height: auto;
     display: block;
@@ -327,8 +442,8 @@ const STYLE = `
   }
   @media (prefers-reduced-motion: reduce) {
     .pl-title-plant__sway { animation: none; }
-    .pl-title-plant__leaf-place,
-    .pl-title-plant__leaf-rest { transition: none; }
+    .pl-title-plant__leaf-shape,
+    .pl-title-plant__crown-leaf-shape { transition: none; }
   }
   /* The happy dance: a quick shake through the leaves, used when the plant is
      watered or fed. It lives on translate for the same reason the flutter does. */
@@ -343,19 +458,17 @@ const STYLE = `
      the script writes it once for the whole canopy and only the leaf's own angle
      per blade.
 
-     Both leaf kinds are covered: the mascot's leaves are placed groups, a crown's
-     are leaf-rest groups, and before this the rustle only ever reached the seven
-     mascot leaves - on a mature tree it moved nothing anyone could see. */
-  .pl-title-plant__leaf-place,
-  .pl-title-plant__leaf-rest {
-    /* Rotating a leaf has to pivot on the leaf, not on the drawing's origin: the
-       viewBox corner is where an SVG element's default origin sits. */
+     The transforms live on the leaf's shape, inside its placement group. Both the
+     size and the rustle turn about the blade's base, which is a point on the shape's
+     own un-transformed box: put them on the placed group and the rotate and scale
+     are resolved against a box the placement has already turned, which is how a
+     leaf lets go of its stem while it grows or moves. */
+  .pl-title-plant__leaf-shape,
+  .pl-title-plant__crown-leaf-shape {
     transform-box: fill-box;
-    /* The pivot is the leaf's base, which is where it meets its stalk. At 85 % the
-       rotation turned the blade about a point inside it and pulled the base off the
-       petiole mid-rustle - the leaves looked detached while they moved. */
     transform-origin: 50% 100%;
     transition:
+      scale 700ms ease,
       rotate var(--pl-leaf-spring, 900ms) cubic-bezier(0.22, 1.16, 0.32, 1),
       translate var(--pl-leaf-spring, 900ms) cubic-bezier(0.22, 1.16, 0.32, 1);
   }
@@ -430,16 +543,35 @@ const STYLE = `
      the left of where it was meant and the leaves come away from the tree. */
   .pl-title-plant__leaf,
   .pl-title-plant__bud-anchor { transform-box: view-box; }
-  /* A leaf opens rather than appears, and a limb grows rather than pops. */
-  .pl-title-plant__leaf,
-  .pl-title-plant__limb { transition: opacity 520ms ease; }
+  .pl-title-plant__bud {
+    scale: var(--pl-bud-scale, 1);
+    transition: scale 700ms ease;
+  }
+  /* A leaf opens rather than appears, and a limb grows rather than pops. Neither
+     gets an opacity fade: a branch that fades up from transparent reads as a
+     ghost, and a leaf that does it appears through the wood instead of opening
+     from its bud. The geometry carries the reveal. */
   /* Blade size against the plant's age, scaled about the point where the leaf meets
      its wood so nothing drifts off its own stem. */
-  .pl-title-plant__leaf-place {
-    transform-box: fill-box;
-    transform-origin: 50% 100%;
-    scale: var(--pl-leaf-scale, 1);
-    transition: scale 700ms ease;
+  .pl-title-plant__leaf-shape { scale: var(--pl-leaf-scale, 1); }
+  .pl-title-plant__crown-leaf-shape { scale: 1; }
+  /* During a growth run a closed leaf is a bud-sized copy of itself at the point
+     where it meets its stem or twig, and opening it grows the blade out from
+     there. The rule is scoped to the run so a loaded save is drawn at its stage at
+     once instead of opening every leaf again on the first frame. */
+  .pl-title-plant.is-growing .pl-title-plant__leaf-shape {
+    scale: calc(var(--pl-leaf-scale, 1) * var(--pl-leaf-open, 1));
+    transition:
+      scale 620ms cubic-bezier(0.22, 0.9, 0.3, 1.05),
+      rotate var(--pl-leaf-spring, 900ms) cubic-bezier(0.22, 1.16, 0.32, 1),
+      translate var(--pl-leaf-spring, 900ms) cubic-bezier(0.22, 1.16, 0.32, 1);
+  }
+  .pl-title-plant.is-growing .pl-title-plant__crown-leaf-shape {
+    scale: var(--pl-leaf-open, 1);
+    transition:
+      scale 620ms cubic-bezier(0.22, 0.9, 0.3, 1.05),
+      rotate var(--pl-leaf-spring, 900ms) cubic-bezier(0.22, 1.16, 0.32, 1),
+      translate var(--pl-leaf-spring, 900ms) cubic-bezier(0.22, 1.16, 0.32, 1);
   }
   /* Light through the canopy. The pool sits behind every leaf and the leaf
      overlays sit on them; both are screened and both are off until a disc is
@@ -464,8 +596,13 @@ const STYLE = `
   .pl-title-plant__leaf-through {
     /* 0.95, not 0.6: at the real grazing hours the transfer is a fifth to a
        quarter, and six tenths of that was below what the eye reads on a leaf. */
-    opacity: calc(var(--pl-leaf-through, 0) * 0.85);
-    mix-blend-mode: screen;
+    opacity: calc(var(--pl-leaf-through, 0) * 0.72);
+    /* No screen blend here. There is one of these overlays per leaf, and an
+       ancient crown carries more than a hundred and seventy of them inside a
+       filtered, swaying SVG. Measured at 1600x1000, the title held 60fps with a
+       16.8ms p95 once the blend mode was removed, against a 50ms p95 and visible
+       hitches with it. The pale fill at this opacity preserves the transmission
+       read without asking the compositor to blend every leaf separately. */
     pointer-events: none;
     transition: opacity 1200ms ease;
   }
@@ -497,7 +634,20 @@ const STYLE = `
   .pl-title-plant__roots {
     --pl-plant-bright: var(--pl-roots-bright, var(--pl-shoot-bright, 1));
   }
-  .pl-title-plant__shoot,
+  /* The shoot is the drawing that sways. Its filter is also the one that covers
+     the whole canopy, so anything in it that needs a colour-space conversion makes
+     the browser re-rasterise every leaf on every breeze frame. Measured at
+     1600x1287 on the ancient tree, the old brightness+saturate+sepia+hue-rotate
+     chain held p95 34 ms and a 30 fps average; dropping hue-rotate alone put the
+     same scene back to 60 fps and p95 17 ms. The leaves already carry their cool
+     far tones and their lit/shaded rungs, so the hue turn is the one part of the
+     grade this drawing can afford to lose. Bark and roots keep it: they do not
+     sway, and their filters measured free above. */
+  .pl-title-plant__shoot {
+    filter: brightness(var(--pl-plant-bright, 1))
+      saturate(var(--pl-plant-sat, var(--pl-shoot-sat, 1)))
+      sepia(var(--pl-plant-sepia, var(--pl-shoot-sepia, 0)));
+  }
   .pl-title-plant__trunk,
   .pl-title-plant__tree,
   .pl-title-plant__roots {
@@ -516,6 +666,10 @@ const STYLE = `
     --pl-bark: #6a4a2b;
     --pl-bark-dark: #432c15;
     --pl-bark-lit: #9a7244;
+    /* The root collar is wood, not stem: it keeps this brown even while the
+       young shoot's --pl-bark is still green. The flare fades into it at the
+       soil line, so a sapling's green trunk does not stop on brown roots. */
+    --pl-root-bark: #432c15;
   }
   /* Older foliage. A mature tree's leaves are deeper and less yellow than a
      seedling's, and the tender gradient was still a sprout's lime on a woody tree.
@@ -541,10 +695,17 @@ const STYLE = `
     transition: stroke-width 520ms ease;
   }
   .pl-title-plant__trunk-flare {
-    /* Close to the trunk's own width: a foot that is much wider than the tree it
-       holds up is a plank. */
-    stroke-width: calc(18 + 9 * var(--pl-trunk-w, 0));
-    transition: stroke-width 520ms ease;
+    /* A filled bell, not a constant-width stroke: it leaves the trunk just above
+       the soil and widens into the root plate, so the foot reads as a flare rather
+       than a bulb. Its width stays close to the root crown's at every age, so a
+       young crown cannot show as a wider shelf under a narrow flare. */
+    transform-box: view-box;
+    transform-origin: 100px 224px;
+    transform: scale(
+      calc(0.9 + 0.1 * var(--pl-trunk-w, 0)),
+      calc(0.72 + 0.28 * var(--pl-trunk-w, 0))
+    );
+    transition: transform 520ms ease;
   }
   /* No fixed widths at the last stage any more: the trunk's thickness is one
      continuous number from the growth ladder, so a hundred stages all differ. */
@@ -566,12 +727,9 @@ const STYLE = `
     transform-box: fill-box;
     transform-origin: 0% 50%;
     transform: scale(1, calc(0.55 + 0.45 * var(--pl-trunk-w, 0)));
-    opacity: var(--pl-trunk-opacity, 0);
-    transition: opacity 420ms ease, transform 520ms ease;
+    transition: transform 520ms ease;
   }
   .pl-title-plant__tree {
-    opacity: var(--pl-tree-opacity, 0);
-    transition: opacity 420ms ease;
     pointer-events: none;
   }
   .pl-title-plant.is-tree .pl-title-plant__tree { pointer-events: auto; }
@@ -614,20 +772,20 @@ const STYLE = `
   }
 
   /* Reduced motion: the sway is stopped in script (the plant's own options carry
-     it), and the drawing's transitions go quiet here. This block used to read
-     '.pl-title-plant, .pl-title-plant__rim transition: none;' - a selector where a
-     declaration belongs - and a browser drops the whole at-rule it sits in, so the
-     mascot had no reduced-motion handling at all. */
+     it), and the drawing's transitions go quiet here. The old rule mixed a selector
+     with a declaration, so a browser dropped the whole at-rule and the mascot had
+     no reduced-motion handling at all. */
   @media (prefers-reduced-motion: reduce) {
     .pl-title-plant__shoot,
     .pl-title-plant > svg.pl-title-plant__roots,
-    .pl-title-plant__rim,
     .pl-title-plant__trunk,
     .pl-title-plant__limb-wood,
     .pl-title-plant__tree,
     .pl-title-plant__seed,
-    .pl-title-plant__sprout {
+    .pl-title-plant__sprout,
+    .pl-title-plant__seed-kernel {
       transition: none;
+      animation: none;
     }
     /* The flutter and the dance are motion for their own sake: a reader who asked
        for less gets a still plant, and the sway is stopped in script as well. */
@@ -675,16 +833,13 @@ interface LeafSpec {
   stage: number;
   /** Tenderness: vein detail is dropped on the smallest leaf. */
   veins?: boolean;
-  /** Draw the sun-facing edge for the rim pass. */
-  rim?: boolean;
 }
 
 function leafPath(len: number, w: number): string {
-  // One scale for every leaf in the drawing, shoot and crown alike. A mature
-  // tree's foliage is small against its wood: big leaves on a long trunk is the
-  // shape of a sapling photographed close up, and that is what the plant read as
-  // however tall it grew. Shrinking the blade keeps every placement and vein and
-  // makes the trunk, limbs and branches carry the silhouette.
+  // One scale for every leaf in the drawing, shoot and crown alike. The old value
+  // was tuned for a small mascot; at the ancient tree's size it left the crown a
+  // scattering of green dots on bare arms. A larger blade keeps every placement and
+  // vein while letting the foliage carry as much of the silhouette as the wood.
   const l = len * LEAF_SIZE;
   const hw = w * LEAF_SIZE;
   return (
@@ -698,13 +853,12 @@ function leafPath(len: number, w: number): string {
 /**
  * How big a leaf is against the wood it hangs from. See leafPath.
  *
- * 0.66 was sized for a nine-stage plant whose trunk was never more than a third of
- * its height. The growth ladder ends in a tree whose crown is most of the picture,
- * and at that size the blades were specks on the branches - a leafy tree read as a
- * bare one with green dots. Bigger blades, and the trunk is still what carries the
- * silhouette.
+ * The growth ladder ends in a tree whose crown is most of the picture. At the old
+ * 0.62 the blades were specks on the branches - a leafy tree read as a bare one
+ * with green dots - so the crown gets proportionally more leaf without changing any
+ * of its authored placement.
  */
-const LEAF_SIZE = 0.8;
+const LEAF_SIZE = 0.74;
 /**
  * How much of their drawn angle the arms keep. 1 is the authored crown, which sat
  * out almost flat from the trunk; the arms climb a little more than that.
@@ -741,10 +895,12 @@ function leafVeins(len: number, w: number): string {
  *
  * A thin blade in front of the moon is not a wall: some of the light behind it
  * comes out the other side. The same outline is laid over the leaf in the
- * through-light colour and screened, so what a player sees is the leaf's own
- * drawing brightened by the light behind it rather than a second, painted leaf.
- * Its opacity is one variable (`--pl-leaf-through`), written by the menu's light
- * pass, so day, dusk, night, rain and snow all move it without touching the art.
+ * through-light colour at partial opacity, so what a player sees is the leaf's own
+ * drawing carrying a little of the light behind it rather than a second, painted
+ * leaf. It is deliberately not screen-blended: one blend layer per leaf was the
+ * title's frame hitch (see the stylesheet). Its opacity is one variable
+ * (`--pl-leaf-through`), written by the menu's light pass, so day, dusk, night,
+ * rain and snow all move it without touching the art.
  */
 function leafThrough(len: number, w: number): string {
   return (
@@ -754,11 +910,8 @@ function leafThrough(len: number, w: number): string {
 }
 
 function leaf(spec: LeafSpec, index: number): string {
-  // No rim pass. Every leaf carried a bright stroke down its sunward edge, and at
-  // title-scene size fourteen of them read as a set of pale outlines drawn over the
-  // foliage - the leaves looked lit from inside rather than lit by the sky. The
-  // leaf gradient already carries the light; the edge is ink and nothing else.
-  const rim = '';
+  // The leaf's own gradient carries the light; the edge is ink and nothing else.
+  // A rim pass was tried and read as pale outlines drawn over the foliage.
   // Light through the blade. A thin leaf in front of a moon is not opaque, so the
   // same shape is laid over it in the through-light colour and screened: the leaf
   // keeps its own drawing and gains a little of whatever is behind it.
@@ -781,11 +934,12 @@ function leaf(spec: LeafSpec, index: number): string {
   return (
     `<g class="pl-title-plant__leaf" data-part="leaf" data-leaf="${index}">` +
     `<g class="pl-title-plant__leaf-place" transform="translate(${spec.x} ${spec.y}) rotate(${spec.angle})"${spec.back ? ' opacity="0.92"' : ''}>` +
+    '<g class="pl-title-plant__leaf-shape">' +
     `<path d="${leafPath(spec.len, spec.w)}" fill="url(#${spec.fill})" ` +
     'stroke="var(--pl-leaf-edge, #2c4512)" stroke-opacity="0.16" stroke-width="1"/>' +
     through +
     veins +
-    rim +
+    '</g>' +
     '</g>' +
     '</g>'
   );
@@ -814,8 +968,8 @@ const LEAF_SPECS: LeafSpec[] = [
     x: 100,
     y: 184,
     angle: -30,
-    len: 68,
-    w: 21,
+    len: 54,
+    w: 17,
     fill: 'pl-leaf-back',
     back: true,
     veins: true,
@@ -825,8 +979,8 @@ const LEAF_SPECS: LeafSpec[] = [
     x: 97,
     y: 152,
     angle: 36,
-    len: 58,
-    w: 18,
+    len: 46,
+    w: 14,
     fill: 'pl-leaf-back',
     back: true,
     veins: true,
@@ -839,47 +993,43 @@ const LEAF_SPECS: LeafSpec[] = [
     x: 100,
     y: 198,
     angle: 46,
-    len: 78,
-    w: 24,
+    len: 58,
+    w: 18,
     fill: 'pl-leaf-a',
     veins: true,
-    rim: true,
     stage: 0,
   },
   {
     x: 99,
     y: 166,
     angle: -48,
-    len: 82,
-    w: 26,
+    len: 62,
+    w: 19,
     fill: 'pl-leaf-a',
     veins: true,
-    rim: true,
     stage: 0,
   },
   {
     x: 96,
     y: 112,
     angle: 52,
-    len: 74,
-    w: 22,
+    len: 56,
+    w: 17,
     fill: 'pl-leaf-b',
     veins: true,
-    rim: true,
     stage: 1.5,
   },
   {
     x: 94.5,
     y: 84,
     angle: -50,
-    len: 60,
-    w: 18,
+    len: 46,
+    w: 14,
     fill: 'pl-leaf-b',
     veins: true,
-    rim: true,
     stage: 3,
   },
-  { x: 93, y: 58, angle: 6, len: 42, w: 13, fill: 'pl-leaf-d', rim: true, stage: 4.5 },
+  { x: 93, y: 58, angle: 6, len: 32, w: 10, fill: 'pl-leaf-d', stage: 4.5 },
 ];
 
 /** The stem in the art, as a straight spine from the soil to the bud. */
@@ -899,9 +1049,33 @@ const STEM_TIP_Y = -8;
 /** Where the bud sits: on the tip, not on the old sapling's shoulder. */
 const BUD_Y = STEM_TIP_Y + 2;
 const STEM_LENGTH = Math.hypot(STEM_TIP_X - STEM_BASE_X, STEM_TIP_Y - STEM_BASE_Y);
+/** The two-leaf sprout's own short stem; it is a separate drawing above the soil. */
+const SPROUT_TIP_X = 98;
+const SPROUT_TIP_Y = 186;
+const SPROUT_LENGTH = Math.hypot(SPROUT_TIP_X - STEM_BASE_X, SPROUT_TIP_Y - STEM_BASE_Y);
 /** Where the stem points before it is touched: the art's own slight lean. */
 const STEM_REST_DEG =
   (Math.atan2(STEM_TIP_Y - STEM_BASE_Y, STEM_TIP_X - STEM_BASE_X) * 180) / Math.PI;
+/** The green a sapling's stem keeps until its wood hardens into bark. */
+const WOOD_GREEN: Rgb = [90, 144, 46];
+const WOOD_GREEN_DARK: Rgb = [70, 116, 31];
+const WOOD_GREEN_LIT: Rgb = [158, 217, 92];
+/** The bark of an adult tree, and the values the drawing already uses. */
+const WOOD_BARK: Rgb = [106, 74, 43];
+const WOOD_BARK_DARK: Rgb = [67, 44, 21];
+const WOOD_BARK_LIT: Rgb = [154, 114, 68];
+
+type Rgb = readonly [number, number, number];
+
+/** A colour between two fixed palette entries, for the green-to-bark age change. */
+const mixRgb = (from: Rgb, to: Rgb, tone: number): string => {
+  const t = Math.max(0, Math.min(1, tone));
+  const r = Math.round(from[0] + (to[0] - from[0]) * t);
+  const g = Math.round(from[1] + (to[1] - from[1]) * t);
+  const b = Math.round(from[2] + (to[2] - from[2]) * t);
+  return `rgb(${r}, ${g}, ${b})`;
+};
+
 /** Node nubs, at the points on the upright stem where a leaf leaves it. */
 const NUB_POINTS: ReadonlyArray<readonly [number, number]> = [
   [100, 198],
@@ -982,7 +1156,7 @@ function armLeaves(len: number, front: boolean, seed: number): LimbLeafSpec[] {
   // side by side and an arm changed tone in one step. Each blade now takes its own
   // rung of the ladder (see depthFill), so an arm has near and far leaves in it and
   // the canopy is one mass with layers instead of two planes of paint.
-  const shade = (step: number): string => depthFill(front, seed, step);
+  const shade = (at: number): string => depthFill(front, seed, at);
   // Small, deterministic variation per arm. A single template for every arm stamped
   // the same five blades in the same five places and the crown read as wallpaper;
   // these amounts are small enough that the silhouette stays balanced, and the two
@@ -993,23 +1167,39 @@ function armLeaves(len: number, front: boolean, seed: number): LimbLeafSpec[] {
   return [
     {
       at: 0.93 + 0.02 * (seed % 2),
-      angle: 54 + swing * 9,
-      len: len * 0.4 * reach,
-      w: len * 0.155,
-      fill: shade(0),
+      angle: -52 + swing * 9,
+      len: len * 0.22 * reach,
+      w: len * 0.085,
+      fill: shade(0.93),
       veins: true,
     },
-    { at: 0.99, angle: 118 - swing * 11, len: len * 0.26 * lift, w: len * 0.105, fill: shade(1) },
+    // The terminal blade points out along the wood, not down across it. At 118 it
+    // hung under the tip and left the rounded cap bare, which is the "stem with a
+    // leaf stuck on the side" the crown kept showing at full growth.
+    { at: 0.99, angle: 88 + swing * 6, len: len * 0.17 * lift, w: len * 0.06, fill: shade(0.99) },
     {
-      at: 0.78,
-      angle: 10 + swing * 7,
-      len: len * 0.36 * lift,
-      w: len * 0.135,
-      fill: shade(2),
+      at: 0.84,
+      angle: 34 - swing * 8,
+      len: len * 0.18 * reach,
+      w: len * 0.07,
+      fill: shade(0.84),
+    },
+    {
+      at: 0.72,
+      angle: -36 + swing * 7,
+      len: len * 0.2 * lift,
+      w: len * 0.078,
+      fill: shade(0.72),
       veins: seed % 2 === 0,
     },
-    { at: 0.6, angle: 44 + swing * 11, len: len * 0.3 * reach, w: len * 0.115, fill: shade(3) },
-    { at: 0.42, angle: 4 - swing * 9, len: len * 0.26 * lift, w: len * 0.1, fill: shade(4) },
+    {
+      at: 0.56,
+      angle: 46 + swing * 11,
+      len: len * 0.17 * reach,
+      w: len * 0.067,
+      fill: shade(0.56),
+    },
+    { at: 0.4, angle: -22 - swing * 9, len: len * 0.14 * lift, w: len * 0.055, fill: shade(0.4) },
   ];
 }
 
@@ -1021,23 +1211,44 @@ function armLeaves(len: number, front: boolean, seed: number): LimbLeafSpec[] {
  * away - so the far rungs are not just darker, they lean blue and flat, which is
  * what tells the eye it is looking through foliage at more foliage. The two ladders
  * meet at the mid tone, so no leaf is a different colour scheme from its neighbour.
+ *
+ * The ladders are ordered from the inside of the crown to its edge, and a blade
+ * takes the rung under its own attachment point rather than a hash of its seed.
+ * That is the whole colour set: inner foliage in shadow, mid foliage in the deep
+ * green, outer foliage in the front green, and only the outer edge in the light.
+ * The old hash could put a highlight leaf at the trunk and a shadow leaf on the
+ * tip of the same arm, which is what made the crown look randomly painted.
  */
-const FRONT_SHADES = ['pl-leaf-a', 'pl-leaf-b', 'pl-leaf-g', 'pl-leaf-b', 'pl-leaf-e'];
-const BACK_SHADES = ['pl-leaf-e', 'pl-leaf-c', 'pl-leaf-back', 'pl-leaf-e', 'pl-leaf-f'];
-function depthFill(front: boolean, seed: number, step: number): string {
+const FRONT_SHADES = ['pl-leaf-e', 'pl-leaf-a', 'pl-leaf-g', 'pl-leaf-b'];
+const BACK_SHADES = ['pl-leaf-f', 'pl-leaf-c', 'pl-leaf-e', 'pl-leaf-back'];
+function depthFill(front: boolean, seed: number, at: number): string {
   const shades = front ? FRONT_SHADES : BACK_SHADES;
-  const offset = (((seed * 7 + step * 3) % shades.length) + shades.length) % shades.length;
-  return shades[offset] ?? (front ? 'pl-leaf-a' : 'pl-leaf-back');
+  const u = Math.max(0, Math.min(1, at));
+  const rung = Math.min(shades.length - 1, Math.floor(u * shades.length));
+  // One rung of variation, never a jump across the ladder: two neighbouring arms
+  // should not be stamped with the same four tones in the same places.
+  const jitter = (seed * 5 + Math.round(u * 17)) % 5 === 0 ? 1 : 0;
+  return (
+    shades[Math.min(shades.length - 1, rung + jitter)] ?? (front ? 'pl-leaf-a' : 'pl-leaf-back')
+  );
 }
 
 const LIMBS: LimbSpec[] = CROWN_ARMS.flatMap((arm, index) =>
-  [-1, 1].map((side) => ({
-    t: arm.t,
-    angle: arm.angle * side,
-    len: arm.len,
-    front: arm.front,
-    leaves: armLeaves(arm.len, arm.front, index + (side === 1 ? 1 : 0)),
-  })),
+  [-1, 1].map((side) => {
+    // The authored crown is mirrored: an arm of exactly equal length and angle on
+    // each side of every tier. That is what turned the wood into a run of perfect
+    // V-shaped forks. A couple of degrees and a few per cent of reach, deterministic
+    // per arm, break the symmetry without changing the shape of the crown.
+    const bias = ((index * 13 + (side > 0 ? 5 : 0)) % 7) - 3;
+    const len = arm.len * (1 + bias * 0.012);
+    return {
+      t: arm.t + ((index + (side > 0 ? 2 : 0)) % 3) * 0.004 - 0.004,
+      angle: arm.angle * side + bias * 0.9,
+      len,
+      front: arm.front,
+      leaves: armLeaves(len, arm.front, index + (side === 1 ? 1 : 0)),
+    };
+  }),
 );
 
 /**
@@ -1074,7 +1285,11 @@ function limbOutline(len: number, w: number): string {
     near.push(`${(x + nx * half).toFixed(1)} ${(y + ny * half).toFixed(1)}`);
     far.push(`${(x - nx * half).toFixed(1)} ${(y - ny * half).toFixed(1)}`);
   }
-  return `M${near.join(' L')} L${far.reverse().join(' L')} Z`;
+  // Round the tip instead of joining the two edges with a straight cut. The cap
+  // is a quadratic through the tip's own end width, so every arm ends in wood that
+  // closes like a stem rather than in a sawn-off rectangle.
+  const farSide = [...far].reverse();
+  return `M${near.join(' L')} Q${(len + w * 0.22).toFixed(1)} 0 ${farSide.join(' L')} Z`;
 }
 
 /** The height of that arc, in limb-local units, at a fraction of its length. */
@@ -1093,16 +1308,30 @@ function limbMarkup(limb: LimbSpec, index: number): string {
   // One width for the whole limb, from the height it leaves the trunk at (see
   // limbBaseWidth): the authored `w` could not keep both sides at the same height
   // the same thickness, and the crown read as sticks of random diameter.
-  const baseW = limbBaseWidth(limb.t, limb.len);
-  const dressing: (LimbLeafSpec & { ring?: number })[] = [0.32, 0.54, 0.74].map((at, i) => ({
-    at,
-    ring: i,
-    angle: i % 2 === 0 ? 44 : -36,
-    len: 17 + baseW * 1.2,
-    w: 6.5 + baseW * 0.38,
-    fill: depthFill(limb.front === true, index, i),
-    veins: i === 1,
-  }));
+  //
+  // The group is scaled by `crownLength` (1.58 at ancient), so using the table's
+  // width directly made every scaffold limb as thick as the trunk it left. The
+  // crown then read as a run of heavy V-shaped forks even after the chevron scars
+  // were removed. Dividing by a fixed reach factor keeps the wood a branch: it
+  // still thickens as the plant ages, because the group scale and care scale both
+  // grow, but it no longer matches the trunk's diameter.
+  const baseW = limbBaseWidth(limb.t, limb.len) / 1.4;
+  // Nine along the arm, not six. At the old crown length six left a visible gap
+  // between clusters on the lower arms; the shorter blades in the gaps keep the
+  // arm covered without turning it into a solid green tube.
+  const dressing: LimbLeafSpec[] = [0.12, 0.2, 0.28, 0.44, 0.52, 0.6, 0.74, 0.8, 0.88].map(
+    (at, i) => {
+      const small = i % 3 === 1;
+      return {
+        at,
+        angle: i % 2 === 0 ? 44 : -36,
+        len: small ? 9 + baseW * 0.35 : 12 + baseW * 0.55,
+        w: small ? 4 + baseW * 0.12 : 5 + baseW * 0.2,
+        fill: depthFill(limb.front === true, index, at),
+        veins: i === 1,
+      };
+    },
+  );
   const leaves = [...dressing, ...limb.leaves]
     .sort((a, b) => a.at - b.at)
     .map((spec, leafIndex) => {
@@ -1155,20 +1384,18 @@ function limbMarkup(limb: LimbSpec, index: number): string {
           'stroke-linecap="round"/>'
         : '';
       return (
-        '<g class="pl-title-plant__leaf pl-title-plant__leaf--crown" data-part="leaf" data-leaf="99"' +
-        // Ring 0 is nearest the trunk; the crown fills out with age by keeping the
-        // outer rings. Authored tip leaves carry no ring and are never dropped.
-        ('ring' in spec ? ` data-ring="${spec.ring}"` : '') +
-        '>' +
+        `<g class="pl-title-plant__leaf pl-title-plant__leaf--crown" data-part="leaf" data-leaf="99" data-at="${spec.at}">` +
         // A crown leaf is placed once and never animated on its own: sixteen
         // SVG groups each running their own keyframes is sixteen style
         // recalculations a frame, and the whole crown breathes as one instead
         // (see pl-crown-breeze below).
         `<g class="pl-title-plant__leaf-rest" transform="translate(${bx.toFixed(1)} ${by.toFixed(1)}) rotate(${angle.toFixed(1)})">` +
+        '<g class="pl-title-plant__crown-leaf-shape">' +
         `<path class="pl-title-plant__blade" data-shade="${spec.fill.replace('pl-leaf-', '')}" d="${leafPath(spec.len, spec.w)}" fill="url(#${spec.fill})" ` +
         'stroke="var(--pl-leaf-edge, #2c4512)" stroke-opacity="0.16" stroke-width="1"/>' +
         leafThrough(spec.len, spec.w) +
         veins +
+        '</g>' +
         '</g>' +
         petiole +
         collar +
@@ -1176,14 +1403,38 @@ function limbMarkup(limb: LimbSpec, index: number): string {
       );
     })
     .join('');
+  // The arm's own light. It is drawn in the limb's local frame, so the group's
+  // rotation, reach and growth clip all apply without a second set of geometry.
+  const stream =
+    `<g class="pl-title-plant__limb-stream" data-limb-stream="${index}" aria-hidden="true">` +
+    '<path class="pl-title-plant__stream-glow" d=""/>' +
+    '<path class="pl-title-plant__stream-core" d=""/>' +
+    '<path class="pl-title-plant__stream-head" d=""/>' +
+    Array.from({ length: 7 }, () => '<circle class="pl-title-plant__stream-spark" r="0"/>').join(
+      '',
+    ) +
+    '</g>';
+  // A socket at the trunk end: without it a limb meets the trunk as two flat
+  // shapes crossing, and every branch reads as a stick pushed through a hole. The
+  // small dark flare grows out of the limb's own base and is painted under the
+  // wood, so it welds the branch into the trunk at every growth stage.
+  const socket =
+    `<circle class="pl-title-plant__limb-socket" cx="0" cy="0" r="${(baseW * 0.52).toFixed(2)}" ` +
+    // Same bark as the limb, no rim. The old flare was a wide chevron with a dark
+    // edge, and at title size every arm carried a V-shaped scar where it met the
+    // trunk. A round weld joins the wood without drawing a second silhouette.
+    'fill="var(--pl-bark, #6a4a2b)" stroke="none"/>';
   return (
     `<g class="pl-title-plant__limb" data-limb="${index}" data-side="${limb.angle < 0 ? 'left' : 'right'}">` +
-    // The wood stops just short of the last leaf's tip: a rounded end poking out past
-    // the foliage is a bare stick in a crown that is meant to be leafy.
-    `<path class="pl-title-plant__limb-wood" d="${limbOutline(limb.len * 0.95, baseW)}" ` +
+    // The wood runs to the last leaf's stalk. It used to stop at 95%, which left
+    // the tip leaf's petiole rooted in empty air; now the rounded cap is the end of
+    // the wood and the terminal blade sits on it.
+    socket +
+    `<path class="pl-title-plant__limb-wood" d="${limbOutline(limb.len * 0.99, baseW)}" ` +
     'fill="var(--pl-bark, #6a4a2b)" stroke="none" ' +
     `style="--pl-limb-w:${baseW.toFixed(2)}"/>` +
     leaves +
+    stream +
     '</g>'
   );
 }
@@ -1194,13 +1445,10 @@ function limbMarkup(limb: LimbSpec, index: number): string {
  * big it starts: it reserves the sky for the fully grown tree and divides the
  * available height by this, so the tallest possible plant is one that fits.
  */
-// The growth ladder's tallest stage (title/growth.ts) is the adult-to-ancient climb
-// from 1 to 1.32; this reserve is that plus headroom. It used to be 2.2, from when
-// care could scale a ten-stage drawing without limit - which made the pane fit
-// reserve a plant two and a half times taller than any the ladder can draw, so the
-// tree was drawn small in a sky with room for a much larger one.
-export const PLANT_GROWTH_CEILING = 0.45;
-export const PLANT_MAX_SCALE = 1 + PLANT_GROWTH_CEILING;
+// The ladder's own tallest stage, read rather than copied: the pane fit must reserve
+// the exact size care can draw. It used to be a hand-typed 2.2 while the ladder ended
+// at 1.7, so the tree was drawn small in a sky with room for a much larger one.
+export const PLANT_MAX_SCALE = growthProfile(GROWTH_STAGES - 1).scale;
 /** Where the strain creases cross the stem, as fractions of its length. */
 const CREASE_TS: ReadonlyArray<number> = [0.26, 0.4, 0.54];
 /**
@@ -1305,6 +1553,11 @@ function plantMarkup(): string {
           <stop offset="0" style="stop-color: var(--pl-stem-dark, #46741f)"/>
           <stop offset="1" style="stop-color: var(--pl-stem, #5a902e)"/>
         </linearGradient>
+        <radialGradient id="pl-energy-pool" cx="0.5" cy="0.5" r="0.5">
+          <stop offset="0" stop-color="var(--pl-energy-core, #fff6c9)" stop-opacity="0.9"/>
+          <stop offset="0.4" stop-color="var(--pl-energy-glow, #d7e98d)" stop-opacity="0.42"/>
+          <stop offset="1" stop-color="var(--pl-energy-glow, #d7e98d)" stop-opacity="0"/>
+        </radialGradient>
         <!-- The light behind the crown. A moon or a low sun sits behind the tree
              and the gaps between the leaves hold a little of it; this is that
              light, not a beam drawn from the disc to the tree. -->
@@ -1313,7 +1566,24 @@ function plantMarkup(): string {
           <stop offset="0.55" style="stop-color: var(--pl-leaf-through-colour, #dfe9ff); stop-opacity: 0.24"/>
           <stop offset="1" style="stop-color: var(--pl-leaf-through-colour, #dfe9ff); stop-opacity: 0"/>
         </radialGradient>
+        {/* The trunk fades into the plate's bark at the soil line. The flare used to
+            stop in the trunk's lighter wood, which drew a horizontal seam exactly
+            where it met the darker root crown. */}
+        <linearGradient id="pl-trunk-flare-fill" gradientUnits="userSpaceOnUse"
+                        x1="100" y1="201" x2="100" y2="224">
+          <stop offset="0" style="stop-color: var(--pl-bark, #6a4a2b)"/>
+          <stop offset="0.62" style="stop-color: var(--pl-bark, #6a4a2b)"/>
+          <stop offset="0.86" style="stop-color: var(--pl-root-bark, #432c15)"/>
+          <stop offset="1" style="stop-color: var(--pl-root-bark, #432c15)"/>
+        </linearGradient>
+        {/* A full bend can carry a low leaf under the soil line. The clip is the
+            floor at y=224 (the foot); the sides and headroom stay open so the bend
+            still uses the drawing's gutters. */}
+        <clipPath id="pl-shoot-floor" clipPathUnits="userSpaceOnUse">
+          <rect x="-1000" y="-1000" width="2000" height="1224"/>
+        </clipPath>
       </defs>
+      <g clip-path="url(#pl-shoot-floor)">
       <!-- Behind every leaf: the through-light pool, faded in only when a disc is
            actually behind the canopy (title/leafThroughLight). -->
       <g class="pl-title-plant__backlight" aria-hidden="true">
@@ -1328,11 +1598,15 @@ function plantMarkup(): string {
       </g>
       <!-- Stage 0: a seed half out of the soil, with a split in its coat. -->
       <g class="pl-title-plant__seed">
-        <ellipse cx="100" cy="224" rx="28" ry="6" fill="rgba(0, 0, 0, 0.22)"/>
         <path d="M76 221 C74 205 88 192 100 197 C113 202 114 216 102 221 C93 225 82 225 76 221 Z"
               fill="#a3814c" stroke="#3b2a12" stroke-opacity="0.45" stroke-width="1.8"/>
         <path d="M86 213 C92 205 101 201 108 203" fill="none" stroke="#f0dcae" stroke-width="2.4"
               stroke-linecap="round" opacity="0.5"/>
+        <!-- The light the seed has taken in. Its radius is written from the stage,
+             so care fills the seed rather than sending a beam out of it. -->
+        <circle class="pl-title-plant__seed-kernel" cx="100" cy="211" r="2.4"
+                fill="url(#pl-energy-pool)" stroke="var(--pl-energy-core, #fff6c9)"
+                stroke-width="0.9" stroke-opacity="0.7"/>
       </g>
       <!-- Stage 1: two leaves on a short stem. -->
       <g class="pl-title-plant__sprout">
@@ -1353,34 +1627,17 @@ function plantMarkup(): string {
           <g class="pl-title-plant__stem" data-part="stem">
             <path class="pl-title-plant__stem-body" d="M100 224 L94 -8" stroke="url(#pl-stem)" stroke-width="11"
                   fill="none" stroke-linecap="round"/>
-            <!-- The stem's foot, flat in bark. The underground half continues from
-                 exactly here, and matching a gradient's end colour at a joint is a
-                 guess - a flat colour is not. Bark, not stem green: the roots below
-                 this line are wood, and a green collar between them and the trunk
-                 was the one colour in the drawing that belonged to nothing. -->
-            <!-- The foot used to be a flat brown rectangle here, drawn once and never
-                 redrawn from the bend: as soon as the trunk was pulled over, the
-                 rectangle stayed standing where the trunk had been, a brown blot on
-                 the soil. The trunk's own base and the flare below cover the joint,
-                 and both follow the bend. -->
-            <!-- A tree, not a seedling: the bottom of the same spine is bark, wider
-                 than the green stem above it, with a flare where it meets the soil.
-                 Both are redrawn from the bend, so the trunk and the stem stay one
-                 object however far the plant is pulled. Drawn over the foot, which
-                 is the seam under the soil line. -->
+            <!-- The bottom of the same spine is bark, not stem green, and it
+                 flares where it meets the root plate. The flare stays rooted
+                 while the trunk above bends, so the joint is always covered. -->
             <g class="pl-title-plant__trunk">
-              <!-- The flare is a foot, not a second trunk: as a full-length bar it
-                   was a dark rectangle standing behind the whole tree, which is
-                   what read as a brown square. Short, rounded, and hidden by the
-                   trunk above it. -->
-              <!-- A foot, drawn in the trunk's own wood and only a little wider than it.
-                   It used to be a 26-unit stroke of the *dark* bark running 18 units up
-                   the trunk, which read as a brown capsule standing behind the tree -
-                   and at the mature width it stuck out on both sides like a pill. Same
-                   colour as the trunk, shorter, and barely wider: the trunk simply
-                   thickens where it meets the ground. -->
-              <path class="pl-title-plant__trunk-flare" d="M100 224 L98.5 210" stroke="var(--pl-bark, #6a4a2b)"
-                    stroke-width="22" fill="none" stroke-linecap="round"/>
+              <!-- A filled bell from y=201 to the soil line, not a constant-width
+                   stroke: a stroke cannot taper, and its round cap made the bulb.
+                   The bell widens into the root crown and covers the trunk's
+                   rounded bottom cap, so the two are one silhouette. -->
+              <path class="pl-title-plant__trunk-flare"
+                    d="M78 224 C80 216 84 207 89 201 C95 199 104 200 110 202 C115 208 120 216 122 224 Z"
+                    fill="url(#pl-trunk-flare-fill)"/>
               <!-- Rounded head, and it stops under the crown: a butt cap at the top
                    of the box put a square-cut brown bar in the leaves. -->
               <path class="pl-title-plant__trunk-body" d="M100 224 L94 -6" stroke="var(--pl-bark, #6a4a2b)"
@@ -1436,6 +1693,34 @@ function plantMarkup(): string {
         </g>
         </g>
       </g>
+      <!-- The growth light is outside the leaves so it can be seen while the plant
+           is still a seed or a sprout, when the main drawing is hidden. It paints
+           over the whole plant: this is energy moving through it, not a second
+           branch. -->
+      <g class="pl-title-plant__stream" aria-hidden="true">
+        <path class="pl-title-plant__stream-glow" d=""/>
+        <path class="pl-title-plant__stream-core" d=""/>
+        <path class="pl-title-plant__stream-head" d=""/>
+        ${Array.from(
+          { length: 16 },
+          () => '<circle class="pl-title-plant__stream-spark" r="0"/>',
+        ).join('')}
+      </g>
+      ${[0, 1]
+        .map(
+          (slot) =>
+            `<g class="pl-title-plant__stream-echo" data-stream-echo="${slot}" aria-hidden="true">` +
+            '<path class="pl-title-plant__stream-glow" d=""/>' +
+            '<path class="pl-title-plant__stream-core" d=""/>' +
+            '<path class="pl-title-plant__stream-head" d=""/>' +
+            Array.from(
+              { length: 7 },
+              () => '<circle class="pl-title-plant__stream-spark" r="0"/>',
+            ).join('') +
+            '</g>',
+        )
+        .join('')}
+      </g>
     </svg>`;
 }
 
@@ -1487,13 +1772,17 @@ export function createTitlePlant(options: TitlePlantOptions): TitlePlant {
   // only reveals leaves, so this list is the whole canopy for the life of the plant.
   const leafPlaces = [
     ...element.querySelectorAll<SVGGElement>(
-      '.pl-title-plant__leaf-place, .pl-title-plant__leaf-rest',
+      '.pl-title-plant__leaf-shape, .pl-title-plant__crown-leaf-shape',
     ),
   ];
-  const trunkPaths = [...element.querySelectorAll<SVGPathElement>('.pl-title-plant__trunk > path')];
+  // The flare is a filled shape authored in the drawing, not a stroked arc: the
+  // bend loop rewrites only the spine paths, or it would flatten the bell back to
+  // a line every frame.
+  const trunkPaths = [
+    ...element.querySelectorAll<SVGPathElement>('.pl-title-plant__trunk > path'),
+  ].filter((path) => !path.classList.contains('pl-title-plant__trunk-flare'));
   const litPaths = [...element.querySelectorAll<SVGPathElement>('.pl-title-plant__trunk-lit')];
   const limbEls = [...element.querySelectorAll<SVGGElement>('.pl-title-plant__limb')];
-  const crownLeaves = [...element.querySelectorAll<HTMLElement>('.pl-title-plant__leaf--crown')];
   // The crown, in growth order rather than paint order: a tree grows its lowest,
   // oldest limb first, and the reveal has to follow that or the crown fills in from
   // the wrong end.
@@ -1511,6 +1800,60 @@ export function createTitlePlant(options: TitlePlantOptions): TitlePlant {
   const roots = element.querySelector<SVGSVGElement>('.pl-title-plant__roots');
   // The soil is underground, and it is a part of the drawing like any other.
   roots?.setAttribute('data-part', 'root');
+  // The shoot's own wood colour. It is set on the shoot, not the mascot, so the
+  // roots keep their older bark while a sapling's stem is still green.
+  const shoot = element.querySelector<SVGSVGElement>('.pl-title-plant__shoot');
+  const woodVarState = new Map<string, string>();
+  const setWoodVar = (name: string, value: string): void => {
+    if (woodVarState.get(name) === value) return;
+    woodVarState.set(name, value);
+    shoot?.style.setProperty(name, value);
+  };
+  const stream = element.querySelector<SVGGElement>('.pl-title-plant__stream');
+  const seedKernel = element.querySelector<SVGCircleElement>('.pl-title-plant__seed-kernel');
+  const streamGlow = stream?.querySelector<SVGPathElement>('.pl-title-plant__stream-glow');
+  const streamCore = stream?.querySelector<SVGPathElement>('.pl-title-plant__stream-core');
+  const streamHead = stream?.querySelector<SVGPathElement>('.pl-title-plant__stream-head');
+  const streamSparks = [
+    ...(stream?.querySelectorAll<SVGCircleElement>('.pl-title-plant__stream-spark') ?? []),
+  ];
+  // Two spare comets, so two quick care actions can each add a stream before the
+  // first has merged into the climbing front.
+  const streamEchoes = [
+    ...element.querySelectorAll<SVGGElement>('.pl-title-plant__stream-echo'),
+  ].map((group) => ({
+    group,
+    glow: group.querySelector<SVGPathElement>('.pl-title-plant__stream-glow'),
+    core: group.querySelector<SVGPathElement>('.pl-title-plant__stream-core'),
+    head: group.querySelector<SVGPathElement>('.pl-title-plant__stream-head'),
+    sparks: [...group.querySelectorAll<SVGCircleElement>('.pl-title-plant__stream-spark')],
+    active: false,
+    startMs: 0,
+    target: 0,
+    last: '',
+  }));
+  // Each arm carries its own light in its own frame. The growth clip on the limb
+  // group then keeps the light on the wood that has actually grown, so the stream
+  // and the branch tip cannot disagree about where the arm ends.
+  const limbStreams = [
+    ...element.querySelectorAll<SVGGElement>('.pl-title-plant__limb-stream'),
+  ].flatMap((group) => {
+    const index = Number(group.dataset.limbStream);
+    const limb = LIMBS[index];
+    if (!limb) return [];
+    return [
+      {
+        group,
+        index,
+        limb,
+        glow: group.querySelector<SVGPathElement>('.pl-title-plant__stream-glow'),
+        core: group.querySelector<SVGPathElement>('.pl-title-plant__stream-core'),
+        head: group.querySelector<SVGPathElement>('.pl-title-plant__stream-head'),
+        sparks: [...group.querySelectorAll<SVGCircleElement>('.pl-title-plant__stream-spark')],
+        last: '',
+      },
+    ];
+  });
 
   let motion: PlantMotionState = createPlantMotion();
   let raf = 0;
@@ -1519,6 +1862,26 @@ export function createTitlePlant(options: TitlePlantOptions): TitlePlant {
   let tap: { response: TapResponse; startMs: number; index: number } | null = null;
   /** A bend held by the pointer, in degrees. */
   let bendDeg = 0;
+  /** How far the stream of light has climbed the stem in the current run, 0..1. */
+  let streamT = 0;
+  /** Whether a growth run owns the light. */
+  let streamActive = false;
+  /**
+   * How much of the stem the current drawing has actually built. The light stops
+   * at the highest open leaf or living branch, never at the artwork's full tip.
+   */
+  let streamLimit = 1;
+  /** The stem geometry last written, so a still stream does not rebuild its paths. */
+  let streamLast = '';
+  /**
+   * How much of each arm is actually drawn. During a run this follows the light
+   * rather than the stage directly: an arm starts when the stream reaches its
+   * socket and reaches its stage shape before the light leaves it. The array is
+   * always the current drawing, not just the target.
+   */
+  const limbGrowth: number[] = LIMBS.map(() => 0);
+  /** Where each arm was when the run started, so a retarget never shrinks wood. */
+  let runLimbFrom: number[] = LIMBS.map(() => 0);
   /** How far each arm reaches, and how far it swings from the trunk, at this stage. */
   let crownLength = 1;
   let crownSpread = 0;
@@ -1657,26 +2020,22 @@ export function createTitlePlant(options: TitlePlantOptions): TitlePlant {
     }
 
     // The trunk is the bottom of the same arc as the stem, in bark and one width
-    // wider, so the woody base and the green top can never drift apart. The flare
-    // is a short, wider stroke where the trunk meets the soil: a tree stands on a
-    // root plate, not on a cut cylinder.
+    // wider, so the woody base and the green top can never drift apart. The filled
+    // flare below it is static: a root crown is anchored in the soil and does not
+    // bend with the trunk, while the trunk's bottom cap stays inside its bell.
     for (const path of trunkPaths) {
       const cls = path.getAttribute('class') ?? '';
-      const isFlare = cls.includes('trunk-flare');
       const isLit = cls.includes('trunk-lit');
       const isLeader = cls.includes('trunk-leader');
-      const from = isFlare || isLit ? 0.02 : isLeader ? Number(path.dataset.from ?? 0.4) : 0;
+      // The trunk body starts just above the soil line so its round bottom cap is
+      // covered by the flare; stopping it at y=224 left a bulb under the bell.
+      const from = isLit ? 0.02 : isLeader ? Number(path.dataset.from ?? 0.4) : 0.06;
       // The wood reaches most of the way up: a tree is a trunk with a crown on it,
       // and a trunk that stops halfway leaves a green stalk holding the canopy.
-      // A flare is a foot, not a plinth: the old 2%..16% band with a butt cap was a
-      // flat-topped rectangle wider than the trunk, which read as a brown square
-      // standing behind the tree. A short rounded band blends into the wood. These
-      // fractions match the authored paths in the SVG, so bending the trunk does not
-      // make it jump longer or shorter than it stands at rest.
       // The trunk runs the whole stem, soil to tip: a leader above the topmost
       // limb is what a tree looks like, and stopping it below left the green stem
       // poking out of the crown.
-      const to = isFlare ? 0.055 : isLeader ? Number(path.dataset.to ?? 1) : 1;
+      const to = isLeader ? Number(path.dataset.to ?? 1) : 1;
       path.setAttribute(
         'd',
         bendArcSegment(
@@ -1734,6 +2093,8 @@ export function createTitlePlant(options: TitlePlantOptions): TitlePlant {
       );
     }
 
+    if (streamActive) paintStream(performance.now());
+
     if (budAnchor) {
       const place = bendPlacement(bendDeg, BUD_Y, STEM_BASE_Y, STEM_LENGTH, STEM_REST_DEG);
       // As a transform attribute rather than a CSS transform: Chrome paints a
@@ -1748,6 +2109,259 @@ export function createTitlePlant(options: TitlePlantOptions): TitlePlant {
           : '',
       );
     }
+  };
+
+  /** A path along one arm, in the limb's own frame, from `from` to `to` of its length. */
+  const limbStreamPath = (limb: LimbSpec, from: number, to: number): string => {
+    const a = Math.max(0, Math.min(1, from));
+    const b = Math.max(a, Math.min(1, to));
+    const steps = 7;
+    let path = '';
+    for (let i = 0; i <= steps; i += 1) {
+      const u = a + (b - a) * (i / steps);
+      const x = (limb.len * u).toFixed(2);
+      const y = limbRise(limb.len, u).toFixed(2);
+      path += `${i === 0 ? 'M' : 'L'}${x} ${y}`;
+    }
+    return path;
+  };
+
+  /**
+   * Where an arm's light leaves the trunk: the outside of its socket, not the
+   * stem's centreline. The socket is the nub the branch grows out of, so starting
+   * the stream at 0 drew a glow across the trunk before it entered the wood.
+   */
+  const limbNubStart = (limb: LimbSpec): number => {
+    const socketRadius = (limbBaseWidth(limb.t, limb.len) / 1.4) * 0.52;
+    return Math.min(0.22, socketRadius / Math.max(0.001, limb.len));
+  };
+
+  /** A short path up the sprout's own stem, not the tree's full trunk. */
+  const sproutStreamPath = (from: number, to: number): string => {
+    const a = Math.max(0, Math.min(1, from));
+    const b = Math.max(a, Math.min(1, to));
+    const steps = 6;
+    let path = '';
+    for (let i = 0; i <= steps; i += 1) {
+      const u = a + (b - a) * (i / steps);
+      const x = (STEM_BASE_X + (SPROUT_TIP_X - STEM_BASE_X) * u).toFixed(2);
+      const y = (STEM_BASE_Y - SPROUT_LENGTH * u).toFixed(2);
+      path += `${i === 0 ? 'M' : 'L'}${x} ${y}`;
+    }
+    return path;
+  };
+
+  const hideStreamEchoes = (): void => {
+    for (const echo of streamEchoes) {
+      echo.active = false;
+      echo.group.classList.remove('is-on');
+    }
+  };
+
+  /**
+   * Add a second stream from the root crown when care arrives mid-run.
+   *
+   * The main stream keeps its place; this comet runs from the base to the live
+   * front and merges into it. Two spare groups let a rapid double watering show
+   * two additions instead of replacing the first.
+   */
+  const spawnStreamEcho = (target: number): void => {
+    if (!streamActive || streamEchoes.length === 0) return;
+    const free = streamEchoes.find((echo) => !echo.active);
+    const oldest = streamEchoes.reduce((a, b) => (a.startMs <= b.startMs ? a : b));
+    const echo = free ?? oldest;
+    echo.active = true;
+    echo.startMs = performance.now();
+    echo.target = Math.max(0.04, Math.min(1, target));
+    echo.last = '';
+    echo.group.classList.add('is-on');
+  };
+
+  const paintStreamEchoes = (nowMs: number): void => {
+    for (const echo of streamEchoes) {
+      if (!echo.active) continue;
+      const t = Math.min(1, (nowMs - echo.startMs) / 720);
+      if (t >= 1) {
+        echo.active = false;
+        echo.group.classList.remove('is-on');
+        continue;
+      }
+      // A quick climb that slows into the front; the head does not outrun the wood.
+      const head = echo.target * (1 - (1 - t) ** 3);
+      const key = `${head.toFixed(4)}|${bendDeg.toFixed(2)}`;
+      if (key !== echo.last) {
+        echo.last = key;
+        const path = bendArcSegment(
+          bendDeg,
+          STEM_LENGTH,
+          STEM_BASE_X,
+          STEM_BASE_Y,
+          0,
+          head,
+          12,
+          0,
+          STEM_REST_DEG,
+        );
+        echo.glow?.setAttribute('d', path);
+        echo.core?.setAttribute('d', path);
+        echo.head?.setAttribute(
+          'd',
+          bendArcSegment(
+            bendDeg,
+            STEM_LENGTH,
+            STEM_BASE_X,
+            STEM_BASE_Y,
+            Math.max(0, head - 0.08),
+            head,
+            5,
+            0,
+            STEM_REST_DEG,
+          ),
+        );
+      }
+      const tailStart = Math.max(0, head - 0.36);
+      const phase = (nowMs / 360) % 1;
+      for (const [index, spark] of echo.sparks.entries()) {
+        const u = tailStart + (head - tailStart) * ((index + phase) / echo.sparks.length);
+        const point = bendPoint(bendDeg, u, STEM_LENGTH, STEM_REST_DEG);
+        const ahead = head > tailStart + 0.0001 ? (u - tailStart) / (head - tailStart) : 1;
+        spark.setAttribute('cx', (STEM_BASE_X + point.x).toFixed(2));
+        spark.setAttribute('cy', (STEM_BASE_Y + point.y).toFixed(2));
+        spark.setAttribute('r', (0.7 + 1.7 * ahead).toFixed(2));
+        spark.setAttribute('opacity', (0.18 + 0.74 * ahead).toFixed(2));
+      }
+    }
+  };
+
+  /**
+   * Draw the growth light at its current progress.
+   *
+   * The light is a routed stream, not a beam to the sky: it stops at the highest
+   * foliage or living branch the drawing has actually grown (`streamLimit`), follows
+   * the bent stem, and runs out along every arm whose socket it has passed. A seed
+   * has no stem, so it keeps a growing kernel instead. A sprout's stream is the
+   * length of its own short stem. The pool at the root crown is where the care
+   * particles land; a second care flashes it again and sends a fresh comet up to
+   * the live front instead of rebuilding the first stream from the ground.
+   */
+  const paintStream = (nowMs: number): void => {
+    if (!stream || !streamActive) return;
+    const tier = element.dataset.growthTier;
+    const isSeed = tier === 'seed';
+    const isSprout = tier === 'sprout';
+    const mode: 'seed' | 'sprout' | 'main' = isSeed ? 'seed' : isSprout ? 'sprout' : 'main';
+    const front = isSeed
+      ? 0
+      : isSprout
+        ? Math.max(0, Math.min(1, streamT))
+        : Math.max(0, Math.min(1, streamT * streamLimit));
+    const stemKey = `${mode}|${front.toFixed(4)}|${bendDeg.toFixed(2)}`;
+    if (stemKey !== streamLast) {
+      streamLast = stemKey;
+      if (isSeed || front <= 0.002) {
+        streamGlow?.setAttribute('d', '');
+        streamCore?.setAttribute('d', '');
+        streamHead?.setAttribute('d', '');
+      } else if (isSprout) {
+        const path = sproutStreamPath(0, front);
+        streamGlow?.setAttribute('d', path);
+        streamCore?.setAttribute('d', path);
+        streamHead?.setAttribute('d', sproutStreamPath(Math.max(0, front - 0.12), front));
+      } else {
+        const path = bendArcSegment(
+          bendDeg,
+          STEM_LENGTH,
+          STEM_BASE_X,
+          STEM_BASE_Y,
+          0,
+          front,
+          18,
+          0,
+          STEM_REST_DEG,
+        );
+        streamGlow?.setAttribute('d', path);
+        streamCore?.setAttribute('d', path);
+        streamHead?.setAttribute(
+          'd',
+          bendArcSegment(
+            bendDeg,
+            STEM_LENGTH,
+            STEM_BASE_X,
+            STEM_BASE_Y,
+            Math.max(0, front - 0.08),
+            front,
+            6,
+            0,
+            STEM_REST_DEG,
+          ),
+        );
+      }
+    }
+
+    if (isSeed) {
+      for (const spark of streamSparks) spark.setAttribute('opacity', '0');
+      for (const item of limbStreams) item.group.classList.remove('is-lit');
+      hideStreamEchoes();
+      return;
+    }
+
+    const tailStart = Math.max(0, front - (isSprout ? 0.62 : 0.42));
+    const tail = front - tailStart;
+    const phase = (nowMs / 480) % 1;
+    for (const [index, spark] of streamSparks.entries()) {
+      const u = tailStart + tail * ((index + phase) / streamSparks.length);
+      const point = isSprout
+        ? {
+            x: (SPROUT_TIP_X - STEM_BASE_X) * u,
+            y: -SPROUT_LENGTH * u,
+          }
+        : bendPoint(bendDeg, u, STEM_LENGTH, STEM_REST_DEG);
+      const ahead = tail > 0.0001 ? (u - tailStart) / tail : 1;
+      spark.setAttribute('cx', (STEM_BASE_X + point.x).toFixed(2));
+      spark.setAttribute('cy', (STEM_BASE_Y + point.y).toFixed(2));
+      spark.setAttribute('r', ((isSprout ? 0.7 : 1) + (isSprout ? 1.7 : 2.6) * ahead).toFixed(2));
+      spark.setAttribute('opacity', front > 0.01 ? (0.22 + 0.78 * ahead).toFixed(2) : '0');
+    }
+
+    if (isSprout) {
+      for (const item of limbStreams) item.group.classList.remove('is-lit');
+      hideStreamEchoes();
+      return;
+    }
+
+    // Every arm the front has reached glows along its own curved wood, not just the
+    // one that happens to be growing this frame. That is what makes the light read
+    // as a route through the crown instead of one vertical line up the trunk.
+    for (const item of limbStreams) {
+      const grow = Math.max(0, Math.min(1, limbGrowth[item.index] ?? 0));
+      const from = Math.min(limbNubStart(item.limb), grow);
+      const active = front >= item.limb.t - 0.02 && grow > from + 0.005;
+      item.group.classList.toggle('is-lit', active);
+      if (!active) continue;
+      // The whole arm is the route, not only its newest tip: a short glint at the
+      // end of each branch still read as a line up the trunk with dots beside it.
+      // From the socket's outer nub the stream runs along the wood the branch has
+      // reached, so the light visibly forks through the crown and stays on it.
+      const key = `${from.toFixed(3)}|${grow.toFixed(3)}`;
+      if (key !== item.last) {
+        item.last = key;
+        const path = limbStreamPath(item.limb, from, grow);
+        item.glow?.setAttribute('d', path);
+        item.core?.setAttribute('d', path);
+        item.head?.setAttribute('d', limbStreamPath(item.limb, Math.max(from, grow - 0.08), grow));
+      }
+      const sparkPhase = (nowMs / 380) % 1;
+      for (const [index, spark] of item.sparks.entries()) {
+        const u = from + (grow - from) * ((index + sparkPhase) / item.sparks.length);
+        const ahead = grow > from + 0.0001 ? (u - from) / (grow - from) : 1;
+        spark.setAttribute('cx', (item.limb.len * u).toFixed(2));
+        spark.setAttribute('cy', limbRise(item.limb.len, u).toFixed(2));
+        spark.setAttribute('r', (0.7 + 1.8 * ahead).toFixed(2));
+        spark.setAttribute('opacity', (0.18 + 0.82 * ahead).toFixed(2));
+      }
+    }
+
+    paintStreamEchoes(nowMs);
   };
 
   let lastPaintMs = 0;
@@ -1796,7 +2410,10 @@ export function createTitlePlant(options: TitlePlantOptions): TitlePlant {
     }
     const busy =
       dragStartX !== null || release !== null || tap !== null || nowMs < shudderStartMs + 900;
-    if (nowMs - lastPaintMs < (busy ? 32 : 66)) {
+    // A held bend and its spring-back are the one place the plant's motion is fast
+    // enough for 30 Hz to read as stepping; the drag gets 60, taps and shudders keep
+    // the cheaper rate, and the idle canopy is pure CSS.
+    if (nowMs - lastPaintMs < (busy ? 16 : 66)) {
       raf = requestAnimationFrame(tick);
       return;
     }
@@ -1977,10 +2594,38 @@ export function createTitlePlant(options: TitlePlantOptions): TitlePlant {
     wake();
   };
 
+  /**
+   * End a bend whose capture was taken away.
+   *
+   * A capture is lost without a pointerup when the window loses focus or another
+   * element takes the pointer. The element then kept `is-bending` - the grabbing
+   * cursor over every leaf - and the stem stayed at its pulled angle until the
+   * next press. A lost capture is a release: put the stem back the same way.
+   */
+  const onLostCapture = (): void => {
+    if (dragStartX !== null) {
+      dragStartX = null;
+      element.classList.remove('is-bending');
+      sound.release(bendDeg);
+      release = { fromDeg: bendDeg, startMs: performance.now() };
+      wake();
+    }
+    pressed = null;
+  };
+
+  /** A drag released outside the plant ends even if the capture never took. */
+  const onWindowPointerEnd = (event: PointerEvent): void => {
+    if (dragStartX === null) return;
+    endDrag(event);
+  };
+
   element.addEventListener('pointerdown', onPointerDown);
   element.addEventListener('pointermove', onPointerMove);
   element.addEventListener('pointerup', endDrag);
   element.addEventListener('pointercancel', endDrag);
+  element.addEventListener('lostpointercapture', onLostCapture);
+  window.addEventListener('pointerup', onWindowPointerEnd);
+  window.addEventListener('pointercancel', onWindowPointerEnd);
   element.addEventListener('dblclick', onDoubleTap);
   // Paint the rest pose once, by hand. Limbs have no placement until the first
   // paint, and the loop now parks itself when nothing is moving - so without this
@@ -2154,7 +2799,62 @@ export function createTitlePlant(options: TitlePlantOptions): TitlePlant {
     else element.setAttribute('data-moon-lit', side);
   };
 
-  return {
+  /** The last value written to each growth property, so unchanged steps are free. */
+  const growthVarState = new Map<string, string>();
+  const setGrowthVar = (name: string, value: string): void => {
+    if (growthVarState.get(name) === value) return;
+    growthVarState.set(name, value);
+    element.style.setProperty(name, value);
+  };
+
+  /**
+   * The growth run's state.
+   *
+   * `shownStage` is what is drawn *now*, not what was last asked for: a care
+   * action asks for a stage several steps above it, and the run walks the drawing
+   * from one to the other instead of switching profiles in one frame. The walk is
+   * linear in the run's progress, which is the light front's constant climb, so the
+   * leaves open as the light reaches their thresholds. The stream moves every
+   * frame; the profile is applied at most every 90 ms, because a hundred leaves and
+   * a dozen arms rewritten sixty times a second would be more paint than growth.
+   */
+  let shownStage: number | null = null;
+  /** The crown geometry the arms were last placed for, so an unchanged step skips it. */
+  let paintedCrownKey = '';
+  let growthRaf = 0;
+  let growthFrom = 0;
+  let growthTo = 0;
+  let growthStartMs = 0;
+  let growthDurationMs = 0;
+  let growthAppliedMs = -Infinity;
+  let growthSettleTimer = 0;
+  /** Apply a new profile at most this often during a run. */
+  const GROWTH_APPLY_MS = 90;
+
+  /** What each leaf was last told, so a step that changes nothing writes nothing. */
+  const leafOpenState = new WeakMap<Element, boolean>();
+  /** Open or close a leaf, including the growth it comes with. */
+  const setLeafOpen = (leaf: Element, open: boolean): void => {
+    if (leafOpenState.get(leaf) === open) return;
+    leafOpenState.set(leaf, open);
+    const style = (leaf as SVGElement).style;
+    // The reveal is the scale, not a fade: a leaf flips visible at its full
+    // opacity only when the wood reaches it, then opens from bud size. An opacity
+    // transition here made a new leaf a ghost of itself over the branch.
+    style.setProperty('opacity', open ? '' : '0');
+    style.setProperty('--pl-leaf-open', open ? '1' : '0.12');
+  };
+
+  // The stem leaves above the crown line, oldest first. They are retired one at a
+  // time as the crown takes over, not all in the stage where the crown appears.
+  const upperStemRank = new Map<SVGGElement, number>();
+  for (const part of leafOrder) {
+    if (part.spec.y < STEM_BASE_Y - STEM_LENGTH * 0.55) {
+      upperStemRank.set(part.group, upperStemRank.size);
+    }
+  }
+
+  const api: TitlePlant = {
     element,
     gust,
     rustle,
@@ -2163,40 +2863,75 @@ export function createTitlePlant(options: TitlePlantOptions): TitlePlant {
       // One number, one profile (title/growth.ts): height, wood, foliage, limbs. A
       // hundred stages, so a plant that is looked after has something new to be at
       // every step instead of ten art states and a scale.
+      shownStage = stage;
       const profile = growthProfile(stage);
-      element.dataset.growth = String(Math.round(profile.stage));
-      element.dataset.growthTier = profile.tier.id;
-      element.style.setProperty('--pl-care-scale', profile.scale.toFixed(3));
-      element.style.setProperty('--pl-trunk-w', profile.trunkWidth.toFixed(3));
-      element.style.setProperty('--pl-trunk-opacity', profile.trunkOpacity.toFixed(2));
-      element.style.setProperty('--pl-tree-opacity', profile.treeOpacity.toFixed(3));
-      element.style.setProperty('--pl-leaf-scale', profile.leafScale.toFixed(3));
-      element.classList.toggle('is-tree', profile.treeOpacity > 0.01);
+      const stageLabel = String(Math.round(profile.stage));
+      if (element.dataset.growth !== stageLabel) element.dataset.growth = stageLabel;
+      if (element.dataset.growthTier !== profile.tier.id)
+        element.dataset.growthTier = profile.tier.id;
+      setGrowthVar('--pl-care-scale', profile.scale.toFixed(3));
+      setGrowthVar('--pl-trunk-w', profile.trunkWidth.toFixed(3));
+      setGrowthVar('--pl-trunk-opacity', profile.trunkOpacity.toFixed(2));
+      // Stage-appropriate wood: a sapling keeps a green stem, a young tree starts
+      // to brown, and the adult is bark. The roots are not in this shoot, so they
+      // keep the older wood colour at every stage.
+      setWoodVar('--pl-bark', mixRgb(WOOD_GREEN, WOOD_BARK, profile.woodTone));
+      setWoodVar('--pl-bark-dark', mixRgb(WOOD_GREEN_DARK, WOOD_BARK_DARK, profile.woodTone));
+      setWoodVar('--pl-bark-lit', mixRgb(WOOD_GREEN_LIT, WOOD_BARK_LIT, profile.woodTone));
+      setGrowthVar('--pl-leaf-scale', profile.leafScale.toFixed(3));
+      setGrowthVar('--pl-bud-scale', profile.budScale.toFixed(2));
+      // The seed's energy is a circle inside the coat. It fills with the seed's
+      // three stages, then the sprout drawing takes over.
+      if (seedKernel) {
+        const fill = profile.tier.id === 'seed' ? Math.min(1, profile.stage / 3) : 0;
+        seedKernel.setAttribute('r', (2.4 + 7.4 * fill).toFixed(2));
+      }
+      element.classList.toggle('is-tree', profile.limbReveal > 0.001);
       element.classList.toggle('is-mature', profile.trunkOpacity > 0.5 && profile.trunkWidth > 0.4);
       // The roots hang deeper as the ladder climbs. One formula, and the CSS
       // transition eases it, so the plate is never redrawn mid-growth.
-      element.style.setProperty(
+      setGrowthVar(
         '--pl-root-depth',
         rootDepth((profile.stage * GROWTH_POINTS) / GROWTH_STAGES).toFixed(3),
       );
-      // Foliage opens one leaf at a time, oldest first. Once there is a crown, the
-      // stem's upper leaves go: a young plant is a stalk with leaves up it, a tree
-      // is a trunk with a crown on it, and a big leaf halfway up a trunk is what
-      // made the last version read as a pole with foliage stuck to it.
       // Crown geometry for this stage: how long the arms are, how wide they spread.
       crownLength = profile.limbLength;
       crownSpread = profile.limbSpreadDeg;
-      const carried = Math.round(profile.crownDensity * 3);
-      for (const leaf of crownLeaves) {
-        const ring = leaf.dataset.ring;
-        leaf.style.opacity = ring === undefined || Number(ring) < carried ? '' : '0';
+      // How much of each arm is drawn. During a run an arm waits for the light to
+      // reach the height it leaves the trunk, then reaches its stage shape before
+      // the light moves on. The stage still decides that shape; the stream only
+      // decides when each arm gets it. Outside a run the stage is applied at once.
+      const arms = LIMBS.length;
+      let crownProgress = 0;
+      for (let index = 0; index < arms; index += 1) {
+        const target = Math.max(0, Math.min(1, profile.limbReveal * arms - index));
+        const grow = streamActive
+          ? limbGrowAlong(LIMBS[index]?.t ?? 0, runLimbFrom[index] ?? target, target, streamT)
+          : target;
+        limbGrowth[index] = grow;
+        crownProgress += grow;
       }
-      const crowned = profile.limbReveal > 0.45;
+      crownProgress /= arms || 1;
+
+      // Foliage opens one leaf at a time, oldest first. Once there is a crown, the
+      // stem's upper leaves go: a young plant is a stalk with leaves up it, a tree
+      // is a trunk with a crown on it, and a big leaf halfway up a trunk is what
+      // made the last version read as a pole with foliage stuck to it. A leaf is
+      // retired by the crown that has actually arrived, not by the stage number.
+      let streamTop = 0;
       for (let i = 0; i < leafOrder.length; i += 1) {
         const threshold = (i + 1) / leafOrder.length;
-        const upperStem = leafOrder[i].spec.y < STEM_BASE_Y - STEM_LENGTH * 0.55;
-        const open = profile.leafReveal + 1e-6 >= threshold && !(crowned && upperStem);
-        leafOrder[i].group.style.opacity = open ? '' : '0';
+        let open = profile.leafReveal + 1e-6 >= threshold;
+        const rank = upperStemRank.get(leafOrder[i].group);
+        if (open && rank !== undefined) {
+          // One upper leaf goes at each sliver of limb growth once the crown is
+          // taking over, so a young tree does not lose five leaves in one stage.
+          open = crownProgress <= 0.45 + rank * 0.04;
+        }
+        setLeafOpen(leafOrder[i].group, open);
+        if (open) {
+          streamTop = Math.max(streamTop, (STEM_BASE_Y - leafOrder[i].spec.y) / STEM_LENGTH + 0.03);
+        }
       }
       // And the crown grows limb by limb, each with its own leaves riding it. A
       // limb is never shown bare, which is what kept the young trees looking like
@@ -2207,34 +2942,68 @@ export function createTitlePlant(options: TitlePlantOptions): TitlePlant {
       // back to the part of itself that has grown, so the wood creeps outward from
       // the trunk over several stages. Before this every arm appeared whole, at its
       // final length, with every leaf already on it - a branch from thin air. The
-      // clip runs from the trunk outward on each side, which is why the markup now
-      // says which side an arm leaves on.
-      const arms = limbOrder.length;
-      const grown = profile.limbReveal * arms;
-      for (let i = 0; i < arms; i += 1) {
-        const grow = Math.max(0, Math.min(1, grown - i));
-        const arm = limbOrder[i];
+      // wood is clipped at its outer end so it extends from the trunk on both sides;
+      // `data-side` is only for which side the moonlight reaches.
+      for (const arm of limbOrder) {
+        const index = Number(arm.dataset.limb ?? 0);
+        const grow = limbGrowth[index] ?? 0;
         arm.style.opacity = grow > 0.001 ? '' : '0';
-        if (grow >= 0.999) {
-          arm.style.clipPath = '';
-        } else {
-          const cut = ((1 - grow) * 100).toFixed(1);
-          arm.style.clipPath =
-            arm.dataset.side === 'left'
-              ? `inset(-20% -20% -20% ${cut}%)`
-              : `inset(-20% ${cut}% -20% -20%)`;
+        // Clip the wood, not the whole arm. The old group clip cut through petioles
+        // and blades as they reached the growing edge, which is exactly the sliced
+        // leaf-and-stem look the crown had at mid-growth. The leaves have their own
+        // attachment thresholds below, and a whole leaf at the edge of the wood is
+        // what a growing branch looks like.
+        const wood = arm.querySelector<SVGElement>('.pl-title-plant__limb-wood');
+        arm.style.clipPath = '';
+        if (wood) {
+          if (grow >= 0.999) {
+            wood.style.clipPath = '';
+          } else {
+            // A limb's local x always runs from the trunk outward, whichever side
+            // it leaves on. The old rule mirrored the inset for left-side arms and
+            // therefore kept the far tip while hiding the base: a brown stick
+            // floating away from the trunk. Clip the outer end on both sides.
+            const cut = ((1 - grow) * 100).toFixed(1);
+            wood.style.clipPath = `inset(-20% ${cut}% -20% -20%)`;
+          }
         }
         // Leaves open out along the arm as it reaches them: a new limb carries the
         // leaves of the length it has, never the whole cluster at once.
         const leaves = arm.querySelectorAll<SVGElement>('.pl-title-plant__leaf--crown');
         for (let k = 0; k < leaves.length; k += 1) {
-          const opensAt = (k + 1) / (leaves.length + 1);
-          leaves[k].style.opacity = grow > opensAt ? '' : '0';
+          // Open a leaf when the clip has actually passed its attachment point, not
+          // at a fixed fraction of the leaf list. The old thresholds opened outer
+          // leaves before the wood reached them, and the limb's clip then cut both
+          // the stalk and half the blade: the crown grew leaves that were visibly
+          // sliced off their branches.
+          const leafAt = Number(leaves[k].dataset.at);
+          // The terminal blade sits at 0.99, so opening on `leafAt + 0.015` means
+          // asking for growth beyond 1 and never opening it. A leaf a hair later
+          // than the wood reaches it is fine; a leaf that can never open is not.
+          const opensAt = Number.isFinite(leafAt)
+            ? Math.min(0.995, leafAt + 0.005)
+            : (k + 1) / (leaves.length + 1);
+          setLeafOpen(leaves[k], grow > opensAt);
         }
+        if (grow > 0.02) streamTop = Math.max(streamTop, (LIMBS[index]?.t ?? 0) + 0.04);
       }
+      // The light cannot outrun the drawing. It climbs only as far as the highest
+      // open leaf or living limb, so a young tree is not lit to a tip it has not
+      // built yet; a seed and a sprout have their own small stages instead.
+      streamLimit =
+        profile.tier.id === 'seed' || profile.tier.id === 'sprout'
+          ? 1
+          : Math.max(0.18, Math.min(1, streamTop));
       // The arms were placed at the previous stage's reach: re-place them now, or a
-      // plant that grew a tier would keep the old crown until it was touched.
-      paintBend();
+      // plant that grew a tier would keep the old crown until it was touched. A
+      // growth run applies a profile every 90 ms, and at that resolution most steps
+      // move the reach by less than the drawn precision, so an unchanged crown is
+      // not redrawn.
+      const crownKey = `${crownLength.toFixed(3)}|${crownSpread.toFixed(2)}`;
+      if (crownKey !== paintedCrownKey) {
+        paintedCrownKey = crownKey;
+        paintBend();
+      }
     },
     setActive(next: boolean): void {
       if (active === next) return;
@@ -2246,6 +3015,14 @@ export function createTitlePlant(options: TitlePlantOptions): TitlePlant {
       } else {
         cancelAnimationFrame(raf);
         window.clearTimeout(breezeTimer);
+        // A growth run is a few hundred milliseconds of the title's own motion;
+        // it has no business continuing behind the world. The plant is put where
+        // the care left it, so it is never caught mid-leaf on the way back, and
+        // the pane is refitted for the height it ended at.
+        if (growthRaf !== 0) {
+          api.setGrowthStage(growthTo, false);
+          options.onGrowthEnd?.();
+        }
       }
     },
     react(part: PlantPart = 'stem', index = 0): void {
@@ -2280,8 +3057,128 @@ export function createTitlePlant(options: TitlePlantOptions): TitlePlant {
       element.removeEventListener('pointermove', onPointerMove);
       element.removeEventListener('pointerup', endDrag);
       element.removeEventListener('pointercancel', endDrag);
+      element.removeEventListener('lostpointercapture', onLostCapture);
+      window.removeEventListener('pointerup', onWindowPointerEnd);
+      window.removeEventListener('pointercancel', onWindowPointerEnd);
       element.removeEventListener('dblclick', onDoubleTap);
+      stopGrowthRun();
       element.remove();
     },
   };
+
+  /** The immediate, un-animated profile writer behind `setGrowthStage`. */
+  const applyGrowth = api.setGrowthStage;
+
+  const stopGrowthRun = (): void => {
+    if (growthRaf !== 0) cancelAnimationFrame(growthRaf);
+    growthRaf = 0;
+    window.clearTimeout(growthSettleTimer);
+    growthSettleTimer = 0;
+    element.classList.remove('is-growing', 'is-streaming');
+    streamActive = false;
+    streamLast = '';
+    hideStreamEchoes();
+    for (const item of limbStreams) item.group.classList.remove('is-lit');
+  };
+
+  const stepGrowth = (now: number): void => {
+    const raw =
+      growthDurationMs <= 0
+        ? 1
+        : Math.min(1, Math.max(0, (now - growthStartMs) / growthDurationMs));
+    // The light is cheap - a few paths and sparks - so it moves every frame. The
+    // drawing itself is re-applied in small steps: a hundred leaves and a dozen
+    // arms rewritten sixty times a second would be more paint than growth.
+    streamT = raw;
+    paintStream(now);
+    if (raw >= 1 || now - growthAppliedMs >= GROWTH_APPLY_MS) {
+      applyGrowth(raw >= 1 ? growthTo : growthStageAlong(growthFrom, growthTo, raw));
+      growthAppliedMs = now;
+      options.onGrowthChange?.();
+    }
+    if (raw < 1) {
+      growthRaf = requestAnimationFrame(stepGrowth);
+      return;
+    }
+    growthRaf = 0;
+    // The stream has reached the highest grown structure; its work is done, even
+    // though the class that carries the last leaves' transitions stays for another
+    // moment.
+    streamActive = false;
+    hideStreamEchoes();
+    element.classList.remove('is-streaming');
+    options.onGrowthEnd?.();
+    // Keep the transition class for the last leaves to finish opening, then drop
+    // it; the class only gates the transitions, it is not the growth itself.
+    window.clearTimeout(growthSettleTimer);
+    growthSettleTimer = window.setTimeout(() => {
+      element.classList.remove('is-growing');
+    }, 700);
+  };
+
+  const startGrowthRun = (target: number): void => {
+    const from = shownStage ?? target;
+    if (target <= from + 0.01) {
+      stopGrowthRun();
+      applyGrowth(target);
+      return;
+    }
+    const now = performance.now();
+    window.clearTimeout(growthSettleTimer);
+    growthSettleTimer = 0;
+    if (growthRaf !== 0) cancelAnimationFrame(growthRaf);
+
+    // A second care can arrive while the first stream is still in the stem. The
+    // light keeps its place; only its destination changes. Solving the stage
+    // timeline backwards (see resumeGrowth) leaves the drawing exactly where it
+    // is at that front, then sends the extra light up from the root as a comet.
+    const midRun = streamActive && streamT > 0.001 && streamT < 0.999;
+    if (midRun) {
+      const resumed = resumeGrowth(from, target, streamT);
+      const remainingMs = growthTransitionMs(target - from);
+      const fullMs =
+        resumed.remainingShare > 0.001 ? remainingMs / resumed.remainingShare : remainingMs;
+      growthFrom = resumed.fromStage;
+      growthTo = target;
+      growthDurationMs = Math.max(1, fullMs);
+      growthStartMs = now - streamT * growthDurationMs;
+      growthAppliedMs = -Infinity;
+      runLimbFrom = limbGrowth.slice();
+      element.classList.add('is-growing', 'is-streaming');
+      spawnStreamEcho(streamT * streamLimit);
+      paintStream(now);
+      growthRaf = requestAnimationFrame(stepGrowth);
+      return;
+    }
+
+    growthFrom = from;
+    growthTo = target;
+    growthStartMs = now;
+    growthDurationMs = growthTransitionMs(target - from);
+    growthAppliedMs = -Infinity;
+    // The arms start from what is actually drawn, not from the stage number: a
+    // previous run may have been retargeted mid-flight, and no arm may shrink.
+    runLimbFrom = limbGrowth.slice();
+    streamT = 0;
+    streamActive = true;
+    streamLast = '';
+    for (const item of limbStreams) item.last = '';
+    element.classList.add('is-growing', 'is-streaming');
+    paintStream(now);
+    growthRaf = requestAnimationFrame(stepGrowth);
+  };
+
+  api.setGrowthStage = (stage: number, animate = false): void => {
+    const target = Number.isFinite(stage) ? Math.max(0, Math.min(GROWTH_STAGES - 1, stage)) : 0;
+    // A load, a reset, a reduced-motion preference or a care that earned no new
+    // stage is drawn at once. Only real growth is walked.
+    if (!animate || options.reducedMotion || shownStage === null) {
+      stopGrowthRun();
+      applyGrowth(target);
+      return;
+    }
+    startGrowthRun(target);
+  };
+
+  return api;
 }

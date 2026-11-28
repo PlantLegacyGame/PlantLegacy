@@ -2441,6 +2441,9 @@ function plantLabelLayer(): ReturnType<typeof createPlantLabelLayer> | null {
 /** Keep each rival's tag above the highest point of its body. */
 function updatePlantLabelPositions(): void {
   if (!plantLabels) return;
+  // One read per frame, not one per rival: `clientHeight` is a layout read and
+  // the loop does not change the canvas.
+  const viewportHeightPx = Math.max(1, renderer.domElement.clientHeight);
   for (const [plantId, nodes] of otherPlayerPlants) {
     let topY = -Infinity;
     let sx = 0;
@@ -2455,7 +2458,11 @@ function updatePlantLabelPositions(): void {
     if (count === 0 || !Number.isFinite(topY)) continue;
     const cx = sx / count;
     const cz = sz / count;
-    const distance = camera.position.distanceTo(new THREE.Vector3(cx, topY, cz));
+    const distance = Math.hypot(
+      camera.position.x - cx,
+      camera.position.y - topY,
+      camera.position.z - cz,
+    );
     const label = plantLabels;
     if (distance > 90) continue;
     // Size the tag in *screen* pixels rather than in metres. Growing a sprite
@@ -2463,7 +2470,6 @@ function updatePlantLabelPositions(): void {
     // plate roughly constant: a 16-character name came out under 6 screen pixels
     // per glyph, which is a smear at native resolution and unreadable once the
     // quality band is downscaling. A pixel size is the thing to hold constant.
-    const viewportHeightPx = Math.max(1, renderer.domElement.clientHeight);
     const halfFovTan = Math.tan((camera.fov * Math.PI) / 360);
     const metresPerPixel = (2 * halfFovTan * Math.max(0.1, distance)) / viewportHeightPx;
     const tagHeight = label.sizeLabel?.(plantId, metresPerPixel, distance) ?? 0;
@@ -5224,6 +5230,8 @@ async function initC01(): Promise<void> {
     targetFps: renderConfig.targetFps,
     fpsWarningThreshold: renderConfig.fpsWarningThreshold,
     resolutionFloor: renderConfig.resolutionFloor,
+    emergencyResolutionFloor: renderConfig.resolutionFloorEmergency,
+    qualityEmergencyAfterMs: renderConfig.qualityEmergencyAfterMs,
     maxPixelRatio: renderConfig.maxPixelRatio,
     qualityTiers: renderConfig.qualityTiers,
     gpuBandMinMs: renderConfig.gpuBandMinMs,
@@ -9721,6 +9729,12 @@ if (isDevMode) {
         journal: () => Array<{ at: number; kind: string; detail?: Record<string, unknown> }>;
         /** The one frame readout: pacing and how much of a frame is our own work. */
         frameStats: () => import('./util/frameBudget.js').FrameStats;
+        /** AL-03: the live quality band, including the emergency floor. */
+        quality: () =>
+          | (import('./render/QualityController.js').QualityState & {
+              effectivePixelRatio: number;
+            })
+          | null;
         /** The three.js renderer, for `info.render` when a frame is expensive. */
         renderer: import('three').WebGLRenderer;
         /**
@@ -9775,6 +9789,7 @@ if (isDevMode) {
     },
     journal: () => loadJournal(sessionJournalStorage).entries,
     frameStats: () => frameStatsOf(frameBudget, lastGpuMs),
+    quality: () => qualityController?.snapshot() ?? null,
     renderFrame: (deltaTime) => renderFrame(deltaTime),
     tiers: (limit?: number) => webgpuRenderer?.readRenderData(limit) ?? Promise.resolve([]),
     plants: () => webgpuRenderer?.plantTable() ?? [],
@@ -12908,6 +12923,9 @@ function renderFrame(deltaTime: number): void {
     // In the orbit the keys move the altitude, the same measure the wheel uses:
     // the distance to the body's centre is a hundred kilometres, so a metres-per-
     // second dolly along it is invisible - the keys looked dead up there.
+    // Do not return from this branch. Returning skipped the rest of the frame -
+    // including the draw and the GPU timing query - so holding +/- in planet
+    // view froze the picture and left the timer open.
     if (planetViewActive) {
       const radius = renderConfig?.planetRadiusM ?? 0;
       if (radius > 0) {
@@ -12922,23 +12940,23 @@ function renderFrame(deltaTime: number): void {
           planetViewDolly(altitude * step);
         }
       }
-      return;
+    } else {
+      const currentDist = camera.position.distanceTo(controls.target);
+      const dollySpeed = renderConfig?.cameraZoomSpeed ?? 2.0;
+      let delta = 0;
+      if (keyboardZoomState.in) delta -= dollySpeed * deltaTime;
+      if (keyboardZoomState.out) delta += dollySpeed * deltaTime;
+
+      // Bounded by the orbit limits, so the camera stops at arm's length instead
+      // of ending up inside the plant.
+      const minD = Math.max(0.05, currentCameraMinDistance());
+      const maxD = effectiveCameraMaxDistance();
+      const newDist = Math.max(minD, Math.min(maxD, currentDist + delta));
+
+      tempVector.copy(camera.position).sub(controls.target).normalize();
+      camera.position.copy(controls.target).addScaledVector(tempVector, newDist);
+      targetCameraDistance = -1; // Manual zoom takes precedence
     }
-    const currentDist = camera.position.distanceTo(controls.target);
-    const dollySpeed = renderConfig?.cameraZoomSpeed ?? 2.0;
-    let delta = 0;
-    if (keyboardZoomState.in) delta -= dollySpeed * deltaTime;
-    if (keyboardZoomState.out) delta += dollySpeed * deltaTime;
-
-    // Bounded by the orbit limits, so the camera stops at arm's length instead
-    // of ending up inside the plant.
-    const minD = Math.max(0.05, currentCameraMinDistance());
-    const maxD = effectiveCameraMaxDistance();
-    const newDist = Math.max(minD, Math.min(maxD, currentDist + delta));
-
-    tempVector.copy(camera.position).sub(controls.target).normalize();
-    camera.position.copy(controls.target).addScaledVector(tempVector, newDist);
-    targetCameraDistance = -1; // Manual zoom takes precedence
   }
 
   // Smooth camera distance framing
@@ -13264,7 +13282,12 @@ function renderFrame(deltaTime: number): void {
         {
           frameMs: frameCostMs,
           gpuMs: gpuCostMs,
-          triangles: renderer.info.render.triangles ?? 0,
+          // The WebGPU plant pass is a second canvas and is not in
+          // `renderer.info`; without its indices a tier budget would ignore
+          // every plant the overlay draws.
+          triangles:
+            (renderer.info.render.triangles ?? 0) +
+            (webgpuRenderer ? Math.floor(webgpuRenderer.getIndexCount() / 3) : 0),
         },
         performance.now(),
       );
@@ -13304,8 +13327,13 @@ function renderFrame(deltaTime: number): void {
       // non-positive frame time is discarded instead of recorded.
       frameMs: document.hidden || skipQualitySample ? 0 : frameCostMs,
       gpuMs: gpuCostMs,
-      triangles: renderer.info.render.triangles ?? 0,
-      drawCalls: renderer.info.render.calls ?? 0,
+      // The WebGPU plant pass is a second canvas: its indices and its two
+      // draws are not in `renderer.info`, so a WebGPU benchmark report would
+      // otherwise describe only half the frame.
+      triangles:
+        (renderer.info.render.triangles ?? 0) +
+        (webgpuRenderer ? Math.floor(webgpuRenderer.getIndexCount() / 3) : 0),
+      drawCalls: (renderer.info.render.calls ?? 0) + (useWebGPU ? 2 : 0),
     });
   }
 

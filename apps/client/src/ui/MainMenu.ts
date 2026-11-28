@@ -45,9 +45,18 @@ import {
 import { autoDisplayName, resolveDisplayName } from './title/plantName.ts';
 import { rootRuns } from './title/rootGrowth.ts';
 import { cloudShadows } from './title/skyLayout.ts';
+import {
+  addSoak,
+  createSoakPatch,
+  gatherSoak,
+  type SoakKind,
+  type SoilPatch,
+  soakFertility,
+  soakMoisture,
+} from './title/soilSoak.ts';
 import { createStyleVarWriter } from './title/styleVars.ts';
 import { createTitlePlant, PLANT_MAX_SCALE, type TitlePlant } from './title/TitlePlant.ts';
-import { createTitleScene, type TitleScene } from './title/TitleScene.ts';
+import { createTitleScene, FOREGROUND_PARALLAX, type TitleScene } from './title/TitleScene.ts';
 import {
   applyCare,
   type CareAction,
@@ -132,6 +141,13 @@ const STYLE = `
     inset: 0;
     overflow: hidden;
     font-family: inherit;
+    /* The title is a screen, not a document. Without this a drag that starts on
+       the art can select a label and turn the next drag into the browser's own
+       text drag - which is where the no-drop cursor comes from. The nickname
+       field opts back into selection below. */
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-user-drag: none;
     color: var(--warm-ink, #f0ead6);
     --pl-sky-high: #24303a;
     --pl-sky-mid: #2b3942;
@@ -262,8 +278,6 @@ const STYLE = `
       radial-gradient(circle at 68% 78%, rgba(255, 255, 255, 0.06) 0 2px, transparent 3px),
       radial-gradient(circle at 79% 44%, rgba(0, 0, 0, 0.2) 0 2px, transparent 4px),
       radial-gradient(circle at 91% 66%, rgba(0, 0, 0, 0.17) 0 3px, transparent 4px),
-      radial-gradient(ellipse 70% 30% at 30% 12%, rgba(0, 0, 0, 0.14), transparent 70%),
-      radial-gradient(ellipse 60% 26% at 74% 22%, rgba(0, 0, 0, 0.12), transparent 70%),
       /* Aggregate: small stones and hollows, tiled at two prime-ish sizes. */
       radial-gradient(ellipse 5px 3px at 22% 30%, rgba(255, 255, 255, 0.05) 0 92%, transparent 96%)
         0 0 / 137px 103px repeat,
@@ -479,31 +493,28 @@ const STYLE = `
       sepia(var(--pl-plant-sepia, var(--pl-shoot-sepia, 0)))
       hue-rotate(var(--pl-plant-hue, var(--pl-shoot-hue, 0deg)));
   }
-  /* Every colour below is the value the plate's own roots resolve, measured off the
-     plate's own stops: the palette vars are written to the palette hosts, not to the
-     plant element, so inside the plate the cream stop has always fallen back - the
-     plate's roots are one cream, one tan and one ink all day, dimmed only
-     by the filter. The reaches used the palette's live values and drifted from them:
-     at 13:12 they were rgb(220, 200, 169) against the plate's rgb(239, 227, 205), and
-     browner still after dark. Same three constants, same filter, same colour.
-
-     The plate draws its ink at 0.3: any darker and a root reads as an outline with a
-     fill in it rather than a thing lying in damp soil. */
-  .pl-menu__root-runs .pl-root-run__ink { fill: #1c1208; opacity: 0.3; }
+  /* The reaches live outside the plant element, but MainMenu's ground pass writes
+     the plant's root palette onto this layer too (plantVars). Read the variables
+     rather than baking the day tones here: the hardcoded values stayed bone-pale
+     at night while the plate turned dark, so the reaches read as wires laid over
+     the soil. The reach tones now come from the same variables at every hour. */
+  .pl-menu__root-runs .pl-root-run__ink {
+    fill: var(--pl-root-ink, #1c1208);
+    /* The plate's ink is a contact edge under a pale body, not a dark outline
+       around it. At 0.42 over dark soil the reaches read as black wires laid
+       beside the plate's pale roots; the plate's own ink is 0.3 and mostly
+       covered by the body. */
+    opacity: 0.18;
+  }
   /* The plate's roots darken with depth (the pl-root-depth mask in roots.ts): the same
-     cheat here, a vertical ramp over the band, so a reach that dives is as deep a
-     tan at the bottom as the plate's laterals and as pale as them at the top. Filled
-     flat with the surface cream, the reaches read as pale wires laid over the dirt. */
+     cheat here, a vertical ramp over the band, so a reach that dives deepens as it
+     goes. The reaches take the plate's tip tone rather than its pale surface bone;
+     a flat surface fill made eight long roots read as wires laid over the dirt. */
   .pl-menu__root-runs .pl-root-run__body { fill: url(#pl-reach-fade-body); }
-  /* Branches and their feeders, in the plate's own tip colour: the plate draws its
-     forks (generation 2) in the root-tip colour, and a reach's smaller roots are
-     the same thing. They used to be 0.14-wide stroke lines, which no fork on the
-     plate looks like. */
+  /* The grips that hold a find, in the plate's own tip colour. A reach used to
+     fan into forks and hairs as well, which on eight runs turned the cut into a
+     bundle of pale wires; the plate carries that detail and the reaches stay clean. */
   .pl-menu__root-runs .pl-root-run__lateral { fill: url(#pl-reach-fade-lateral); }
-  /* Third order, at the plate's own weight: it draws its hairs as a 50%-opacity
-     stroke, so a reach's feeders are paler than its forks too. At full strength they
-     read as one bright brush of wires at the end of every root. */
-  .pl-menu__root-runs .pl-root-run__hair { fill: url(#pl-reach-fade-hair); }
   /* The centreline as a stroke under the body, because a fill tapers to nothing in
      whatever width the pane happens to be: on a phone the tip came out at 0.7 px.
      Non-scaling, so 1.4 px however wide the pane is, and divided by the camera's
@@ -511,7 +522,7 @@ const STYLE = `
      body everywhere the body is wide, so it only shows where the root would fade. */
   .pl-menu__root-runs .pl-root-run__tip {
     fill: none;
-    stroke: #efe3cd;
+    stroke: var(--pl-root-tip, #9a7d5c);
     stroke-width: calc(2px / var(--pl-scene-zoom, 1));
     stroke-linecap: round;
     vector-effect: non-scaling-stroke;
@@ -520,13 +531,8 @@ const STYLE = `
      filled shape is enough to keep a tip from disappearing and not enough to fatten
      it where it already has a body. */
   .pl-menu__root-runs .pl-root-run__lateral {
-    stroke: #cbb99b;
+    stroke: var(--pl-root-tip, #9a7d5c);
     stroke-width: calc(1.2px / var(--pl-scene-zoom, 1));
-    vector-effect: non-scaling-stroke;
-  }
-  .pl-menu__root-runs .pl-root-run__hair {
-    stroke: #cbb99b;
-    stroke-width: calc(1px / var(--pl-scene-zoom, 1));
     vector-effect: non-scaling-stroke;
   }
   /* Light over the world. Screen-blended sun glow, multiply-blended night, both
@@ -734,27 +740,6 @@ const STYLE = `
   /* ---------------------------------------------------------------- soil life
      What is buried in the cut. The pieces belong to the ground, so they slide
      with it, and each one is a button: clicking a fossil should do something. */
-  /* Moonlight on the ground: one wide, soft pool in front of the plant, at its own
-     intensity from the moon's wash. Screen, not multiply: it is light added to the
-     soil, and the soil under it should read as catching the sky. */
-  .pl-menu__moon-pool {
-    position: absolute;
-    left: 50%;
-    top: var(--pl-horizon, 140vh);
-    width: 108vmin;
-    height: 40vh;
-    translate: -50% -35%;
-    pointer-events: none;
-    background: radial-gradient(
-      50% 50% at 50% 50%,
-      rgba(206, 224, 255, 0.34) 0%,
-      rgba(176, 202, 255, 0.16) 42%,
-      rgba(150, 180, 240, 0.06) 62%,
-      transparent 80%
-    );
-    opacity: calc(var(--pl-moon-wash, 0) * 0.55);
-    mix-blend-mode: screen;
-  }
   /* The ground as one plane: moving it is a compositor blit, not four rasters.
      Pointer-transparent, because it covers the scene the drag listens on. */
   .pl-menu__ground-plane {
@@ -784,6 +769,126 @@ const STYLE = `
        the finds against the soil they are buried in and slid the outer columns off
        the frame at the pulled-back limit. They hold their place with the pane. */
   }
+  .pl-menu__soil-moisture {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    overflow: hidden;
+  }
+
+  /* A deposit of water or feed in the soil. It is deliberately not a circle:
+     this is a cross-section, and water does not sit on the cut face as a hoop.
+     It is a soft-edged column that begins on the surface line and darkens the
+     soil below it. Width, height and opacity are driven by the soak model; the
+     long transitions are the wet front travelling down and sideways. */
+  .pl-soil-patch {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 0;
+    height: 0;
+    pointer-events: none;
+    opacity: 0;
+    transform: translateX(-50%);
+    -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 14%, #000 86%, transparent 100%);
+    mask-image: linear-gradient(90deg, transparent 0, #000 14%, #000 86%, transparent 100%);
+    transition:
+      width 1100ms cubic-bezier(0.2, 0.7, 0.2, 1),
+      height 1500ms cubic-bezier(0.2, 0.7, 0.2, 1),
+      opacity 450ms ease;
+  }
+  .pl-soil-patch.is-visible { opacity: 1; }
+  .pl-soil-patch.is-drying {
+    opacity: 0;
+    transition: opacity 1600ms ease;
+  }
+  .pl-soil-patch__water,
+  .pl-soil-patch__feed,
+  .pl-soil-patch__pool,
+  .pl-soil-patch__surface,
+  .pl-soil-patch__crumbs {
+    position: absolute;
+    left: 0;
+    top: 0;
+    display: block;
+    width: 100%;
+  }
+  .pl-soil-patch__water {
+    height: 0;
+    background: linear-gradient(
+      180deg,
+      rgba(9, 28, 35, 0.84) 0%,
+      rgba(13, 36, 43, 0.7) 20%,
+      rgba(16, 34, 39, 0.48) 58%,
+      rgba(16, 30, 34, 0) 100%
+    );
+    /* Only the stain is diffuse. The surface sheet and crumbs stay crisp enough
+       to read as water and meal, rather than as two soft smudges. */
+    filter: blur(1.1px);
+    transition: height 1500ms cubic-bezier(0.2, 0.7, 0.2, 1), opacity 700ms ease;
+  }
+  .pl-soil-patch__feed {
+    height: 0;
+    background: linear-gradient(
+      180deg,
+      rgba(74, 49, 17, 0.78) 0%,
+      rgba(70, 49, 23, 0.56) 34%,
+      rgba(63, 46, 25, 0.28) 68%,
+      rgba(58, 43, 22, 0) 100%
+    );
+    filter: blur(1.1px);
+    transition: height 1500ms cubic-bezier(0.2, 0.7, 0.2, 1), opacity 700ms ease;
+  }
+  /* A shallow sheet of water that has gathered on the surface before it goes
+     down. It is a flat band, not a splash: no expanding circle and no spray. */
+  .pl-soil-patch__pool {
+    height: 12px;
+    background: linear-gradient(
+      180deg,
+      rgba(220, 249, 255, 0.7) 0%,
+      rgba(158, 226, 255, 0.45) 46%,
+      rgba(124, 198, 232, 0.14) 82%,
+      transparent 100%
+    );
+    box-shadow: 0 1px 4px rgba(147, 218, 255, 0.28);
+    opacity: 0;
+    transition: opacity 700ms ease;
+  }
+  /* A wet seam on the surface, not an expanding ring. When more landings gather
+     here it widens with the patch; nothing is thrown back into the air. */
+  .pl-soil-patch__surface {
+    height: 4px;
+    background: linear-gradient(
+      90deg,
+      transparent 0%,
+      rgba(189, 235, 255, 0.58) 22%,
+      rgba(226, 250, 255, 0.7) 50%,
+      rgba(189, 235, 255, 0.58) 78%,
+      transparent 100%
+    );
+    box-shadow: 0 1px 3px rgba(147, 218, 255, 0.28);
+    transition: opacity 800ms ease;
+  }
+  /* Feed lands as meal, so its surface is a few crumbs that stay above the
+     sinking nutrient stain instead of a blue puddle. */
+  .pl-soil-patch__crumbs {
+    height: 14px;
+    background:
+      linear-gradient(
+        90deg,
+        transparent 0%,
+        rgba(232, 195, 124, 0.42) 14%,
+        rgba(255, 224, 160, 0.68) 50%,
+        rgba(232, 195, 124, 0.42) 86%,
+        transparent 100%
+      ) 0 0 / 100% 4px no-repeat,
+      repeating-linear-gradient(90deg, #d3ad68 0 3px, transparent 3px 9px) 1px 5px / 100% 2px no-repeat,
+      radial-gradient(circle, #e8c37c 0 2px, transparent 2.4px) 2px 7px / 10px 6px repeat;
+    filter: drop-shadow(0 1px 0 rgba(52, 36, 16, 0.45));
+    opacity: 0;
+    transition: opacity 600ms ease;
+  }
+
   .pl-treasure {
     position: absolute;
     /* Three caps: its share of the band's width, the old vh ceiling, and a share
@@ -991,8 +1096,8 @@ const STYLE = `
   /* The carried prop bobs and tilts, which is what makes it read as held rather
      than as a picture of a prop that happens to be under the pointer. */
   @keyframes pl-carry-bob {
-    0%, 100% { transform: translate(-50%, -78%) rotate(-3deg); }
-    50% { transform: translate(-50%, -84%) rotate(3deg); }
+    0%, 100% { transform: translate(-50%, -100%) rotate(-3deg); }
+    50% { transform: translate(-50%, -100%) rotate(3deg); }
   }
   .pl-care-ghost {
     animation: pl-carry-bob 1.2s ease-in-out infinite;
@@ -1002,7 +1107,12 @@ const STYLE = `
     z-index: 900;
     width: 72px;
     pointer-events: none;
-    transform: translate(-50%, -78%);
+    /* The prop's base, not its middle, is what sits at the pointer. The old
+       -78% offset lifted the can a fifth of its own height above the ground it
+       was being carried along; a prop that is put down on the soil has to have
+       its foot on the soil. transform-origin is the base for the same reason. */
+    transform: translate(-50%, -100%);
+    transform-origin: 50% 100%;
     filter: drop-shadow(0 8px 12px rgba(0, 0, 0, 0.5));
     opacity: 0.95;
     /* The clone keeps its pl-care class, so these only have to undo the
@@ -1034,9 +1144,11 @@ const STYLE = `
   .pl-menu__fx {
     position: absolute;
     inset: 0;
-    /* Screen space: the prop effects are measured with getBoundingClientRect and
-       written back as left/top, so the layer must not be scaled. */
-    z-index: 2;
+    /* Ground space: this layer is a parallax host inside the zoomed world, so a
+       puddle stays on the same soil through a camera drag or a wheel step. It is
+       written in the layer's own coordinates (see spawnResourceEffect), not in
+       client pixels. */
+    z-index: 4;
     pointer-events: none;
     overflow: hidden;
   }
@@ -1076,11 +1188,11 @@ const STYLE = `
     100% { translate: 0 var(--pl-arc-dy, 60px); rotate: var(--pl-arc-spin, 0deg); opacity: 0; }
   }
   .pl-fx__drop--water {
-    width: 2px;
-    height: 4px;
+    width: 6px;
+    height: 10px;
     border-radius: 50% 50% 50% 50% / 62% 62% 38% 38%;
     background: #e4f6ff;
-    box-shadow: 0 0 3px rgba(150, 214, 255, 0.45);
+    box-shadow: 0 0 4px rgba(150, 214, 255, 0.55);
   }
   /* The tail: water in the air is a head with a streak behind it, not a bead. The
      tail points back up the path, so a pour reads as falling water in the same
@@ -1088,10 +1200,10 @@ const STYLE = `
   .pl-fx__drop--water::after {
     content: '';
     position: absolute;
-    left: 0.5px;
-    bottom: 2px;
-    width: 1px;
-    height: 7px;
+    left: 2px;
+    bottom: 4px;
+    width: 2px;
+    height: 13px;
     border-radius: 1px;
     background: linear-gradient(
       0deg,
@@ -1100,125 +1212,31 @@ const STYLE = `
     );
   }
   .pl-fx__drop--feed {
-    width: 4px;
-    height: 4px;
+    width: 7px;
+    height: 7px;
     border-radius: 1px;
     background: #c9a25a;
     box-shadow: 0 0 3px rgba(0, 0, 0, 0.22);
   }
-  /* The splash. An ellipse, because this is a flat side-view world and a circle
-     on the ground line is a hoop standing on edge: it read as a ring drawn on the
-     soil face, and - being round - it reached below the surface into the dirt
-     cross-section, which is a cut through the earth, not a floor. The ellipse is
-     pinned to the surface line at its foot and grows upward from there, so no
-     part of a splash is ever drawn under the ground. */
-  .pl-fx__ripple {
-    position: absolute;
-    width: var(--pl-ripple-w, 22px);
-    height: calc(var(--pl-ripple-w, 22px) * 0.26);
-    margin-left: calc(var(--pl-ripple-w, 22px) / -2);
-    border: 1.6px solid color-mix(in srgb, var(--pl-rain-colour, #d6e6ef) 86%, transparent);
-    /* The near edge is solid and the far edge catches the light: a tight ring and
-       a thrown one in one stroke, like the rain's own landings. */
-    border-top-color: transparent;
-    border-radius: 50%;
-    box-shadow: 0 0 5px 1px color-mix(in srgb, var(--pl-rain-colour, #d6e6ef) 20%, transparent);
-    transform-origin: 50% 100%;
-    opacity: 0;
-    animation: pl-fx-ripple 640ms ease-out var(--pl-ripple-delay, 0ms) forwards;
+  /* The whole root plate takes a breath once the soil has taken the pour. The
+     leaves already answer, but the roots are where the water/feed went; this is
+     the half of the answer that a surface-only effect could not give. */
+  .pl-title-plant.is-absorbing .pl-title-plant__roots {
+    animation: pl-roots-drink 760ms ease-out;
   }
-  @keyframes pl-fx-ripple {
-    0% { transform: scale(0.25, 0.4); opacity: 0; }
-    16% { opacity: 0.95; }
-    100% { transform: scale(1.4, 1); opacity: 0; }
-  }
-  /* The splash itself: water thrown out of the landing and falling back. A single
-     vertical column read as a pin standing on the soil - a splash is a handful of
-     drops leaving the point at an angle, hopping, and dropping out of sight. */
-  .pl-fx__spit {
-    position: absolute;
-    width: 2px;
-    height: 3px;
-    margin-left: -1px;
-    border-radius: 50%;
-    background: #bfe6fb;
-    box-shadow: 0 0 4px rgba(150, 214, 255, 0.55);
-    opacity: 0;
-    animation: pl-fx-spit 470ms cubic-bezier(0.25, 0.6, 0.5, 1) var(--pl-spit-delay, 0ms) forwards;
-  }
-  .pl-fx__spit--meal {
-    background: #c9a25a;
-    box-shadow: 0 1px 0 rgba(58, 42, 21, 0.5);
-    width: 3px;
-    height: 3px;
-    border-radius: 1px;
-  }
-  @keyframes pl-fx-spit {
-    0% { transform: translate(0, 0) scale(0.5); opacity: 0; }
-    14% { opacity: 0.95; }
-    46% {
-      transform: translate(calc(var(--pl-spit-dx, 0px) * 0.55), calc(var(--pl-spit-rise, 11px) * -1)) scale(1);
-      opacity: 0.95;
+  @keyframes pl-roots-drink {
+    0%, 100% {
+      filter: brightness(var(--pl-plant-bright, 1))
+        saturate(var(--pl-plant-sat, var(--pl-shoot-sat, 1)))
+        sepia(var(--pl-plant-sepia, var(--pl-shoot-sepia, 0)))
+        hue-rotate(var(--pl-plant-hue, var(--pl-shoot-hue, 0deg)));
     }
-    100% { transform: translate(var(--pl-spit-dx, 0px), -1px) scale(0.8); opacity: 0; }
-  }
-  /* Wet soil: water that has just landed darkens the ground and dries off. It is
-     the only mark that stays after the splash, and it is what makes the pour feel
-     like it went into the soil rather than onto a screen. */
-  .pl-fx__wet {
-    position: absolute;
-    width: var(--pl-wet-w, 34px);
-    /* Taller than a puddle, because this is a cross-section: water that lands on
-       the surface soaks down into the soil, and an 8 px cap at the surface line
-       was a stain on the grass that never entered the earth. */
-    height: 22px;
-    margin-left: calc(var(--pl-wet-w, 34px) / -2);
-    border-radius: 50% 50% 46% 46% / 34% 34% 66% 66%;
-    /* Damp soil, with a cool sheen along its top edge: water reflects the sky
-       even at night, and a stain alone is invisible on soil this dark. The dark
-       is strongest just under the surface and fades with depth. */
-    background:
-      linear-gradient(180deg, rgba(206, 232, 255, 0.24) 0%, rgba(206, 232, 255, 0) 42%),
-      radial-gradient(
-        ellipse at 50% 16%,
-        rgba(20, 12, 6, 0.5) 0%,
-        rgba(20, 12, 6, 0.36) 46%,
-        transparent 80%
-      );
-    /* Grows downward from the surface line: the wet front moving into the soil
-       rather than a puddle spreading on top of it. */
-    transform-origin: 50% 0;
-    opacity: 0;
-    animation: pl-fx-wet 3800ms ease-out var(--pl-wet-delay, 0ms) forwards;
-  }
-  @keyframes pl-fx-wet {
-    0% { transform: scale(0.55, 0.14); opacity: 0; }
-    9% { opacity: 0.95; }
-    30% { transform: scale(1, 1); opacity: 1; }
-    62% { opacity: 0.82; }
-    100% { transform: scale(1.04, 1); opacity: 0; }
-  }
-  /* Meal: a speck that lands and lies there for a moment before the soil takes it.
-     Feeding leaves crumbs, not water - no ring, no spray. */
-  .pl-fx__meal {
-    position: absolute;
-    width: 3px;
-    height: 3px;
-    border-radius: 1px;
-    background: #c9a25a;
-    box-shadow: 0 1px 0 rgba(58, 42, 21, 0.45);
-    transform-origin: 50% 100%;
-    opacity: 0;
-    /* Meal lies on the soil until the ground takes it. 1.5 s was one beat too
-       few to see it land: a handful of crumbs that is gone before the eye has
-       followed the pour reads as the feed vanishing, not as being eaten. */
-    animation: pl-fx-meal 3200ms ease-out var(--pl-meal-delay, 0ms) forwards;
-  }
-  @keyframes pl-fx-meal {
-    0% { opacity: 0; transform: scale(0.4); }
-    5% { opacity: 1; transform: scale(1); }
-    78% { opacity: 1; }
-    100% { opacity: 0; }
+    38% {
+      filter: brightness(calc(var(--pl-plant-bright, 1) * 1.46))
+        saturate(calc(var(--pl-plant-sat, var(--pl-shoot-sat, 1)) * 1.16))
+        sepia(var(--pl-plant-sepia, var(--pl-shoot-sepia, 0)))
+        hue-rotate(var(--pl-plant-hue, var(--pl-shoot-hue, 0deg)));
+    }
   }
   /* Water: the leaves lift and brighten. Feed: the whole plant swells for a beat.
      Different curves, so the two props read as different actions. */
@@ -1269,24 +1287,6 @@ const STYLE = `
   }
   @media (prefers-reduced-motion: reduce) {
     .pl-menu__cloudshadow i { animation: none; }
-  }
-  /* Warmth where the plant stands: a low, wide glow lying on the soil around the
-     stem. Not light from the sky - the sun's wash does that - but the near, warm
-     pool that makes a place feel sat in, and the reason the ground no longer
-     reads as a flat brown band under a nice sky. */
-  .pl-menu__cozy {
-    position: absolute;
-    inset: 0;
-    z-index: 1;
-    pointer-events: none;
-    background: radial-gradient(
-      ellipse 46% 26% at 50% calc(var(--pl-horizon, 54%) + 4%),
-      color-mix(in srgb, var(--pl-sun-core, #fff2c4) 26%, transparent) 0%,
-      color-mix(in srgb, var(--pl-sun-core, #fff2c4) 9%, transparent) 46%,
-      transparent 76%
-    );
-    mix-blend-mode: normal;
-    opacity: var(--pl-cozy, 0.85);
   }
   /* Pollen: a few motes of warm light lifting off the meadow. Small, slow and
      dim enough to be noticed only after a moment. */
@@ -1645,6 +1645,10 @@ const STYLE = `
   .pl-menu__input {
     width: 100%;
     box-sizing: border-box;
+    /* A form field is the one place on this screen text is meant to be selected
+       and edited, so it takes back what the menu root turns off. */
+    user-select: text;
+    -webkit-user-select: text;
     padding: 12px 14px;
     border-radius: var(--hud-radius, 14px);
     border: 2px solid var(--hud-border, rgba(94, 122, 53, 0.35));
@@ -1655,6 +1659,13 @@ const STYLE = `
     text-align: center;
     outline: none;
     transition: border-color 160ms ease, background 160ms ease;
+  }
+  /* The sign-in fields are built from a template rather than this class, so the
+     opt-in is by element as well: an input is the one place text is selected. */
+  .pl-menu input,
+  .pl-menu textarea {
+    user-select: text;
+    -webkit-user-select: text;
   }
   .pl-menu__input::placeholder { color: var(--ink-dim, #9a937a); opacity: 0.85; }
   .pl-menu__input:focus { border-color: var(--leaf-400, #9ed95c); background: rgba(12, 18, 12, 0.92); }
@@ -2073,14 +2084,6 @@ export class MainMenu {
     // it is appended here rather than where it was built.
     groundPlane.appendChild(this.stage);
 
-    // The moon's light lying on the ground in front of the plant. The scene needs a
-    // source near the tree at night, and a cold pool of moonlight is the one that
-    // belongs there - it is the opposite of the warm hearth that was removed.
-    const moonPool = document.createElement('div');
-    moonPool.className = 'pl-menu__moon-pool';
-    moonPool.setAttribute('aria-hidden', 'true');
-    groundPlane.appendChild(moonPool);
-
     // What is buried in the cut soil. Each piece is a small button rather than a
     // decoration: clicking a chest should open it, and clicking a worm should
     // annoy it. The tilt is per piece so nothing sits on the grid.
@@ -2126,18 +2129,29 @@ export class MainMenu {
         // stop half way down the band - a reach crosses the whole band, so the same
         // 0.5 left its deep end a ghost. The fade is the plate's, its end is not.
         [
-          { name: 'body', colour: '#efe3cd', opacities: [1, 0.95, 0.72] },
-          { name: 'lateral', colour: '#cbb99b', opacities: [1, 0.95, 0.72] },
-          // Third order is paler than second, as the plate draws its hairs at 50%.
-          { name: 'hair', colour: '#cbb99b', opacities: [0.55, 0.52, 0.4] },
+          // The reaches use the plate's own body ramp, not only its tip tone at
+          // every depth. A reach that left the crown already dark looked like a
+          // second root system laid beside the pale fan under the trunk; starting
+          // at the plate's surface tan and settling into its tip tan makes the two
+          // one system, with the join hidden under the root crown.
+          {
+            name: 'body',
+            colours: ['var(--pl-root, #d9c3a1)', 'var(--pl-root-tip, #9a7d5c)'],
+            opacities: [0.95, 0.8, 0.5],
+          },
+          {
+            name: 'lateral',
+            colours: ['var(--pl-root-tip, #9a7d5c)', 'var(--pl-root-tip, #9a7d5c)'],
+            opacities: [0.9, 0.7, 0.4],
+          },
         ]
           .map(
             (fade) =>
               `<linearGradient id="pl-reach-fade-${fade.name}" gradientUnits="userSpaceOnUse" ` +
               `x1="0" y1="0" x2="0" y2="100">` +
-              `<stop offset="0" stop-color="${fade.colour}" stop-opacity="${fade.opacities[0]}"/>` +
-              `<stop offset="0.62" stop-color="${fade.colour}" stop-opacity="${fade.opacities[1]}"/>` +
-              `<stop offset="1" stop-color="${fade.colour}" stop-opacity="${fade.opacities[2]}"/>` +
+              `<stop offset="0" stop-color="${fade.colours[0]}" stop-opacity="${fade.opacities[0]}"/>` +
+              `<stop offset="0.62" stop-color="${fade.colours[1]}" stop-opacity="${fade.opacities[1]}"/>` +
+              `<stop offset="1" stop-color="${fade.colours[1]}" stop-opacity="${fade.opacities[2]}"/>` +
               '</linearGradient>',
           )
           .join('') +
@@ -2148,7 +2162,7 @@ export class MainMenu {
     if (runsSvg) {
       // No redraw on zoom and none on a timer: the reaches are drawn in the band's
       // own percentage space, and the band is a piece of the world, so the camera's
-      // scale moves and thickens them with the soil around them. The eight paths are
+      // scale moves and thickens them with the soil around them. Each path is
       // built once and never touched again.
       for (const run of rootRuns()) {
         const group = document.createElementNS('http://www.w3.org/2000/svg', 'g');
@@ -2157,8 +2171,8 @@ export class MainMenu {
         // be found in DevTools without counting paths.
         group.dataset.root = run.name;
         group.dataset.branches = run.branches.map((branch) => branch.name).join(' ');
-        // The same three passes the static plate draws: a padded ink edge, the
-        // pale tapered body, and a few hairs off the spine.
+        // The same passes the static plate draws: a padded ink edge, a pale tip
+        // floor, and the tapered body over it.
         const add = (d: string, className: string): void => {
           const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
           path.setAttribute('d', d);
@@ -2170,11 +2184,18 @@ export class MainMenu {
         add(run.tip, 'tip');
         add(run.outline, 'body');
         add(run.laterals, 'lateral');
-        add(run.hairs, 'hair');
         runsSvg.appendChild(group);
         runGroups.set(run.id, group);
       }
     }
+
+    // The soil's wetness lives under the roots, not in the prop-effect layer. The
+    // roots and finds then remain legible through it, and the damp earth is a
+    // child of the ground plane, so it stays in its place through a camera move.
+    const soilMoisture = document.createElement('div');
+    soilMoisture.className = 'pl-menu__soil-moisture';
+    soilMoisture.setAttribute('aria-hidden', 'true');
+    soilLife.insertBefore(soilMoisture, soilLife.firstChild);
 
     const soilCaption = document.createElement('div');
     soilCaption.className = 'pl-menu__soil-caption';
@@ -2219,11 +2240,23 @@ export class MainMenu {
       say(treasure.find);
     });
 
+    let lastGrowthFit = 0;
     this.plant = createTitlePlant({
       swayMs: options.ui.titlePlantSwayMs,
       reactMs: options.ui.titlePlantReactMs,
       cooldownMs: options.ui.titlePlantReactCooldownMs,
       reducedMotion: options.ui.reducedMotion,
+      // The plant is growing over a second or two now, and the ground line answers
+      // to its height. Following every step would measure the layout at 11 Hz for
+      // the length of a pour; a few times a second is enough to keep the crown out
+      // of the menu without making the growth itself stutter.
+      onGrowthChange: () => {
+        const now = performance.now();
+        if (now - lastGrowthFit < 220) return;
+        lastGrowthFit = now;
+        this.fitToPane();
+      },
+      onGrowthEnd: () => this.fitToPane(),
     });
     // The plant stands in the world, not in the menu: it never fades with the UI
     // and it is the only part of the world the pointer can grab.
@@ -2370,9 +2403,8 @@ export class MainMenu {
     this.world.appendChild(careBar);
 
     // The foreground: the ground as one layer (so a find cannot slide out of its
-    // own hole), the plant and the care buttons that hang off it. Horizontal for
-    // the ground only - lifting the soil line opens the hill skirts under it.
-    // One factor for the whole ground, plant included.
+    // own hole), the plant and the care buttons that hang off it. One factor for
+    // the whole ground, plant included.
     //
     // The plant stands on this plane: it is rooted in it and its plate is the root
     // crown every reach leaves from. It was registered at 1.1 while the ground - the
@@ -2381,23 +2413,206 @@ export class MainMenu {
     // finds: the trunk hung over nothing, treasure by treasure, and the top of the
     // reach stubs came out from behind the plate. Same factor now, so a drag moves
     // the whole ground and the thing growing out of it as one piece.
-    // No vertical share on either: a drag that lifts the soil has to lift the trunk
-    // by the same amount, or the trunk sinks into the ground on the way up.
-    this.scene.addParallaxHost(groundPlane, 0.9, 0);
-    this.scene.addParallaxHost(this.plant.element, 0.9, 0, 'translate(-50%, -100%)');
+    //
+    // The vertical share is half the horizontal one, matching the near plane's
+    // own 1:0.5 ratio. It used to be zero, which made a vertical drag move only
+    // the painted hills: the foreground cutout, the soil line, the plant and the
+    // finds all stayed put while the background slid out from under them. A drag
+    // that lifts the soil lifts the trunk and the props by exactly the same
+    // amount, so the plant stays planted in its own ground.
+    this.scene.addParallaxHost(groundPlane, FOREGROUND_PARALLAX.x, FOREGROUND_PARALLAX.y);
+    this.scene.addParallaxHost(
+      this.plant.element,
+      FOREGROUND_PARALLAX.x,
+      FOREGROUND_PARALLAX.y,
+      'translate(-50%, -100%)',
+    );
     // The props stand on the same soil, so they keep the same factor as the soil.
-    this.scene.addParallaxHost(careBar, 0.9, 0);
+    this.scene.addParallaxHost(careBar, FOREGROUND_PARALLAX.x, FOREGROUND_PARALLAX.y);
 
-    // Everything a prop leaves behind lands here: droplets, specks, the ring of
-    // water on the soil. Above the plant, so the effect is in front of it.
+    // The falling half of a pour lives here: droplets from the can and specks of
+    // meal from the sack. The mark it leaves is in the soil layer under the roots,
+    // because that is the thing that gets wet or enriched. Above the plant, so the
+    // falling drops pass in front of it.
     const fx = document.createElement('div');
     fx.className = 'pl-menu__fx';
     fx.setAttribute('aria-hidden', 'true');
-    // Screen space, like the weather: the droplets are placed from the pointer's
-    // client coordinates and the plant's rect, which are screen pixels. Inside the
-    // scaled world those numbers were off by 1/zoom, and at the pulled-back limit
-    // the water fell past the soil into the cut.
-    this.root.appendChild(fx);
+    // Ground space, not screen space. The layer lives inside the zoomed world and
+    // takes the foreground's parallax share, so a puddle stays on the patch of soil
+    // it landed on when the camera is dragged or zoomed. Its positions are converted
+    // from client pixels at spawn time; storing screen pixels here made the water
+    // land in one place and the ground move out from under it.
+    this.world.appendChild(fx);
+    this.scene.addParallaxHost(fx, FOREGROUND_PARALLAX.x, FOREGROUND_PARALLAX.y);
+    // A pour can overlap the previous one; the root's uptake breath is one timer
+    // pair, not one per landing. A new pour restarts it from the new last landing.
+    let uptakeAtTimer = 0;
+    let uptakeEndTimer = 0;
+
+    type SoilPatchVisual = {
+      patch: SoilPatch;
+      element: HTMLDivElement;
+      water: HTMLSpanElement;
+      feed: HTMLSpanElement;
+      pool: HTMLSpanElement;
+      surface: HTMLSpanElement;
+      crumbs: HTMLSpanElement;
+      expiryTimer: number;
+    };
+    const soilPatches: SoilPatchVisual[] = [];
+    let nextSoilPatchId = 1;
+    const SOIL_DRY_MS = 26000;
+    const SOIL_FEED_LIFE_MS = 38000;
+    const MAX_SOIL_PATCHES = 18;
+
+    const renderSoilPatch = (visual: SoilPatchVisual): void => {
+      const { patch } = visual;
+      const moisture = soakMoisture(patch);
+      const fertility = soakFertility(patch);
+      visual.element.style.left = `${patch.x.toFixed(1)}px`;
+      visual.element.style.width = `${patch.width.toFixed(1)}px`;
+      visual.element.style.height = `${Math.max(patch.waterDepth, patch.feedDepth).toFixed(1)}px`;
+      visual.water.style.height = `${patch.waterDepth.toFixed(1)}px`;
+      visual.water.style.opacity = patch.water > 0 ? `${(0.4 + moisture * 0.5).toFixed(2)}` : '0';
+      visual.feed.style.height = `${patch.feedDepth.toFixed(1)}px`;
+      visual.feed.style.opacity = patch.feed > 0 ? `${(0.58 + fertility * 0.3).toFixed(2)}` : '0';
+      // The pool is the visible gathering stage; the soil stain underneath is the
+      // part that has already gone down.
+      visual.pool.style.opacity = patch.water > 0 ? `${(0.4 + moisture * 0.45).toFixed(2)}` : '0';
+      visual.surface.style.opacity =
+        patch.water > 0 ? `${(0.3 + moisture * 0.35).toFixed(2)}` : '0';
+      visual.crumbs.style.opacity =
+        patch.feed > 0 ? `${(0.82 + fertility * 0.12).toFixed(2)}` : '0';
+    };
+
+    const forgetSoilPatch = (visual: SoilPatchVisual): void => {
+      window.clearTimeout(visual.expiryTimer);
+      visual.element.remove();
+      const index = soilPatches.indexOf(visual);
+      if (index >= 0) soilPatches.splice(index, 1);
+    };
+
+    const scheduleSoilExpiry = (visual: SoilPatchVisual): void => {
+      window.clearTimeout(visual.expiryTimer);
+      visual.element.classList.remove('is-drying');
+      visual.element.classList.add('is-visible');
+      const life = visual.patch.feed > 0 ? SOIL_FEED_LIFE_MS : SOIL_DRY_MS;
+      visual.expiryTimer = window.setTimeout(() => {
+        visual.element.classList.remove('is-visible');
+        visual.element.classList.add('is-drying');
+        visual.expiryTimer = window.setTimeout(() => forgetSoilPatch(visual), 1700);
+      }, life);
+    };
+
+    const makeSoilPatchVisual = (patch: SoilPatch): SoilPatchVisual => {
+      const element = document.createElement('div');
+      element.className = 'pl-soil-patch';
+      const water = document.createElement('span');
+      water.className = 'pl-soil-patch__water';
+      const feed = document.createElement('span');
+      feed.className = 'pl-soil-patch__feed';
+      const pool = document.createElement('span');
+      pool.className = 'pl-soil-patch__pool';
+      const surface = document.createElement('span');
+      surface.className = 'pl-soil-patch__surface';
+      const crumbs = document.createElement('span');
+      crumbs.className = 'pl-soil-patch__crumbs';
+      element.append(water, feed, pool, surface, crumbs);
+      soilMoisture.appendChild(element);
+      const visual: SoilPatchVisual = {
+        patch,
+        element,
+        water,
+        feed,
+        pool,
+        surface,
+        crumbs,
+        expiryTimer: 0,
+      };
+      // Start at the surface and let the width/height transitions carry the stain
+      // down. A patch that appeared at full depth in one frame was a decal again.
+      element.style.width = '0px';
+      element.style.height = '0px';
+      visual.water.style.height = '0px';
+      visual.feed.style.height = '0px';
+      requestAnimationFrame(() => {
+        renderSoilPatch(visual);
+        element.classList.add('is-visible');
+      });
+      return visual;
+    };
+
+    /**
+     * Two damp volumes that reach each other are one damp volume. Without this,
+     * two patches could grow into the same soil and stack their darkness, which
+     * is both visually wrong and double-counts water that has already spread.
+     */
+    const mergeTouchingSoilPatches = (): void => {
+      for (let i = 0; i < soilPatches.length; i += 1) {
+        for (let j = i + 1; j < soilPatches.length; j += 1) {
+          const left = soilPatches[i];
+          const right = soilPatches[j];
+          if (!left || !right) continue;
+          const touching = (left.patch.width + right.patch.width) * 0.45;
+          if (Math.abs(left.patch.x - right.patch.x) > touching) continue;
+          const leftMass = left.patch.water + left.patch.feed;
+          const rightMass = right.patch.water + right.patch.feed;
+          const mass = leftMass + rightMass;
+          const mergedX =
+            mass > 0 ? (left.patch.x * leftMass + right.patch.x * rightMass) / mass : left.patch.x;
+          left.patch = addSoak(
+            {
+              ...left.patch,
+              x: mergedX,
+              water: left.patch.water + right.patch.water,
+              feed: left.patch.feed + right.patch.feed,
+            },
+            'water',
+            0,
+          );
+          renderSoilPatch(left);
+          scheduleSoilExpiry(left);
+          forgetSoilPatch(right);
+          // The array just got shorter; start again so the merged patch can join
+          // another one in the same pass.
+          i = -1;
+          break;
+        }
+      }
+    };
+
+    /**
+     * Put one landing into the soil. Landings near each other gather into one
+     * patch; the patch's centre moves towards the new drop, so repeated watering
+     * is one growing wet volume rather than a row of independent decals.
+     */
+    const depositSoil = (x: number, kind: SoakKind): void => {
+      const gathered = gatherSoak(
+        soilPatches.map((visual) => visual.patch),
+        x,
+      );
+      if (gathered) {
+        const visual = soilPatches.find((entry) => entry.patch.id === gathered.id);
+        if (visual) {
+          const existing = gathered.water + gathered.feed;
+          const mergedX = existing > 0 ? (gathered.x * existing + x) / (existing + 1) : x;
+          visual.patch = addSoak({ ...gathered, x: mergedX }, kind);
+          renderSoilPatch(visual);
+          scheduleSoilExpiry(visual);
+          mergeTouchingSoilPatches();
+          return;
+        }
+      }
+      // A patch is a volume, not an infinite sheet. Keeping the oldest few near
+      // the planting lets a long session dry out instead of turning the whole cut
+      // into one uniform dark band.
+      if (soilPatches.length >= MAX_SOIL_PATCHES) forgetSoilPatch(soilPatches[0]);
+      const visual = makeSoilPatchVisual(createSoakPatch(nextSoilPatchId, x, kind));
+      nextSoilPatchId += 1;
+      soilPatches.push(visual);
+      scheduleSoilExpiry(visual);
+      mergeTouchingSoilPatches();
+    };
 
     const rootedIds = new Set<string>();
 
@@ -2460,18 +2675,12 @@ export class MainMenu {
     };
 
     /**
-     * What a prop leaves where it was used: a stream of water that arcs out of the
-     * spout, splashes on the soil and wets the ground; or a scatter of meal that
-     * tumbles down and lies there. This is the difference between the two actions
-     * made visible - the growth step is the same, the gesture is not.
-     *
-     * Both halves of this were wrong. The droplets started at the top of the
-     * plant's bounding box - a hand above the leaves, in the sky - and fell
-     * straight down, so the pour never touched the can it supposedly came from.
-     * The splashes were round rings at the soil line, which is the top edge of the
-     * dirt cross-section: their lower halves were painted on the cut face, and
-     * they read as hoops sunk into the earth. The pour is an arc from the spout
-     * now, and every landing is an ellipse sitting *on* the surface line.
+     * What a prop leaves where it was used: water arcs out of the spout, and feed
+     * spills from the sack. The falling part is only half the gesture. A landing
+     * is not a splash: it joins the soil volume below it, where nearby landings
+     * gather, the wet front goes down, and saturation spreads sideways into drier
+     * soil. The same model handles meal, but feed has its own slower, shallower,
+     * warm trail and a pile of crumbs instead of a pool.
      *
      * @param from  Where the prop is: the can's spout, the sack's mouth, or the
      *              point a carried prop was let go.
@@ -2487,6 +2696,21 @@ export class MainMenu {
     ): void => {
       const box = fx.getBoundingClientRect();
       const plantBox = this.plant.element.getBoundingClientRect();
+      // The layer is inside the zoomed world, so client pixels have to become the
+      // layer's own pixels. One scale for both axes: the camera is uniform.
+      const scale = fx.offsetWidth > 0 ? box.width / fx.offsetWidth : 1;
+      const toLocal = (x: number, y: number): { x: number; y: number } => ({
+        x: (x - box.left) / scale,
+        y: (y - box.top) / scale,
+      });
+      // The soil layer is a different host: it is pinned to the soil line and
+      // spans the pane, rather than covering the whole world. Its own local
+      // coordinates are what the moisture patches are stored in.
+      const soilBox = soilMoisture.getBoundingClientRect();
+      const soilScale =
+        soilMoisture.offsetWidth > 0 ? soilBox.width / soilMoisture.offsetWidth : scale;
+      const toSoilX = (fxX: number): number => (fxX * scale + box.left - soilBox.left) / soilScale;
+      const localPlantBottom = (plantBox.bottom - box.top) / scale;
       // The stage the plant stands on is wider than the plant: its own drawing is
       // the grab plate around the trunk, and that is the width water can land
       // across. Watering a sprout with the fan of a full tree put half the drops on
@@ -2498,14 +2722,16 @@ export class MainMenu {
       // on it, and so does every puddle. Measured from the plant so a drag or a
       // zoom that lifts the soil lifts the water with it - and nothing is ever
       // drawn below it, because under it is the cut face of the soil.
-      const groundY = plantBox.bottom - box.top;
-      const originX = from.x - box.left;
-      const originY = from.y - box.top;
-      const targetX = landX - box.left;
+      const groundY = localPlantBottom;
+      const origin = toLocal(from.x, from.y);
+      const originX = origin.x;
+      const originY = origin.y;
+      const target = toLocal(landX, plantBox.bottom);
+      const targetX = target.x;
       const water = action === 'water';
       // Over the plant the water lands across its own width; anywhere else it lands
       // where it was poured, in a splash no wider than a hand.
-      const spread = onPlant ? artBox.width * (water ? 0.32 : 0.15) : 5;
+      const spread = onPlant ? (artBox.width / scale) * (water ? 0.2 : 0.12) : 5;
       const landings = water ? 6 : 4;
       const drops = water ? 18 : 14;
       const landingX: number[] = [];
@@ -2554,73 +2780,35 @@ export class MainMenu {
           delay + dur,
         );
       }
-      // What each landing leaves: water opens a ripple, throws a spray and darkens
-      // the soil; meal drops a few specks that lie there and fade.
+      // What each landing leaves is not a splash: the landing joins the soil
+      // volume under it. Nearby landings gather into one patch; the soak model
+      // deepens it until saturation, then widens it into the drier soil beside it.
       let lastAt = 0;
       for (let i = 0; i < landings; i += 1) {
         const arrive = firstArrival[i] ?? 0;
         if (!Number.isFinite(arrive)) continue;
-        const x = landingX[i] ?? targetX;
         lastAt = Math.max(lastAt, arrive);
-        if (water) {
-          const width = 16 + ((i * 7) % 6);
-          const height = width * 0.26;
-          const wet = document.createElement('i');
-          wet.className = 'pl-fx__wet';
-          wet.style.left = `${x.toFixed(1)}px`;
-          // Most of the stain is below the surface line: that is the soil the
-          // water is soaking into, and it is why the ground reads darker.
-          wet.style.top = `${(groundY - 6).toFixed(1)}px`;
-          wet.style.setProperty('--pl-wet-w', `${Math.round(width * 2.3)}px`);
-          wet.style.setProperty('--pl-wet-delay', `${Math.max(0, Math.round(arrive) - 80)}ms`);
-          mount(wet);
-          // Two rings, the second a beat later and a quarter wider: one ring reads
-          // as a line drawn on the soil, two read as a landing.
-          for (let k = 0; k < 2; k += 1) {
-            const ripple = document.createElement('i');
-            ripple.className = 'pl-fx__ripple';
-            ripple.style.left = `${x.toFixed(1)}px`;
-            ripple.style.top = `${(groundY - height * (1 + k * 0.25)).toFixed(1)}px`;
-            ripple.style.setProperty('--pl-ripple-w', `${width * (1 + k * 0.25)}px`);
-            ripple.style.setProperty('--pl-ripple-delay', `${Math.round(arrive + k * 80)}ms`);
-            mount(ripple);
-          }
-          // Three drops thrown out of the landing, one out each way and one up.
-          for (let k = 0; k < 3; k += 1) {
-            const spit = document.createElement('i');
-            spit.className = 'pl-fx__spit';
-            spit.style.left = `${(x + (k - 1) * 1.5).toFixed(1)}px`;
-            spit.style.top = `${(groundY - 2).toFixed(1)}px`;
-            spit.style.setProperty(
-              '--pl-spit-dx',
-              `${((k - 1) * 9 + ((i * 13) % 5) - 2).toFixed(0)}px`,
-            );
-            spit.style.setProperty('--pl-spit-rise', `${9 + ((i + k) % 4) * 2}px`);
-            spit.style.setProperty('--pl-spit-delay', `${Math.round(arrive + k * 30)}ms`);
-            mount(spit);
-          }
-        } else {
-          for (let k = 0; k < 3; k += 1) {
-            const meal = document.createElement('i');
-            meal.className = 'pl-fx__meal';
-            meal.style.left = `${(x + (k - 1) * 3.5).toFixed(1)}px`;
-            meal.style.top = `${(groundY - 3).toFixed(1)}px`;
-            meal.style.setProperty('--pl-meal-delay', `${Math.round(arrive + k * 45)}ms`);
-            mount(meal);
-            // A crumb that bounces off the soil before it lies down.
-            const bounce = document.createElement('i');
-            bounce.className = 'pl-fx__spit pl-fx__spit--meal';
-            bounce.style.left = `${x.toFixed(1)}px`;
-            bounce.style.top = `${(groundY - 2).toFixed(1)}px`;
-            bounce.style.setProperty('--pl-spit-dx', `${((k - 1) * 7).toFixed(0)}px`);
-            bounce.style.setProperty('--pl-spit-rise', `${6 + k * 2}px`);
-            bounce.style.setProperty('--pl-spit-delay', `${Math.round(arrive + k * 30)}ms`);
-            mount(bounce);
-          }
-        }
+        const x = landingX[i] ?? targetX;
+        window.setTimeout(
+          () => depositSoil(toSoilX(x), water ? 'water' : 'feed'),
+          Math.max(0, Math.round(arrive)),
+        );
       }
-      // A pour is a gesture with an end: everything it left is gone a beat after
-      // the last splash has dried.
+      // The roots take their turn a beat after the last landing: the soil has
+      // taken the pour by then, and the plant's whole root plate answers it.
+      if (onPlant) {
+        window.clearTimeout(uptakeAtTimer);
+        window.clearTimeout(uptakeEndTimer);
+        this.plant.element.classList.remove('is-absorbing');
+        uptakeAtTimer = window.setTimeout(() => {
+          this.plant.element.classList.add('is-absorbing');
+          uptakeEndTimer = window.setTimeout(() => {
+            this.plant.element.classList.remove('is-absorbing');
+          }, 780);
+        }, Math.round(lastAt) + 420);
+      }
+      // The falling drops are cleaned up after the pour. The soil patches are not:
+      // they keep soaking/drying on their own timers in the ground layer.
       window.setTimeout(() => {
         for (const piece of pieces) piece.remove();
       }, Math.round(lastAt) + 4200);
@@ -2631,7 +2819,7 @@ export class MainMenu {
       // watering instead of only when it crosses a stage boundary.
       // Care counts are not stages: the ladder is a hundred steps long, so a
       // watering is five of them and the drawing changes at every one.
-      this.plant?.setGrowthStage(growthStageFromPoints(care.points));
+      this.plant?.setGrowthStage(growthStageFromPoints(care.points), animateNew);
       // The drawing just changed size, so the ground line has to answer to the new
       // height: a tree that grew while the horizon stayed put is a tree that grew
       // through the top of the pane.
@@ -2713,6 +2901,7 @@ export class MainMenu {
       action: CareAction;
       button: HTMLElement;
       ghost: HTMLElement;
+      pointerId: number;
       startX: number;
       startY: number;
       moved: boolean;
@@ -2775,6 +2964,9 @@ export class MainMenu {
 
     const onCarryMove = (event: PointerEvent): void => {
       if (!carrying) return;
+      // A second finger on the bar is not the hand that is carrying the prop.
+      if (event.pointerId !== carrying.pointerId) return;
+      if (!carrying.ghost.isConnected) return;
       if (
         !carrying.moved &&
         Math.hypot(event.clientX - carrying.startX, event.clientY - carrying.startY) < 6
@@ -2795,9 +2987,18 @@ export class MainMenu {
 
     /** Put a carried prop down without acting on it (a lost capture, a cancel). */
     const dropGhost = (event?: PointerEvent): void => {
-      if (!carrying) return;
-      carrying.ghost.remove();
-      carrying.button.classList.remove('is-carried');
+      const current = carrying;
+      if (!current) return;
+      // A lost capture names the pointer it belonged to; another pointer losing
+      // one must not take the prop out of the hand that is holding it.
+      if (event && event.pointerId !== current.pointerId) return;
+      // Clear the state, not only the nodes. The carry used to stay non-null
+      // after a lost capture, so the next move over the care bar re-added
+      // `is-carrying` on the world - with no ghost - and left the whole title
+      // showing the grab hand.
+      carrying = null;
+      current.ghost.remove();
+      current.button.classList.remove('is-carried');
       this.plant.element.classList.remove('is-carry-target');
       this.world.classList.remove('is-carrying');
       try {
@@ -2808,6 +3009,7 @@ export class MainMenu {
     const onCarryEnd = (event: PointerEvent): void => {
       const current = carrying;
       if (!current) return;
+      if (event.pointerId !== current.pointerId) return;
       carrying = null;
       // Where the carried prop actually is on screen, read before it is removed:
       // what was put down has to be the drawing the player is looking at, not the
@@ -2886,6 +3088,7 @@ export class MainMenu {
         action,
         button,
         ghost,
+        pointerId: event.pointerId,
         startX: event.clientX,
         startY: event.clientY,
         moved: false,
@@ -2942,12 +3145,6 @@ export class MainMenu {
     this.nightWash = document.createElement('div');
     this.nightWash.className = 'pl-menu__wash pl-menu__wash--night';
     this.screenLayerEl().appendChild(this.nightWash);
-
-    // Warmth on the ground where the plant stands, under the light passes so the
-    // hour still decides how warm it reads.
-    const cozy = document.createElement('div');
-    cozy.className = 'pl-menu__cozy';
-    this.screenLayerEl().appendChild(cozy);
 
     // Pollen. Placed once from a fixed table rather than at random, so the same
     // meadow is the same meadow on every visit and nothing pops in on reload.
@@ -3587,30 +3784,43 @@ export class MainMenu {
     // PLANT_MAX_SCALE, and a cap derived from the seed-sized art is one the grown
     // tree walks straight through - which is how the crown ended up above the top
     // of the pane while the cap insisted there was room.
-    // A real tree, not a sapling that fits a window: the budget is the sky you can
-    // reach by pulling the camera back (1.2 panes), so at the default zoom the tree
-    // fills the sky above the soil and its crown is a little above the frame, and a
-    // step back frames the whole thing.
-    // A taller tree: the reserved sky was 90% of the pane minus the ground, which
-    // left the grown plant noticeably shorter than the space it stood in. The
-    // horizon rule below still owns the line, and this only fills the sky that is
-    // already there - at 96% the crown clears the top edge and the whole tree is
-    // framed without pulling the camera back.
-    // 0.84 rather than 0.96: a tree that fills every pixel of the sky above the
-    // ground reads as a close-up of one. The smaller share leaves air over the
-    // crown, which is what makes it a tree standing in a field.
-    const maxWidth = mascotMaxWidthPx(paneH * 0.84, ground, 84, PLANT_MAX_SCALE);
+    // The plant lives inside the camera's world, so its width is measured in world
+    // units and then scaled by the home zoom. The old budget ignored that scale and
+    // reserved room the drawing never used: at the 0.72 opening zoom the full tree
+    // filled barely three quarters of the sky it was given.
+    const worldScale = Math.max(0.55, Math.min(3.2, this.options.ui.titleHomeZoom || 1));
+    // A tree, not a sapling: PLANT_MAX_SCALE is the grown drawing, and the budget
+    // is divided by it so the tallest ladder stage is what fits. The crown's tips
+    // overhang the authored 200x283 box by roughly seven per cent of the drawing's
+    // height, and `offsetHeight` cannot see that overhang: at 0.97 the ancient
+    // crown was clipped by the top of the pane. 0.91 reserves that overhang plus a
+    // little air, so the whole tree is visible instead of ending at the sky edge.
+    const maxWidth = mascotMaxWidthPx(
+      (paneH * 0.91) / worldScale,
+      ground / worldScale,
+      84,
+      PLANT_MAX_SCALE,
+    );
     this.root.style.setProperty('--pl-mascot-max', `${Math.round(maxWidth)}px`);
-    // offsetHeight ignores transforms, so the care scale has to be applied by hand:
-    // otherwise the ground line answers to the plant's seed size while the tree is
-    // drawn at up to 1.6x above it.
+    // offsetHeight ignores transforms, so the care scale and the camera's own zoom
+    // have to be applied by hand: otherwise the ground line answers to the plant's
+    // layout size while the tree is drawn up to 2.35x above it, then scaled by the
+    // world around that.
     const careScale = Number(this.plant.element.style.getPropertyValue('--pl-care-scale')) || 1;
     const plantPx =
-      (this.plant.element.offsetHeight || Math.round(maxWidth * PLANT_ART_ASPECT)) * careScale;
+      (this.plant.element.offsetHeight || Math.round(maxWidth * PLANT_ART_ASPECT)) *
+      careScale *
+      worldScale;
+    // The crown's tips hang above the shoot's own box by roughly seven per cent of
+    // the drawing's height. `plantPx` is the layout box, so without this pad the
+    // fit put the box at the top of the pane and the tips above it. The pad is a
+    // share of the plant, not a fixed number, so it holds at every size.
+    const crownOverhangPx = Math.round(plantPx * 0.07);
     const horizon = horizonForPane({
       viewportPx: paneH,
       fraction: this.options.ui.titleHorizonFraction,
       plantPx,
+      topPadPx: crownOverhangPx + 10,
       minGroundPx: ground,
     });
     this.root.style.setProperty('--pl-horizon', `${Math.round(horizon)}px`);
@@ -3801,7 +4011,6 @@ export class MainMenu {
       const daylight = 1 - Math.min(1, palette.star);
       const sunBody = sunPosition(hourNow());
       const moonBody = moonPosition(hourNow());
-      const sunX = sunBody.x;
       const groundPalette = paletteAt(groundTime);
       // The verge follows the world's season, not the hour: the flowers change when
       // the calendar does.
@@ -3822,6 +4031,22 @@ export class MainMenu {
       const groundLight = titleLighting(groundPalette);
       plantVars.set('--pl-plant-dim', groundPalette.plantDim.toFixed(2));
       plantVars.set('--pl-plant-sat', groundLight.plantSaturation.toFixed(2));
+      // The roots are the one part of the plant whose palette words were written
+      // only to the scene hosts: the plate itself inherited its fallbacks at every
+      // hour, so it stayed one bone colour while the soil moved around it. Write
+      // them on the plant element, where the plate can actually see them, and give
+      // the system the same warm, depth-graded pair the reaches use.
+      const rootBase = lerpHex(
+        '#d9c3a1',
+        groundPalette.groundTop,
+        0.26 + groundPalette.star * 0.46,
+      );
+      plantVars.set(
+        '--pl-root',
+        lerpHex(rootBase, groundPalette.sun, 0.12 * (1 - groundPalette.star * 0.8)),
+      );
+      plantVars.set('--pl-root-tip', lerpHex('#b59a76', groundPalette.groundTop, 0.55));
+      plantVars.set('--pl-root-ink', lerpHex(groundPalette.groundBody, '#000000', 0.55));
       // The sun's wash is the sun's own light, so it cannot outlive the disc. The
       // palette's glow fades more slowly than the dusk does, and the wash is a
       // full-pane screen blend: for a few minutes every evening the whole title
@@ -3865,9 +4090,10 @@ export class MainMenu {
       // its light - the "why did the moonlight go" case.
       const throughGate = through.source === 'moon' ? 1 - storm * 0.08 : 1 - storm * 0.7;
       // Paper and torchlight, in the title's own drawing: the per-leaf overlay is
-      // screened over every blade and its opacity is this number, so a moon behind
-      // the crown lights the canopy from within. `top` is that moon (over the
-      // trunk's column); `amount` is the sideways transmission at rise and set.
+      // laid over every blade at this opacity, so a moon behind the crown lights the
+      // canopy from within without one screen-blend layer per leaf. `top` is that
+      // moon (over the trunk's column); `amount` is the sideways transmission at
+      // rise and set.
       plantVars.set(
         '--pl-leaf-through',
         // 0.42, not 0.7: screened over a blade this overlay is nearly white, and
@@ -3981,14 +4207,6 @@ export class MainMenu {
       // The rim of the leaves and the near silhouettes follow the light too.
       // Written on the plant's own element. On the menu root it was one more
       // property whose every step recalculated two thousand descendants.
-      // Whole pixels, not quarter pixels. This is written on the plant element, which
-      // is 921 SVG nodes with filters: a write restyles and repaints all of them and
-      // measured 70-170 ms. The sun moves enough for a quarter-pixel step on most of
-      // the two-second ticks, so the title stuttered every two seconds whether or not
-      // the sky had visibly changed - the source of the "every few seconds" hitch.
-      // The rim offset spans five pixels across a day; a whole pixel is one step every
-      // twelve minutes and no one can see the difference.
-      this.plant.element.style.setProperty('--pl-plant-rim-x', `${Math.round((sunX - 0.5) * 5)}px`);
       // The soft bar behind the wordmark. It is a *fill* light, not a source: at
       // night it sat behind the trunk with the moon behind it, a bright warm blob
       // in the middle of the ground brighter than either disc. It now exists only

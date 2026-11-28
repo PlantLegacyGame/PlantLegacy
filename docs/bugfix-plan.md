@@ -1,4 +1,4 @@
-# Bug-fix plan — opened 2026-11-16, updated 2026-11-23
+# Bug-fix plan — opened 2026-11-16, updated 2026-11-27
 
 An ordered plan for the defects that were in the code on 2026-11-16, each with
 the evidence that it was real, the exact edit, and a check that proves the fix.
@@ -28,7 +28,7 @@ the commands are the check, not this table.
 | `pnpm config:keys` | pass | every declared key name appears in code or is allowlisted (a name that is read and then dropped still passes — E20) |
 | `pnpm palette:check` | pass | 7 ramps × 5 steps, 31 roles; the art bible and sheet match `config/palette.json` |
 | `pnpm test` | pass | 0 failures in tools, client, server, shared and weather |
-| `pnpm docs:check` | pass | 50/50 protocol rows, 139 quoted config cells, 83 tunables rows, every top-level doc linked |
+| `pnpm docs:check` | pass | links, config cells, protocol rows and table shapes; the counts print on every run |
 | `pnpm build` | pass | chunk-size warning unchanged |
 | `pnpm verify` | pass | the whole chain above, end to end |
 
@@ -515,7 +515,7 @@ others settled first.
 | F5 `docs/tasks/T02.md` quotes 50 / 0.3 | Already fixed: the `## Config:` table in `docs/tasks/T02.md` reads `cutaway_radius` 7.0 and `soil_opacity` 0.45, and `pnpm docs:check` now compares those cells with `config/` so they cannot drift back. The inventory row is `[x]`. |
 | A6 transition direction | Already fixed: `RootSightStateMachine` derives direction from target + progress and has a test. The inventory row is `[x]` and says so. |
 | Build warning "Top-level await is not available in the configured target environment" | Checked the artefact, not the warning: `dist/assets/index-legacy-*.js` is a `System.register` module with no top-level `await` (the bootstrap was wrapped). No confirmed defect. Re-check only if `main.ts` gains another top-level `await`. |
-| A1 "no strata to reveal" | A capability limit rather than a bug, and no longer untouched: **T56 has started** (2026-11-23) — an authored arch is meshed by surface nets, and the ground under the Root Sight aperture is a real volume with per-vertex beds, so a buried eye sees earth with a floor and a shaft wall. The rest of the ground is still a heightfield skin, so the limit stands everywhere else; the inventory row is `[~]` and names the two regions. |
+| A1 "no strata to reveal" | A capability limit rather than a bug, and no longer untouched: **T56 has started** (2026-11-23) — an authored arch is meshed by surface nets. The aperture body that also had per-vertex beds was removed on 2026-11-27 when its collar moved into the cavity bowl. The rest of the ground is still a heightfield skin, so the limit stands everywhere else; the inventory row is `[~]` and names the arch. |
 | 5.45 MB main chunk | A size warning, not a defect. Code-splitting is a performance task (AL-01 family), not a fix. |
 
 ## 7. To-do ledger

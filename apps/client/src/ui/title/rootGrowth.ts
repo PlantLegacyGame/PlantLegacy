@@ -5,9 +5,9 @@
  * (`rootDepth` in `roots.ts`): it thickens and deepens with care, but a scale
  * cannot make a root travel sideways to a chest that is buried at the edge of the
  * cut. So the reach is its own layer: one path per find, in the ground's own
- * percentage space, starting at the crown (50%, 0%) and ending on the piece. The
- * path is revealed along its length, which is what "a root grows towards it" looks
- * like - not a line that fades in.
+ * percentage space, starting just under the crown (about 50%, 3%) and ending on
+ * the piece. The path is revealed along its length, which is what "a root grows
+ * towards it" looks like - not a line that fades in.
  *
  * The geometry is data, so the arithmetic can be tested without a browser: the
  * tests check that every run starts on the crown, ends inside the piece it claims,
@@ -27,8 +27,8 @@ import { TREASURES, type Treasure } from './treasures.ts';
 export interface RootBranch {
   /** `a_1`, `a_2`, ... */
   name: string;
-  /** A fork off the spine, a grip that holds the find, or a hair off a fork. */
-  kind: 'fork' | 'grip' | 'hair';
+  /** A grip that holds the find. */
+  kind: 'grip';
   d: string;
 }
 
@@ -63,22 +63,8 @@ export interface RootRun {
   outline: string;
   /** The same shape, padded, filled with the ink colour: the plate's own edge. */
   ink: string;
-  /**
-   * Branches and the small roots off them, as one path of tapered shapes.
-   *
-   * The plate's roots fork (see `roots.ts`): a lateral leaves the parent, narrows,
-   * and throws its own feeders. A reach with one spine and three stroke "hairs" had
-   * none of that and read as a rope with whiskers laid beside the plate.
-   */
+  /** The grips that hold the find, as one path of tapered shapes. */
   laterals: string;
-  /**
-   * The feeders off those branches: the plate's root hairs.
-   *
-   * The plate draws generation-2 forks at full strength and their hairs as a
-   * 50%-opacity stroke (`roots.ts` `hairs`), so a reach's third order has to be
-   * paler than its second or the tips read as one flat brush.
-   */
-  hairs: string;
   /**
    * The run's centreline, stroked under the body.
    *
@@ -228,53 +214,6 @@ function ribbon(points: Pt[], half: (t: number) => number): string {
   );
 }
 
-/**
- * The centreline of a branch leaving `spine` at `t`, as sampled points.
- *
- * It leaves at a wide angle and turns further down as it goes, which is what makes
- * a root crown read as a fan instead of as a set of whiskers. Returned as points so
- * a branch can have its own feeders, the way the plate's laterals do.
- */
-function branchPoints(spine: Pt[], t: number, side: number, length: number): Pt[] {
-  const index = Math.min(spine.length - 1, Math.max(0, Math.round(t * (spine.length - 1))));
-  const origin = spine[index] ?? { x: ROOT_CROWN.x, y: ROOT_CROWN.y };
-  const before = spine[Math.max(0, index - 1)] ?? origin;
-  const after = spine[Math.min(spine.length - 1, index + 1)] ?? origin;
-  const heading = Math.atan2(after.y - before.y, after.x - before.x);
-  // 31 degrees off the parent, then a further 29 over its length: the plate's forks
-  // leave at 22-46 and turn 24-44 more, so the departure was set at 66 degrees here
-  // - twice the plate's widest - and every join was a kink.
-  const out = heading + side * 0.55;
-  // The bend is clamped to level: a fork on the upper side of a level parent would
-  // otherwise lift above the point it left (measured 0.88 units, ten pixels on
-  // screen), and no root on the plate ever rises.
-  const control = {
-    x: origin.x + Math.cos(out) * length * 0.5,
-    y: Math.max(origin.y + length * 0.18, origin.y + Math.sin(out) * length * 0.5),
-  };
-  const end = {
-    x: origin.x + Math.cos(out + side * 0.5) * length,
-    // A branch never rises above the point it left its parent: the plate's roots
-    // only ever go down, and a fork that lifts is a wire bent upward.
-    y: Math.max(
-      origin.y + length * 0.3,
-      origin.y + Math.sin(out + side * 0.5) * length + length * 0.12,
-    ),
-  };
-  const points: Pt[] = [];
-  for (let step = 0; step <= 8; step += 1) {
-    const u = step / 8;
-    const a = (1 - u) ** 2;
-    const b = 2 * (1 - u) * u;
-    const c = u * u;
-    points.push({
-      x: a * origin.x + b * control.x + c * end.x,
-      y: a * origin.y + b * control.y + c * end.y,
-    });
-  }
-  return points;
-}
-
 /** A branch's points as a tapered shape: narrow at its join, a point at its tip. */
 function tapered(points: Pt[], thick: number): string {
   return ribbon(points, (u) => 0.08 + (thick - 0.08) * (1 - u) ** 1.2);
@@ -309,8 +248,8 @@ function gripOn(spine: Pt[], t: number, target: Pt, thick: number, bend: number)
  * One root run, from the crown to the piece.
  *
  * `d` is the cubic centreline (and what the tests hold to the crown and the
- * find); `outline` and `ink` are the drawn shapes, and `hairs` the root hairs
- * that make it read as a root instead of a drawn line.
+ * find); `outline` and `ink` are the drawn shapes, and `laterals` the three grips
+ * that hold the find.
  */
 export function rootRunFor(treasure: Treasure, index = 0): RootRun {
   const end = rootRunEnd(treasure, index);
@@ -338,14 +277,18 @@ export function rootRunFor(treasure: Treasure, index = 0): RootRun {
   const lane = row / Math.max(1, peers.length - 1);
   const start = {
     x: round(50 + side * (0.4 + noise * 1.1)),
-    // Below the soil line, not on it. The widest part of a root is its crown, and a
-    // crown sitting on the line paints its own shoulder over the horizon, which is
-    // what still read as a root growing in the air. The band is 0..100 deep, so this
-    // is one to three per cent of it under the ground - and deeper for a deeper row.
-    y: round(1.7 + lane * 1.6 + noise * 0.3),
+    // Below the soil line, not on it - and far enough below that the *whole* width
+    // of the root's cut end is under the line. At the old 1.7 with a crowned start
+    // the top edge sat above the horizon, so eight runs laid a row of flat dark
+    // ovals along the soil surface. The plate's root crown covers these ends.
+    y: round(2.8 + lane * 1.3 + noise * 0.2),
   };
-  // The run stops short of the find: what lands on the piece is its grips.
-  const stop = { x: round(end.x + inward * 5.5), y: round(end.y + 0.2) };
+  // The run stops just short of the find: what lands on the piece is its grips.
+  // It used to stop 5.5 units out, which left the grips bridging a gap wide enough
+  // that their curves crossed and read as a knot of wire. Three units still keeps
+  // the main root from spiking through the piece, but leaves the join short enough
+  // for two fingers to close it cleanly.
+  const stop = { x: round(end.x + inward * 3), y: round(end.y + 0.3) };
   // Three knots, each one further out and further down than the last: down first,
   // then out along its own depth. Every coordinate is monotone, so the path cannot
   // double back, cannot rise above its starting point, and cannot overshoot.
@@ -377,78 +320,53 @@ export function rootRunFor(treasure: Treasure, index = 0): RootRun {
   // Half-widths: a root leaves the crown thick, thins steadily, and ends in a
   // point. The plate uses `(1 - t) ** taper + tip`; the same curve here keeps a
   // reach and a static root the same object.
-  // The plate's laterals are about 1.6 units of a 200-unit band, so 0.8% of the
-  // band's width. This layer is a 0..100 space stretched over the same band, so the
-  // matching half-width is 0.4, not 0.8: the first passes were twice the plate's
-  // thickness and read as pale bands laid across the soil instead of as roots.
-  // World units of the band, so the camera scales the whole root - length, taper and
-  // ink alike - with everything else buried in the soil.
-  // The plate's own laterals are about 0.8 of its 200-unit band, which on screen is
-  // a hair over a pixel. This layer is the same 0..100 space stretched across the
-  // whole cut, so the matching half-width is 0.16, not 0.4 or 0.5: the reaches were
-  // three times the plate's thickness and read as cables laid over the soil.
-  // This layer is the whole cut in 0..100, so one unit is about 11 px at a 1150 px
-  // pane and about six at the pulled-back zoom. A half-width below 0.1 is then under
-  // a pixel and the root disappears: the tip keeps 0.1 for that reason.
-  // These runs are three times as long as a plate lateral (the plate's widest is 74
-  // of its 200 units, a reach is 41 of 100 across the whole pane), so the same taper
-  // reads as a thread. The base is a quarter wider than the plate's for that reason;
-  // 0.1 is still 2.3 px at the tip on a desktop pane.
-  const thick = 0.44 + (1 - noise) * 0.1;
-  // It closes to a hair at the tip, so the rounded end is a point rather than a
-  // rounded rectangle.
-  // Flared at the crown: the first tenth of the run is up to twice as thick, which
-  // is what merges it into the plate's root crown instead of starting as a wire.
-  // The plate's laterals are 6.8 px wide at the base, 3.8 at half way and 0.63 at the
-  // tip - 56% then 9% - from a `(1 - t) ** 0.95` taper. This was 1.1 with a 0.1 floor,
-  // which held 29% of the base out to the very tip: the last fifth stayed a fat wire
-  // instead of thinning off. 1.3 with a 0.09 floor gives 53% at half and 20% at nine
-  // tenths, and 0.09 is still 2 px on screen at zoom 1.
-  const half = (t: number): number =>
-    (0.12 + (thick - 0.12) * (1 - t) ** 1.25) * (1 + 0.6 * Math.max(0, 1 - t * 6));
-  // A constant edge, not a proportional one: a thick root and a thin one get the
-  // same ink line, so the outline stays thin all the way down.
-  const inkHalf = (t: number): number => half(t) + 0.06;
-
-  // Branches, and the feeders off them.
   //
-  // The plate draws a lateral that forks its own smaller roots (`roots.ts`, the
-  // generation-2 spines); a reach with two whiskers on it had none of that and read
-  // as wire. Two branches carry two feeders each, and the spine throws three short
-  // ones of its own, all sized from the parent's width where they leave it.
+  // The plate's laterals are 7.4 units across a 200-unit band, 3.7% of the band's
+  // width. This layer is a 0..100 space stretched over the same band, so the
+  // matching full width is 3.7 units, or 1.85 half. A run is much longer than a
+  // lateral, so its body is held just under that, 1.8 half; the crown flares wider
+  // where it joins the plate and the long taper carries it to a point. The first
+  // version used half of 0.52 and the reaches read as pale wires laid over the
+  // soil next to real roots.
+  //
+  // World units of the band, so the camera scales the whole root - length, taper
+  // and ink alike - with everything else buried in the soil.
+  const thick = 1.8 + (1 - noise) * 0.18;
+  // A root leaves the plate at its body width and tapers to a point. It used to
+  // flare over the first tenth to merge into the plate's crown, but the flare made
+  // the cut end wider than the plate could hide; the plate already supplies the
+  // crown, so the run can start as the root it is. The tip is a point, not a
+  // clipped rectangle; 0.14 is about a pixel at the pulled-back zoom, and the
+  // non-scaling tip stroke carries the last of it.
+  const half = (t: number): number => 0.14 + (thick - 0.14) * (1 - t) ** 1.25;
+  // A constant edge, not a proportional one: thick and thin roots get the same ink
+  // line, so the outline stays a hair all the way down. A hair was too little on the
+  // pale tan body: at the pulled-back zoom the reaches lost their edge and read as
+  // flat ribbons. A tenth of a unit is still an edge, not an outline.
+  const inkHalf = (t: number): number => half(t) + 0.14;
+
+  // The grips are the only branches a reach needs. Forks and hairs were tried as
+  // well and made eight long runs read as a bundle of pale wires crossing the cut;
+  // the plate under the trunk carries that detail, so the reaches stay one clean
+  // tapered root with two fingers on the find.
   const name = rootRunName(index);
   const branches: RootBranch[] = [];
-  const addBranch = (kind: RootBranch['kind'], d: string): void => {
-    branches.push({ name: `${name}_${branches.length + 1}`, kind, d });
+  const addBranch = (d: string): void => {
+    branches.push({ name: `${name}_${branches.length + 1}`, kind: 'grip', d });
   };
-  const fork = (from: Pt[], t: number, side: number, length: number, scale: number): Pt[] => {
-    const points = branchPoints(from, t, side, length);
-    addBranch('fork', tapered(points, half(t) * scale));
-    return points;
-  };
-  // The count matches the plate's: a lateral carries two forks, each of which has one
-  // hair, and nothing else. Four branches on the spine (two of them plucked out of
-  // thin air at 0.2, 0.47 and 0.7 of the way down) is twice the richest root on the
-  // plate, and it is what made the reaches read as a wire brush next to it.
-  const leftW = half(0.34) * 0.62;
-  const rightW = half(0.64) * 0.5;
-  const left = fork(spine, 0.34, 1, 10 + (1 - noise) * 5, 0.62);
-  addBranch('hair', tapered(branchPoints(left, 0.55, -1, 4 + noise * 1.6), leftW * 0.5));
-  const right = fork(spine, 0.64, -1, 8 + noise * 4, 0.5);
-  addBranch('hair', tapered(branchPoints(right, 0.6, 1, 3.6 + noise * 1.6), rightW * 0.46));
-  // The grips. These are what arrives on the find: the run itself stops four units
-  // short of it, so the piece is held by branches that come over its face rather
-  // than spiked by the end of the main root. They leave the last fifth of the run
-  // and are the thick end of it, so they stay visible at the pulled-back zoom.
-  const gripThick = 0.2 + (1 - noise) * 0.05;
+  // The grips. These are what arrives on the find: the run itself stops a few
+  // units short of it, so the piece is held by branches that come over its face
+  // rather than spiked by the end of the main root. Two fingers, not three: with
+  // the old wide gap all three had to reach across, and their arcs crossed into a
+  // loop on top of every piece. Keep the bend shallow so each finger is a rootlet
+  // lying over the find, not another curve to read.
+  const gripThick = 0.46 + (1 - noise) * 0.06;
   const lean = side > 0 ? 1 : -1;
   for (const [t, target, thick, bend] of [
-    [0.8, { x: round(end.x - 3.4 * lean), y: round(end.y + 2.4) }, gripThick, 1.5 * lean],
-    [0.87, { x: round(end.x + 3.2 * lean), y: round(end.y + 3.4) }, gripThick * 0.92, -1.3 * lean],
-    [0.94, { x: round(end.x + inward * 1.2), y: round(end.y + 5.2) }, gripThick * 0.85, 1.1],
-    [0.99, { x: round(end.x + inward * 2.2), y: round(end.y + 1.2) }, gripThick * 0.8, -1.2],
+    [0.86, { x: round(end.x - 3.6 * lean), y: round(end.y + 2.2) }, gripThick, 0.5 * lean],
+    [0.96, { x: round(end.x + 2.8 * lean), y: round(end.y + 3) }, gripThick * 0.9, -0.4 * lean],
   ] as Array<[number, Pt, number, number]>) {
-    addBranch('grip', gripOn(spine, t, target, thick, bend));
+    addBranch(gripOn(spine, t, target, thick, bend));
   }
 
   return {
@@ -458,15 +376,8 @@ export function rootRunFor(treasure: Treasure, index = 0): RootRun {
     d,
     outline: ribbon(spine, half),
     ink: ribbon(spine, inkHalf),
-    laterals: branches
-      .filter((branch) => branch.kind !== 'hair')
-      .map((branch) => branch.d)
-      .join(' '),
-    hairs: branches
-      .filter((branch) => branch.kind === 'hair')
-      .map((branch) => branch.d)
-      .join(' '),
-    tip: 'M ' + spine.map((p) => `${round(p.x)} ${round(p.y)}`).join(' L '),
+    laterals: branches.map((branch) => branch.d).join(' '),
+    tip: `M ${spine.map((p) => `${round(p.x)} ${round(p.y)}`).join(' L ')}`,
   };
 }
 

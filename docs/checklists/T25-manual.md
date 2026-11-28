@@ -17,12 +17,14 @@ here would be a claim that somebody stood on the ground and looked.
 
 ## Ground
 
-- [ ] Walk 500 m from spawn: the ground rises and falls, and the horizon patch
-      meets the detail patch without a visible seam or step.
+- [ ] Walk across the 620 m play disc: the ground rises and falls. At the disc
+      rim, note the 20 km transition ring's seam; the 620 m boundary is the known
+      limitation described in `planet-scale.md` §2.1, not a passing no-seam check.
 - [ ] Stand on a slope: the camera does not sink into the hill, and the orbit
       target follows the surface.
-- [ ] Walk off the detail patch: the player keeps walking on the outer patch
-      instead of falling through.
+- [ ] Walk to the disc rim: the player stays on the disc heightfield; the ring
+      and the global globe are scenery, not walkable ground. Do not expect to
+      walk on the outer ring.
 
 ## Plant colliders
 

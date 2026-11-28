@@ -93,6 +93,7 @@ import {
 } from './environment/planetRelief.js';
 import {
   createSurfaceRing,
+  HORIZON_RING_OUTER_M,
   planetSurfaceY,
   planetTerrainY,
   TERRAIN_SKIN_M,
@@ -130,6 +131,7 @@ import {
   DEFAULT_WATER_FIELD_TUNING,
   type WaterFieldTuning,
 } from './environment/waterFieldTuning.js';
+import { createWaterGroundGuard, type WaterGroundGuard } from './environment/waterGroundGuard.js';
 import { createEnvironmentWeatherMachine } from './environment/weatherPresets.js';
 import { advanceWorldClock, applyServerClock, withTimeOfDay } from './environment/worldClock.ts';
 import { getTerrainParams } from './terrain/terrainState.js';
@@ -227,10 +229,10 @@ export interface WeatherPayload {
 /** The static globe sits a few metres under the play disc so the two never z-fight. */
 const FAR_RELIEF_FALLBACK_SINK_M = 5;
 /**
- * The ring that joins the play disc to the globe. It starts on the disc rim and
+ * The ring that joins the play disc to the globe starts on the disc rim and
  * reaches the planet-wide field well before the eye can see its outer edge.
+ * Its outer radius lives with the planet-surface geometry.
  */
-const HORIZON_RING_OUTER_M = 20_000;
 const HORIZON_RING_BLEND_M = 1_800;
 const HORIZON_RING_LIP_M = 8;
 /** Polar arc where the coarse globe must not draw; the ring covers well past it. */
@@ -299,6 +301,8 @@ export class EnvironmentRenderer {
   private surfaceWater: SurfaceWaterField | null = null;
   /** The same field as a surface: its level in geometry, not a tint. */
   private surfaceWaterMesh: SurfaceWaterMesh | null = null;
+  /** The drawn-ground guard shared by the standing and cave water. */
+  private waterGroundGuard: WaterGroundGuard | null = null;
   /** The cave river's own surface, two metres under the ground's. */
   private undergroundWaterMesh: SurfaceWaterMesh | null = null;
   /** Throttle for copying the field into the mesh's vertices. */
@@ -665,7 +669,7 @@ export class EnvironmentRenderer {
       };
       if (this.reliefParams.amplitudeM > 0) {
         this.ensureFarRelief(this.reliefParams);
-        this.ensureHorizonRing(this.reliefParams);
+        this.ensureHorizonRing();
         // 2e. The planet-wide sea, when the world is wet. Off by default now:
         //     the world is land, and a second water sphere at a fixed level
         //     painted the whole horizon and every basin as ocean.
@@ -747,6 +751,21 @@ export class EnvironmentRenderer {
         this.undergroundWaterMesh.mesh.renderOrder = 1;
         scene.add(this.undergroundWaterMesh.mesh);
       }
+      // The water decides whether it is under the drawn ground, not merely
+      // under the field: the disc's 2 m triangles and the ring's coarser ones
+      // both sit below the field on a rise. Build one guard for both surfaces.
+      const playRadiusM = config.terrainRadius;
+      this.waterGroundGuard = createWaterGroundGuard({
+        playRadiusM,
+        planetRadiusM: this.planetRadiusM,
+        sampleY: (x, z) =>
+          Math.hypot(x, z) <= playRadiusM
+            ? planetTerrainY(this.planetRadiusM, x, z, getTerrainParams())
+            : this.horizonRingHeightAt(x, z),
+        tuning: this.waterTuning,
+      });
+      this.surfaceWaterMesh?.setGroundGuard(this.waterGroundGuard);
+      this.undergroundWaterMesh?.setGroundGuard(this.waterGroundGuard);
     }
 
     // Initial weather state and lighting, before the first render.
@@ -1864,34 +1883,46 @@ export class EnvironmentRenderer {
    * then follows the global field itself, so there is one continuous surface
    * from the player's ground to the far side of the planet.
    */
-  private ensureHorizonRing(params: PlanetReliefParams): THREE.Mesh | null {
+  /**
+   * Height of the drawn transition ring at a world XZ.
+   *
+   * The ring starts on the play disc's rim and blends the local cap into the
+   * body's global relief over 1.8 km. The water guard samples this, not just
+   * `planetTerrainY`, so its far grid agrees with the surface on screen.
+   */
+  private horizonRingHeightAt(x: number, z: number): number {
+    const inner = this.config.terrainRadius;
+    const radius = this.planetRadiusM;
+    if (!(inner > 0) || !(radius > 0)) {
+      return planetTerrainY(radius, x, z, getTerrainParams());
+    }
+    const surface = planetSurfaceY(radius, x, z);
+    const local = surface + TERRAIN_SKIN_M;
+    const r = Math.hypot(x, z);
+    const t = Math.min(1, Math.max(0, (r - inner) / HORIZON_RING_BLEND_M));
+    if (t <= 0 || !this.reliefParams) return local;
+    const blend = t * t * (3 - 2 * t);
+    // The global field is measured from the body's centre, not the tangent
+    // plane, so the sample direction has to include the surface's curvature.
+    const direction = new THREE.Vector3(x, surface + radius, z).normalize();
+    const global =
+      surface + planetReliefAt(direction, this.reliefParams) - FAR_RELIEF_FALLBACK_SINK_M;
+    return local + (global - local) * blend;
+  }
+
+  private ensureHorizonRing(): THREE.Mesh | null {
     if (this.horizonRing) return this.horizonRing;
     const disk = this.planetDetailMesh ?? this.scene.getObjectByName('planet-play-disk');
     const inner = Number(disk?.userData.playRadiusM);
     if (!(inner > 0) || !(this.planetRadiusM > 0)) return null;
     const segments = Number(disk?.userData.playDiskSegments) || 512;
-    const radius = this.planetRadiusM;
-    const direction = new THREE.Vector3();
     const outer = Math.max(inner + HORIZON_RING_BLEND_M, HORIZON_RING_OUTER_M);
-    const heightAt = (x: number, z: number): number => {
-      const r = Math.hypot(x, z);
-      const surface = planetSurfaceY(radius, x, z);
-      const local = surface + TERRAIN_SKIN_M;
-      const t = Math.min(1, Math.max(0, (r - inner) / HORIZON_RING_BLEND_M));
-      if (t <= 0) return local;
-      const blend = t * t * (3 - 2 * t);
-      // The global field is measured from the body's centre, not the tangent
-      // plane, so the sample direction has to include the surface's curvature.
-      direction.set(x, surface + radius, z).normalize();
-      const global = surface + planetReliefAt(direction, params) - FAR_RELIEF_FALLBACK_SINK_M;
-      return local + (global - local) * blend;
-    };
     const ring = createSurfaceRing({
       innerRadiusM: inner,
       outerRadiusM: outer,
       segments,
       rows: 48,
-      heightAt,
+      heightAt: (x, z) => this.horizonRingHeightAt(x, z),
       material: this.groundMaterial,
       lipDepthM: HORIZON_RING_LIP_M,
       name: 'planet-horizon-ring',
@@ -2352,6 +2383,8 @@ export class EnvironmentRenderer {
       this.undergroundWaterMesh.dispose();
       this.undergroundWaterMesh = null;
     }
+    this.waterGroundGuard?.dispose();
+    this.waterGroundGuard = null;
     if (this.terrainVolume) {
       this.scene.remove(this.terrainVolume);
       this.terrainVolume.geometry.dispose();

@@ -828,6 +828,12 @@ restating tiers. The shipped billboard path becomes L3-only; L2 needs
 at the cost of 3–5× the arithmetic of a texture fetch in a screen band bounded
 by the far field.
 
+**Update 2026-11-24.** The L3 atlas billboard and its baker were deleted rather
+than left switched off. Tiers 2 and 3 are now one analytic ellipsoid pass, relit
+live, with no atlas, bake or billboard; see
+[`partitioning-lod.md`](./partitioning-lod.md). The L3 decision above is
+historical.
+
 ---
 
 ## ADR-043 — Volumetric terrain's first slice is one authored region
@@ -1857,14 +1863,21 @@ without a resize.
 that depends on the pane belongs in that one function rather than in a second resize
 listener: a listener that never fires on layout is a value that never gets set.
 
-## ADR-076 — Proposed: the planet is sized by its horizon, not by its orbit
+## ADR-076 — The planet is sized by its horizon, not by its orbit
 
 **Status: accepted 2026-11-21 as a direction, not authorized for build. The
 owner accepted the analysis and the P1 ring-clipmap gate; `planet_radius_m`
 stays at 100 km until that work becomes a milestone.**
 
+**Update 2026-11-27.** The two-patch ground has been replaced by the 620 m play
+disc, the 20 km transition ring and the 100 km globe. The rim is near the 583 m
+horizon at ground level, but the disc-to-ring boundary is legible at 1.2 km;
+closing it is P1 in [`planet-scale.md`](./planet-scale.md) §6. The 100 km radius
+and the direction above are unchanged.
+
 **Context.** The world is a 100 km sphere with 620 m of authored ground, so the horizon
-at eye height (583 m) and the ground's rim agree and there is no visible edge. An
+at eye height (583 m) and the ground's rim agreed, and there was no visible edge at
+ground level in that build. An
 Earth-sized procedural planet demo raised the question of growing it. The number a
 player feels is not the radius but `sqrt(2Rh)`: 583 m at 100 km, 1.17 km at 400 km,
 4.65 km at Earth radius. The authored ground has to reach the horizon or the relief runs
@@ -1892,11 +1905,15 @@ above the pole's tangent plane, with the radius in the mesh placement and in the
 translation; the three dead tile keys were deleted from `config/terrain.json` and
 `clientConfig.ts`. Neither change depends on the size decision.
 
-## ADR-077 — Proposed: the orbit view is a camera path, not a second world
+## ADR-077 — The orbit view is a camera path, not a second world
 
 **Status: accepted 2026-11-21 as a direction, not authorized for build. Orbit
 remains the dev action described below until the clipmap and depth range are
 scheduled.**
+
+**Update 2026-11-27.** The globe and ring are built, and the dev-panel orbit was
+checked in the running client. The player-facing continuous descent, shared
+depth and raymarched limb remain P2 work; orbit is still a dev action.
 
 **Context.** Orbit is a dev action today: it saves and swaps near/far, moves the camera
 to `3R` and rebuilds `OrbitControls`. Making it a feature means a continuous descent

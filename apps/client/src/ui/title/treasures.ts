@@ -323,11 +323,10 @@ function wormArt(): string {
   </g>`;
 }
 
-/** A pale mushroom: cap with gills, stem, spots, and its own little shadows. */
+/** A pale mushroom: cap with gills, stem and spots. */
 function mushroomArt(): string {
   return `
   <g class="pl-treasure__mushroom">
-    <ellipse cx="60" cy="97" rx="30" ry="5" fill="rgba(0, 0, 0, 0.22)"/>
     <path d="M52 58 H68 L73 90 Q73 97 66 97 H54 Q47 97 47 90 Z" fill="#e8dcc0" stroke="${INK}" stroke-opacity="0.3" stroke-width="2"/>
     <path d="M56 62 L57 90" stroke="#c9b894" stroke-width="2.4" opacity="0.7"/>
     <path d="M18 60 C18 34 40 18 60 18 C80 18 102 34 102 60 Z" fill="#c2704f" stroke="${INK}" stroke-opacity="0.35" stroke-width="2"/>

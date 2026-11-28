@@ -65,8 +65,8 @@ Measured in the running page after the client reloaded on the new code:
   mouth is intact. So the bubble was never able to fire at a
   player standing in the pit *or* beside it: its gate is `eyeIsUnder`, which the
   renderer fills with its buried flag — under the sheet **and** outside the
-  opening's column — and the aperture body is only ever built for that same
-  buried eye. The `uRootSightEyeInPit < 0.5` clause is therefore a second,
+  opening's column — and the old aperture body was only ever built for that same
+  buried eye (it was removed on 2026-11-27). The `uRootSightEyeInPit < 0.5` clause is therefore a second,
   local guarantee at the discard, not the thing the measurement depends on, and
   it says so in the shader.
 - **The near cut at a grown 4.91 m mouth.** Sized by the dev action

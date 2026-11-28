@@ -4,6 +4,10 @@ Honest list. No feature promises (T42, RULE_13). Updated at every gate.
 
 ## Working
 
+Entries are chronological: a later entry supersedes an earlier one. The
+2026-11-27 ground rebuild is the current architecture, so older "detail patch",
+"outer patch" and "180 m/560 m ring" descriptions are historical.
+
 - **Seed archetypes, a spawn scene and paid ground (2026-11-27):** Play no longer
   connects straight into the old plant. It opens a full-screen `SpawnScene` with
   four archetypes, their multipliers, a free wild spawn, four named areas, an
@@ -35,25 +39,26 @@ Honest list. No feature promises (T42, RULE_13). Updated at every gate.
   instead of clamping. Tests: the shared geodetic suite (north pole,
   antimeridian, sub-millimetre round trip inside the play area, malformed input)
   and the spawn resolver's altitude/bounds cases.
-- **One detailed ground and one static globe (2026-11-27):** the camera-selected
-  `ReliefChunkSet`, the 64/128/256 altitude levels and the inner/outer/horizon
-  pair are out of the render and physics paths. The play area is a single
-  620 m-radius disc at a fixed 2 m cell size, built once from the shared height
-  field with analytic gradient normals, one `BufferGeometry` and one material;
-  there is no chunk swap, skirt, per-camera rebuild or LOD boundary inside it.
-  The rest of the planet is one static globe mesh built once for the horizon and
-  orbit. Physics uses a single Rapier heightfield over the same cells instead of
-  a 1.2M-triangle trimesh. Older terrain/LOD tests were deleted with the code.
+- **One detailed ground, a 20 km horizon ring and a static globe (2026-11-27):**
+  the camera-selected `ReliefChunkSet`, the 64/128/256 altitude levels and the
+  old inner/outer/horizon pair are out of the render and physics paths. The
+  play area is a single 620 m-radius disc at a fixed 2 m cell size, built once
+  from the shared height field with analytic gradient normals, one
+  `BufferGeometry` and one material; there is no chunk swap, skirt, per-camera
+  rebuild or LOD boundary inside it. A 20 km transition ring joins the disc rim
+  to the global field, and the far body is one static globe mesh built once for
+  the horizon and orbit. Physics uses a single Rapier heightfield over the disc
+  cells instead of a 1.2M-triangle trimesh. Older terrain/LOD tests were deleted
+  with the code.
   At the 1152-wide dev panel it measured **60 fps, p50 16.7 ms, p95 16.8 ms** in
   rain over 180 frames, the same as dry. At a true 1919 x 1080 drawing buffer
   with the camera active it measured **39.6 fps, p50 25.1 ms, p95 43.4 ms**
   (CPU 4.6 ms, GPU 22.1 ms); the 1080p 60 fps target is **not met** on this
   Intel Iris Xe machine, and hiding every non-light scene object still capped
   at 55.2 fps, so the terrain is not the only cause. The rain frame and the top-down ground were checked in the running client. The disc uses the fixed 2 m
-  fallback cell size; no LOD was introduced. A 20 km transition ring now joins
-  the disc rim to the global field, and the coarse globe's shader cuts out the
-  polar cap under it, so the ground stays one continuous surface at ground
-  level, at 1,200 m and at 43 km. The globe is visible in planet view too, so
+  fallback cell size; no LOD was introduced. The coarse globe's shader cuts out
+  the polar cap under the ring, so the ground stays one continuous surface at
+  ground level, at 1,200 m and at 43 km. The globe is visible in planet view too, so
   the whole planet appears without hiding the horizon first; the oblique and orbit views were checked in the running client. The visible 620 m
   detail boundary is a known limitation: the plan for a continuous
   view-dependent chain, sparse editable crust and planet-scale water/weather is
@@ -811,8 +816,10 @@ Honest list. No feature promises (T42, RULE_13). Updated at every gate.
   fallback and device-loss recovery. Plants upload into GPU storage buffers;
   a compute pass performs per-plant frustum culling and distance-based 4-tier LOD
   with hysteresis and tier dwell time. Tiers 0/1 draw a merged tapered-tube mesh
-  with leaf cards, tiers 2–4 draw camera-facing billboards (as shipped; ADR-042 makes
-  L2 an ellipsoid and the atlas L3-only — see the reconciliation note below).
+  with leaf cards; in that build tiers 2–4 drew camera-facing billboards. The
+  current path is one analytic ellipsoid for tiers 2 and 3, with no atlas (the
+  L3 atlas and its baker were deleted 2026-11-24; see the reconciliation note
+  below).
   Separate frame/plant/
   render buffers, WGSL shaders loaded through Vite `?raw`, sun direction, growth
   (the WebGPU ground pass still carves its Root Sight window with a hard discard;
@@ -847,8 +854,8 @@ Honest list. No feature promises (T42, RULE_13). Updated at every gate.
   server-side context snapshot and rate limits. Record: `docs/tasks/T05.md`.
 - **T25 terrain:** one seeded field shared by client and server. The play area is
   one fixed 620 m-radius disc at 2 m cells, built once and collided by a single
-  Rapier heightfield; the rest of the planet is one static globe backdrop, with
-  no camera-selected LOD. Per-plant capsule colliders and sparse 32×32 soil
+  Rapier heightfield; the 20 km transition ring and the global globe are
+  backdrop, with no camera-selected LOD. Per-plant capsule colliders and sparse 32×32 soil
   chunks (height delta, moisture, compaction, voids) persist in Postgres with
   protocol 32–34.
   Height deltas are not yet written into a client chunk texture, so the lit
@@ -1244,12 +1251,15 @@ tests and these records, not the images.
   than snapped ahead of it (0.00 m joint error across a live crawl).
 - **Water stays under the ground (R19).** In a band of zoom levels the rain film
   and the water table used to lie on top of hills: both follow the terrain field
-  at about a metre per cell, while the drawn ground is that fine only inside the
-  180 m detail patch, and outside it the ~8 m ring triangles can sit decimetres
-  below the field. The water shader now tests each fragment against **the ground
-  that is actually drawn**, not against the field: the detail patch's own grid
-  (1.41 m cells out to 180 m) near the player, and the far ring's own grid (8 m
-  cells out to 560 m) past its edge, taking the lower of the two. The old 110 m
+  at about a metre per cell, while in the build that introduced this test the
+  drawn ground was that fine only inside the 180 m detail patch, and outside it
+  the ~8 m ring triangles could sit decimetres below the field. (That 180 m/560 m
+  ground is historical: the guard now samples the current 2 m play disc out to
+  620 m and the 20 km transition ring at 64 m, the ring's outer angular spacing.)
+  The water shader now tests each fragment against **the ground that is actually
+  drawn**, not against the field: the play disc's own grid near the player and
+  the transition ring's coarser guard past its edge, taking the lower of the two.
+  The old 110 m
   fade is gone, so a lake stays visible when the camera pulls back. How far above
   that ground each sheet may stand before it is thrown away is per surface: the
   table is a subsurface sheet and gets 2 cm, while the rain film and the river lie
@@ -1365,7 +1375,10 @@ replacing the CPU-fps-based `QualityController`) landed 2026-11-15 and are not
 queued work. Shared depth between the WebGPU plant pass and the WebGL
 environment pass is **deferred, not a C02b blocker**: ADR-041 gates it on
 volumetric terrain (T56), the first geometry tall enough to occlude a plant.
-Plant appearance follows ADR-042 (ellipsoid L2, colour-only atlas L3).
+Plant appearance is one analytic ellipsoid SDF for tiers 2 and 3; the L3 atlas
+billboard and its baker were deleted on 2026-11-24 (see
+[`partitioning-lod.md`](./partitioning-lod.md)). ADR-042's L3 atlas sentence is
+historical.
 Broadcast cadence now honours `client_send_rate_hz` and `weather_send_rate_hz`;
 the per-plant event log is written and read back.
 Interest filtering now covers growth events, plant creation,
@@ -1394,8 +1407,9 @@ decisions are recorded as ADR-041 to ADR-049 in
 - **Shared depth is deferred, not abandoned.** C02's transparent canvas stands
   (ADR-041). Unification is now the gate for shipping caves, arches and sea —
   the point where local occlusion first matters.
-- **The config count is 80 files**, owned by [`tunables.md`](./tunables.md). Any
-  surviving count of 77 or 79 is stale.
+- **The config count is owned by [`tunables.md`](./tunables.md).** Earlier
+  snapshots said 77, 79 or 80; none of those is a source of truth. Read the
+  count from that page.
 - The renderer work is ranked in
   [`abyssal-garden-source-analysis.md`](./abyssal-garden-source-analysis.md) Part II;
   the task specs behind it are in `DESIGN.md` Parts 11 and 16.
@@ -2372,6 +2386,8 @@ outcome the players have not built themselves.
   falls through the picture into the soil cutaway.
 
 ## The level of detail is a joint, not a line (2026-11-25)
+
+**Historical:** superseded by the 2026-11-27 disc/ring/globe rebuild.
 
 The ground the player walks on is two meshes: a 180 m patch at 0.7 m vertices,
 and a coarse ring around it celled in metres. They used to *overlap*. The ring's

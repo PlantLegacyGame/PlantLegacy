@@ -27,6 +27,7 @@ import { worldColour } from '../worldPalette.ts';
 import type { AtmosphereParams } from './atmosphere.js';
 import { buildWaterContour } from './waterContour.js';
 import { DEFAULT_WATER_COLORS, type WaterColors } from './waterFieldTuning.js';
+import type { WaterGroundGuard } from './waterGroundGuard.ts';
 import { createWaterMaterial, setWaterAtmosphere, type WaterMaterial } from './waterMaterial.js';
 
 export interface SurfaceWaterMeshOptions {
@@ -61,6 +62,8 @@ export interface SurfaceWaterMesh {
   sync(source: SurfaceWaterSource): void;
   /** Remove the water over a Root Sight opening, metres. */
   setCavityClip(x: number, z: number, radiusM: number): void;
+  /** Test the surface against the ground the player can actually see. */
+  setGroundGuard(guard: WaterGroundGuard | null): void;
   /** Per-frame: sun, sky and the clock the ripples run on. */
   updateLighting(params: {
     timeSeconds: number;
@@ -177,6 +180,15 @@ export function createSurfaceWaterMesh(options: SurfaceWaterMeshOptions): Surfac
     setCavityClip(x, z, radiusM) {
       uniform('uCavityCenter').value = new THREE.Vector2(x, z);
       uniform('uCavityRadius').value = Math.max(0, radiusM);
+    },
+    setGroundGuard(guard) {
+      if (!guard) {
+        uniform('uGroundHeightAvailable').value = 0;
+        uniform('uGroundCoarseAvailable').value = 0;
+        uniform('uWaterSubmergeM').value = 1e3;
+        return;
+      }
+      guard.applyTo(waterMaterial.material);
     },
     updateLighting(params) {
       uniform('uTime').value = params.timeSeconds;

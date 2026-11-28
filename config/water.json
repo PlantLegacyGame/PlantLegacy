@@ -275,21 +275,39 @@
     },
     "ground_test_radius_m": {
       "type": "number",
-      "value": 560,
+      "value": 20000,
       "range": [
-        64,
-        1200
+        620,
+        30000
       ],
-      "notes": "Half-extent of the coarse ground grid the water is tested against, in metres. It matches the distance at which the water table finishes fading, so every water surface the sheet can still draw has a ground to compare with."
+      "notes": "Half-extent of the coarse ground guard, in metres: the current 20 km transition ring's outer edge. Water outside this is not tested against the ground."
     },
     "ground_test_cell_m": {
       "type": "number",
-      "value": 8,
+      "value": 64,
       "range": [
-        1,
-        40
+        2,
+        256
       ],
-      "notes": "Spacing of the coarse ground samples the water shader tests its own height against, in metres. The far terrain ring is a mesh of ~8 m cells, so an interpolated triangle sits below the field on a rise and water that is really underground would otherwise stand on top of it. The client passes the ring's own cell size; this value is the fallback and the documented spacing."
+      "notes": "Spacing of the coarse ground guard over the transition ring, in metres. The ring's cells grow with radius; 64 m is its outer angular spacing, where the guard has to cover the most ground. The 2 m play-disc grid is the fine guard and owns every metre the player can walk."
+    },
+    "ground_test_fine_radius_m": {
+      "type": "number",
+      "value": 620,
+      "range": [
+        64,
+        4000
+      ],
+      "notes": "Half-extent of the fine ground guard, in metres: the current play disc's radius. Inside it the water is tested against the disc's own 2 m grid."
+    },
+    "ground_test_fine_cell_m": {
+      "type": "number",
+      "value": 2,
+      "range": [
+        0.5,
+        8
+      ],
+      "notes": "Cell size of the fine ground guard, in metres: the play disc's own 2 m ground grid."
     },
     "sheet_edge_fade": {
       "type": "number",

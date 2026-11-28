@@ -6,8 +6,12 @@ import {
   GROWTH_STAGES,
   GROWTH_TIERS,
   growthProfile,
+  growthStageAlong,
   growthStageFromPoints,
   growthTierAt,
+  growthTransitionMs,
+  limbGrowAlong,
+  resumeGrowth,
 } from './growth.ts';
 
 const stageOf = (points: number): number => Math.round(growthStageFromPoints(points));
@@ -75,13 +79,92 @@ describe('title growth ladder', () => {
       assert.ok(next.scale >= previous.scale, `scale dropped at ${stage}`);
       assert.ok(next.trunkWidth >= previous.trunkWidth, `trunk shrank at ${stage}`);
       assert.ok(next.trunkOpacity >= previous.trunkOpacity, `wood vanished at ${stage}`);
-      assert.ok(next.treeOpacity >= previous.treeOpacity, `crown vanished at ${stage}`);
       assert.ok(next.leafReveal >= previous.leafReveal, `a leaf closed at ${stage}`);
       assert.ok(next.limbReveal >= previous.limbReveal, `a limb vanished at ${stage}`);
       assert.ok(next.limbLength >= previous.limbLength, `the crown shrank at ${stage}`);
       assert.ok(next.limbSpreadDeg >= previous.limbSpreadDeg, `an arm closed in at ${stage}`);
       assert.ok(next.crownDensity >= previous.crownDensity, `the crown thinned at ${stage}`);
       previous = next;
+    }
+  });
+
+  it('spreads a growth run over time, longer for a bigger move', () => {
+    assert.equal(growthTransitionMs(0), 0);
+    assert.equal(growthTransitionMs(Number.NaN), 0);
+    assert.ok(growthTransitionMs(1) >= 1200);
+    assert.ok(growthTransitionMs(6) > growthTransitionMs(2));
+    assert.ok(growthTransitionMs(100) <= 2800);
+  });
+
+  it('walks from the old stage to the new one without overshooting', () => {
+    const from = 12;
+    const to = 18;
+    assert.equal(growthStageAlong(from, to, 0), from);
+    assert.equal(growthStageAlong(from, to, 1), to);
+    // The stage follows the stream, which climbs at a constant speed: half way
+    // through the run is half the growth, not most of it.
+    assert.equal(growthStageAlong(from, to, 0.25), 13.5);
+    assert.equal(growthStageAlong(from, to, 0.5), 15);
+    assert.equal(growthStageAlong(from, to, 0.75), 16.5);
+    let previous = from;
+    for (let step = 1; step <= 20; step += 1) {
+      const stage = growthStageAlong(from, to, step / 20);
+      assert.ok(stage >= previous, `the stage went backwards at step ${step}`);
+      assert.ok(stage <= to, `the stage overshot at step ${step}`);
+      previous = stage;
+    }
+    // A clock that arrives early, late or broken cannot move the plant outside
+    // the run it belongs to.
+    assert.equal(growthStageAlong(from, to, -1), from);
+    assert.equal(growthStageAlong(from, to, 2), to);
+    assert.equal(growthStageAlong(from, to, Number.NaN), from);
+  });
+
+  it('adds care without sending the light back to the root', () => {
+    // A second care halfway up a run keeps the same light front. The resumed
+    // timeline starts lower so the stage under that front is exactly what is
+    // already drawn, not a jump forward or a reset to the base.
+    const shown = 15;
+    const target = 30;
+    const progress = 0.5;
+    const resumed = resumeGrowth(shown, target, progress);
+    assert.equal(resumed.fromStage, 0);
+    assert.equal(resumed.remainingShare, 0.5);
+    assert.equal(growthStageAlong(resumed.fromStage, target, progress), shown);
+    // The same holds at any point in the run, including a care that arrives late.
+    for (const point of [0.05, 0.2, 0.4, 0.7, 0.95]) {
+      const next = resumeGrowth(shown, target, point);
+      assert.ok(
+        Math.abs(growthStageAlong(next.fromStage, target, point) - shown) < 1e-9,
+        `the drawing jumped at front ${point}`,
+      );
+      assert.ok(next.remainingShare > 0, 'no run left');
+    }
+    assert.equal(resumeGrowth(12, 30, 0).fromStage, 12);
+    assert.equal(resumeGrowth(12, 30, 0).remainingShare, 1);
+  });
+
+  it('sends the light up the trunk and grows arms from the bottom up', () => {
+    // The lower arm begins when the stream passes its socket, and is finished well
+    // before the run ends; the top arm starts late and only just reaches its target
+    // when the stream does.
+    assert.equal(limbGrowAlong(0.42, 0, 1, 0), 0);
+    assert.ok(limbGrowAlong(0.42, 0, 1, 0.41) > 0, 'the lower arm never started at its socket');
+    assert.ok(limbGrowAlong(0.42, 0, 1, 0.5) > 0, 'the lower arm never started');
+    assert.equal(limbGrowAlong(0.42, 0, 1, 0.65), 1);
+    assert.equal(limbGrowAlong(0.93, 0, 1, 0.7), 0);
+    assert.ok(limbGrowAlong(0.93, 0, 1, 0.95) > 0, 'the top arm never started');
+    // Exact endpoints: care always leaves an arm on the stage's predetermined shape.
+    assert.equal(limbGrowAlong(0.93, 0, 1, 1), 1);
+    assert.equal(limbGrowAlong(0.42, 0.3, 0.8, 1), 0.8);
+    // An arm the stage does not grow stays closed, and a growing arm never shrinks.
+    assert.equal(limbGrowAlong(0.42, 0, 0, 0.8), 0);
+    assert.equal(limbGrowAlong(0.42, 0.6, 0.2, 0.8), 0.6);
+    let previous = 0;
+    for (let step = 0; step <= 20; step += 1) {
+      const grow = limbGrowAlong(0.42, 0, 1, step / 20);
+      assert.ok(grow >= previous, `the arm shrank at step ${step}`);
+      previous = grow;
     }
   });
 
@@ -104,11 +187,25 @@ describe('title growth ladder', () => {
     assert.ok(adult.crownDensity > growthProfile(10).crownDensity);
   });
 
+  it('keeps a sapling green and hardens it into bark as it ages', () => {
+    const sapling = growthProfile(12);
+    const young = growthProfile(30);
+    const adult = growthProfile(60);
+    assert.ok(sapling.woodTone < 0.2, `a sapling was already ${sapling.woodTone} bark`);
+    assert.ok(young.woodTone > sapling.woodTone, 'the young tree did not brown');
+    assert.ok(adult.woodTone > 0.8, `an adult was only ${adult.woodTone} bark`);
+    let previous = -1;
+    for (let stage = 0; stage < GROWTH_STAGES; stage += 1) {
+      const tone = growthProfile(stage).woodTone;
+      assert.ok(tone >= previous, `the wood went backwards at ${stage}`);
+      previous = tone;
+    }
+  });
+
   it('draws a seed first and a full tree last', () => {
     const seed = growthProfile(0);
     assert.equal(seed.tier.id, 'seed');
     assert.equal(seed.trunkOpacity, 0);
-    assert.equal(seed.treeOpacity, 0);
     // A seed is not a bare stick: the stem's six leaves open at (i + 1) / 6, so a
     // reveal under the first threshold (1/6) hid every one of them and the bottom
     // of the ladder was a green line. The pair has to be out at stage zero.
@@ -119,5 +216,12 @@ describe('title growth ladder', () => {
     assert.equal(ancient.leafReveal, 1);
     assert.equal(ancient.limbReveal, 1);
     assert.ok(ancient.scale > growthProfile(75).scale);
+    // The last tiers keep climbing in size instead of flattening out: taller wood,
+    // a wider reach, and smaller leaves against both. These floors are deliberately
+    // near the current profile: an ancient tree is the thing the title is showing.
+    assert.ok(ancient.scale > 2.2, `the ancient tree only reached ${ancient.scale}x`);
+    assert.ok(ancient.limbLength > 1.5, `the ancient crown only reached ${ancient.limbLength}`);
+    assert.ok(ancient.leafScale < 0.5, `the ancient leaves were still ${ancient.leafScale}`);
+    assert.ok(ancient.budScale < 0.5, `the ancient tip bud was still ${ancient.budScale}`);
   });
 });

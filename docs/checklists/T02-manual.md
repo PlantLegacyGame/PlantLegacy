@@ -8,7 +8,7 @@ Run with the local stack (`pnpm dev`). A box is checked only when the command or
 
 - [x] `pnpm config:validate`
   - Expected: 83 file(s), OK (the count is owned by `docs/tunables.md`).
-  - Observed: OK for every file then present (75 at the time of the first run; the count is owned by [`docs/tunables.md`](../tunables.md) and is 79 today), `config/root_sight.json` valid extended-1 schema.
+  - Observed: OK for every file then present (75 at the time of the first run; the count is owned by [`docs/tunables.md`](../tunables.md)), `config/root_sight.json` valid extended-1 schema.
 - [x] `curl http://127.0.0.1:8080/config/root_sight`
   - Expected: 200 JSON with **every** entry in `config/root_sight.json` — `cutaway_radius`, `transition_ms`, `soil_opacity`, both highlight colours, `substrate_multiplier`, `camera_target`, `max_cavity_bubbles`, `bubble_merge_cell_m`, `bubble_padding_m`, `rival_bubble_budget`, `camera_burrow_enabled`, `max_burrow_depth_m`, `cavity_clearance_m`, `rebuild_hz`, `auto_open_on_root_growth`, `eye_window_radius_m` (all 30 entries — the
     count is `docs/tunables.md`'s).

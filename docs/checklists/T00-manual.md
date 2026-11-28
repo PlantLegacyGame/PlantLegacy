@@ -15,7 +15,7 @@ the stated result observed.
 
 - [x] Compare the file list in `docs/tunables.md` with DESIGN.md Part 6.2.
   - Expected: 73 names, no extras, no missing.
-  - Observed: 73/73 at T00. Today `docs/tunables.md` lists 80: the same 73 plus
+  - Observed: 73/73 at T00. Today `docs/tunables.md` lists 83: the same 73 plus
     files added by later tasks.
 
 ## 3. Rarity ban fails the build and startup

@@ -47,7 +47,7 @@ describe('title root runs', () => {
       assert.ok(tail, `${treasure.id} has no end point`);
       const gap = Math.hypot(Number(tail[1]) - end.x, Number(tail[2]) - end.y);
       assert.ok(gap > 2 && gap < 7, `${treasure.id} stops ${gap} units from its find`);
-      assert.ok(run.laterals.length > 0, `${treasure.id} has no branches on its find`);
+      assert.ok(run.laterals.length > 0, `${treasure.id} has no grips on its find`);
     });
   });
 
@@ -125,22 +125,22 @@ describe('branch names', () => {
       ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'],
     );
     for (const run of runs) {
-      assert.ok(run.branches.length > 0, run.id + ' has no named branches');
+      assert.ok(run.branches.length > 0, `${run.id} has no named branches`);
       run.branches.forEach((branch, i) => {
-        assert.equal(branch.name, run.name + '_' + (i + 1));
+        assert.equal(branch.name, `${run.name}_${i + 1}`);
       });
     }
   });
 
-  it('draws every branch it names, and only those', () => {
+  it('draws every grip it names, and only those', () => {
     for (const run of rootRuns()) {
-      const drawn =
-        (run.laterals.match(/M /g) ?? []).length + (run.hairs.match(/M /g) ?? []).length;
+      const drawn = (run.laterals.match(/M /g) ?? []).length;
       assert.equal(
         drawn,
         run.branches.length,
-        run.id + ' draws ' + drawn + ' of ' + run.branches.length,
+        `${run.id} draws ${drawn} of ${run.branches.length}`,
       );
+      assert.ok(run.branches.every((branch) => branch.kind === 'grip'));
     }
   });
 });

@@ -26,6 +26,10 @@ export interface RenderConfig {
   targetFps: number;
   fpsWarningThreshold: number;
   resolutionFloor: number;
+  /** AL-03: the lower floor used only after sustained overload. */
+  resolutionFloorEmergency: number;
+  /** AL-03: sustained overload before that floor is used, in ms. */
+  qualityEmergencyAfterMs: number;
   maxPixelRatio: number;
   /** AL-03: frame cost below which detail is restored, in ms. */
   gpuBandMinMs: number;
@@ -454,6 +458,10 @@ interface RenderConfigResponse {
   fpsWarningThreshold?: number;
   resolution_floor?: number;
   resolutionFloor?: number;
+  resolution_floor_emergency?: number;
+  resolutionFloorEmergency?: number;
+  quality_emergency_after_ms?: number;
+  qualityEmergencyAfterMs?: number;
   max_pixel_ratio?: number;
   maxPixelRatio?: number;
   gpu_band_min_ms?: number;
@@ -898,6 +906,18 @@ function normalizeRenderConfig(data: RenderConfigResponse, fallback: RenderConfi
     fpsWarningThreshold:
       data.fps_warning_threshold ?? data.fpsWarningThreshold ?? fallback.fpsWarningThreshold,
     resolutionFloor: data.resolution_floor ?? data.resolutionFloor ?? fallback.resolutionFloor,
+    resolutionFloorEmergency: Math.min(
+      data.resolution_floor_emergency ??
+        data.resolutionFloorEmergency ??
+        fallback.resolutionFloorEmergency,
+      data.resolution_floor ?? data.resolutionFloor ?? fallback.resolutionFloor,
+    ),
+    qualityEmergencyAfterMs: Math.max(
+      0,
+      data.quality_emergency_after_ms ??
+        data.qualityEmergencyAfterMs ??
+        fallback.qualityEmergencyAfterMs,
+    ),
     maxPixelRatio: data.max_pixel_ratio ?? data.maxPixelRatio ?? fallback.maxPixelRatio,
     gpuBandMinMs: data.gpu_band_min_ms ?? data.gpuBandMinMs ?? fallback.gpuBandMinMs,
     gpuBandMaxMs: data.gpu_band_max_ms ?? data.gpuBandMaxMs ?? fallback.gpuBandMaxMs,
@@ -1435,10 +1455,14 @@ export async function loadRenderConfig(serverOrigin: string): Promise<RenderConf
   return fetchFlat<RenderConfig>(serverOrigin, '/config/render', {
     targetFps: 60,
     fpsWarningThreshold: 0.85,
-    // One floor, in the file and in the fallback. The fallback was 0.25 while the
-    // shipped config said 0.75, so a client that could not read the config drew
-    // every tag at a quarter of the display's density with no lever to recover.
-    resolutionFloor: 0.75,
+    // One normal floor, in the file and in the fallback: 0.9. These had drifted
+    // (the fallback was 0.75 while the shipped config said 0.9), so a client that
+    // could not read the config drew a softer picture with no way to recover the
+    // detail. The emergency floor is a separate, lower step used only after a
+    // sustained overload, never a different default.
+    resolutionFloor: 0.9,
+    resolutionFloorEmergency: 0.75,
+    qualityEmergencyAfterMs: 5000,
     maxPixelRatio: 2.0,
     gpuBandMinMs: 10.0,
     gpuBandMaxMs: 13.6,

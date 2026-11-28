@@ -370,7 +370,9 @@ destroying a 16-layer texture per plant: one scratch texture now serves every
 bake. Second bug, in the shader: "no impostor" was tested as tile (0, 0), which
 is also a real tile, so plant index 0 never showed its impostor and any other
 plant that drew tile 0 lost it too; the sentinel is now an explicit
-`0xffffffff`.
+`0xffffffff`. The atlas and its baker were later deleted on 2026-11-24; tiers 2
+and 3 are one analytic ellipsoid pass. See
+[`partitioning-lod.md`](./partitioning-lod.md).
 
 **Staged plan for the god-modules (next sessions, one at a time):**
 

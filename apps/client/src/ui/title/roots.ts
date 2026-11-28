@@ -10,11 +10,10 @@
  * It used to be a table of thirteen hand-typed cubics, which looked right and
  * could not grow: the only way to make the roots deeper was to scale the drawing,
  * and a scaled root is a longer, thinner root rather than a bigger one. The table
- * is a *builder* now. One seeded pass lays out a taproot, two buttresses and three
- * laterals a side, forks each lateral, and hangs hairs along the result; growth
- * then truncates every spine along its own curve, so the roots extend into the
- * soil the way roots do. The seed is fixed, so the drawing is the same on every
- * boot.
+ * is a *builder* now. One seeded pass lays out a root collar with three laterals a
+ * side, forks each lateral once, and hangs one short hair off the older roots.
+ * Growth is a scale about the soil line, not a redraw: the same plate thickens and deepens
+ * with care, and the seed is fixed so the drawing is the same on every boot.
  *
  * Four rules keep it from looking like a wire brush:
  *
@@ -163,12 +162,17 @@ function fitToGrid(spine: RootSpine): RootSpine {
 /**
  * The root plate, as spines.
  *
- * Six laterals (three a side) leave the stem between the soil line and the middle
- * of the taproot and reach out at their own angles and depths; every one forks
- * once or twice, and the forks start on the parent's centre line. Nothing here
- * points at anything: the plate is a fan of roots because roots fan, and the
- * strands that reach a buried find are drawn separately, in the ground's own
- * space, by the menu.
+ * Six laterals (three a side) leave the stem just under the soil line and reach
+ * out at their own angles and depths; each one forks once at mid-length, and the
+ * fork starts on the parent's centre line. Nothing here points at anything: the
+ * plate is a fan of roots because roots fan, and the strands that reach a buried
+ * find are drawn separately, in the ground's own space, by the menu.
+ *
+ * The remaster takes the brush out of the plate: the laterals are fewer and
+ * heavier, the second-order tangle is gone, and the hairs are now one per older
+ * root rather than two per spine. Measured at the ancient stage, the old plate
+ * put two dozen pale strokes under a 17-unit trunk and read as a wire frame; the
+ * new one keeps the same reach with twelve bodies and six hairs.
  */
 export function buildRoots(seed = 7): RootSpine[] {
   const rand = makeRng(seed);
@@ -180,21 +184,11 @@ export function buildRoots(seed = 7): RootSpine[] {
     return fitted;
   };
 
-  // The taproot is the plate's trunk and has to read as one. It was 11 units wide
-  // with a taper exponent of 1.9, which necks it to a hair by the middle of the
-  // plate: in the scene the roots in the *centre* were visibly thinner than the
-  // laterals spreading out to the sides, which is upside down. A tree's root crown
-  // is the thickest part of its root system and its laterals leave it thinner.
-  // 17 units at the soil line, tapering gently, and deeper than any lateral.
-  add({
-    id: 'taproot',
-    p: [100, 0, 100, 20, 94, 42, 101, 57],
-    w: 17,
-    tip: 0.6,
-    gen: 1,
-    taper: 1,
-    bark: true,
-  });
+  // There is no central taproot. A mature tree's support is a ring of structural
+  // roots leaving the collar, and the old wide taproot read as a triangular tooth
+  // hanging under the trunk. The three laterals a side leave the collar themselves,
+  // close to the surface, so the plate opens as a fan instead of hanging from one
+  // spine. Their overlapping bases make the collar.
 
   // Laterals: outward first, then down. A lateral that leaves already diving is a
   // fence post; the flat start is what makes the plate look like it is spreading.
@@ -207,13 +201,16 @@ export function buildRoots(seed = 7): RootSpine[] {
   // how far the middle sags. A lateral that arrives on a steep heading is a frond:
   // the static plate these replaced left and arrived within a few degrees of level
   // and got its droop from the sag, which is a far calmer shape.
-  // Widths step down with each lateral, from just under the taproot's own: the
-  // three of them used to be 4.2 / 3.6 / 2.8 against a necked taproot, so they
-  // were the widest roots in the drawing.
+  // Widths step down with each lateral: the three of them used to be 4.2 / 3.6 /
+  // 2.8 against a necked taproot, so they were the widest roots in the drawing.
+  // Heavier than the old 5.4 / 4.4 / 3.4 and each forking once instead of twice.
+  // The plate has to read as a root system, not as the veins of a leaf: a smaller
+  // number of substantial roots carries the eye out to the fine material at the
+  // tips, while the same reach drawn with twice the strands reads as a wire brush.
   const LATERALS = [
-    { y: 12, out: 15, len: 74, drop: 15, bow: 12, w: 5.4, forks: 2 },
-    { y: 19, out: 30, len: 56, drop: 19, bow: 11, w: 4.4, forks: 2 },
-    { y: 26, out: 55, len: 44, drop: 24, bow: 9, w: 3.4, forks: 1 },
+    { y: 4, out: 18, len: 74, drop: 15, bow: 12, w: 7.4 },
+    { y: 8, out: 33, len: 56, drop: 19, bow: 11, w: 6.0 },
+    { y: 12, out: 58, len: 44, drop: 24, bow: 9, w: 4.7 },
   ];
   for (const side of [-1, 1]) {
     for (const [index, lateral] of LATERALS.entries()) {
@@ -237,7 +234,7 @@ export function buildRoots(seed = 7): RootSpine[] {
         // Below 1 the root keeps its body further along instead of thinning to a
         // hair for the last third: a long root that tapers like a spike has no
         // visible body at all, and that is what read as a string. 0.95 rather than
-        // 0.85 so a lateral still gives way to the taproot at the same age.
+        // 0.85 so a lateral keeps its body further out.
         taper: 0.95,
       });
       // Forks start on the parent's centre line, sized from its width there, so the
@@ -245,8 +242,7 @@ export function buildRoots(seed = 7): RootSpine[] {
       // Forks leave while the parent still has a body. At 0.8 of the way out the
       // lateral is thinner than the feeder leaving it, so the feeder's flat start
       // showed either side of it: a root that had been sliced off.
-      const forkAt = lateral.forks === 2 ? [0.36, 0.62] : [0.5];
-      for (const [forkIndex, at] of forkAt.entries()) {
+      for (const [forkIndex, at] of [0.5].entries()) {
         const point = cubicPoint(parent.p, at);
         // A fork is sized from the parent's width *there*, not at its base. Sized
         // from the base it came out twice as wide as the root it leaves, which is
@@ -265,10 +261,10 @@ export function buildRoots(seed = 7): RootSpine[] {
             5 + rand() * 3,
           ),
           // Narrower than the parent at that point, so the parent covers its start.
-          w: local * (forkIndex === 0 ? 0.85 : 0.7),
+          w: local * 0.9,
           // Sized from the fork's own width: a fixed tip on a thin feeder leaves it
           // with no taper at all.
-          tip: local * 0.22,
+          tip: local * 0.24,
           gen: 2,
           taper: 0.9,
         });
@@ -342,23 +338,20 @@ export function hairPath(spine: RootSpine, t: number, side: 1 | -1, len: number)
 /**
  * Hairs along a spine, placed by its own geometry rather than typed as free paths:
  * hand-placed hairs drifted off the roots and read as ticks floating in the dirt.
- * Every main root gets two, at fixed fractions of its own length.
+ * One hair per older spine, and none on the feeders: the old two-per-spine rule
+ * put a second fringe around every fork and turned the plate's edge into a brush.
  */
 function spineHairs(spine: RootSpine): Array<{ t: number; side: 1 | -1; len: number }> {
-  if (spine.bark) {
-    return [
-      { t: 0.56, side: 1, len: 3 },
-      { t: 0.76, side: -1, len: 2.8 },
-    ];
-  }
+  if (spine.bark) return [{ t: 0.56, side: 1, len: 3 }];
+  if (spine.gen === 2) return [];
   const seed = spine.id.length * 7 + spine.id.charCodeAt(spine.id.length - 1);
-  // One on a feeder: two apiece turned the tips into a brush.
-  const at = spine.gen === 2 ? [0.45] : [0.32, 0.58];
-  return at.map((t, index) => ({
-    t: t + ((seed + index * 13) % 5) * 0.02,
-    side: (seed + index) % 2 === 0 ? 1 : -1,
-    len: 3 + ((seed + index * 7) % 3) * 0.7,
-  }));
+  return [
+    {
+      t: 0.42 + (seed % 5) * 0.02,
+      side: seed % 2 === 0 ? 1 : -1,
+      len: 3 + (seed % 3) * 0.45,
+    },
+  ];
 }
 
 /**
@@ -384,8 +377,11 @@ export function rootDepth(points: number): number {
 
 function fillOf(spine: RootSpine): string {
   if (spine.bark) return 'url(#pl-root-bark)';
-  if (spine.gen === 2) return 'var(--pl-root-tip, #cbb99b)';
-  return 'var(--pl-root, #efe3cd)';
+  if (spine.gen === 2) return 'var(--pl-root-tip, #b59a76)';
+  // A vertical ramp, not a flat fill. The plate is a cut through soil: a root is
+  // paler where it meets the surface and warmer as it goes down, and a single
+  // cream body made every lateral read as a wire lying on top of the dirt.
+  return 'url(#pl-root-body)';
 }
 
 /** The roots' markup, without the SVG wrapper. */
@@ -408,6 +404,9 @@ export function rootsContent(): string {
     .join('');
   return `
       <defs>
+        {/* The crown is solid at the soil line: the trunk's filled flare covers the
+            flat top of the plate, so the two are one silhouette rather than a
+            faded shelf with a bulb above it. */}
         <linearGradient id="pl-root-depth-ramp" x1="0" y1="0" x2="0" y2="1">
           <stop offset="0" stop-color="#fff" stop-opacity="1"/>
           <stop offset="0.62" stop-color="#fff" stop-opacity="0.92"/>
@@ -418,6 +417,12 @@ export function rootsContent(): string {
         </mask>
         {/* Bark at the soil line, root within a dozen units: one shape, so there is
             no collar to line up. */}
+        <linearGradient id="pl-root-body" gradientUnits="userSpaceOnUse"
+                        x1="0" y1="0" x2="0" y2="58">
+          <stop offset="0" style="stop-color: var(--pl-root, #d9c3a1)"/>
+          <stop offset="0.58" style="stop-color: var(--pl-root-tip, #b59a76)"/>
+          <stop offset="1" style="stop-color: var(--pl-root-tip, #b59a76)"/>
+        </linearGradient>
         <linearGradient id="pl-root-bark" gradientUnits="userSpaceOnUse"
                         x1="0" y1="0" x2="0" y2="58">
           {/* Bark, not stem: the crown of the plate is the same wood as the trunk
@@ -430,15 +435,15 @@ export function rootsContent(): string {
               pieces stacked, with the ground as the seam. Bark now runs well below
               the line and lets go of the colour gradually, so the trunk sinks into
               its roots instead of being plugged into them. */}
-          <stop offset="0" stop-color="var(--pl-bark-dark, #432c15)"/>
+          <stop offset="0" stop-color="var(--pl-root-bark, #432c15)"/>
           <stop offset="0.2" stop-color="var(--pl-bark, #6a4a2b)"/>
-          <stop offset="0.52" stop-color="var(--pl-root, #efe3cd)"/>
+          <stop offset="0.52" stop-color="var(--pl-root, #d9c3a1)"/>
         </linearGradient>
       </defs>
       <g mask="url(#pl-root-depth)">
         <g opacity="0.3">${ink}</g>
         ${body}
-        <g fill="none" stroke="var(--pl-root-tip, #cbb99b)" stroke-opacity="0.5"
+        <g fill="none" stroke="var(--pl-root-tip, #b59a76)" stroke-opacity="0.42"
            stroke-width="1" stroke-linecap="round">${hairs}</g>
       </g>`;
 }

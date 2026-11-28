@@ -33,7 +33,25 @@
         0.1,
         1
       ],
-      "notes": "Minimum renderer pixel ratio relative to devicePixelRatio. Was 0.75, and 0.5 before that: whenever the scene got heavier - more plants, a finer terrain level - the band spends resolution first, and the whole frame, the raymarched plant most of all, was drawn at three quarters of the screen and upscaled, which is the blur a player notices as soon as the world grows. At 0.9 the same lever still exists (the band must be able to spend something, and renderConfig.test.ts asserts it can), but the worst case is a tenth of the frame rather than a quarter."
+      "notes": "Minimum renderer pixel ratio relative to devicePixelRatio. Was 0.75, and 0.5 before that: whenever the scene got heavier - more plants, a finer terrain level - the band spends resolution first, and the whole frame, the raymarched plant most of all, was drawn at three quarters of the screen and upscaled, which is the blur a player notices as soon as the world grows. At 0.9 the same lever still exists (the band must be able to spend something, and renderConfig.test.ts asserts it can), but its normal worst case is a tenth of the frame rather than a quarter. A machine that still cannot hold the target after quality_emergency_after_ms may step down to resolution_floor_emergency (0.75), so the old quarter-scale picture remains an escape hatch, not the starting point."
+    },
+    "resolution_floor_emergency": {
+      "type": "number",
+      "value": 0.75,
+      "range": [
+        0.5,
+        0.9
+      ],
+      "notes": "AL-03: the lower floor the band may use only after the frame has stayed over budget for quality_emergency_after_ms. The normal 0.9 floor is a visual choice; this is the escape hatch that keeps the target frame rate reachable on a GPU-bound machine instead of stopping at 0.9 and missing every frame."
+    },
+    "quality_emergency_after_ms": {
+      "type": "integer",
+      "value": 5000,
+      "range": [
+        1000,
+        20000
+      ],
+      "notes": "AL-03: sustained over-budget time before the emergency resolution floor is allowed, and sustained headroom before it is given back. Long enough that a load spike does not soften the picture; short enough that a permanently GPU-bound machine reaches a playable rate."
     },
     "max_pixel_ratio": {
       "type": "number",

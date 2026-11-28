@@ -31,12 +31,14 @@ export const GROUND_BAND_PX = 96;
  *
  * The plant grows upward from the ground line, so the only honest way to give a
  * tall tree room is to move that line down - and the only thing that stops it is
- * the menu standing under it. At 0.66 the sky is two thirds of the pane at most
- * and the hero column always has a third to stand in (at the minimum scale its
- * own `menuFit` allows). Without this the line could slide to 96 px from the
- * bottom to keep a huge plant in frame, which put the Play button on the trunk.
+ * the menu standing under it. At 0.75 the sky is three quarters of the pane at
+ * most, which is the share a fully grown ancient tree needs; the hero column
+ * stands in the remaining quarter and its own `menuFit` rule scales and lifts it
+ * when a short pane cannot hold both. Without this the line could slide to 96 px
+ * from the bottom to keep a huge plant in frame, which put the Play button on the
+ * trunk.
  */
-export const SKY_MAX_SHARE = 0.66;
+export const SKY_MAX_SHARE = 0.75;
 
 /** The smallest ground band a pane may be given, given how tall it is. */
 export function skyGroundPx(viewportPx: number, minPx = GROUND_BAND_PX): number {
@@ -138,7 +140,7 @@ export interface HorizonInput {
 }
 
 export function horizonForPane(input: HorizonInput): number {
-  const viewport = input.viewportPx > 0 ? input.viewportPx : 0;
+  const viewport = Math.max(input.viewportPx, 0);
   if (viewport <= 0) return 0;
   const pad = Number.isFinite(input.topPadPx) ? (input.topPadPx as number) : 10;
   const ground = Number.isFinite(input.minGroundPx) ? (input.minGroundPx as number) : 96;
@@ -163,10 +165,11 @@ export function horizonForPane(input: HorizonInput): number {
  * taller. `PLANT_ART_ASPECT` is the art's own height over its width (200 units
  * wide around 283 units of drawing), so a maximum *width* is what the CSS can set.
  *
- * `maxScale` is the important part: care scales the drawing up to 1.6x, and a cap
- * derived from the unscaled art is a cap that the grown tree walks straight
- * through - which is how the crown ended up above the top of the pane. The budget
- * is divided by it, so the tree at its full height is the tree that fits.
+ * `maxScale` is the important part: care scales the drawing through its growth
+ * ladder (2.35x at the ancient stage), and a cap derived from the unscaled art is
+ * a cap that the grown tree walks straight through - which is how the crown ended
+ * up above the top of the pane. The budget is divided by it, so the tree at its
+ * full height is the tree that fits.
  */
 export const PLANT_ART_ASPECT = 283 / 200;
 

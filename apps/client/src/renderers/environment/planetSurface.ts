@@ -135,6 +135,12 @@ export const SOIL_SLAB_SINK_M = 0.01;
  * Two metres per cell at 620 m is about 600k vertices - large, but it is one
  * draw, one geometry and no LOD boundary anywhere inside the world.
  */
+/** The walkable disc's radius; the ground beyond it is the transition ring. */
+export const PLAY_DISK_RADIUS_M = 620;
+
+/** The transition ring's outer radius, where it hands over to the globe. */
+export const HORIZON_RING_OUTER_M = 20_000;
+
 export const PLAY_DISK_CELL_M = 2;
 
 export interface PlayDiskOptions {
@@ -156,7 +162,7 @@ export interface PlayDiskOptions {
  */
 export function createPlayDisk(options: PlayDiskOptions): THREE.Mesh {
   const radius = Math.max(1, options.radiusM);
-  const outer = Math.max(8, options.playRadiusM ?? 620);
+  const outer = Math.max(8, options.playRadiusM ?? PLAY_DISK_RADIUS_M);
   const cell = Math.max(1, options.cellSizeM ?? PLAY_DISK_CELL_M);
   const rings = Math.max(8, Math.ceil(outer / cell));
   const segments = Math.max(64, Math.ceil((Math.PI * 2 * outer) / cell));

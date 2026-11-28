@@ -110,8 +110,8 @@ const WATER_FRAGMENT_SHADER = /* glsl */ `
   uniform float uGroundHeightSize;
   uniform vec2 uGroundHeightRange;
   uniform float uGroundHeightAvailable;
-  // The same field sampled at the far terrain ring's own spacing. Past the detail
-  // patch the ground on screen is a mesh of those coarse cells, and a triangle
+  // The same field sampled at the transition ring's spacing. Past the play disc
+  // the ground on screen is a mesh of those coarser cells, and a triangle
   // interpolated across metres of relief sits below the field: water that is
   // genuinely underground then stands in front of the drawn hill. This test uses
   // whichever ground is lower, so it compares against what is actually drawn.
@@ -122,6 +122,8 @@ const WATER_FRAGMENT_SHADER = /* glsl */ `
   uniform float uGroundCoarseAvailable;
   /** Metres from the coarse grid's centre where it starts to apply. */
   uniform float uGroundCoarseInnerRadiusM;
+  /** Radius used to add planet curvature back to guard heights; 0 disables. */
+  uniform float uGroundPlanetRadius;
   /** 1 on the planet-wide sea: a sphere, not a sheet lying on a bed. */
   uniform float uOceanMode;
   /**
@@ -347,9 +349,9 @@ if (vWaterDepth <= 0.0) discard;
     if (uGroundHeightAvailable > 0.5 && uOceanMode < 0.5) {
       vec2 groundUV = (vWaterWorld.xz - uGroundHeightOrigin) / uGroundHeightSize;
       // The sheet may only be drawn where it is below the ground the eye can see.
-      // Two grounds: the fine field near the player (which is what the detail
-      // patch draws), and the field sampled at the far ring's spacing out to the
-      // water table's own range. Out there the drawn ground is that ring's mesh,
+      // Two grounds: the play disc's 2 m grid near the player, and the field
+      // sampled at the transition ring's spacing out to its 20 km edge. Out
+      // there the drawn ground is that ring's mesh,
       // and an interpolated triangle dips below the field on a rise, which is
       // what put sheets of water on top of distant hills. Where both apply, the
       // lower one wins: water hidden under either surface is not drawn, and a
@@ -357,9 +359,20 @@ if (vWaterDepth <= 0.0) discard;
       // field, above nothing else.
       bool groundTested = false;
       float groundY = 0.0;
+      // The guard stores height above the planet's tangent surface, so the
+      // curvature is added back here. At 20 km it is kilometres; leaving it in
+      // an 8-bit ramp would quantise the guard into metre-sized steps.
+      float groundDrop = 0.0;
+      if (uGroundPlanetRadius > 0.0) {
+        float r2 = dot(vWaterWorld.xz, vWaterWorld.xz);
+        groundDrop = r2 >= uGroundPlanetRadius * uGroundPlanetRadius
+          ? uGroundPlanetRadius
+          : uGroundPlanetRadius - sqrt(uGroundPlanetRadius * uGroundPlanetRadius - r2);
+      }
       if (groundUV.x >= 0.0 && groundUV.x <= 1.0 && groundUV.y >= 0.0 && groundUV.y <= 1.0) {
         groundY =
-          uGroundHeightRange.x + texture2D(uGroundHeight, groundUV).r * uGroundHeightRange.y;
+          uGroundHeightRange.x + texture2D(uGroundHeight, groundUV).r * uGroundHeightRange.y -
+          groundDrop;
         groundTested = true;
       }
       if (uGroundCoarseAvailable > 0.5) {
@@ -367,7 +380,8 @@ if (vWaterDepth <= 0.0) discard;
         if (coarseUV.x >= 0.0 && coarseUV.x <= 1.0 && coarseUV.y >= 0.0 && coarseUV.y <= 1.0) {
           if (length(coarseUV - 0.5) * uGroundCoarseSize > uGroundCoarseInnerRadiusM) {
             float coarseY =
-              uGroundCoarseRange.x + texture2D(uGroundCoarse, coarseUV).r * uGroundCoarseRange.y;
+              uGroundCoarseRange.x + texture2D(uGroundCoarse, coarseUV).r * uGroundCoarseRange.y -
+              groundDrop;
             groundY = groundTested ? min(groundY, coarseY) : coarseY;
             groundTested = true;
           }
@@ -775,6 +789,7 @@ export function createWaterMaterial(options: WaterMaterialOptions = {}): WaterMa
       uGroundCoarseRange: { value: new THREE.Vector2(0, 1) },
       uGroundCoarseAvailable: { value: 0 },
       uGroundCoarseInnerRadiusM: { value: 0 },
+      uGroundPlanetRadius: { value: 0 },
       uOceanMode: { value: 0 },
       // 0 in w means "not the body's sea", which keeps every other water mesh on
       // the flat field it has always used.
